@@ -1,0 +1,17 @@
+{
+  "model": "stub",
+  "engines": [
+    { "iid": "e0", "url": "http://127.0.0.1:8101", "role": "prefill" },
+    { "iid": "e1", "url": "http://127.0.0.1:8102", "role": "prefill" },
+    { "iid": "e2", "url": "http://127.0.0.1:8103", "role": "prefill" },
+    { "iid": "e3", "url": "http://127.0.0.1:8104", "role": "decode" },
+    { "iid": "e4", "url": "http://127.0.0.1:8105", "role": "decode" },
+    { "iid": "e5", "url": "http://127.0.0.1:8106", "role": "decode" }
+  ],
+  "_slo": "The stub sleeps its timing model on the host CPU, where asyncio granularity puts the measured decode floor near 0.16 s/token against a nominal 0.012; a target below the measured floor fails the final slo gate on any fresh clone. 0.5 clears the floor about 3x, loaded CI machines included.",
+  "slo": { "ttft_s": 10.0, "tpot_s": 0.5 },
+  "thresholds": { "expand": 1.0, "shrink": 0.5, "cooldown_s": 10.0 },
+  "monitor_interval_s": 1.0,
+  "profiles_path": "runs/stub/profiles.json",
+  "tokenize": true
+}

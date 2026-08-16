@@ -1,0 +1,23 @@
+# The local mirror of CI's cheap gates: what would fail there fails here
+# first. install: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2  # keep in lockstep with the pin in pyproject.toml
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: markdown-links
+        name: relative markdown links resolve
+        entry: python3 tools/check_links.py
+        language: system
+        pass_filenames: false
+        files: \.md$
+      - id: mypy
+        name: mypy (src)
+        entry: .venv/bin/mypy
+        language: system
+        pass_filenames: false
+        types: [python]

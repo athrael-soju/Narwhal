@@ -1,0 +1,17 @@
+# Router on its own port, engines from the generated targets file.
+# tools/observability/make_targets.py writes targets/engines.json from the
+# fleet config; the file is gitignored because it carries real addresses.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/prometheus-alerts.yml
+
+scrape_configs:
+  - job_name: narwhal-router
+    static_configs:
+      - targets: ["localhost:8011"]
+  - job_name: engines
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/engines.json"]

@@ -1,0 +1,31 @@
+{
+  "_comment": "The CUDA preset, recorded as measured. The URLs below are placeholders: copy this file to the node's config/fleet.local.json and put the real addresses there, per presets/README.md. Give each engine its node's ordinary routed address, not a fabric ULA - these hosts run no IPoIB, so the 400G HCAs carry no IP and every IP-level path rides the primary NIC. That costs nothing at the transfer layer, where NIXL addresses the HCAs by LID over RDMA; see manifest.md.",
+  "model": "moonshotai/Kimi-K3",
+  "engines": [
+    {
+      "iid": "b1",
+      "url": "http://ENGINE-1-ADDRESS:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "b2",
+      "url": "http://ENGINE-2-ADDRESS:8002",
+      "role": "decode"
+    }
+  ],
+  "_slo_comment": "MEASURED ON THE OFFLOADED SHAPE, NOT B200 SERVING NUMBERS. Calibrated 2026-08-15 at 2x light-load p99, the same rule as the reference preset, against engines whose experts spill to host RAM: measured TPOT floor 1.050 s (b1) and 0.994 s (b2), flat against concurrency because the expert transfer is per-forward-pass and amortizes across the batch. That floor is PCIe, not silicon. The reference fleet's 0.06 s target is unreachable here at any fleet size, and narwhal-check says so. Reset these to the reference values the moment the fleet runs resident.",
+  "slo": {
+    "ttft_s": 3.0,
+    "tpot_s": 2.1
+  },
+  "monitor_interval_s": 1.0,
+  "profiles_path": "runs/local/profiles.json",
+  "request_timeout_s": 600.0,
+  "prefill_timeout_s": 120.0,
+  "tokenize": true,
+  "chars_per_token": 3.8,
+  "controller": "planner",
+  "connector": "nixl",
+  "dialect": "vllm",
+  "min_prefill": 1
+}

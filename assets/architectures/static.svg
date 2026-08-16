@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 250" font-family="ui-monospace, 'Cascadia Code', Menlo, monospace">
+  <style>
+    .card { fill: #fdfcf6; stroke: #26261f; stroke-width: 1.5; }
+    .name { font-size: 16px; font-weight: bold; fill: #26261f; }
+    .sub { font-family: Georgia, serif; font-style: italic; font-size: 13px; fill: #6b6a5f; }
+    .lbl { font-size: 13px; fill: #8a897d; }
+    .pro { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #5f6f3e; }
+    .con { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #b3592f; }
+    .chip { font-size: 12px; font-weight: bold; fill: #fdfcf6; }
+    .dash { stroke: #8a897d; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    .poolP { stroke: #2f4156; stroke-width: 1.2; stroke-dasharray: 6 4; fill: none; }
+    .poolD { stroke: #5f6f3e; stroke-width: 1.2; stroke-dasharray: 6 4; fill: none; }
+    .kv { stroke: #5f6f3e; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    .kvdot { animation: kv 3s infinite linear; }
+    @keyframes kv { 0% { transform: translateX(0); opacity: 0; } 15% { opacity: 1; } 85% { transform: translateX(104px); opacity: 1; } 100% { transform: translateX(104px); opacity: 0; } }
+    .reqin { animation: reqin 5s infinite linear; }
+    @keyframes reqin { 0% { transform: translateX(0); opacity: 0; } 10% { opacity: 1; } 46% { transform: translateX(52px); opacity: 1; } 52%,100% { transform: translateX(56px); opacity: 0; } }
+    .reqout { animation: reqout 5s infinite linear; }
+    @keyframes reqout { 0%,50% { transform: translateX(0); opacity: 0; } 56% { opacity: 1; } 92% { transform: translateX(38px); opacity: 1; } 100% { transform: translateX(42px); opacity: 0; } }
+    .tok { animation: tok 5s infinite linear; }
+    @keyframes tok { 0%,45% { transform: translateX(0); opacity: 0; } 50% { opacity: 1; } 95% { transform: translateX(50px); opacity: 1; } 100% { opacity: 0; } }
+  </style>
+  <text class="lbl" x="20" y="123">requests</text>
+  <line class="dash" x1="20" y1="140" x2="86" y2="140"/>
+  <path d="M86 140 l-7 -4 v8 z" fill="#8a897d"/>
+  <rect class="card" x="96" y="110" width="120" height="60"/>
+  <text class="name" x="156" y="136" text-anchor="middle">router</text>
+  <text class="sub" x="156" y="156" text-anchor="middle" fill="#b3592f">phase-aware</text>
+  <line class="dash" x1="216" y1="140" x2="258" y2="140"/>
+  <path d="M258 140 l-7 -4 v8 z" fill="#8a897d"/>
+
+  <rect class="poolP" x="268" y="56" width="390" height="170" rx="3"/>
+  <rect x="276" y="47" width="190" height="20" fill="#2f4156"/>
+  <text class="chip" x="284" y="61">PREFILL POOL &#8212; 2 NODES</text>
+  <g>
+    <rect class="card" x="286" y="84" width="170" height="88"/><rect x="286" y="84" width="170" height="5" fill="#2f4156"/>
+    <rect class="card" x="470" y="84" width="170" height="88"/><rect x="470" y="84" width="170" height="5" fill="#2f4156"/>
+    <text class="name" x="298" y="116">node-00</text><text class="sub" x="298" y="136">prefill</text>
+    <text class="name" x="482" y="116">node-01</text><text class="sub" x="482" y="136">prefill</text>
+  </g>
+
+  <g>
+    <line class="kv" x1="666" y1="100" x2="774" y2="100"/><path d="M774 100 l-7 -4 v8 z" fill="#5f6f3e"/>
+    <line class="kv" x1="666" y1="140" x2="774" y2="140"/><path d="M774 140 l-7 -4 v8 z" fill="#5f6f3e"/>
+    <line class="kv" x1="666" y1="180" x2="774" y2="180"/><path d="M774 180 l-7 -4 v8 z" fill="#5f6f3e"/>
+    <circle class="kvdot" cx="670" cy="100" r="4.5" fill="#5f6f3e"/>
+    <circle class="kvdot" cx="670" cy="140" r="4.5" fill="#5f6f3e" style="animation-delay:1s"/>
+    <circle class="kvdot" cx="670" cy="180" r="4.5" fill="#5f6f3e" style="animation-delay:2s"/>
+    <text class="lbl" x="720" y="212" text-anchor="middle">KV handoff</text>
+  </g>
+
+  <rect class="poolD" x="782" y="56" width="390" height="170" rx="3"/>
+  <rect x="790" y="47" width="185" height="20" fill="#5f6f3e"/>
+  <text class="chip" x="798" y="61">DECODE POOL &#8212; 2 NODES</text>
+  <g>
+    <rect class="card" x="800" y="84" width="170" height="88"/><rect x="800" y="84" width="170" height="5" fill="#5f6f3e"/>
+    <rect class="card" x="984" y="84" width="170" height="88"/><rect x="984" y="84" width="170" height="5" fill="#5f6f3e"/>
+    <text class="name" x="812" y="116">node-02</text><text class="sub" x="812" y="136">decode</text>
+    <text class="name" x="996" y="116">node-03</text><text class="sub" x="996" y="136">decode</text>
+  </g>
+
+  <text class="pro" x="463" y="204" text-anchor="middle">+ no interference: each pool tuned to its phase</text>
+  <text class="con" x="977" y="204" text-anchor="middle">&#8722; fixed ratio: floods queue while capacity idles</text>
+  <text class="lbl" x="1180" y="123">tokens</text>
+  <line class="dash" x1="1172" y1="140" x2="1230" y2="140"/>
+  <path d="M1230 140 l-7 -4 v8 z" fill="#8a897d"/>
+  <circle class="tok" cx="1176" cy="140" r="4.5" fill="#b3592f"/>
+  <circle class="reqin" cx="28" cy="140" r="4.5" fill="#b3592f"/>
+  <circle class="reqin" cx="28" cy="140" r="4.5" fill="#b3592f" style="animation-delay:2.3s"/>
+  <circle class="reqout" cx="214" cy="140" r="4.5" fill="#b3592f"/>
+  <circle class="reqout" cx="214" cy="140" r="4.5" fill="#b3592f" style="animation-delay:2.3s"/>
+</svg>

@@ -1,0 +1,19 @@
+# The sdist is a buildable snapshot: everything the demo, the tests and the
+# harnesses read. `config/` is deliberately absent: it holds local fleet
+# files with real addresses, and the annotated example ships inside the
+# package (narwhal-check --print-example-config).
+include LICENSE
+include NOTICE
+include Makefile
+include .env.example
+recursive-include docs *.md
+recursive-include demo *.py
+recursive-include tests *.py
+recursive-include tools *.py *.sh
+recursive-include src/narwhal py.typed *.json
+
+global-exclude __pycache__ *.py[cod]
+recursive-include presets *.json *.md *.sh
+recursive-include scripts *.sh
+include config/fleet.stub.json
+include config/engine.env.example

@@ -1,0 +1,35 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Site-specific: a fleet config names real hosts, an engine.env real paths.
+config/fleet.*.json
+!config/fleet.example.json
+!config/fleet.stub.json
+engine.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Vendored / generated
+local/bin/
+
+# Run artifacts
+profiles/
+runs/

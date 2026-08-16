@@ -1,0 +1,35 @@
+# The standing observability stack for one router node: docker compose up -d
+# here (or `make observe` from the repo root on the node). Host networking so
+# Prometheus reaches the router and engines on their own addresses; volumes
+# and restart policies so a reboot changes nothing.
+services:
+  prometheus:
+    image: prom/prometheus:v3.9.1
+    network_mode: host
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+      # Under runs/ so a fleet deploy (which wipes the repo tree but
+      # preserves runs/) cannot orphan the mount and blank the board.
+      - ../../runs/observability/targets:/etc/prometheus/targets:ro
+      - prom-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    network_mode: host
+    restart: always
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana-narwhal.json:/var/lib/grafana/dashboards/narwhal.json:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prom-data:
+  grafana-data:

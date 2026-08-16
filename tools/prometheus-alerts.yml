@@ -1,0 +1,59 @@
+# Alert rules for the Prometheus that scrapes the router's /metrics.
+# Load with `rule_files: [prometheus-alerts.yml]` in prometheus.yml.
+#
+# The n4 lesson: every signal below existed during the run that lost four
+# phases to a dead engine, and nothing was alarming on them.
+groups:
+  - name: narwhal
+    rules:
+      - alert: NarwhalEngineDown
+        expr: up{job="engines"} == 0
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "Engine {{ $labels.iid }} stopped answering its scrape - code red"
+          description: "A node down is never routine. The engines job watches every engine the targets file declares, independent of the router's config, so an engine removed from serving still alarms here."
+
+      - alert: NarwhalEngineEjected
+        expr: arrow_ejected_instances > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "The breaker is holding {{ $value }} engine(s) out of scheduling"
+          description: "arrow_ejected{iid=...} names them. Readmission probes /health; if this persists, the engine process is down."
+
+      - alert: NarwhalRouterDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "The router stopped answering its scrape"
+
+      - alert: NarwhalErrorBurst
+        expr: rate(arrow_failed_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Requests failing at {{ $value | printf \"%.2f\" }}/s over 5m"
+          description: "A sustained burst with zero ejections usually means a leg-level fault the breaker cannot see yet; check the journal's error column."
+
+      - alert: NarwhalUnservedRising
+        expr: rate(arrow_unserved_total[10m]) > 0.2
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Algorithm 1 is placing requests nothing can serve within SLO"
+          description: "The fleet is undersized for the offered load, or the pools are stuck in the wrong split."
+
+      - alert: NarwhalPoolStarved
+        expr: arrow_pool_instances < 1
+        for: 2m
+        labels:
+          severity: warn
+        annotations:
+          summary: "A pool has no instances"

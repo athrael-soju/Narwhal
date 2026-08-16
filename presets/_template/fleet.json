@@ -1,0 +1,20 @@
+{
+  "_": "Copy this directory to presets/<hw>-<model>/ and fill every <...>. Engine URLs are the addresses engines serve HTTP on and NIXL moves KV over - fabric addresses on a multi-NIC fleet. Roles are the opening split only; the controller moves them.",
+  "model": "<served model name - every engine must serve exactly this>",
+  "engines": [
+    { "iid": "n1", "url": "http://<node-1-address>:<port>", "role": "prefill" },
+    { "iid": "n2", "url": "http://<node-2-address>:<port>", "role": "prefill" },
+    { "iid": "n3", "url": "http://<node-3-address>:<port>", "role": "decode" },
+    { "iid": "n4", "url": "http://<node-4-address>:<port>", "role": "decode" }
+  ],
+  "_slo": "Leave these until you have profiled: calibrate at twice the light-load p99 (see docs/Benchmarking.md), then record them in manifest.md. Placeholder values here refuse traffic honestly rather than lie.",
+  "slo": {
+    "ttft_s": 10.0,
+    "tpot_s": 0.125
+  },
+  "profiles_path": "runs/local/profiles.json",
+  "tokenize": true,
+  "controller": "planner",
+  "connector": "nixl",
+  "dialect": "vllm"
+}

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1110 320" font-family="ui-monospace, 'Cascadia Code', Menlo, monospace">
+  <style>
+    .card { fill: #fdfcf6; stroke: #26261f; stroke-width: 1.5; }
+    .name { font-size: 16px; font-weight: bold; fill: #26261f; }
+    .sub { font-family: Georgia, serif; font-style: italic; font-size: 13px; fill: #6b6a5f; }
+    .lbl { font-size: 13px; fill: #8a897d; }
+    .pro { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #5f6f3e; }
+    .con { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #b3592f; }
+    .chip { font-size: 12px; font-weight: bold; fill: #fdfcf6; }
+    .dash { stroke: #8a897d; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    .ctl { stroke: #b3592f; stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+    .pool { stroke: #46425c; stroke-width: 1.2; stroke-dasharray: 6 4; fill: none; }
+    .flipbar { animation: flipbar 10s infinite; }
+    @keyframes flipbar { 0%,28% { fill: #5f6f3e; } 33%,78% { fill: #2f4156; } 83%,100% { fill: #5f6f3e; } }
+    .subP { animation: subP 10s infinite; }
+    @keyframes subP { 0%,28% { opacity: 1; } 33%,78% { opacity: 0; } 83%,100% { opacity: 1; } }
+    .subD { animation: subD 10s infinite; }
+    @keyframes subD { 0%,28% { opacity: 0; } 33%,78% { opacity: 1; } 83%,100% { opacity: 0; } }
+    .switching { animation: switching 10s infinite; opacity: 0; }
+    @keyframes switching { 0%,26% { opacity: 0; } 29%,34% { opacity: 1; } 38%,100% { opacity: 0; } }
+    .ratio1 { animation: r1 10s infinite; }
+    @keyframes r1 { 0%,28% { opacity: 1; } 33%,78% { opacity: 0; } 83%,100% { opacity: 1; } }
+    .ratio2 { animation: r2 10s infinite; }
+    @keyframes r2 { 0%,28% { opacity: 0; } 33%,78% { opacity: 1; } 83%,100% { opacity: 0; } }
+    .reqin { animation: reqin 5s infinite linear; }
+    @keyframes reqin { 0% { transform: translateX(0); opacity: 0; } 10% { opacity: 1; } 46% { transform: translateX(48px); opacity: 1; } 52%,100% { transform: translateX(52px); opacity: 0; } }
+    .reqout { animation: reqout 5s infinite linear; }
+    @keyframes reqout { 0%,50% { transform: translateX(0); opacity: 0; } 56% { opacity: 1; } 92% { transform: translateX(36px); opacity: 1; } 100% { transform: translateX(40px); opacity: 0; } }
+    .tok { animation: tok 5s infinite linear; }
+    @keyframes tok { 0%,45% { transform: translateX(0); opacity: 0; } 50% { opacity: 1; } 95% { transform: translateX(46px); opacity: 1; } 100% { opacity: 0; } }
+  </style>
+  <rect class="card" x="508" y="10" width="260" height="56" stroke="#b3592f"/>
+  <text class="name" x="638" y="34" text-anchor="middle">controller</text>
+  <text class="sub" x="638" y="54" text-anchor="middle">control plane only</text>
+  <line class="ctl" x1="526" y1="68" x2="444" y2="114"/>
+  <path d="M526 68 l-8 1 l5 6 z" fill="#b3592f"/>
+  <text class="sub" x="340" y="86">load telemetry</text>
+  <line class="ctl" x1="770" y1="68" x2="856" y2="114"/>
+  <path d="M856 114 l-2 -8 l-6 5 z" fill="#b3592f"/>
+  <text class="sub" x="866" y="92" fill="#b3592f">relabel role</text>
+
+  <text class="lbl" x="20" y="185">requests</text>
+  <line class="dash" x1="20" y1="202" x2="82" y2="202"/>
+  <path d="M82 202 l-7 -4 v8 z" fill="#8a897d"/>
+  <rect class="card" x="92" y="172" width="118" height="60"/>
+  <text class="name" x="151" y="198" text-anchor="middle">router</text>
+  <text class="sub" x="151" y="218" text-anchor="middle" fill="#b3592f">phase-aware</text>
+  <line class="dash" x1="210" y1="202" x2="248" y2="202"/>
+  <path d="M248 202 l-7 -4 v8 z" fill="#8a897d"/>
+
+  <rect class="pool" x="258" y="110" width="760" height="190" rx="3"/>
+  <rect x="266" y="101" width="300" height="20" fill="#46425c"/>
+  <text class="chip" x="274" y="115">ADAPTIVE POOL &#8212; ROLES FOLLOW LOAD</text>
+  <text class="lbl ratio1" x="940" y="97" fill="#b3592f">now 2:2</text>
+  <text class="lbl ratio2" x="940" y="97" fill="#b3592f">now 3:1</text>
+
+  <g>
+    <rect class="card" x="278" y="140" width="170" height="88"/><rect x="278" y="140" width="170" height="5" fill="#2f4156"/>
+    <rect class="card" x="462" y="140" width="170" height="88"/><rect x="462" y="140" width="170" height="5" fill="#2f4156"/>
+    <text class="name" x="290" y="172">node-00</text><text class="sub" x="290" y="192">prefill</text>
+    <text class="name" x="474" y="172">node-01</text><text class="sub" x="474" y="192">prefill</text>
+  </g>
+  <g>
+    <rect class="card" x="646" y="140" width="170" height="88"/>
+    <rect class="flipbar" x="646" y="140" width="170" height="5"/>
+    <text class="name" x="658" y="172">node-02</text>
+    <text class="sub subP" x="658" y="192">decode</text>
+    <text class="sub subD" x="658" y="192">prefill</text>
+    <g class="switching">
+      <rect x="658" y="200" width="88" height="18" fill="#f6e3d3" stroke="#b3592f"/>
+      <text class="lbl" x="666" y="213" fill="#b3592f">switching</text>
+    </g>
+  </g>
+  <g>
+    <rect class="card" x="830" y="140" width="170" height="88"/><rect x="830" y="140" width="170" height="5" fill="#5f6f3e"/>
+    <text class="name" x="842" y="172">node-03</text><text class="sub" x="842" y="192">decode</text>
+  </g>
+
+  <text class="pro" x="448" y="272" text-anchor="middle">+ adapts in seconds: weights stay resident</text>
+  <text class="con" x="828" y="272" text-anchor="middle">&#8722; needs capable engines and a tuned control loop</text>
+  <text class="lbl" x="1024" y="185">tokens</text>
+  <line class="dash" x1="1018" y1="202" x2="1076" y2="202"/>
+  <path d="M1076 202 l-7 -4 v8 z" fill="#8a897d"/>
+  <circle class="tok" cx="1022" cy="202" r="4.5" fill="#b3592f"/>
+  <circle class="reqin" cx="28" cy="202" r="4.5" fill="#b3592f"/>
+  <circle class="reqin" cx="28" cy="202" r="4.5" fill="#b3592f" style="animation-delay:2.3s"/>
+  <circle class="reqout" cx="208" cy="202" r="4.5" fill="#b3592f"/>
+  <circle class="reqout" cx="208" cy="202" r="4.5" fill="#b3592f" style="animation-delay:2.3s"/>
+</svg>
