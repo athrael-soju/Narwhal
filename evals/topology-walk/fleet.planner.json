@@ -1,0 +1,58 @@
+{
+  "_": "Topology walk, planner cell. The shipped mi355x-kimi-k3 preset unchanged: one adaptive controller, no pins, and the floor at its default of 1, so every station on the ladder from 5P1D to 1P5D is reachable.",
+  "model": "moonshotai/Kimi-K3",
+  "engines": [
+    {
+      "iid": "n1",
+      "url": "http://<node-1-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n2",
+      "url": "http://<node-2-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n3",
+      "url": "http://<node-3-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n4",
+      "url": "http://<node-4-fabric-address>:8002",
+      "role": "decode"
+    },
+    {
+      "iid": "n5",
+      "url": "http://<node-5-fabric-address>:8002",
+      "role": "decode"
+    },
+    {
+      "iid": "n6",
+      "url": "http://<node-6-fabric-address>:8002",
+      "role": "decode"
+    }
+  ],
+  "slo": {
+    "ttft_s": 3.0,
+    "tpot_s": 0.06
+  },
+  "thresholds": {
+    "expand": 1.0,
+    "shrink": 0.5,
+    "cooldown_s": 180.0,
+    "sustained_intervals": 3,
+    "dwell_s": 0.0
+  },
+  "controller": "planner",
+  "monitor_interval_s": 1.0,
+  "tokenize": true,
+  "chars_per_token": 3.8,
+  "first_token_timeout_s": 30.0,
+  "decode_read_timeout_s": 300.0,
+  "prefill_timeout_s": 120.0,
+  "request_timeout_s": 600.0,
+  "profiles_path": "runs/local/profiles.json",
+  "connector": "nixl",
+  "dialect": "vllm"
+}

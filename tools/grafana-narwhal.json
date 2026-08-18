@@ -1,0 +1,411 @@
+{
+  "title": "Narwhal",
+  "uid": "narwhal-router",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "$iid",
+      "datasource": {
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "expr": "(3 * (sum by (iid) (arrow_instance_role{iid=\"$iid\", role=\"prefill\"}) == 1 and on(iid) sum by (iid) (arrow_instance_role{iid=\"$iid\", role=\"decode\"}) == 1) and on(iid) (sum by (iid) (up{job=\"engines\", iid=\"$iid\"}) == 1)) or ((sum by (iid) (arrow_instance_role{iid=\"$iid\", role=\"prefill\"})) and on(iid) (sum by (iid) (up{job=\"engines\", iid=\"$iid\"}) == 1)) or ((0 * sum by (iid) (arrow_instance_role{iid=\"$iid\", role=\"decode\"})) and on(iid) (sum by (iid) (up{job=\"engines\", iid=\"$iid\"}) == 1)) or (2 * sum by (iid) (up{job=\"engines\", iid=\"$iid\"} == 1))",
+          "legendFormat": "$iid",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "PREFILL",
+                  "color": "blue",
+                  "index": 0
+                },
+                "0": {
+                  "text": "DECODE",
+                  "color": "green",
+                  "index": 1
+                },
+                "2": {
+                  "text": "STANDBY",
+                  "color": "orange",
+                  "index": 2
+                },
+                "3": {
+                  "text": "P+D",
+                  "color": "purple",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "OFFLINE",
+                  "color": "red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "noValue": "OFFLINE",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "repeat": "iid",
+      "repeatDirection": "h",
+      "maxPerRow": 6
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Pool load vs SLO (1.0 = at target)",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "arrow_pool_load",
+          "refId": "A",
+          "legendFormat": "{{pool}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Pool sizes, ejections and probation",
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "arrow_pool_instances",
+          "refId": "A",
+          "legendFormat": "{{pool}}"
+        },
+        {
+          "expr": "arrow_ejected_instances",
+          "refId": "B",
+          "legendFormat": "ejected"
+        },
+        {
+          "expr": "arrow_probation_instances",
+          "refId": "C",
+          "legendFormat": "probation {{iid}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Throughput and failures",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(arrow_served_total[30s])",
+          "refId": "A",
+          "legendFormat": "served/s"
+        },
+        {
+          "expr": "rate(arrow_failed_total[30s])",
+          "refId": "B",
+          "legendFormat": "failed/s"
+        },
+        {
+          "expr": "rate(arrow_unserved_total[30s])",
+          "refId": "C",
+          "legendFormat": "unserved/s"
+        },
+        {
+          "expr": "rate(arrow_refused_total[30s])",
+          "refId": "D",
+          "legendFormat": "refused (door)"
+        },
+        {
+          "expr": "rate(arrow_rejected_total[30s])",
+          "refId": "E",
+          "legendFormat": "rejected (pool)"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Flips",
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(arrow_flips_total[5m])",
+          "refId": "A",
+          "legendFormat": "{{to}} by {{by}}"
+        },
+        {
+          "expr": "rate(arrow_flip_reversals_total[5m])",
+          "refId": "B",
+          "legendFormat": "reversals"
+        },
+        {
+          "expr": "rate(arrow_flips_refused_total[5m])",
+          "refId": "C",
+          "legendFormat": "refused"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "TTFT quantiles (\u00a74.2 cut)",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(arrow_ttft_seconds_bucket[5m]))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.9, rate(arrow_ttft_seconds_bucket[5m]))",
+          "refId": "B",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(arrow_ttft_seconds_bucket[5m]))",
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "TPOT quantiles (\u00a74.3)",
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(arrow_tpot_seconds_bucket[5m]))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.9, rate(arrow_tpot_seconds_bucket[5m]))",
+          "refId": "B",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(arrow_tpot_seconds_bucket[5m]))",
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Resident requests per instance",
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "arrow_resident_requests",
+          "refId": "A",
+          "legendFormat": "{{iid}} {{phase}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Node roles (1 = prefill, 0 = decode)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "expr": "sum by (iid) (arrow_instance_role{role=\"prefill\"})",
+          "refId": "A",
+          "legendFormat": "{{iid}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Node health: ejected and probation",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "targets": [
+        {
+          "expr": "arrow_ejected_instances",
+          "refId": "A",
+          "legendFormat": "ejected {{iid}}"
+        },
+        {
+          "expr": "arrow_probation_instances",
+          "refId": "B",
+          "legendFormat": "probation {{iid}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus"
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "editable": true,
+  "templating": {
+    "list": [
+      {
+        "name": "iid",
+        "label": "engine",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus"
+        },
+        "query": {
+          "query": "label_values(up{job=\"engines\"}, iid)",
+          "refId": "iid"
+        },
+        "definition": "label_values(up{job=\"engines\"}, iid)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "refresh": 2,
+        "sort": 1,
+        "options": []
+      }
+    ]
+  }
+}

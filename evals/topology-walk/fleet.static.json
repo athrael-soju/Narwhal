@@ -1,0 +1,63 @@
+{
+  "_": "Topology walk, static 3P3D cell. The pins are the guarantee - every engine pinned, and no flip path moves a pinned engine. The unreachable thresholds come along because thresholds alone would leak: Algorithm 2 obeys them and the 31-year cooldown bars Algorithm 1's step-3 flip toward decode, but the step-3 flip toward prefill reads only the shrink guard, which a quiet decode pool passes. The controller ships reactive because the planner prices demand and never reads thresholds at all, so with anything unpinned it would re-split whatever these numbers say.",
+  "model": "moonshotai/Kimi-K3",
+  "engines": [
+    {
+      "iid": "n1",
+      "url": "http://<node-1-fabric-address>:8002",
+      "role": "prefill",
+      "pin": true
+    },
+    {
+      "iid": "n2",
+      "url": "http://<node-2-fabric-address>:8002",
+      "role": "prefill",
+      "pin": true
+    },
+    {
+      "iid": "n3",
+      "url": "http://<node-3-fabric-address>:8002",
+      "role": "prefill",
+      "pin": true
+    },
+    {
+      "iid": "n4",
+      "url": "http://<node-4-fabric-address>:8002",
+      "role": "decode",
+      "pin": true
+    },
+    {
+      "iid": "n5",
+      "url": "http://<node-5-fabric-address>:8002",
+      "role": "decode",
+      "pin": true
+    },
+    {
+      "iid": "n6",
+      "url": "http://<node-6-fabric-address>:8002",
+      "role": "decode",
+      "pin": true
+    }
+  ],
+  "slo": {
+    "ttft_s": 3.0,
+    "tpot_s": 0.06
+  },
+  "thresholds": {
+    "expand": 1000000000.0,
+    "shrink": 0.5,
+    "cooldown_s": 1000000000.0,
+    "sustained_intervals": 1000000000
+  },
+  "controller": "reactive",
+  "monitor_interval_s": 1.0,
+  "tokenize": true,
+  "chars_per_token": 3.8,
+  "first_token_timeout_s": 30.0,
+  "decode_read_timeout_s": 300.0,
+  "prefill_timeout_s": 120.0,
+  "request_timeout_s": 600.0,
+  "profiles_path": "runs/local/profiles.json",
+  "connector": "nixl",
+  "dialect": "vllm"
+}

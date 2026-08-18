@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1130 260" font-family="ui-monospace, 'Cascadia Code', Menlo, monospace">
+  <style>
+    .card { fill: #fdfcf6; stroke: #26261f; stroke-width: 1.5; }
+    .name { font-size: 16px; font-weight: bold; fill: #26261f; }
+    .sub { font-family: Georgia, serif; font-style: italic; font-size: 13px; fill: #6b6a5f; }
+    .lbl { font-size: 13px; fill: #8a897d; }
+    .pro { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #5f6f3e; }
+    .con { font-family: Georgia, serif; font-style: italic; font-size: 14px; fill: #b3592f; }
+    .chip { font-size: 12px; font-weight: bold; fill: #fdfcf6; }
+    .dash { stroke: #8a897d; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    .pool { stroke: #b3592f; stroke-width: 1.2; stroke-dasharray: 6 4; fill: none; }
+    .barP { fill: #2f4156; } .barD { fill: #5f6f3e; }
+    .clashP { animation: clashP 4s infinite ease-in-out; }
+    .clashD { animation: clashD 4s infinite ease-in-out; }
+    @keyframes clashP { 0%,100% { width: 30px; } 50% { width: 68px; } }
+    @keyframes clashD { 0%,100% { width: 60px; } 50% { width: 14px; } }
+    .reqin { animation: reqin 5s infinite linear; }
+    @keyframes reqin { 0% { transform: translateX(0); opacity: 0; } 10% { opacity: 1; } 46% { transform: translateX(52px); opacity: 1; } 52%,100% { transform: translateX(56px); opacity: 0; } }
+    .reqout { animation: reqout 5s infinite linear; }
+    @keyframes reqout { 0%,50% { transform: translateX(0); opacity: 0; } 56% { opacity: 1; } 92% { transform: translateX(62px); opacity: 1; } 100% { transform: translateX(66px); opacity: 0; } }
+    .tok { animation: tok 5s infinite linear; }
+    @keyframes tok { 0%,45% { transform: translateX(0); opacity: 0; } 50% { opacity: 1; } 95% { transform: translateX(60px); opacity: 1; } 100% { opacity: 0; } }
+  </style>
+  <text class="lbl" x="20" y="113">requests</text>
+  <line class="dash" x1="20" y1="130" x2="86" y2="130"/>
+  <path d="M86 130 l-7 -4 v8 z" fill="#8a897d"/>
+  <rect class="card" x="96" y="100" width="120" height="60"/>
+  <text class="name" x="156" y="126" text-anchor="middle">router</text>
+  <text class="sub" x="156" y="146" text-anchor="middle" fill="#b3592f">round-robin</text>
+  <line class="dash" x1="216" y1="130" x2="282" y2="130"/>
+  <path d="M282 130 l-7 -4 v8 z" fill="#8a897d"/>
+
+  <rect class="pool" x="292" y="38" width="758" height="180" rx="3"/>
+  <rect x="300" y="29" width="270" height="20" fill="#b3592f"/>
+  <text class="chip" x="308" y="43">UNIFIED POOL &#8212; 4 &#215; PREFILL + DECODE</text>
+
+  <g id="cards">
+    <rect class="card" x="310" y="68" width="170" height="88"/>
+    <rect class="barP" x="310" y="68" width="85" height="5"/>
+    <rect class="barD" x="395" y="68" width="85" height="5"/>
+  </g>
+  <use href="#cards" x="184"/><use href="#cards" x="368"/><use href="#cards" x="552"/>
+  <g>
+    <text class="name" x="322" y="100">node-00</text><text class="sub" x="322" y="120">prefill + decode</text>
+    <text class="name" x="506" y="100">node-01</text><text class="sub" x="506" y="120">prefill + decode</text>
+    <text class="name" x="690" y="100">node-02</text><text class="sub" x="690" y="120">prefill + decode</text>
+    <text class="name" x="874" y="100">node-03</text><text class="sub" x="874" y="120">prefill + decode</text>
+  </g>
+  <g>
+    <rect class="barP clashP" x="322" y="134" height="6"/><rect class="barD clashD" x="322" y="144" height="6"/>
+    <rect class="barP clashD" x="506" y="134" height="6" style="animation-delay:1s"/><rect class="barD clashP" x="506" y="144" height="6" style="animation-delay:1s"/>
+    <rect class="barP clashP" x="690" y="134" height="6" style="animation-delay:2s"/><rect class="barD clashD" x="690" y="144" height="6" style="animation-delay:2s"/>
+    <rect class="barP clashD" x="874" y="134" height="6" style="animation-delay:0.5s"/><rect class="barD clashP" x="874" y="144" height="6" style="animation-delay:0.5s"/>
+  </g>
+  <circle class="reqin" cx="28" cy="130" r="4.5" fill="#b3592f"/>
+  <circle class="reqin" cx="28" cy="130" r="4.5" fill="#b3592f" style="animation-delay:1.7s"/>
+  <circle class="reqout" cx="214" cy="130" r="4.5" fill="#b3592f"/>
+  <circle class="reqout" cx="214" cy="130" r="4.5" fill="#b3592f" style="animation-delay:1.7s"/>
+  <text class="pro" x="480" y="198" text-anchor="middle">+ simplest: one pool, no transfer fabric</text>
+  <text class="con" x="860" y="198" text-anchor="middle">&#8722; phases interfere: prefill stalls every decode</text>
+  <text class="lbl" x="1058" y="113">tokens</text>
+  <line class="dash" x1="1050" y1="130" x2="1116" y2="130"/>
+  <path d="M1116 130 l-7 -4 v8 z" fill="#8a897d"/>
+  <circle class="tok" cx="1054" cy="130" r="4.5" fill="#b3592f"/>
+</svg>

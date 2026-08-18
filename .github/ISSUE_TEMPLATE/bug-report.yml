@@ -1,0 +1,33 @@
+# Every failure mode here is environmental: the fleet, the engines, the
+# config. The template asks for the three things that let a stranger's
+# report be diagnosed without a round trip.
+name: Bug report
+description: Something the router, a gate, or a harness did wrong
+labels: ["correctness"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what should have happened
+      description: One paragraph each. If a request failed, include the HTTP status and any error body.
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: narwhal-check output
+      description: Run `narwhal-check --fleet <your config>` against the same fleet and paste the output. It is the fastest way to rule the environment in or out.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Fleet config, sanitized
+      description: Your fleet JSON with addresses elided. The SLOs, thresholds and timeouts are usually the story.
+      render: json
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: "`pip show narwhal-inference | head -2`, `python --version`, and the engine (vLLM) version. If you have a journal, its first line names the exact build that wrote it."
+    validations:
+      required: true

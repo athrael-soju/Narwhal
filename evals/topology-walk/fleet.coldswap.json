@@ -1,0 +1,59 @@
+{
+  "_": "Topology walk, cold-swap cell. The planner cell plus a 300 s out-of-service charge per flip, emulating drain-and-reprovision. Engines never actually restart, and 300 s is under half a real reprovision on most hardware, so the penalty is a floor.",
+  "model": "moonshotai/Kimi-K3",
+  "engines": [
+    {
+      "iid": "n1",
+      "url": "http://<node-1-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n2",
+      "url": "http://<node-2-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n3",
+      "url": "http://<node-3-fabric-address>:8002",
+      "role": "prefill"
+    },
+    {
+      "iid": "n4",
+      "url": "http://<node-4-fabric-address>:8002",
+      "role": "decode"
+    },
+    {
+      "iid": "n5",
+      "url": "http://<node-5-fabric-address>:8002",
+      "role": "decode"
+    },
+    {
+      "iid": "n6",
+      "url": "http://<node-6-fabric-address>:8002",
+      "role": "decode"
+    }
+  ],
+  "slo": {
+    "ttft_s": 3.0,
+    "tpot_s": 0.06
+  },
+  "thresholds": {
+    "expand": 1.0,
+    "shrink": 0.5,
+    "cooldown_s": 180.0,
+    "sustained_intervals": 3,
+    "dwell_s": 0.0
+  },
+  "controller": "planner",
+  "monitor_interval_s": 1.0,
+  "tokenize": true,
+  "chars_per_token": 3.8,
+  "first_token_timeout_s": 30.0,
+  "decode_read_timeout_s": 300.0,
+  "prefill_timeout_s": 120.0,
+  "request_timeout_s": 600.0,
+  "profiles_path": "runs/local/profiles.json",
+  "connector": "nixl",
+  "dialect": "vllm",
+  "flip_offline_s": 300.0
+}

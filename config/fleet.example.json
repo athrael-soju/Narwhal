@@ -1,0 +1,103 @@
+{
+  "model": "Qwen/Qwen3-32B",
+
+  "_engines": "One entry per vLLM instance, six here to match the fleet. `role` is only where the run starts; the scheduler relabels instances as Algorithms 2 and 3 decide. Every engine must run NixlConnector with kv_role kv_both, or an instance can only ever serve one phase and flipping does nothing. An entry may add \"pin\": true to hold its configured role for the life of the run. The use is a failover anchor: a pinned prefill engine gives a control-plane takeover a known seat to land on. Do not pin around a NIC that cannot carry decode-side egress at peak - that symptom points at misrouted traffic, and Deploy shows the check. min_prefill defaults to 1 (the never-empty guard); an entry without \"pin\" is fully scheduler-managed.",
+  "engines": [
+    { "iid": "n0", "url": "http://node0:8000", "role": "prefill" },
+    { "iid": "n1", "url": "http://node1:8000", "role": "prefill" },
+    { "iid": "n2", "url": "http://node2:8000", "role": "prefill" },
+    { "iid": "n3", "url": "http://node3:8000", "role": "decode" },
+    { "iid": "n4", "url": "http://node4:8000", "role": "decode" },
+    { "iid": "n5", "url": "http://node5:8000", "role": "decode" }
+  ],
+
+  "_slo": "Set your own targets rather than the Arrow paper's. Appendix A Table 1 ranges TTFT 1 to 150 s and TPOT 0.075 to 0.2 s across four traces on Qwen3-32B and Llama-3.1-70B, so its rows do not transfer to a different model. Every cost, every load and every flip is priced against these two numbers, which makes them the most consequential setting in this file. Read the profile the profiler wrote and set TPOT above the intercept: a target below the zero-contention interval is unreachable at any fleet size.",
+  "slo": {
+    "ttft_s": 10.0,
+    "tpot_s": 0.125
+  },
+
+  "_thresholds": "Section 5.5. Loads are already SLO-relative, so expand 1.0 means exactly at target. cooldown_s guards P->D only. sustained_intervals is how many consecutive over-threshold passes fire Algorithm 2, because one crossing is a spike rather than a sustained period. dwell_s pins a just-flipped instance in both directions; 0 is the Arrow paper's behaviour, and the right setting on workloads whose optimum moves. panic_ratio lets a P->D flip through the cooldown only on a sustained regime flip: decode at that multiple of expand while prefill is at or below shrink, held for sustained_intervals passes; a global spike raises both loads and does not fire it. 0 is off, the Arrow paper's behaviour.",
+  "thresholds": {
+    "expand": 1.0,
+    "shrink": 0.5,
+    "cooldown_s": 10.0,
+    "panic_ratio": 0.0,
+    "sustained_intervals": 3,
+    "dwell_s": 0.0
+  },
+
+  "_monitor_interval_s": "Section 5.5's update interval: one control pass, then the decode load window closes.",
+  "monitor_interval_s": 1.0,
+
+  "_flip_offline_s": "Actuation-cost ablation: seconds a just-flipped instance stays out of service, emulating fleets whose role change drains and relaunches the worker. 0 is the hot swap. The instance counts toward its new pool, finishes resident work, and takes no new placements until the window passes.",
+  "flip_offline_s": 0.0,
+
+  "_prefill_affinity": "Ablation switch: prefill legs sharing a prompt head return to their warm engine unconditionally. Off is the architecture's position; on reintroduces the selfish caching game for measurement.",
+  "prefill_affinity": false,
+
+  "_admission_policy": "What happens at the door when the fleet cannot serve on time. predictive (default) prices every request's cheapest placement and refuses with 429 + Retry-After what lands over the TTFT budget: overload becomes fast refusals, reported as a KPI, instead of slow failures in an engine queue. admission_margin widens the budget by a fraction so placement noise at the boundary does not churn refusals. open always admits; it is kept for paired measurement.",
+  "admission": "predictive",
+  "admission_margin": 0.0,
+
+  "_queue_rebalance": "A queued prefill leg has no migrated state, so a leg whose staying price has missed the TTFT budget can move to an engine that meets it with replace_slack_s to spare, a re-dispatch with no state to move. Deep queues nominate and replace_per_pass live legs move per monitoring pass: pass prices snapshot the moment, so an unbounded pass would invert the skew rather than drain it. true is the default; false keeps every placement final, for the paired arm.",
+  "queue_rebalance": true,
+  "replace_slack_s": 0.5,
+  "replace_per_pass": 2,
+
+  "_prefix_coop": "Cooperative prefix reuse: a shared prompt head priced inside Algorithm 1's cost as a discount on the engine whose KV holds it. It wins ties and loses conflicts with queued work. Warmth fades on prefix_halflife_s because engines evict silently. Cannot compose with the affinity ablation; the two games are measured apart.",
+  "prefix_coop": false,
+  "prefix_halflife_s": 60.0,
+
+  "_placement": "Prefill-leg placement. greedy places each request on arrival, the Arrow paper's sequential behaviour and the default. batched holds arrivals for batch_window_ms (or batch_max, whichever first) and assigns the window jointly by exact min-cost matching over the same cost pairs.",
+  "placement": "greedy",
+  "batch_window_ms": 20.0,
+  "batch_max": 6,
+
+  "_controller": "Which loop moves roles. planner, the default, computes a destination split per plan window from offered prefill work and decode backlog, confirms pure rebalancing twice, moves a starving pool immediately, and relabels all needed instances in one pass; Algorithm 1 placement is untouched and its inline flips are suppressed. The Price of Order measures it against reactive control. reactive is Algorithm 2 as the Arrow paper specifies. Choose it for paper-faithful behaviour. The planner prices demand against the fleet-mean profile.",
+  "controller": "planner",
+  "planner": {
+    "interval_s": 60.0,
+    "window_s": 120.0,
+    "confirmations": 2,
+    "utilization": 0.8,
+    "min_arrivals": 10,
+    "demand_floor": 0.5,
+    "fast_step_s": 5.0,
+    "attainment_floor": 0.9
+  },
+
+  "profiles_path": "runs/profiles.json",
+  "request_timeout_s": 600.0,
+  "prefill_timeout_s": 120.0,
+  "tokenize": true,
+  "chars_per_token": 3.8,
+
+  "_first_token_timeout_s": "Deadline for the decode leg's first token, section 4.3's t2. Set it above the crossed-handoff p99 in narwhal-report's KV table for your context sizes: transfer time is size-insensitive, so the tail is decode queueing, and a deadline inside it converts queueing into failure bursts. 2.5 fits contexts to ~8k; long-context fleets set it far higher, from their own KV table.",
+  "first_token_timeout_s": 2.5,
+
+  "_decode": "Attempts per request (a retry only happens before anything streamed) and the longest silent gap before a stream counts as stalled. These deadlines are also the fleet's back-pressure: they shed work that sustained overload has already made late. Raising them severalfold is its own failure mode: toxic backlog stays resident until the engines themselves fail decode legs, and outright losses grow at lower attainment.",
+  "decode_attempts": 2,
+  "decode_read_timeout_s": 60.0,
+
+  "_availability": "eject_after counts consecutive failed legs per instance; connection-shaped failures (refused, unreachable) eject at the threshold, while timeout-shaped failures only trigger a /health verify and eject when that fails too, so a flooded but healthy engine stays in the pool. readmit_every is monitor intervals between /health readmission probes of ejected instances; tokenize_timeout_s is the tokenize probe's budget, charged to a request the router has not placed yet.",
+  "eject_after": 3,
+  "readmit_every": 10,
+  "tokenize_timeout_s": 2.0,
+
+  "_admission": "One admitted request holds one engine connection at a time, so max_connections is both the engine pool size and the router's admission limit; the request past it is answered 429 rather than left waiting in the pool, where its wait would land in its own TTFT while Algorithm 1 prices it as placed. pool_timeout_s bounds the slot wait so exhaustion fails a leg loudly instead of stalling. connect_timeout_s bounds the TCP handshake to an engine, health_timeout_s the /health probes that readmission and the check gates run. flip_history caps the flips and refusals kept for /arrow/state.",
+  "max_connections": 512,
+  "pool_timeout_s": 5.0,
+  "connect_timeout_s": 10.0,
+  "health_timeout_s": 5.0,
+  "flip_history": 1000,
+
+  "_graceful_timeout_s": "Seconds uvicorn allows in-flight requests after SIGTERM; narwhal-serve --graceful-timeout overrides per process. Kubernetes defaults to the same 30, which covers a ~1,500-token stream's drain.",
+  "graceful_timeout_s": 30.0,
+
+  "_wandb": "Optional telemetry destination. Empty project means no exporter; a harness names each arm's run in the derived configs it writes.",
+  "wandb": {
+    "project": "",
+    "run": ""
+  }
+}

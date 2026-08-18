@@ -1,0 +1,14 @@
+.git
+.venv
+.mypy_cache
+.hypothesis
+.pytest_cache
+runs
+local
+dist
+research
+config/*.local.json
+**/__pycache__
+.env
+.env.*
+!.env.example

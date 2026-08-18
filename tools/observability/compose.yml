@@ -1,0 +1,39 @@
+# Observability for one router node. `make observe` from the repo root
+# starts it, or `docker compose up -d` here. Both containers use host
+# networking so Prometheus can reach the router and each engine at its
+# configured address. restart: always and the named volumes keep the stack
+# and its data across reboots.
+services:
+  prometheus:
+    image: prom/prometheus:v3.9.1
+    network_mode: host
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+      # A fleet deploy wipes the repo tree and keeps runs/, so the targets
+      # directory is generated there. At its previous location beside this
+      # compose file, a deploy removed the bind-mount source under the
+      # running container, and engine targets read as down until the file
+      # was regenerated.
+      - ../../runs/observability/targets:/etc/prometheus/targets:ro
+      - prom-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    network_mode: host
+    restart: always
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana-narwhal.json:/var/lib/grafana/dashboards/narwhal.json:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prom-data:
+  grafana-data:

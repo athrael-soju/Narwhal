@@ -1,0 +1,41 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  release:
+    if: github.repository == 'athrael-soju/Narwhal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: create the GitHub Release from the CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          awk -v tag="## $TAG" 'BEGIN{f=0} $0==tag{f=1;next} f&&/^## /{exit} f{print}' CHANGELOG.md > section.md
+          if [ -s section.md ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > gen.md || true
+            { cat section.md; echo; echo '---'; echo; cat gen.md; } > notes.md
+            gh release create "$TAG" dist/* --title "Narwhal $TAG" --notes-file notes.md || \
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "Narwhal $TAG" --generate-notes || \
+            gh release upload "$TAG" dist/* --clobber
+          fi
+      - name: publish to PyPI (trusted publishing)
+        # Deferred until the paper is public: flip the repository
+        # variable PYPI_PUBLISH to 'true' to arm this step.
+        if: vars.PYPI_PUBLISH == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1

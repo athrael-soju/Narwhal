@@ -1,0 +1,10 @@
+narwhal
+Copyright 2026 NCA LTD
+
+Licensed under the Apache License, Version 2.0. The full text is in LICENSE.
+
+This software is an independent reimplementation of the scheduling mechanisms
+described in Wu et al., "Arrow: Adaptive Scheduling Mechanisms for
+Disaggregated LLM Inference Architecture", arXiv:2505.11916v2, 6 November 2025,
+https://arxiv.org/abs/2505.11916. It is not affiliated with, reviewed by or
+endorsed by the authors, and that paper carries its own copyright.
