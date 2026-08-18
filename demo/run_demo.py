@@ -169,7 +169,7 @@ def main() -> int:
         "--instances",
         type=int,
         default=N_INSTANCES,
-        help="fleet size; 8 reproduces the Arrow paper, 6 matches the AMD fleet",
+        help="fleet size; 8 reproduces the Arrow paper, 6 matches the study's MI355X fleet",
     )
     ap.add_argument("--rates", default="0.6,1.0,1.6,2.4,3.2,4.4,5.4,6.4")
     args = ap.parse_args()
