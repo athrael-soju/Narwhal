@@ -52,7 +52,7 @@ class HandoffReport:
     unserved: int = 0
 
 
-def snapshot(router: Any, *, wall: float | None = None) -> dict[str, Any]:
+def snapshot(router: Any) -> dict[str, Any]:
     """The whole handoff, small enough to rewrite every monitoring pass."""
     remaining = {
         iid: max(0.0, at - router._clock())
@@ -61,7 +61,7 @@ def snapshot(router: Any, *, wall: float | None = None) -> dict[str, Any]:
     }
     return {
         "version": VERSION,
-        "at": wall if wall is not None else time.time(),
+        "at": time.time(),
         "run": router.journal.run,
         "model": router.cfg.model,
         "engines": sorted(router.monitor.instances),
@@ -100,7 +100,7 @@ def load(path: Path) -> dict[str, Any] | None:
     return doc
 
 
-def apply(router: Any, doc: dict[str, Any] | None, *, wall: float | None = None) -> HandoffReport:
+def apply(router: Any, doc: dict[str, Any] | None) -> HandoffReport:
     """Rebuild the late router's actuated picture onto this one.
 
     Refuses when the handoff names a different fleet — a different fleet's
@@ -109,7 +109,7 @@ def apply(router: Any, doc: dict[str, Any] | None, *, wall: float | None = None)
     request and nothing to probe from: it lands as no ejections instead, with
     a warning.
     """
-    now_wall = wall if wall is not None else time.time()
+    now_wall = time.time()
     if doc is None:
         return HandoffReport(applied=False, why="no handoff file")
     declared = sorted(doc.get("engines") or [])

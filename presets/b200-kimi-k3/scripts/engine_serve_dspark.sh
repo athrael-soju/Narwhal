@@ -7,9 +7,11 @@
 #
 # Keep it invisible to narwhal: run on a port NOT in the fleet config
 # (e.g. 9002). Requires the container from container_recreate.sh with the
-# draft weights at $MODELS/Kimi-K3-DSpark.
+# draft weights at $MODELS/Kimi-K3-DSpark. Without the OFFLOAD machinery from
+# engine_serve.sh this script cannot boot Kimi-K3 on B200, and it is a
+# scaffold pending validation.
 #
-# Usage (run ON the node):
+# Usage (run inside the engine container ON the node):
 #   MODELS=<weights dir> bash engine_serve_dspark.sh [PORT]
 set -euo pipefail
 

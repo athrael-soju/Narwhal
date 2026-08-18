@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Run-dir contract: $D/status gains a "COOLDOWN WALK DONE" line and $D/config.json exists;
+# no in-repo runner writes either today (run dirs carry <name>.<tag>.config.json), so
+# this watchdog targets externally prepared run dirs.
 # Node-local watchdog for a long run: one verdict line every 15 s.
 #
 #   nohup tools/run_watchdog.sh /abs/path/to/run-dir & 

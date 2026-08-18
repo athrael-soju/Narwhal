@@ -25,10 +25,6 @@ log = logging.getLogger("narwhal.scheduler")
 # Compared lexicographically: the first component has priority over the second.
 Cost = tuple[float, float]
 
-# Consecutive failed legs before an instance leaves the candidate set: far
-# enough from one transient to be evidence, near enough to stop a dead
-# instance from taking the fleet.
-
 
 @dataclass
 class Flip:
@@ -140,6 +136,9 @@ class GlobalScheduler:
         # argument entirely.
         self.ejected: dict[str, float] = {}
         self._failures: Counter[str] = Counter()
+        # Consecutive failed legs before an instance leaves the candidate set: far
+        # enough from one transient to be evidence, near enough to stop a dead
+        # instance from taking the fleet.
         self._eject_after = eject_after
         # A target-state controller that owns the pools suppresses this
         # scheduler's own flips (Algorithm 1 step 3 and Algorithm 2): two
@@ -190,8 +189,6 @@ class GlobalScheduler:
         self.prefix_halflife_s = prefix_halflife_s
         # (at, ttft_ok, tpot_ok) per completed request: the planner's
         # closed-loop signal. Failures count as TTFT misses.
-        from collections import deque
-
         self.outcomes: deque[tuple[float, bool, bool]] = deque(maxlen=4096)
         from collections import OrderedDict
 
@@ -210,10 +207,10 @@ class GlobalScheduler:
         """Count one failed leg; report "eject", "verify" or None.
 
         Two failure shapes, two verdicts: a connection-shaped failure
-        (refused, unreachable) is how a dead engine presents, and three in a
-        row eject. A timeout-shaped failure is how an overloaded engine
+        (refused, unreachable) is how a dead engine presents, and `eject_after`
+        in a row eject. A timeout-shaped failure is how an overloaded engine
         presents - the 504 tail is load, and load is the scheduler's job -
-        so three in a row return "verify": the caller probes /health and
+        so `eject_after` in a row return "verify": the caller probes /health and
         ejects only if that fails too, which is the wedged-listener case.
         Without the distinction the breaker chatters between ejection and
         readmission on a healthy engine under a flood phase.
@@ -774,10 +771,6 @@ class GlobalScheduler:
                     )
                     if best is None or total < best:
                         best, best_perm = total, perm
-                if best_perm is None:
-                    raise RuntimeError(
-                        "batch gate priced no assignment: fewer candidates than the chunk"
-                    )
                 for k, r in enumerate(chunk):
                     out[r.rid] = candidates[best_perm[k]]
                 continue

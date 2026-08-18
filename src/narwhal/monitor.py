@@ -25,7 +25,7 @@ class _Window:
     published: float = 0.0
 
     def add(self, gap: float) -> None:
-        """Register an instance and open its pricing windows."""
+        """Accumulate one inter-token gap into `total_s` and `count`."""
         self.total_s += gap
         self.count += 1
 

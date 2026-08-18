@@ -66,7 +66,6 @@ class Planner:
         self._confirmations = 0
         self._next_plan = clock() + interval_s
         self._last_fast = clock()
-        self.moves = 0
         self.last_needs: tuple[float, float] = (0.0, 0.0)
 
     # -- observations ----------------------------------------------------
@@ -270,7 +269,6 @@ class Planner:
             moved += 1
         del self.scheduler.flips[: -self.scheduler._flip_history]
         if moved:
-            self.moves += moved
             p = len(self.monitor.pool(Role.PREFILL))
             log.info(
                 "PLAN moved %d instance(s) -> %dP%dD | demand P=%.2f D=%.2f",

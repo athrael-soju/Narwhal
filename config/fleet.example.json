@@ -85,7 +85,7 @@
   "readmit_every": 10,
   "tokenize_timeout_s": 2.0,
 
-  "_admission": "One admitted request holds one engine connection at a time, so max_connections is both the engine pool size and the router's admission limit; the request past it is answered 429 rather than left waiting in the pool, where its wait would land in its own TTFT while Algorithm 1 prices it as placed. pool_timeout_s bounds the slot wait so exhaustion fails a leg loudly instead of stalling. connect_timeout_s bounds the TCP handshake to an engine, health_timeout_s the /health probes that readmission and the check gates run. flip_history caps the flips and refusals kept for /arrow/state.",
+  "_pool": "One admitted request holds one engine connection at a time, so max_connections is both the engine pool size and the router's admission limit; the request past it is answered 429 rather than left waiting in the pool, where its wait would land in its own TTFT while Algorithm 1 prices it as placed. pool_timeout_s bounds the slot wait so exhaustion fails a leg loudly instead of stalling. connect_timeout_s bounds the TCP handshake to an engine, health_timeout_s the /health probes that readmission and the check gates run. flip_history caps the flips and refusals kept for /arrow/state.",
   "max_connections": 512,
   "pool_timeout_s": 5.0,
   "connect_timeout_s": 10.0,

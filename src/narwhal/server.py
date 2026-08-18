@@ -482,7 +482,7 @@ class ArrowRouter:
                 if not self.scheduler.meets_slo(req, priced, ttft_margin=self.cfg.admission_margin):
                     return self._refusal(rid, client_rid, arrived, req, priced[1], tenant=tenant)
             # The prediction the drift signal grades this placement against
-            #: Algorithm 1's own quoted cost for it, taken before the
+            # Algorithm 1's own quoted cost for it, taken before the
             # dispatch makes the request resident - after, the quote would
             # price the request twice. A re-driven leg re-quotes at its new
             # home, so the residual grades the placement that served.
@@ -1081,9 +1081,9 @@ async def _sweep_liveness(router: ArrowRouter) -> list[str]:
     is never dispatched anything that could fail and it keeps its role
     indefinitely. This is the traffic-free path to the same verdict: ask
     /health directly, on a cadence, and eject on `liveness_misses` consecutive
-    silences. One miss is a blip and never enough, because a sweep that ejects
-    on a single timeout would take engines out for a hiccup no request ever
-    noticed.
+    silences. With the default of two misses, one is a blip and never enough,
+    because a sweep that ejects on a single timeout would take engines out for
+    a hiccup no request ever noticed.
     """
     misses = router.scheduler.liveness_misses
     live = [iid for iid in router.monitor.instances if iid not in router.scheduler.ejected]
@@ -1124,15 +1124,15 @@ async def _monitor_once(router: ArrowRouter) -> Instance | None:
     Separate from the loop so a caller drives one interval with no sleep.
     The flip itself logs inside `GlobalScheduler.flip`, which covers both
     algorithms' paths; this pass carries the per-pass line and the telemetry
-    point.
+    point. Under planner control the passes go to the planner, nothing flips
+    inline, and the return is None.
     """
     interval = router.cfg.monitor_interval_s
     flipped = None
     try:
         if router.planner is not None:
             # The plan loop replaces Algorithm 2's trigger; readmission, the
-            # The drift instrument and the telemetry below are
-            # controller-independent.
+            # drift instrument, and the telemetry below are controller-independent.
             router.planner.sample()
             router.planner.fast_step()
             router.planner.pass_due()

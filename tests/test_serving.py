@@ -411,12 +411,6 @@ async def test_the_door_prices_prefix_identity_only_when_an_arm_is_on(tmp_path):
     assert tokens == prompt_tokens
 
 
-def test_the_priced_span_is_the_hashed_span_not_the_whole_head() -> None:
-    """2048 hashed chars at 3.8 chars/token claim 539 tokens; a shorter
-    prompt claims itself, a longer one claims only what the hash saw."""
-    assert int(2048 / 3.8) == 538
-
-
 def test_sse_token_count_ignores_the_terminator_and_counts_deltas():
     assert sse_token_count('data: {"choices":[{"text":"a"}]}') == 1
     assert sse_token_count('data: {"choices":[{"delta":{"content":"a"}}]}') == 1

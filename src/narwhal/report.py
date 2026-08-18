@@ -2,7 +2,8 @@
 
 Goodput is the headline, but it says nothing about whether the controller
 actuated or thrashed. §C names the rest: re-role count and rate, thrash as
-reversals within a short window, and attainment split by which SLO bound.
+reversals within a short window (counted windowless across the run here),
+and attainment split by which SLO bound.
 """
 
 from __future__ import annotations

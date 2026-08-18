@@ -26,7 +26,7 @@ The validated pair: Kimi-K3 on AMD Instinct MI355X, verified at L4 on the [Suppo
 
 ## Known caveats on the validated image
 
-Both upstream and version-bound, covered in [Deploy](../../docs/Deploy.md)'s compatibility notes: engines restart in whole waves, and prefix caching stays off (the full-cache-hit assert). Speculative decoding is not enabled pending an upstream Triton/AITER pairing; the pair is fully functional without it.
+Both upstream and version-bound, covered in [Deploy](../../docs/Deploy.md)'s compatibility notes: engines restart in whole waves, and prefix caching ships on (the full-cache-hit assert fires on fully cache-resident prompts on affected builds; set `PREFIX_CACHING=off` for benchmark campaigns there). Speculative decoding is not enabled pending an upstream Triton/AITER pairing; the pair is fully functional without it.
 
 ## Speculative decoding: upstream, no date
 

@@ -1,4 +1,4 @@
-"""The simulator behind the README table, and §6.1's attainment metric.
+"""The simulator behind the table `make demo` prints, and §6.1's attainment metric.
 
 The published table is the only result this project reports, so the golden run
 at the end pins it.
@@ -173,7 +173,7 @@ def test_a_decode_leg_that_crosses_instances_waits_for_the_kv_transfer(tmp_path)
 # -- the published table --------------------------------------------------
 
 # demo/run_demo.py --rates 2.4,6.4 at seed 7, the 2.4 and 6.4 columns of the
-# README table. The three cells a finished-only denominator moves are here:
+# `make demo` table. The three cells a finished-only denominator moves are here:
 # static 1P7D at 6.4, static 7P1D at 2.4 and the adaptive arm at 6.4.
 GOLDEN = [
     "static 1P7D             39%    33%        none",

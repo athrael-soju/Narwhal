@@ -35,7 +35,7 @@ def test_a_miss_names_the_constraint_that_bound_it():
     assert _bound({**ok, "error": "ReadTimeout"}, 10, 0.125) == "error"
 
 
-def test_a_refused_row_is_its_own_bucket_not_an_error(tmp_path):
+def test_a_refused_row_is_its_own_bucket_not_an_error():
     """Refusal at the door is an admission KPI; bucketed as error it would
     read as a request the fleet destroyed."""
     row = {
@@ -110,7 +110,7 @@ def test_an_arm_with_no_state_file_still_scores(tmp_path):
     assert scored[0].reroles == 0
 
 
-def test_time_to_adapt_is_the_lag_from_a_phase_boundary(tmp_path):
+def test_time_to_adapt_is_the_lag_from_a_phase_boundary():
     """§C: "lag between the load-shift onset and the completed role change"."""
     from narwhal.report import _time_to_adapt
 
@@ -119,7 +119,7 @@ def test_time_to_adapt_is_the_lag_from_a_phase_boundary(tmp_path):
     assert _time_to_adapt(flips, first_arrival=0.0, phase_s=30.0) == [41.0, 11.0]
 
 
-def test_a_boundary_with_no_flip_after_it_reports_nothing(tmp_path):
+def test_a_boundary_with_no_flip_after_it_reports_nothing():
     """Never adapting is not adapting instantly."""
     from narwhal.report import _time_to_adapt
 

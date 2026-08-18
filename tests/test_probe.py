@@ -90,7 +90,8 @@ def stub_url():
         finally:
             _stop(proc)
         return
-    raise last if last is not None else RuntimeError("the stub never started")
+    assert last is not None
+    raise last
 
 
 SHORT = probe.Sweep(

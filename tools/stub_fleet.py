@@ -2,9 +2,10 @@
 """A fake vLLM fleet: the disaggregated protocol, with the Arrow paper's timing.
 
 This exists so the deployment path can be exercised end to end without an
-accelerator. It answers `/health`, `/tokenize` and `/v1/completions`, honours
-`kv_transfer_params`, and streams. Timing follows Arrow §3.1: prefill quadratic in
-input length, decode linear in the tokens resident on that instance.
+accelerator. It answers `/health`, `/tokenize`, `/v1/models` and
+`/v1/completions`, honours `kv_transfer_params`, and streams. Timing follows
+Arrow §3.1: prefill quadratic in input length, decode linear in the tokens
+resident on that instance.
 
 What it validates is the wiring: profiling, admission, both legs, the handoff,
 the token stream, flipping, the journal. What it cannot validate is anything

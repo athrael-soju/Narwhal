@@ -689,7 +689,7 @@ class FleetConfig:
 
     @staticmethod
     def from_env() -> FleetConfig:
-        """The NARWHAL_FLEET fallback for commands given no --fleet."""
+        """NARWHAL_FLEET names the file only for the ASGI-factory path."""
         path = os.environ.get("NARWHAL_FLEET")
         if not path:
             raise RuntimeError("set NARWHAL_FLEET to a fleet config file")

@@ -1,7 +1,7 @@
 """Fixtures shared by the suite.
 
-The tests build routers directly rather than through `create_app`, so nothing
-runs the shutdown handler that closes the journal. The handle then reaches the
+Most tests build routers directly rather than through `create_app`, so those
+never run the shutdown handler that closes the journal. The handle then reaches the
 garbage collector open, and CPython raises `ResourceWarning` from whatever
 callback happened to trigger the collection. `filterwarnings` in
 `pyproject.toml` promotes that warning to an error.

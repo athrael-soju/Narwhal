@@ -10,7 +10,7 @@ inside each phase are counted from the state file's monotonic stamps, aligned
 by the journal's first arrival.
 
     score_walk.py --dir runs/local/eval-topology-walk --arm planner --tag seed7 \
-        --segments "<spec>" [--rate 1.0] [--seed 7]
+        --segments "<spec>" --ttft-slo 2.0 --tpot-slo 0.1 [--rate 1.0] [--seed 7]
 """
 
 from __future__ import annotations

@@ -1,13 +1,13 @@
 """A warm standby, so the control plane survives its node.
 
-Direction 1 made the restart cheap: everything the router must remember is
+The --resume handoff made the restart cheap: everything the router must remember is
 one small handoff document, rewritten every monitoring pass. This module
 makes it warm. A second router process starts with `--standby-of` pointing
 at the primary, polls that document over HTTP, and refuses traffic while
 the primary answers. When the primary goes silent for `takeover_after`
 consecutive probes, the standby applies the freshest document it holds and
 opens its door. Detection plus takeover is a handful of probe intervals -
-sub-second at the defaults - and the applied document is at most one
+about a second at the defaults - and the applied document is at most one
 monitoring pass old, so the actuated picture (roles, the breaker's holds,
 the counters the run speaks over) continues rather than restarts.
 

@@ -7,7 +7,8 @@ Ordered cheapest first:
   pace      no engine runs conspicuously slower than the fleet it claims to match
   tokenize  exact input length is available
   produce   a prefill leg returns kv_transfer_params
-  consume   a real split moves KV from one engine to another
+  consume   a real split moves KV from one engine to another (ring shapes with a
+            single unpinned engine may probe it against itself)
   profile   every instance has a measured curve
   slo       the TPOT target is above the measured floor
 

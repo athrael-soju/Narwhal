@@ -1,4 +1,4 @@
-"""The Prometheus endpoint the fleet has been scraping into a 404."""
+"""The /metrics exposition metrics.render produces: counters, pools, loads, both histograms."""
 
 from __future__ import annotations
 

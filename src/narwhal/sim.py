@@ -59,7 +59,7 @@ class _Live:
 
 
 class Fleet:
-    """The simulator: local schedulers stepped on a shared clock (README table)."""
+    """The simulator: local schedulers stepped on a shared clock (the table `make demo` prints)."""
 
     def __init__(
         self,

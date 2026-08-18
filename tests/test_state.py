@@ -31,9 +31,6 @@ class FakeClock:
     def __call__(self) -> float:
         return self.t
 
-    def advance(self, dt: float) -> None:
-        self.t += dt
-
 
 def _cfg(tmp_path: Path, **over) -> FleetConfig:
     cfg = FleetConfig(

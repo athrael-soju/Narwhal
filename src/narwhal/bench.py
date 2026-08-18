@@ -365,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
                 for s in samples:
                     fh.write(json.dumps({"rate": rate, **s.__dict__}) + "\n")
         if frac >= args.target:
-            sustained = rate
+            sustained = max(sustained, rate)
     shown = f"{sustained:g} req/s" if sustained else "none"
     print(f"\nsustained at {args.target:.0%} attainment: {shown}")
     return 0

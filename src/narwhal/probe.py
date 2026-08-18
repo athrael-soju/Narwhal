@@ -271,7 +271,7 @@ async def run(cfg: FleetConfig, only: set[str] | None, sweep: Sweep | None = Non
         for spec in targets:
             r = await client.get(f"{spec.url}{dialect.health_path}", timeout=10.0)
             if r.status_code != 200:
-                print(f"  {spec.iid}: not healthy, skipped", file=sys.stderr)
+                print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
                 return 1
             if dialect.tokenize_path is None:
                 # The x axis of both fits is then sized off the character

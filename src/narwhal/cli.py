@@ -116,7 +116,7 @@ def serve(argv: list[str] | None = None) -> int:
     # only debug keeps them.
     if LOG_LEVELS[args.log_level] != "DEBUG":
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    if (holder := _port_in_use(args.host, args.port)) is not None:
+    if (holder := _port_in_use(args.port)) is not None:
         print(
             f"port {args.port} is already serving ({holder}). The fleet has one "
             f"router port, so starting here would leave the old router taking the "
@@ -154,7 +154,7 @@ def serve(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _port_in_use(host: str, port: int) -> str | None:
+def _port_in_use(port: int) -> str | None:
     """Describe what holds the port, or None if it is free."""
     for family, addr in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
         with socket.socket(family, socket.SOCK_STREAM) as s:

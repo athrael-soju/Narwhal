@@ -67,7 +67,7 @@ async def test_the_ring_covers_a_fraction_of_them():
     cfg, eng = _cfg(6), FakeEngines()
     await _run(cfg, eng, mesh=False)
     assert len(eng.calls) == 6, "a ring is n pairs of the n*(n-1) the router can use"
-    assert ("e2", "e0") not in eng.calls, "the pair that stalled on the fleet is outside it"
+    assert ("e2", "e0") not in eng.calls, "every probed pair belongs to the ring"
 
 
 @pytest.mark.asyncio
@@ -150,7 +150,7 @@ def test_a_free_port_reads_free():
     with _s.socket(_s.AF_INET, _s.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         free_port = probe.getsockname()[1]
-        assert _port_in_use("127.0.0.1", free_port) is None
+        assert _port_in_use(free_port) is None
 
 
 def test_a_held_port_is_named_rather_than_silently_bound():
@@ -162,7 +162,7 @@ def test_a_held_port_is_named_rather_than_silently_bound():
         held.bind(("127.0.0.1", 0))
         held.listen(1)
         port = held.getsockname()[1]
-        assert _port_in_use("127.0.0.1", port) == "accepting connections"
+        assert _port_in_use(port) == "accepting connections"
 
 
 # -- the trace has to be able to show adaptation paying -------------------

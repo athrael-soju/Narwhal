@@ -126,7 +126,6 @@ def apply_command(scn: Scenario, line: str, now: float) -> str:
 class Session:
     """Everything one driving session accumulates."""
 
-    scenario: Scenario = field(default_factory=Scenario)
     samples: list[tuple[float, Sample]] = field(default_factory=list)
     sent: int = 0
     started: float = field(default_factory=time.monotonic)
@@ -170,7 +169,7 @@ async def _router_line(client: httpx.AsyncClient, base: str) -> str:
 async def run(args: argparse.Namespace) -> int:
     """The session: an arrival loop, a command reader, a heartbeat."""
     scn = Scenario()
-    ses = Session(scenario=scn)
+    ses = Session()
     rng = random.Random(args.seed)  # noqa: S311 - load synthesis, not cryptography
     record = Path(args.record)
     record.parent.mkdir(parents=True, exist_ok=True)

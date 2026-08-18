@@ -388,7 +388,7 @@ def _handed(tmp_path: Path, monkeypatch, *extra: str) -> dict:
     handed: dict = {}
     # `serve` sets the level for the whole process, so it is put back.
     monkeypatch.setattr(logging.root, "level", logging.root.level)
-    monkeypatch.setattr(cli, "_port_in_use", lambda host, port: None)
+    monkeypatch.setattr(cli, "_port_in_use", lambda port: None)
     monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kw: handed.update(app=app, **kw))
     assert cli.serve(["--fleet", str(fleet), *extra]) == 0
     return handed

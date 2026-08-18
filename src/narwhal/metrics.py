@@ -45,11 +45,9 @@ class Histogram:
                 self.counts[i] += 1
 
     def render(self, name: str, help_text: str) -> list[str]:
-        """The /metrics payload: counters, pools, loads and both histograms."""
+        """One histogram's exposition lines: HELP, TYPE, le buckets, +Inf, sum, count."""
         out = [f"# HELP {name} {help_text}", f"# TYPE {name} histogram"]
-        cumulative = 0
         for edge, count in zip(self.buckets, self.counts, strict=True):
-            cumulative = max(cumulative, count)
             out.append(f'{name}_bucket{{le="{edge}"}} {count}')
         out.append(f'{name}_bucket{{le="+Inf"}} {self.n}')
         out.append(f"{name}_sum {self.total}")

@@ -59,7 +59,6 @@ class _EngineDrift:
     ttft_residuals: deque[float] = field(default_factory=lambda: deque(maxlen=4096))
     window_since: float = 0.0
     score: float | None = None
-    ttft_score: float | None = None
     over: int = 0
     under: int = 0
     on_probation: bool = False
@@ -153,11 +152,6 @@ class DriftTracker:
         engine = self._engines.get(iid)
         return engine.score if engine else None
 
-    def ttft_score(self, iid: str) -> float | None:
-        """The informational TTFT window score, or None if none this round."""
-        engine = self._engines.get(iid)
-        return engine.ttft_score if engine else None
-
     def tick(self) -> list[tuple[str, str]]:
         """Close any due windows; return (verdict, iid) pairs it adjudicated.
 
@@ -176,10 +170,6 @@ class DriftTracker:
             e.score = sum(e.residuals) / len(e.residuals)
             e.residuals.clear()
             scored[iid] = e.score
-        for e in self._engines.values():
-            if e.ttft_residuals:
-                e.ttft_score = sum(e.ttft_residuals) / len(e.ttft_residuals)
-                e.ttft_residuals.clear()
         # A quorum needs two scored engines; alone, a score reads only
         # against the absolute band.
         quorum_size = len(scored)

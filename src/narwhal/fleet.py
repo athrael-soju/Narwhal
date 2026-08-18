@@ -2,8 +2,8 @@
 
 Credentials come from `.env` at the repository root, named
 `<PREFIX>_<n>_IP`, `_USERNAME`, one of `_KEY` or `_PASSWORD`, and optionally
-`_NAME`. `.env.example` ships the names with empty values. `_KEY` is a private
-key path and takes precedence. A password is passed to `ssh` through the
+`_NAME` and `_FABRIC`. `.env.example` ships all but `_NAME` with empty values.
+`_KEY` is a private key path and takes precedence. A password is passed to `ssh` through the
 `SSHPASS` environment variable and is kept out of `Node`'s repr, so it never
 appears in a process argument list, a log line or a tracked file.
 """

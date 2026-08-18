@@ -83,7 +83,7 @@ def test_the_bench_cli_scores_a_journal_without_driving(tmp_path: Path, capsys):
     assert "1/1" in capsys.readouterr().out
 
 
-def test_the_deploy_stamp_is_the_fallback_describe(tmp_path, monkeypatch):
+def test_the_deploy_stamp_is_the_fallback_describe(tmp_path):
     """A tarball deploy has no .git, so the journal's build identity
     comes from the DEPLOYED_COMMIT file the deploy dropped next to the code."""
     from narwhal.provenance import _read_stamp

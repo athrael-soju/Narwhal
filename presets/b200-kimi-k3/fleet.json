@@ -1,5 +1,5 @@
 {
-  "_comment": "The CUDA preset, recorded as measured. The URLs below are placeholders: copy this file to the node's config/fleet.local.json and put the real addresses there, per presets/README.md. Give each engine its node's ordinary routed address, not a fabric ULA - these hosts run no IPoIB, so the 400G HCAs carry no IP and every IP-level path rides the primary NIC. That costs nothing at the transfer layer, where NIXL addresses the HCAs by LID over RDMA; see manifest.md.",
+  "_comment": "The CUDA preset, recorded as measured. The URLs below are placeholders: copy this file to the node's runs/fleet.local.json and put the real addresses there, per presets/README.md. Give each engine its node's ordinary routed address, not a fabric ULA - these hosts run no IPoIB, so the 400G HCAs carry no IP and every IP-level path rides the primary NIC. That costs nothing at the transfer layer, where NIXL addresses the HCAs by LID over RDMA; see manifest.md.",
   "model": "moonshotai/Kimi-K3",
   "engines": [
     {

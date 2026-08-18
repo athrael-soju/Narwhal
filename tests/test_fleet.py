@@ -130,7 +130,8 @@ def test_ship_is_pinned():
         "config",
         "tools",
         "presets",
-        # demo.sh and the guest wrappers: Live Bench on the nodes.
+        # scripts/ ships when present; operator fleets keep local demo and
+        # campaign wrappers there, and _payload skips missing paths.
         "scripts",
     )
 

@@ -15,14 +15,6 @@ from narwhal.types import Instance, Phase, Request, Role
 
 TTFT_SLO = 10.0
 TPOT_SLO = 0.125
-PROFILE = Profile(
-    iid="",
-    ttft_a=2e-8,
-    ttft_b=6e-5,
-    ttft_c=0.005,
-    tpot_slope=3e-6,
-    tpot_intercept=0.012,
-)
 
 
 class FakeClock:
@@ -73,7 +65,7 @@ def _run_scenario(tmp_path: Path, predictive: bool):
     sched._last_p2d_flip -= sched.th.cooldown_s
     fleet = Fleet(mon, store, clock, kv_transfer_s=0.05, dt=0.01)
 
-    arrivals = [t * 0.6 for t in range(150)]  # a P2-shaped walk: 800 in, 60 out
+    arrivals = [t * 0.6 for t in range(150)]  # a P2-shaped walk: 100 in, 300 out
     predicted_ttft: dict[str, float] = {}
     next_free = 0
     last_pass = 0.0
@@ -118,9 +110,6 @@ def _run_scenario(tmp_path: Path, predictive: bool):
         ):
             break
     return fleet, sched, degraded
-
-
-# Keep finished live rows: the metric reads them.
 
 
 def test_the_loop_names_and_isolates_the_drifting_engine(tmp_path):

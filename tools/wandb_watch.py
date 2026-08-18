@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         if s is None:
             if args.once:
                 print(
-                    f"wandb_watch: {args.base} not reachable; the poll loop keeps retrying",
+                    f"wandb_watch: {args.base} not reachable; exiting",
                     flush=True,
                 )
                 return 0

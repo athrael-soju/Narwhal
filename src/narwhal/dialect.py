@@ -5,7 +5,8 @@ in it - but a handful of HTTP details around Arrow §5.6's fixed protocol are th
 engine build's own: the non-OpenAI /health and /tokenize routes, the
 /tokenize response shape, the parameters a one-token prefill leg cannot
 carry, and the `min_tokens`/`ignore_eos` the decode sweep relies on. Today
-every one of those is vLLM's, baked into engine.py and probe.py. A dialect
+every one of those is vLLM's, carried by `VllmDialect`, with engine.py and
+probe.py reading them through the ABC. A dialect
 packs them behind this module's small ABC and registry, selected by name in
 the fleet config's `dialect` key - the connector seam mirrored one
 layer up, and the admission path for SGLang or TRT-LLM without an engine.py

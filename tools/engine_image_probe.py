@@ -41,7 +41,7 @@ import sys
 # Runs inside the candidate container. Prints one JSON object on stdout, so
 # the image's own logging on stderr cannot corrupt the result.
 PAYLOAD = r"""
-import importlib.util, json, os, re, struct, subprocess, sys
+import importlib.util, json, os, re, struct, subprocess
 
 out = {"versions": {}, "arch_flags": [], "deep": None, "guards": {},
        "spec_decode": {}, "errors": []}

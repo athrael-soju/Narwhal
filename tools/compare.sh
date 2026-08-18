@@ -64,8 +64,9 @@ start_router () {
     curl -sf http://localhost:8011/health >/dev/null 2>&1 || break
     sleep 1
   done
-  rm -f runs/local/journal.jsonl
-  setsid $V/narwhal-serve --fleet "$cfg" --host :: --port 8011 </dev/null \
+  rm -f "$OUT/$name.$tag.journal.jsonl"
+  setsid $V/narwhal-serve --fleet "$cfg" --host :: --port 8011 \
+    --journal "$OUT/$name.$tag.journal.jsonl" </dev/null \
     > "$OUT/$name.$tag.router.log" 2>&1 &
   for _ in $(seq 1 30); do
     curl -sf http://localhost:8011/health >/dev/null 2>&1 && break; sleep 1
@@ -94,7 +95,6 @@ run_arm () {
       --phase-seconds "$PHASE_SECONDS" "${TRACE_ARGS[@]}" \
       --out "$OUT/$name.$rate.samples.jsonl" >> "$OUT/$name.bench.log" 2>&1
     curl -s http://localhost:8011/arrow/state > "$OUT/$name.$rate.state.after.json"
-    cp runs/local/journal.jsonl "$OUT/$name.$rate.journal.jsonl" 2>/dev/null
   done
   echo "== $name"; grep -vE "^ +rate|^$" "$OUT/$name.bench.log" | grep -v "sustained at"
 }

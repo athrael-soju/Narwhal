@@ -22,7 +22,7 @@
 #   - its --max-num-seqs 4, which sized a smoke client; the narwhal engine
 #     leaves vLLM's default alone
 #
-# Usage (run ON the node):
+# Usage (run inside the engine container ON the node):
 #   NIXL_HOST_IP=<node serving address> bash engine_serve.sh [PORT]
 #
 # Env knobs:
@@ -31,6 +31,17 @@
 #   GPU_MEM_UTIL        default 0.90 (the recipe's value)
 #   MODELS              required, node-local weights directory
 #   LOG_DIR             default ./runs
+#   PREFIX_CACHING      default on (off drops --enable-prefix-caching)
+#   OFFLOAD             default off (on spills MoE experts to host RAM)
+#   LOAD_FORMAT         default fastsafetensors (auto when OFFLOAD=on)
+#   EAGER               default off (on when OFFLOAD=on)
+#   MAX_MODEL_LEN       default 1048576 (262144 when OFFLOAD=on)
+#   OFFLOAD_GROUP_SIZE  default 4
+#   OFFLOAD_NUM_IN_GROUP  default 1
+#   OFFLOAD_PREFETCH_STEP  default 2
+#   OFFLOAD_PARAMS      default experts
+#   UCX_NET_DEVICES     default the ACTIVE 400G HCA list
+#   UCX_MODULE_DIR      default derived from the nixl wheel (required)
 set -euo pipefail
 
 PORT="${1:-8002}"

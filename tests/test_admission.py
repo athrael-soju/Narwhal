@@ -77,7 +77,7 @@ class Harness:
 
 
 def _profiles(ttft_c: float = 0.005) -> dict[str, Profile]:
-    """prefill_time(n) ~= 1.75 s at 15k tokens on this curve."""
+    """prefill_time(n) ~= 5.4 s at 15k tokens on this curve."""
     return {
         e: Profile(
             iid=e, ttft_a=2e-8, ttft_b=6e-5, ttft_c=ttft_c, tpot_slope=3e-6, tpot_intercept=0.012

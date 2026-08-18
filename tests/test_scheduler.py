@@ -1,4 +1,7 @@
-"""Each test names the clause of arXiv:2505.11916 it holds the code to."""
+"""Each paper-derived test names the clause of arXiv:2505.11916 it holds the code to.
+
+The extension tests stand on their own names.
+"""
 
 from __future__ import annotations
 
