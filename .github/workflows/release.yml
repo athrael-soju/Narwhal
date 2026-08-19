@@ -35,7 +35,7 @@ jobs:
             gh release upload "$TAG" dist/* --clobber
           fi
       - name: publish to PyPI (trusted publishing)
-        # Deferred until the paper is public: flip the repository
-        # variable PYPI_PUBLISH to 'true' to arm this step.
-        if: vars.PYPI_PUBLISH == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Skip files already on PyPI so tag re-pushes stay green.
+          skip-existing: true
