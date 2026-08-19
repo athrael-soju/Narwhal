@@ -12,7 +12,7 @@ An eval stops any router already on its host and starts one per cell. Do not aim
 
 ## When preflight fails
 
-Every eval preflights with `narwhal-check`. A red gate stops the run before scoring, and the eval prints the path of the log it wrote. The log names the gate, the leg, and the engine.
+Every live eval but the cache game preflights with `narwhal-check`. A red gate stops the run before scoring, and the eval prints the path of the log it wrote. The log names the gate, the leg, and the engine.
 
 Minutes after a fleet has worked, a crossed transfer can still be stalled on the previous run's residue, and it clears on its own. Treat a single-leg failure in that window as transient, and re-check once with the fleet idle:
 
@@ -24,6 +24,6 @@ When the failure repeats on an idle fleet, treat it as a fault. [Deploy](Deploy.
 
 ## After a run
 
-A run writes one artifact set per cell under `runs/`, and [evals/README.md](../evals/README.md) documents the layout. The config files contain the fleet's real addresses, so scrub them before sharing a result; the state files are `/arrow/state` captures - iids, pools, thresholds, SLOs, counters, flips - and hold none. The journals record lengths, timings, and engine ids, but a failure row can embed the full engine URL, so grep before sharing. `check.before.log` shares that property (its failure lines interpolate the engine URLs too).
+A run writes one artifact set per cell under `runs/`, and [evals/README.md](https://github.com/athrael-soju/Narwhal/blob/main/evals/README.md) documents the layout. The config files contain the fleet's real addresses, so scrub them before sharing a result; the state files are `/arrow/state` captures - iids, pools, thresholds, SLOs, counters, flips - and hold none. The journals record lengths, timings, and engine ids, but a failure row can embed the full engine URL, so grep before sharing. `check.before.log` shares that property (its failure lines interpolate the engine URLs too).
 
 Replicates change the seed and nothing else. Rest the fleet between replicates the same way you do before a scored run, and quote single-seed results as `n=1`.

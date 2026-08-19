@@ -8,7 +8,7 @@
 
 ### Evals
 - `evals/` ships reproducible fleet evals: a question, a runner that exits non-zero on failure, and the cell configs it runs, so a result can be reproduced by anyone with the same hardware
-- `evals/topology-walk` scores five architectures against a moving optimum on one fleet, one seed, architecture as the only variable. The seed is a parameter, so replicates need no edit
+- `evals/topology-walk` scores five cells - two controllers and three architecture baselines - against a moving optimum on one fleet, one seed, one variable per cell. The seed is a parameter, so replicates need no edit
 - `tools/score_walk.py` scores a walk cell's client attainment per phase, and `tools/plot_walk.py` draws the split the fleet held over time. Both read the eval's artifacts as written
 
 ## v0.1.1

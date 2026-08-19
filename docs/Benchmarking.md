@@ -10,7 +10,7 @@ Measure your own fleet the way the study measured this one. The bench drives loa
 
 ## The metric
 
-Attainment is the fraction of *offered* requests that meet both SLOs, TTFT and TPOT, at once. A request the fleet never finished misses its SLO, because counting only completions would let a fleet score better by dropping work. The headline number is the sustained rate: the highest offered rate that still meets the attainment target, 90% by default, with `--target` to change it.
+Attainment is the fraction of *offered* requests that meet both SLOs, TTFT and TPOT, at once. A request the fleet never finished misses its SLO, because counting only completions would let a fleet score better by dropping work. The headline number is the sustained rate (what [Serving KPIs](KPIs.md) calls goodput): the highest offered rate that still meets the attainment target, 90% by default, with `--target` to change it.
 
 ## Calibrate SLOs first
 
@@ -66,7 +66,7 @@ Two sizing rules keep a comparison discriminating. A discriminating phase has to
 
 The directory takes journals named `<arm>.<tag>.journal.jsonl`, the layout `tools/compare.sh` writes. `--profiles` names the profile store and defaults to `runs/profiles.json`, the store the profiler writes; pass it only for a store kept elsewhere.
 
-Per arm and rate the report prints attainment, the re-role count, thrash per hour (reversals of the same engine), median time-to-adapt, the KV handoff percentiles split crossed against local, and which SLO bound each miss. Two runs can post the same attainment with very different re-role behavior behind it, so read attainment beside the thrash and time-to-adapt columns.
+Per arm and rate the report prints attainment, the re-role count, thrash per hour (reversals of the same engine), median time-to-adapt, the requests resident when each flip fired, the KV handoff percentiles split crossed against local, and which SLO bound each miss. Two runs can post the same attainment with very different re-role behavior behind it, so read attainment beside the thrash and time-to-adapt columns.
 
 The two tools score different populations, and the difference decides cross-arm rankings. `narwhal-bench` scores from the client side: met over offered, with admission refusals counted as misses, the deployer's number. `narwhal-report` scores the router's journal and excludes refusals from its denominator, reporting them apart. Refusal rates can differ by more than an order of magnitude between arms, because predictive admission turns load away at the door where a pinned split queues and misses, so journal-scored comparisons across arms are not like-for-like. Rank arms by the client score, and quote any journal score with its refusal count beside it. The journal keeps the per-request evidence behind either score: arrival, TTFT, TPOT, both instance ids, whether the KV crossed, and the error if any ([Api](Api.md) lists the fields). Score a journal directly with `narwhal-bench --score-journal <path> --ttft-slo ... --tpot-slo ...`.
 

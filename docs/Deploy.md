@@ -1,6 +1,6 @@
 # Deploying Narwhal
 
-The router is in front of a fleet of stateless engines, whose only requirement is to be stateless, and able to move KV cache to any instance. For vLLM that means every engine runs NixlConnector with `kv_role: kv_both`. An engine pinned to `kv_producer` or `kv_consumer` can only serve one phase, and flipping it does nothing. A fleet needs one transfer fabric and one KV layout across every engine, and nothing else about the hardware reaches the scheduler. What can still break that contract - an upstream rename of `kv_both`, two version-bound vLLM behaviours, and the wiring between an engine's advertised address and its interface - is collected under 'Before you trust real hardware', below the seven steps.
+The router is in front of a fleet of engines whose only requirement is to be stateless and able to move KV cache to any instance. For vLLM that means every engine runs NixlConnector with `kv_role: kv_both`. An engine pinned to `kv_producer` or `kv_consumer` can only serve one phase, and flipping it does nothing. A fleet needs one transfer fabric and one KV layout across every engine, and nothing else about the hardware reaches the scheduler. What can still break that contract - an upstream rename of `kv_both`, two version-bound vLLM behaviours, and the wiring between an engine's advertised address and its interface - is collected under 'Before you trust real hardware', below the seven steps.
 
 ## Without GPUs
 
@@ -61,7 +61,7 @@ The control plane survives its node by running a second router on another one, p
   --standby-of http://<primary-host>:8000
 ```
 
-The standby refuses traffic (`503`, `retry-after: 1`) and answers `/health` with `"standby"` while the primary serves. It polls the primary's `/arrow/handoff` document four times a second, keeps the freshest copy, and applies it after one second of silence: roles, the breaker's holds, and the run's counters continue rather than restart. The takeover logs its measured gap, and the test suite pins it under a second. Live, a takeover takes about a second (1.01 s measured); a supervised restart of the primary, about half a second (0.41 s measured). Pin one prefill engine as the takeover's anchor: a pinned engine keeps its configured role while the resume reapplies every other role, so the prefill pool is never empty mid-failover.
+The standby refuses traffic (`503`, `retry-after: 1`) and answers `/health` with `"standby"` while the primary serves. It polls the primary's `/arrow/handoff` document four times a second, keeps the freshest copy, and applies it after one second of silence: roles, the breaker's holds, and the run's counters continue rather than restart. The takeover logs its measured gap, and the test suite pins it under a second. Live, a takeover takes about a second (1.01 s measured); a supervised restart of the primary, about half a second (0.41 s measured). Pin one prefill engine as the takeover's anchor: a pinned engine keeps its configured role while the takeover reapplies every other role, so the prefill pool is never empty mid-failover.
 
 
 ## 6. Measure

@@ -70,7 +70,7 @@ Installing adds these commands to the path:
 
 ## Evidence
 
-The bench drives load and writes every request with `--out`, the report tool scores the journal for goodput, adaptation lag and thrash, and the preflight gates check a run's preconditions. *The Price of Order in Disaggregated Inference* compares the serving architectures and controllers measured with these tools, and its artifact includes the methodology, the raw journals, and the campaign drivers. A preprint link will be added on publication. The comparison's two seeded walks puts ~400k requests and ~5.6 billion tokens through this router on a live six-node fleet. No crash, restart, ejection, or panic event appears in any arm's journal on either walk. [Benchmarking](docs/Benchmarking.md) explains how to measure your own fleet and score the journal.
+The bench drives load and writes every request with `--out`, the report tool scores the journal for goodput, time-to-adapt and thrash, and the preflight gates check a run's preconditions. *The Price of Order in Disaggregated Inference* compares the serving architectures and controllers measured with these tools, and its artifact includes the methodology, the raw journals, and the campaign drivers. A preprint link will be added on publication. The comparison's two seeded walks put 203,313 requests and 2.86 billion tokens through this router on a live six-node fleet. No crash, restart, ejection, or panic event appears in any arm's journal on either walk. [Benchmarking](docs/Benchmarking.md) explains how to measure your own fleet and score the journal.
 
 ## Documentation
 
