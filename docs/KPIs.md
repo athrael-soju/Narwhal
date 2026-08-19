@@ -36,16 +36,27 @@ For interactive chat and code completion, a tight TTFT avoids an initial pause a
 
 ## Operational diagnostics
 
+These split into two kinds. Live metrics are queryable on the router's `/metrics` while serving ([Observability](Observability.md) lists every series). Post-run report columns are computed by `narwhal-report` from the journal after a run, and a dashboard cannot graph them.
+
+### Live metrics
+
 | KPI                              | Why it matters                                                                                                   |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Error and short-response rate    | Errors and outputs short of `wanted_len` miss goodput regardless of their latency.                               |
+| Error rate                       | Errors miss goodput regardless of their latency.                                                                 |
 | Prefill/decode pool load         | Each pool's pressure relative to its SLO-based target. Values above `1.0` exceed the modeled budget.             |
 | Resident requests / queue depth  | Leading indicator of pressure on an instance or phase. Read it alongside TTFT and TPOT as a diagnostic.          |
-| KV-transfer time                 | Separates the cost of a crossed prefill/decode handoff from compute and queueing.                                |
-| Re-role events and time-to-adapt | Shows whether the adaptive controller responds promptly when the workload's phase mix changes.                   |
+| Re-role events                   | Shows whether the adaptive controller responds when the workload's phase mix changes.                            |
 | Flip reversals (thrash)          | Detects unstable P/D role changes that undo each other.                                                          |
 | Requests resident during a flip  | Quantifies the work exposed to a re-role operation and its potential latency cost.                               |
 | Ejected instances                | Nonzero means the breaker currently excludes capacity from scheduling. Treat it as an availability signal.       |
 | Placement regret                 | Scheduling-efficiency diagnostic relative to the placement's own lower-bound cost.                               |
+
+### Post-run report columns
+
+| KPI                              | Why it matters                                                                                                   |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Short-response rate              | Outputs short of `wanted_len` miss goodput regardless of their latency.                                          |
+| KV-transfer time                 | Separates the cost of a crossed prefill/decode handoff from compute and queueing.                                |
+| Time-to-adapt                    | Shows whether the adaptive controller responds promptly when the workload's phase mix changes.                   |
 
 The request journal is the source of record for request-level KPIs. See [Api](Api.md) for its fields and `narwhal-bench --score-journal` for scoring a recorded run against the configured SLOs.

@@ -45,8 +45,9 @@
 #   PORT            router port                    (default 8011)
 #   OUT             artifact directory             (default runs/local/eval-cache-game)
 #
-# Cost: 3 arms x |RATES| x DURATION of load (45 minutes at the defaults) plus
-# router turnarounds. Score with:
+# Cost: DURATION per (arm, rate) cell, but the rate-2.0 cells replay the
+# trace at half wall time: 3 x (900 + 450) s, about 68 minutes of load at the
+# defaults, plus router turnarounds. Score with:
 #   narwhal-report --dir $OUT --ttft-slo <ttft> --tpot-slo <tpot> --phases 1
 # The trailing table reads the game directly: first-open TTFT against
 # repeat-open TTFT per arm (hashed by the trace's own prefix ids), attainment

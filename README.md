@@ -20,7 +20,7 @@
   <a href="docs/Benchmarking.md"><b>Benchmarking</b></a>
 </p>
 
-Narwhal is an orchestration framework for disaggregated inference, whose controller treats the prefill/decode split as a scheduling decision: a role is a label the controller rewrites while the weights stay resident, so a re-split costs one label write and settles in seconds, where a conventional fleet pays minutes of drain.
+Narwhal is an orchestration framework for disaggregated inference. Use Narwhal when the phase mix of your workload moves and a pinned split loses goodput. The controller treats the prefill/decode split as a scheduling decision, so a re-split settles in seconds, where a conventional fleet pays minutes of drain. [Architectures](docs/Architectures.md) compares the design against the established fleet organizations and states hot-swap's price out loud.
 
 ## About
 
@@ -36,9 +36,9 @@ The scheduling core is an independent implementation of the Arrow paper ([arXiv:
 | Journaled requests             | Every request gets an `x-request-id` and an entry in a replayable journal                                                     | `narwhal-report` scores goodput, re-role rate and thrash from the journal alone |
 | Target-state planner (default) | A windowed demand estimator plans the whole split on an interval, and a ratcheted fast loop relieves starvation between plans | The whole split moves in one pass instead of one reactive flip at a time        |
 | Control-plane failover         | A warm standby copies the live handoff document and takes over when the primary stops updating it                             | Scheduling state survives the loss of the scheduler's node                      |
-| Operator surface               | Preflight gates, a Prometheus metrics route with dashboard and alert configs, optional W&B streaming                            | A fleet is checked before it serves and measured while it serves                |
+| Operator surface               | Preflight gates, a Prometheus metrics route with dashboard and alert configs, optional W&B streaming                          | A fleet is checked before it serves and measured while it serves                |
 
-Use Narwhal when the phase mix of your workload moves and a pinned split loses goodput. Your engines must meet one contract: stateless instances with any-peer KV transfer.
+Your engines must meet one contract: stateless instances with any-peer KV transfer.
 
 ## Quick Start
 
@@ -56,21 +56,21 @@ For real engines, [Deploy](docs/Deploy.md) goes from install to serving against 
 
 Installing adds these commands to the path:
 
-| Command              | What it does                                                |
-| -------------------- | ----------------------------------------------------------- |
-| `narwhal-check`      | Runs every preflight gate against a fleet in one pass       |
-| `narwhal-profile`    | Fits each instance's prefill and decode curves              |
-| `narwhal-serve`      | Runs the router                                             |
-| `narwhal-bench`      | Sweeps request rate and journals each request with `--out`  |
-| `narwhal-report`     | Scores a journal for goodput, re-role rate and thrash       |
-| `narwhal-live-bench` | Drives interactive or scripted load at a running router     |
-| `narwhal-fleet`      | Copies this checkout to the nodes over SSH                  |
+| Command              | What it does                                               |
+| -------------------- | ---------------------------------------------------------- |
+| `narwhal-check`      | Runs every preflight gate against a fleet in one pass      |
+| `narwhal-profile`    | Fits each instance's prefill and decode curves             |
+| `narwhal-serve`      | Runs the router                                            |
+| `narwhal-bench`      | Sweeps request rate and journals each request with `--out` |
+| `narwhal-report`     | Scores a journal for goodput, re-role rate and thrash      |
+| `narwhal-live-bench` | Drives interactive or scripted load at a running router    |
+| `narwhal-fleet`      | Copies this checkout to the nodes over SSH                 |
 
 `make check` runs the whole suite. Each test cites the scheduling clause it enforces.
 
 ## Evidence
 
-The bench drives load and writes every request with `--out`, the report tool scores the journal for goodput, adaptation lag and thrash, and the preflight gates check a run's preconditions. *The Price of Order in Disaggregated Inference* compares the serving architectures and controllers measured with these tools, and its artifact includes the methodology, the experiments ledger, the raw journals, and the campaign drivers. A preprint link will be added on publication. The comparison's two seeded walks put 203,313 requests and 2.86 billion tokens through this router on a live six-node fleet. No crash, restart, ejection, or panic event appears in any arm's journal on either walk. [Benchmarking](docs/Benchmarking.md) explains how to measure your own fleet and score the journal.
+The bench drives load and writes every request with `--out`, the report tool scores the journal for goodput, adaptation lag and thrash, and the preflight gates check a run's preconditions. *The Price of Order in Disaggregated Inference* compares the serving architectures and controllers measured with these tools, and its artifact includes the methodology, the raw journals, and the campaign drivers. A preprint link will be added on publication. The comparison's two seeded walks puts ~400k requests and ~5.6 billion tokens through this router on a live six-node fleet. No crash, restart, ejection, or panic event appears in any arm's journal on either walk. [Benchmarking](docs/Benchmarking.md) explains how to measure your own fleet and score the journal.
 
 ## Documentation
 

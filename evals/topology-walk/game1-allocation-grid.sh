@@ -4,7 +4,7 @@
 # The topology walk scores controllers on a moving optimum, but it never
 # measures the game itself: at every moment the controller is chasing, so the
 # fleet never sits still long enough to read the payoff surface. This eval
-# holds the workload still and moves the split instead. Six pinned static
+# holds the workload still and moves the split instead. Five pinned static
 # fleets, one per split, all serving the same phase:
 #
 #     1P5D -> 2P4D -> 3P3D -> 4P2D -> 5P1D, each at the GRID workload

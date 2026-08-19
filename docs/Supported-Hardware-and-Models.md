@@ -31,7 +31,7 @@ The validated deployment. Its fleet configuration with measured SLOs, engine env
 
 Two environment variables are required: `VLLM_ROCM_USE_AITER=1` (the MXFP4 MoE path on ROCm) and `VLLM_SSM_CONV_STATE_LAYOUT=DS` (needed by NIXL's mamba-conv transfer). The second is a K3-hybrid requirement, so a CUDA build of this pair needs it as well.
 
-Two engine-version caveats apply, both upstream and both covered in the compatibility notes in [Deploy](Deploy.md). Engines restart in whole waves, and prefix caching ships on; on affected builds the full-cache-hit assert fires on fully cache-resident prompts, so benchmark campaigns there run with `PREFIX_CACHING=off`. Speculative decoding is disabled pending an upstream Triton/AITER pairing. The pair is fully functional without it, and the L4 grade above was verified in exactly this configuration.
+Two engine-version caveats apply, both upstream and both covered in the compatibility notes in [Deploy](Deploy.md). Engines restart in whole waves, and prefix caching ships on; on affected builds the full-cache-hit assert fires on fully cache-resident prompts, so benchmark campaigns there run with `PREFIX_CACHING=off`. Speculative decoding is disabled pending an upstream Triton/AITER pairing. The pair is fully functional without it, and the L4 grade above was verified in exactly this configuration, run at the evaluation's 15 s TTFT and 60 ms TPOT budgets. The preset ships a tighter 3 s TTFT budget for demonstration; a run against it scores with `--ttft-slo 3.0`.
 
 ## The B200 / Kimi-K3 pair
 

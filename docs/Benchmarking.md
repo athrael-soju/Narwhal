@@ -4,6 +4,10 @@ Measure your own fleet the way the study measured this one. The bench drives loa
 
 [Serving KPIs](KPIs.md) defines every term used here.
 
+## Start here: the 90-second check
+
+`make demo` needs no fleet. The simulator replays a 90-second moving trace across the topology spectrum on CPU and prints the comparison table, adaptive against every static split, in under a minute of wall clock. Run it before spending GPU time. The test suite pins the table at two of its rates.
+
 ## The metric
 
 Attainment is the fraction of *offered* requests that meet both SLOs, TTFT and TPOT, at once. A request the fleet never finished misses its SLO, because counting only completions would let a fleet score better by dropping work. The headline number is the sustained rate: the highest offered rate that still meets the attainment target, 90% by default, with `--target` to change it.
@@ -20,7 +24,7 @@ Attainment prices every request against your two SLO targets, so set the targets
   --rates 0.6,1.0,1.6,2.4,3.2 --out runs/local/adaptive.jsonl
 ```
 
-The built-in generator runs phased load whose rate multipliers are priced from your own fitted curves when `--profiles` finds the store (the default is `runs/local/profiles.json`), so the sweep loads the fleet you have. `--phase-seconds` sets phase length, and `--seed` fixes the arrival process. The run prints attainment per rate and the sustained rate:
+The built-in generator runs phased load whose rate multipliers are priced from your own fitted curves when it finds the profiles store (default `runs/profiles.json`, the store the profiler writes), so the sweep loads the fleet you have. `--profiles` points at a store kept elsewhere. `--phase-seconds` sets phase length, and `--seed` fixes the arrival process. The run prints attainment per rate and the sustained rate:
 
 ```
   rate   attainment     met/total
@@ -37,7 +41,7 @@ sustained at 90% attainment: 1 req/s
 
 ## Compare architectures on your fleet
 
-The case for adaptivity is a controlled comparison on your own hardware: arms that share one trace, one rate list and one pair of SLOs, and differ only in whether a role can move. Three configs cover the range the study measured:
+The case for adaptivity is a controlled comparison on your own hardware: arms that share one trace, one rate list and one pair of SLOs, and differ only in whether a role can move. Three configs cover three of the four architectures the study measured; the fourth, cold-swap, is the adaptive config with a charged `flip_offline_s`:
 
 | Arm | Config | Roles |
 | --- | --- | --- |
@@ -45,22 +49,22 @@ The case for adaptivity is a controlled comparison on your own hardware: arms th
 | Static | the fleet config with `"pin": true` on every engine, `controller` set to `"reactive"`, `thresholds.expand` above any reachable load (`1e9`), `cooldown_s` past the run length | pinned at the launched split |
 | Aggregated | the static config, with every engine's `role` set to `decode` | pinned, both phases sharing each instance |
 
-On the static arm the pins do the fixing. Algorithm 1's step-3 flip ignores thresholds only toward decode (toward prefill it consults `thresholds.shrink`), and no flip path moves a pinned engine, so roles stay where the config put them. The unreachable thresholds and the long cooldown cover the case the pin list misses. In the aggregated arm both phases execute on one instance and KV crosses the fabric only on a failover retry. Confirm it from the journal, where `crossed` reads `false` on every row that never retried.
+On the static arm the pins do the fixing. Algorithm 1's step-3 flip ignores thresholds only toward decode (toward prefill it consults `thresholds.shrink`), and no flip path moves a pinned engine, so roles stay where the config put them. The unreachable thresholds and the long cooldown do not cover an engine the pin list misses: the toward-prefill rescue fires inside placement, reads only `thresholds.shrink`, and a quiet decode pool passes whatever `expand` says. In the aggregated arm both phases execute on one instance and KV crosses the fabric only on a failover retry. Confirm it from the journal, where `crossed` reads `false` on every row that never retried.
 
 Restart the router on each arm's config and drive it identically. Every arm appends to the same journal, `journal.jsonl` beside `profiles_path` (`runs/journal.jsonl` under the example config), so move the file aside between arms: a later arm scores whatever rows it finds there, the earlier arms' rows included. Score the adaptive arm against every static split within budget, because a single pinned baseline shows the cost of a moving mix for one mix only. `tools/compare.sh` automates the sweep: each arm gets its own router, journal and bench output under `runs/local/comparison`, and `RATES` overrides the rate list.
 
 [evals/topology-walk](https://github.com/athrael-soju/Narwhal/tree/main/evals/topology-walk) packages the comparison as a reproducible eval: five cells - two hot-swap controller variants and three architecture baselines - derived from your fleet config, driven over a moving optimum with one seed per run. `tools/score_walk.py` breaks a cell's client attainment down per phase, and `tools/plot_walk.py` plots the split the fleet kept over time from its router log.
 
-Two sizing rules come from the study's measurement campaign. A discriminating phase has to start above the pinned split's measured knee: pin the fleet in the shape under test, raise the rate in short steps until windowed attainment collapses, and set the phase's rate past that point. Size a phase under the knee and it cannot separate the arms, because the static side meets its SLOs through the whole phase. Paired arms run treatment-first with a rest interval between them, because a freshly worked fleet skews whichever arm runs first. [Evals](Evals.md) covers the rest of the run discipline, resting the fleet included.
+Two sizing rules keep a comparison discriminating. A discriminating phase has to start above the pinned split's measured knee: pin the fleet in the shape under test, raise the rate in short steps until windowed attainment collapses, and set the phase's rate past that point. Size a phase under the knee and it cannot separate the arms, because the static side meets its SLOs through the whole phase. Isolate every arm in a fresh router boot and keep the arm order fixed across replicas; the study ran its cells exactly that way, back-to-back. [Evals](Evals.md) covers the rest of the run discipline, resting the fleet included.
 
 ## Score the record
 
 ```bash
 .venv/bin/narwhal-report --dir runs/local/comparison \
-  --ttft-slo <yours> --tpot-slo <yours> --profiles runs/profiles.json
+  --ttft-slo <yours> --tpot-slo <yours>
 ```
 
-The directory takes journals named `<arm>.<tag>.journal.jsonl`, the layout `tools/compare.sh` writes. `--profiles` defaults to `runs/local/profiles.json`, so point it at the store the profiler wrote.
+The directory takes journals named `<arm>.<tag>.journal.jsonl`, the layout `tools/compare.sh` writes. `--profiles` names the profile store and defaults to `runs/profiles.json`, the store the profiler writes; pass it only for a store kept elsewhere.
 
 Per arm and rate the report prints attainment, the re-role count, thrash per hour (reversals of the same engine), median time-to-adapt, the KV handoff percentiles split crossed against local, and which SLO bound each miss. Two runs can post the same attainment with very different re-role behavior behind it, so read attainment beside the thrash and time-to-adapt columns.
 
@@ -89,7 +93,3 @@ The two tools score different populations, and the difference decides cross-arm 
 | `quit` | stop and print the session score |
 
 The session ends with a score and a recorded trace whose path it prints. `narwhal-bench --trace-file <path>` replays the recording request for request.
-
-## The 90-second check
-
-`make demo` needs no fleet. The simulator replays a 90-second moving trace across the topology spectrum on CPU and prints the comparison table, adaptive against every static split, in under a minute of wall clock. Run it before spending GPU time. The test suite pins the table at two of its rates.

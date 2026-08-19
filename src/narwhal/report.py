@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ttft-slo", type=float, required=True)
     ap.add_argument("--tpot-slo", type=float, required=True)
     ap.add_argument(
-        "--profiles", default="runs/local/profiles.json", help="profile store, for the §D oracle"
+        "--profiles", default="runs/profiles.json", help="profile store, for the §D oracle"
     )
     ap.add_argument(
         "--phases", type=int, default=3, help="phases in each cell's trace, for time-to-adapt"

@@ -47,7 +47,7 @@ PREFIXES=48 DURATION=1200 RATES=1.0,2.0 \
   bash evals/topology-walk/game2-cache-game.sh
 ```
 
-The default costs 45 minutes of load plus router turnarounds and writes `runs/local/eval-cache-game`. The engines must already run with prefix caching on; the script verifies that from engine metrics and exits 2 otherwise. Engines restart only in whole waves, so the operator owns the wave into caching mode and the wave back to the fleet's standing mode.
+The default costs about 68 minutes of load plus router turnarounds and writes `runs/local/eval-cache-game`. The engines must already run with prefix caching on; the script verifies that from engine metrics and exits 2 otherwise. Engines restart only in whole waves, so the operator owns the wave into caching mode and the wave back to the fleet's standing mode.
 
 ### Game 3: hindsight replay
 
@@ -109,7 +109,7 @@ Three of them need a word.
 
 **`static`** pins every engine *and* sets unreachable thresholds, and the pins are the load-bearing half: no flip path moves a pinned engine. Thresholds alone would leak. Algorithm 2 obeys them, and the 31-year cooldown bars Algorithm 1's step-3 flip toward decode, but that flip fires inside placement when nothing meets the SLO, and toward prefill it reads only the shrink guard, which a quiet decode pool passes whatever `expand` says. The controller must be reactive for the mirror-image reason: the planner prices demand and never reads thresholds at all, so with anything unpinned it would re-split on its own schedule.
 
-**`aggregated`** is `static` with every engine set to `decode`, so each serves both phases locally and no KV crosses the fabric.
+**`aggregated`** is `static` with every engine set to `decode`, so each serves both phases locally and KV crosses the fabric only on failover.
 
 ## Check the floor before reading the result
 
@@ -219,7 +219,7 @@ differently, reactive first on the client's count and static first on
 the journal's on both runs, and the refused column is most of the
 explanation. Static held one split whose knee the ladder's rates
 approached, so predictive admission refused 2,080 requests at the door
-across the two runs that the adaptive cells served.
+across the two runs, every one a request the adaptive cells attempted.
 
 These two runs are the evidence *The Price of Order in Disaggregated
 Inference* reports; where they diverge the paper prints the mean with

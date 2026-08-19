@@ -83,7 +83,7 @@ The live scheduler picture, and the actuation record of an adaptive run. The fol
     },
     "slo": {
         "ttft_s": 10.0,
-        "tpot_s": 0.5
+        "tpot_s": 0.125
     },
     "first_token_timeout_s": 2.5,
     "resident": {

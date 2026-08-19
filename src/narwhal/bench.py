@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--profiles",
-        default="runs/local/profiles.json",
+        default="runs/profiles.json",
         help="profile store; when present, the built-in phases' rate "
         "multipliers are priced from the fleet's own fitted curves rather "
         "than the shipped fallbacks. --segments and --trace-file "
