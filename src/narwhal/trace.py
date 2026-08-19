@@ -191,7 +191,7 @@ def set_tokens_per_repeat(ratio: float) -> None:
         _tokens_per_repeat = ratio
 
 
-def _prompt_of(tokens: int, prefix: tuple[int, int] | None = None) -> str:
+def _prompt_of(tokens: int, prefix: tuple[int, int] | None = None, nonce: str = "") -> str:
     """Filler text sized to `tokens`; distinct, stable heads per prefix.
 
     With a `(prefix_id, prefix_len)` pair, the first `prefix_len` tokens are
@@ -200,9 +200,20 @@ def _prompt_of(tokens: int, prefix: tuple[int, int] | None = None) -> str:
     router's affinity key alike) and diverging from every other prefix
     within the first few characters. The tag repeat is treated as one token,
     the same convention the filler measured to within 2%.
+
+    `nonce` marks the tail as this request's own. Without it the tail is
+    pure filler, so two same-prefix requests whose lengths coincide - or a
+    shorter one following a longer one - produce identical or fully contained
+    prompts, and on an engine image that asserts on full-cache hits such a
+    request is terminal. A trace replayed with prefix caching on must never
+    offer a prompt that another request already cached in full. The nonce
+    sits after the shared head, so head byte-identity (the thing the cache
+    game measures) is untouched; callers that omit it get the historical
+    text, since a caching-off fleet cannot observe the difference.
     """
+    mark = f"t{nonce} " if nonce else ""
     if prefix is None:
-        return FILLER * max(1, round(tokens / _tokens_per_repeat))
+        return mark + FILLER * max(1, round(tokens / _tokens_per_repeat))
     pid, plen = prefix
     plen = min(plen, tokens)
     tag = f"ctx{pid} "
@@ -210,4 +221,4 @@ def _prompt_of(tokens: int, prefix: tuple[int, int] | None = None) -> str:
     tail_tokens = tokens - plen
     if tail_tokens <= 0:
         return head
-    return head + FILLER * max(1, round(tail_tokens / _tokens_per_repeat))
+    return head + mark + FILLER * max(1, round(tail_tokens / _tokens_per_repeat))

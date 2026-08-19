@@ -7,6 +7,9 @@ A preflight check asks whether a fleet is wired correctly. [`narwhal-check`](../
 | eval | question | cost |
 | --- | --- | --- |
 | [topology-walk](topology-walk/) | What does each architecture score when the optimum keeps moving? | ~13 h 20 m per seed |
+| [allocation-grid](topology-walk/README.md#game-1-allocation-grid) | Where does one fixed workload's goodput peak across the split choices? | ~100 m at defaults |
+| [cache-game](topology-walk/README.md#game-2-cache-game) | What do the router's prefix postures recover when engines cache again? | ~45 m plus engine waves |
+| [hindsight-replay](topology-walk/README.md#game-3-hindsight-replay) | What would a hindsight-optimal router have paid on recorded journals? | seconds; offline |
 
 Run discipline - resting the fleet before a scored run, and what a failed preflight means - is in [Evals](../docs/Evals.md).
 
@@ -16,10 +19,15 @@ Every eval reads a fleet config and writes its artifacts under `runs/`:
 
 ```bash
 bash evals/topology-walk/run.sh
-FLEET=config/fleet.mine.json SEED=11 bash evals/topology-walk/run.sh
+bash evals/topology-walk/game1-allocation-grid.sh
+bash evals/topology-walk/game2-cache-game.sh
+IN=runs/canon/topology-walk PROFILES=runs/local/profiles.json \
+  bash evals/topology-walk/game3-hindsight-replay.sh
 ```
 
-Common environment for both:
+The cache game is the exception with a hardware-wide precondition: the engines must already be running with prefix caching on, and the operator owns the whole-fleet wave into that mode and back out again. The script refuses to run when engines export no prefix-cache counters.
+
+Common environment for the live evals:
 
 | variable | meaning | default |
 | --- | --- | --- |
@@ -31,7 +39,7 @@ Common environment for both:
 
 The default `FLEET` is operator-local and does not ship, and the run exits 2 when it names no file. On a fresh checkout, copy [`config/fleet.example.json`](../config/fleet.example.json) - or the preset under `presets/` that names your hardware - to a config of your own, fill in the fabric addresses and the model, and point `FLEET` at it.
 
-Each eval **stops any router running on the host** and starts one of its own per cell, so nothing carries between cells. Do not run one against a fleet serving production traffic.
+Each live eval **stops any router running on the host** and starts one of its own per cell, so nothing carries between cells. The hindsight replay is offline and never touches the fleet. Do not run a live eval against a fleet serving production traffic.
 
 No GPUs handy? `tools/stub_fleet.py` stands up a fake fleet that speaks the same routes, which is enough to exercise the plumbing and read the artifact shapes. Scores from it mean nothing.
 

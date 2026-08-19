@@ -31,6 +31,13 @@ from .trace import (
     set_tokens_per_repeat,
 )
 
+# Salts every prompt this process sends. Engines with prefix caching on keep
+# blocks from earlier runs, and a later run re-issuing an identical prompt is
+# a full-cache hit, which the reference fleet's image asserts on. The seed
+# already fixes what a run asks; the salt keeps two runs from asking for it
+# in the same bytes twice.
+_RUN_SALT = f"{int(time.time()):x}"
+
 
 @dataclass
 class Sample:
@@ -54,7 +61,7 @@ async def _one(
     osl: int,
     prefix: tuple[int, int] | None = None,
 ) -> Sample:
-    prompt = _prompt_of(isl, prefix)
+    prompt = _prompt_of(isl, prefix, nonce=f"{_RUN_SALT}-{idx}")
     body = {
         "model": model,
         "prompt": prompt,

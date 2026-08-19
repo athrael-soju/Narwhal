@@ -16,6 +16,52 @@ CELLS="planner static" PHASE_SECONDS=60 bash evals/topology-walk/run.sh
 
 This eval drives the fleet to a single prefill engine at its lean end, where one engine carries the fleet's whole KV egress. A fabric that cannot hold that corner produces a result about the fabric rather than the controller, so verify `narwhal-check --ring` is green first and read phase 5 with that in mind.
 
+## The game-specific companions
+
+The walk prices architectures while the optimum moves. The three companion scripts isolate the individual games that make that moving optimum expensive. They share the walk's configs, budgets, seed discipline, and artifact layout.
+
+### Game 1: allocation grid
+
+**Question.** Holding one workload fixed, where does fleet attainment peak across the five split choices?
+
+**Why it exists.** The walk never sits still long enough to read the allocation game's payoff surface. [`game1-allocation-grid.sh`](game1-allocation-grid.sh) pins one static fleet per split - 1P5D through 5P1D at the walk's mid-ladder load by default - so split is the only moving variable. A result supports the game model when attainment peaks at the split the live walk selected and adjacent marginals degrade away from it; a flat or displaced surface means the topology walk's allocation story did not survive the fixed-workload test.
+
+```bash
+bash evals/topology-walk/game1-allocation-grid.sh
+SPLITS="3 4" PHASE_SECONDS=600 bash evals/topology-walk/game1-allocation-grid.sh
+```
+
+The default costs five 1,200 s cells plus router turnarounds and writes `runs/local/eval-allocation-grid`. The script prints client attainment, journal attainment, and refusals per split; the scored artifacts sit beside the exact pinned `fleet.grid-*.json` each split ran.
+
+### Game 2: cache game
+
+**Question.** If engines cache prefixes again, how much of the routing cost do Narwhal's two prefix postures recover?
+
+**Why it exists.** Narwhal's engines are stateless in the standing deployment, which deletes the cache-placement game. [`game2-cache-game.sh`](game2-cache-game.sh) reintroduces it under controlled cache state. It runs three router arms against long shared-prefix traffic with unique tails: `off` ignores warmth, `affinity` returns shared prefixes to the engine that warmed them, and `coop` prices fading warmth inside the routing cost.
+
+Each arm generates its own trace and its own prefix-id range, so cache contents cannot carry from one arm into the next. The trailing table compares first-open and repeat-open TTFT inside every arm, reports attainment, and dumps engine prefix-cache counter deltas. Treat an arm with little warm gain but unchanged attainment as router overhead that did not pay; treat a warm-gain lead with poor attainment as cache loyalty bought at admission cost.
+
+```bash
+bash evals/topology-walk/game2-cache-game.sh
+PREFIXES=48 DURATION=1200 RATES=1.0,2.0 \
+  bash evals/topology-walk/game2-cache-game.sh
+```
+
+The default costs 45 minutes of load plus router turnarounds and writes `runs/local/eval-cache-game`. The engines must already run with prefix caching on; the script verifies that from engine metrics and exits 2 otherwise. Engines restart only in whole waves, so the operator owns the wave into caching mode and the wave back to the fleet's standing mode.
+
+### Game 3: hindsight replay
+
+**Question.** On routing decisions already recorded by a walk, how far was the actual assignment from a windowed hindsight optimum?
+
+**Why it exists.** The routing game's denominator is not a live policy; it is the value a scheduler with the full window in advance could have reached. [`game3-hindsight-replay.sh`](game3-hindsight-replay.sh) replays walk journals against the fitted engine profile store, compares the journal's actual prefill assignment with an exact min-cost matching per arrival window, and writes both Markdown and JSON reports.
+
+```bash
+IN=runs/canon/topology-walk PROFILES=runs/local/profiles.json \
+  bash evals/topology-walk/game3-hindsight-replay.sh
+```
+
+The replay is CPU-only and does not touch the fleet. It writes `runs/local/eval-hindsight-replay/game3-poa-replay.{md,json}` by default. Its ratio-of-sums is the game-theoretic quantity; per-window medians and p90s show spread. The estimator prices the prefill leg only, and its per-window OPT is a perfect matching, so ratios below 1.0 on an asymmetric fleet mean the matching constraint bound the estimate rather than that anarchy went negative.
+
 ## The ladder
 
 Eight phases, one flip apart, out and back:

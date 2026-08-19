@@ -170,3 +170,25 @@ def test_an_empty_store_keeps_the_reference_multipliers(tmp_path):
     from narwhal.trace import derive_segments
 
     assert derive_segments(ProfileStore(Path(tmp_path) / "none.json"), 0.05) is None
+
+
+def test_a_nonce_marks_the_tail_without_touching_the_shared_head():
+    """Prefix caching prices head reuse, and the reference fleet's image dies on
+    a full-cache hit. The nonce keeps every request's full text its own while
+    leaving the shared head byte-identical, so a warm engine can hit the head
+    and never see the whole prompt."""
+    from narwhal.trace import _prompt_of
+
+    head_len = len("ctx1 ") * 8000
+    a = _prompt_of(9000, (1, 8000), nonce="r1-0")
+    b = _prompt_of(9000, (1, 8000), nonce="r1-1")
+    assert a[:head_len] == b[:head_len], "same prefix, same head bytes"
+    assert not a.startswith(b), "no full hit between runs"
+    assert not b.startswith(a), "no full hit between runs, either way"
+
+    longer_first = _prompt_of(8600, (1, 8000), nonce="r1-2")
+    shorter_after = _prompt_of(8500, (1, 8000), nonce="r1-3")
+    assert not longer_first.startswith(shorter_after), "containment was the killer"
+
+    assert _prompt_of(500, nonce="r1-4") != _prompt_of(500), "non-prefix traces salt too"
+    assert _prompt_of(9000, (1, 8000), nonce="r1-0") == a, "one nonce, one text"
