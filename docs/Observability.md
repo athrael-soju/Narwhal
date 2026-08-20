@@ -12,7 +12,7 @@ Counters reset when the router restarts. With `resume: true` or a warm-standby t
 | `arrow_failed_total` | counter | | Requests that ended in an error. |
 | `arrow_unserved_total` | counter | | Requests that reached Algorithm 1 step 3 with no placement meeting the SLO. |
 | `arrow_refused_total` | counter | | The predictive door priced the request over the TTFT budget and turned it away. The router answers 429. |
-| `arrow_rejected_total` | counter | | Requests refused at the pool limit (`max_connections`), answered 429 as well. `arrow_refused_total` counts cost-model declines, so graph the two apart. |
+| `arrow_rejected_total` | counter | | Requests refused at the pool limit (`max_connections`), or - with tenant auth on - an unidentified bearer turned away at the door; answered 429 and 401 respectively. `arrow_refused_total` counts cost-model declines, so graph the two apart. |
 | `arrow_pool_instances` | gauge | `role` | Instances in each pool. |
 | `arrow_pool_load` | gauge | `role` | Pool load as a ratio against the pool's own SLO target, where 1.0 is at target. The reactive controller reads the pair. |
 | `arrow_instance_role` | gauge | `iid`, `role` | 1 while the engine has that role. An aggregated fleet (no prefill pool configured) reports every engine in both roles, since both are the function the engines perform. |
@@ -39,10 +39,10 @@ The histogram buckets derive from the configured SLOs. Each bucket edge is a fix
 | --- | --- | --- |
 | `NarwhalEngineDown` | `up{job="engines"} == 0` for 30 s | An engine stopped answering its scrape. Treat it as a fault even when the router reports healthy pools. |
 | `NarwhalEngineEjected` | `arrow_ejected_instances > 0` for 1 m | The breaker is scheduling around a live engine, so capacity is down while the process stays up. `arrow_ejected{iid=...}` names the engines. Readmission probes `/health`. If the ejection persists, the engine process is down. |
-| `NarwhalRouterDown` | `up == 0` for 2 m | A scrape target has answered nothing for two minutes. The expression has no job qualifier, so a dead engine fires this alert alongside `NarwhalEngineDown`. When it fires on its own, the router is down and the standby has already taken over. |
-| `NarwhalErrorBurst` | `rate(arrow_failed_total[5m]) > 0.5` for 5 m | Requests failing faster than background noise explains. A sustained burst with zero ejections means a leg-level fault the breaker cannot see yet. The journal's error column names the leg. |
+| `NarwhalRouterDown` | `up == 0` for 2 m | A scrape target has answered nothing for two minutes. The expression has no job qualifier, so a dead engine fires this alert alongside `NarwhalEngineDown`. When it fires on its own, the router is down, and a warm standby, if deployed, has already taken over. |
+| `NarwhalErrorBurst` | `rate(arrow_failed_total[5m]) > 0.5` for 5 m | Requests failing faster than background noise explains. A sustained burst with zero ejections usually means a leg-level fault the breaker cannot see yet. The journal's error column names the leg. |
 | `NarwhalUnservedRising` | `rate(arrow_unserved_total[10m]) > 0.2` for 10 m | The cost model finds no placement that meets the SLO. The fleet is undersized for the offered load, or the pools are in the wrong split. |
-| `NarwhalPoolStarved` | `arrow_pool_instances < 1` for 2 m | A pool has no engines. With `min_prefill` at its default, every engine of one role has been ejected. |
+| `NarwhalPoolStarved` | `arrow_pool_instances < 1` for 2 m | A pool has no engines. Ejected engines keep their label and still count here, so this is the role split collapsing, not the breaker; `min_prefill` floors the prefill pool, so a disaggregated fleet's zero points at the decode side or a misconfiguration. |
 
 ## The standard board
 

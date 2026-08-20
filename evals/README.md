@@ -9,7 +9,7 @@ A preflight check asks whether a fleet is wired correctly. [`narwhal-check`](../
 | [topology-walk](topology-walk/) | What does each architecture score when the optimum keeps moving? | ~13 h 20 m per seed |
 | [allocation-grid](topology-walk/README.md#game-1-allocation-grid) | Where does one fixed workload's goodput peak across the split choices? | ~100 m at defaults |
 | [cache-game](topology-walk/README.md#game-2-cache-game) | What do the router's prefix postures recover when engines cache again? | ~68 m plus engine waves |
-| [hindsight-replay](topology-walk/README.md#game-3-hindsight-replay) | What would a hindsight-optimal router have paid on recorded journals? | seconds; offline |
+| [hindsight-replay](topology-walk/README.md#game-3-hindsight-replay) | How far was a walk's recorded routing from a windowed hindsight optimum? | seconds; offline |
 
 Run discipline - resting the fleet before a scored run, and what a failed preflight means - is in [Evals](../docs/Evals.md).
 

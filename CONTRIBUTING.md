@@ -31,6 +31,6 @@ Results claims follow the experiments ledger: each run keeps its README, sanitiz
 
 ## Releasing
 
-A release is a pull request plus a tag. The release PR bumps the version in four places - `pyproject.toml`, a new CHANGELOG section, `CITATION.cff`, and the README's citation block - and the CHANGELOG section it adds becomes the published release notes. Once the PR merges, pushing the matching `v*` tag triggers the release workflow: build, `twine check`, and a GitHub Release carrying the CHANGELOG section with the generated commit list as an appendix. The same workflow publishes to PyPI via trusted publishing, skipping files already on PyPI so a tag re-push stays green.
+A release is a pull request plus a tag. The release PR bumps the version in three places - `pyproject.toml`, a new CHANGELOG section, and `CITATION.cff` - and the CHANGELOG section it adds becomes the published release notes. Once the PR merges, pushing the matching `v*` tag triggers the release workflow: build, `twine check`, and a GitHub Release carrying the CHANGELOG section with the generated commit list as an appendix. The same workflow publishes to PyPI via trusted publishing, skipping files already on PyPI so a tag re-push stays green.
 
 Versioning is `0.MINOR.PATCH`: minor when behavior or the configuration surface moves, patch for fixes and docs. Releases cut from a green `main`, at milestones rather than on a calendar.

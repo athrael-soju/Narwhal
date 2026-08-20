@@ -32,8 +32,8 @@ The scheduling core is an independent implementation of the Arrow paper ([arXiv:
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Adaptive hot-swap              | A node's role flips in place while its weights stay resident                                                                  | A re-split costs one label write instead of minutes of drain                    |
 | Two-leg scheduling             | A request runs prefill then decode, and each leg is priced on the serving engine's own measured curves                        | KV crosses the fabric only when the two legs run on different engines           |
-| Shape-aware failure handling   | A streak of `eject_after` consecutive connection failures ejects an engine, and a timeout triggers a health check first       | A slow engine is not ejected as dead, and a recovered engine readmits itself    |
-| Journaled requests             | Every request gets an `x-request-id` and an entry in a replayable journal                                                     | `narwhal-report` scores goodput, re-role rate and thrash from the journal alone |
+| Shape-aware failure handling   | A streak of `eject_after` consecutive connection failures ejects an engine, and the same streak of timeouts triggers a health check first       | A slow engine is not ejected as dead, and a recovered engine readmits itself    |
+| Journaled requests             | Every request gets an `x-request-id` and an entry in a replayable journal                                                     | `narwhal-report` scores goodput, re-role rate and thrash from the recorded run |
 | Target-state planner (default) | A windowed demand estimator plans the whole split on an interval, and a ratcheted fast loop relieves starvation between plans | The whole split moves in one pass instead of one reactive flip at a time        |
 | Control-plane failover         | A warm standby copies the live handoff document and takes over when the primary stops updating it                             | Scheduling state survives the loss of the scheduler's node                      |
 | Operator surface               | Preflight gates, a Prometheus metrics route with dashboard and alert configs, optional W&B streaming                          | A fleet is checked before it serves and measured while it serves                |
@@ -62,7 +62,7 @@ Installing adds these commands to the path:
 | `narwhal-profile`    | Fits each instance's prefill and decode curves             |
 | `narwhal-serve`      | Runs the router                                            |
 | `narwhal-bench`      | Sweeps request rate and journals each request with `--out` |
-| `narwhal-report`     | Scores a journal for goodput, re-role rate and thrash      |
+| `narwhal-report`     | Scores a recorded run for goodput, re-role rate and thrash      |
 | `narwhal-live-bench` | Drives interactive or scripted load at a running router    |
 | `narwhal-fleet`      | Copies this checkout to the nodes over SSH                 |
 

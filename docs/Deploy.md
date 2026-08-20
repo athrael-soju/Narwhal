@@ -68,9 +68,9 @@ The standby refuses traffic (`503`, `retry-after: 1`) and answers `/health` with
 
 ```
 .venv/bin/narwhal-bench --base http://localhost:8000 --model <served-name> \
-  --ttft-slo 10.0 --tpot-slo 0.125 --out runs/bench/samples.jsonl
+  --ttft-slo <yours> --tpot-slo <yours> --out runs/bench/samples.jsonl
 .venv/bin/narwhal-report --dir runs/local/comparison \
-  --ttft-slo 10.0 --tpot-slo 0.125
+  --ttft-slo <yours> --tpot-slo <yours>
 ```
 
 `narwhal-bench` drives the three-phase trace from the Arrow paper's evaluation and scores attainment from the client side. `narwhal-report` scores a directory of journals named `<arm>.<tag>.journal.jsonl`, the layout `tools/compare.sh` writes: goodput, re-roles, thrash, time-to-adapt and the KV handoff table. To score one journal, including the router's own, run `narwhal-bench --score-journal <file>` without driving load. Both tools default `--profiles` to `runs/profiles.json`, the store the profiler writes, so the flag is needed only for a store you moved. Every journal and sample file opens with a provenance row naming the package version and commit that wrote it.
