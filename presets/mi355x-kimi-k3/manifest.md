@@ -1,6 +1,6 @@
 # mi355x-kimi-k3
 
-The validated pair: Kimi-K3 on AMD Instinct MI355X, verified at L4 on the [Supported Hardware and Models](../../docs/Supported-Hardware-and-Models.md) ladder - gates, profiling, sustained serving, and a full comparative evaluation, all in this configuration.
+The validated pair is Kimi-K3 on AMD Instinct MI355X, verified at L4 on the [Supported Hardware and Models](../../docs/Supported-Hardware-and-Models.md) ladder - gates, profiling, sustained serving, and a full comparative evaluation, all in this configuration.
 
 | field | value |
 | --- | --- |

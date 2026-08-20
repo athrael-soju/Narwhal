@@ -14,7 +14,7 @@ CELLS="planner static" PHASE_SECONDS=60 bash evals/topology-walk/run.sh
 
 `FLEET` defaults to `config/fleet.local.json`, which is operator-local and does not ship; the run exits 2 without one. Copy `config/fleet.example.json` - or the preset under `presets/` that names your hardware - fill in the fabric addresses and the model, and pass `FLEET=config/fleet.mine.json`. The rest default to all five cells, 1,200 s a phase, seed 7, port 8011, artifacts under `runs/local/eval-topology-walk`.
 
-This eval drives the fleet to a single prefill engine at its lean end, where one engine carries the fleet's whole KV egress. A fabric that cannot hold that corner produces a result about the fabric rather than the controller, so verify `narwhal-check --ring` is green first and read phase 5 with that in mind.
+This eval drives the fleet to a single prefill engine at its lean end, where one engine carries the fleet's whole KV egress. A fabric that cannot hold that corner produces a result about the fabric rather than the controller, so verify `narwhal-check --ring` is green before the run and read phase 5 against that check.
 
 ## The game-specific companions
 
@@ -70,18 +70,18 @@ Eight phases, one flip apart, out and back:
 4P2D -> 5P1D -> 4P2D -> 3P3D -> 2P4D -> 1P5D -> 2P4D -> 3P3D
 ```
 
-Each phase names an intent, not a setting. Nothing tells the controller where the optimum went. The load shape moves - output length and arrival rate together decide which split is optimal, with the input band held constant - and the controller has to find it:
+Each phase names an intent, the split its workload makes optimal. Nothing tells the controller where the optimum went. The load shape moves - output length and arrival rate together decide which split is optimal, with the input band held constant - and the controller has to find it:
 
 | phase | intent | input | output | rate |
 | --- | --- | --- | --- | --- |
-| 0 | 4P2D | 12–16k | 20–40 | 3.0 |
-| 1 | 5P1D | 12–16k | 1–4 | 3.8 |
-| 2 | 4P2D | 12–16k | 20–40 | 3.0 |
-| 3 | 3P3D | 12–16k | 60–100 | 2.0 |
-| 4 | 2P4D | 12–16k | 120–180 | 1.2 |
-| 5 | 1P5D | 12–16k | 350–450 | 0.6 |
-| 6 | 2P4D | 12–16k | 120–180 | 1.2 |
-| 7 | 3P3D | 12–16k | 60–100 | 2.0 |
+| 0 | 4P2D | 12-16k | 20-40 | 3.0 |
+| 1 | 5P1D | 12-16k | 1-4 | 3.8 |
+| 2 | 4P2D | 12-16k | 20-40 | 3.0 |
+| 3 | 3P3D | 12-16k | 60-100 | 2.0 |
+| 4 | 2P4D | 12-16k | 120-180 | 1.2 |
+| 5 | 1P5D | 12-16k | 350-450 | 0.6 |
+| 6 | 2P4D | 12-16k | 120-180 | 1.2 |
+| 7 | 3P3D | 12-16k | 60-100 | 2.0 |
 
 Out and back matters. A controller that adapts well going one direction can hunt or lag coming back, and the second half is where that shows.
 
@@ -103,11 +103,11 @@ architecture claim rests on adaptive - either controller - against
 | `static` | one fixed split, every engine pinned, no flip can fire |
 | `aggregated` | no disaggregation; every engine both-phases its own requests |
 
-Three of them need a word.
+Three cells need explanation.
 
 **`coldswap`** emulates drain-and-reprovision by charging `flip_offline_s: 300` per flip. Engines never actually restart, and 300 s is under half a real reprovision on most hardware, so its penalty is a floor rather than an estimate.
 
-**`static`** pins every engine *and* sets unreachable thresholds, and the pins are the load-bearing half: no flip path moves a pinned engine. Thresholds alone would leak. Algorithm 2 obeys them, and the 31-year cooldown bars Algorithm 1's step-3 flip toward decode, but that flip fires inside placement when nothing meets the SLO, and toward prefill it reads only the shrink guard, which a quiet decode pool passes whatever `expand` says. The controller must be reactive for the mirror-image reason: the planner prices demand and never reads thresholds at all, so with anything unpinned it would re-split on its own schedule.
+**`static`** pins every engine and sets unreachable thresholds, and the pins are the half that enforces: no flip path moves a pinned engine. Thresholds alone would leak. Algorithm 2 obeys them, and the 31-year cooldown bars Algorithm 1's step-3 flip toward decode, but that flip fires inside placement when nothing meets the SLO, and toward prefill it reads only the shrink guard, which a quiet decode pool passes whatever `expand` says. The controller must be reactive for the mirror-image reason: the planner prices demand and never reads thresholds at all, so with anything unpinned it would re-split on its own schedule.
 
 **`aggregated`** is `static` with every engine set to `decode`, so each serves both phases locally and KV crosses the fabric only on failover.
 
@@ -189,7 +189,7 @@ them. The two controllers miss in different phases:
 | 5 | 1P5D (lean) | 1,493 | 100.0% | 95.4% |
 | 6 | 2P4D | 2,839 | 100.0% | 98.2% |
 | 7 | 3P3D | 4,935 | 100.0% | 97.8% |
-| **overall** | | **40,661** | **95.3%** | **98.5%** |
+| **all phases** | | **40,661** | **95.3%** | **98.5%** |
 
 The planner hunted through the flood, roughly 40 moves per run in
 phase 1, and never settled at 5P1D (one run held it for a single 82 s
@@ -197,12 +197,12 @@ cadence and reverted); the flood offers the most requests of any
 phase, so it dominates the weighted total. Reactive held still through
 the same phase and served all of it, then lagged at the lean end:
 614 s on average to reach 1P5D against the planner's 202 s, and
-95.4% there against 100%. Overall attainment weights phases by offered
-volume, so the headline under-weights the lean stations, and those are
+95.4% there against 100%. Offered-weighted attainment favors the busy
+phases, so the headline under-weights the lean stations, and those are
 the stations that separate the architectures.
 
-All five cells from the same two runs, overall only, scored both ways
-(refused is the pooled count over both runs):
+All five cells from the same two runs, whole-walk numbers only, scored
+both ways (refused is the pooled count over both runs):
 
 | cell | client | journal | refused |
 | --- | --- | --- | --- |

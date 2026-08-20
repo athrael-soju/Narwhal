@@ -20,11 +20,11 @@
   <a href="docs/Benchmarking.md"><b>Benchmarking</b></a>
 </p>
 
-Narwhal is an orchestration framework for disaggregated inference. Use Narwhal when the phase mix of your workload moves and a pinned split loses goodput. The controller treats the prefill/decode split as a scheduling decision, so a re-split settles in seconds, where a conventional fleet pays minutes of drain. [Architectures](docs/Architectures.md) compares the design against the established fleet organizations and states hot-swap's price out loud.
+Narwhal is an orchestration framework for disaggregated inference. Use Narwhal when the phase mix of your workload moves and a pinned split loses goodput. The controller treats the prefill/decode split as a scheduling decision, so a re-split settles in seconds, where a conventional fleet pays minutes of drain. [Architectures](docs/Architectures.md) compares the design against the established fleet organizations and states hot-swap's price.
 
 ## About
 
-![Adaptive hot-swap: A node's role flips in place while weights stay resident. The price is capable engines and a tuned control loop.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/architectures/hotswap.svg)
+![Adaptive hot-swap: a node's role flips in place while weights stay resident. The price is capable engines and a tuned control loop.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/architectures/hotswap.svg)
 
 The scheduling core is an independent implementation of the Arrow paper ([arXiv:2505.11916](https://arxiv.org/abs/2505.11916)). It implements Algorithms 1-3, the lexicographic cost pairs, event-fed monitoring, and stateless instances. Narwhal adds its own machinery around that core.
 

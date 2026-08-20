@@ -2,7 +2,7 @@
 
 Fleet evals: reproducible runs that answer a question about a fleet and end in a scored verdict. Each one ships the configs it runs, so a result can be reproduced by anyone with the same hardware.
 
-A preflight check asks whether a fleet is wired correctly. [`narwhal-check`](../docs/Deploy.md) does that, and it is the gate before any of this. An eval asks a harder question: whether the fleet holds up under a load shape chosen to find a specific failure, and what it scores when it does.
+A preflight check asks whether a fleet is wired correctly. [`narwhal-check`](../docs/Deploy.md) does that, and it is the gate before any of this. An eval asks a harder question: whether the fleet survives a load shape chosen to find a specific failure, and what it scores when it does.
 
 | eval | question | cost |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ The default `FLEET` is operator-local and does not ship, and the run exits 2 whe
 
 Each live eval **stops any router running on the host** and starts one of its own per cell, so nothing carries between cells. The hindsight replay is offline and never touches the fleet. Do not run a live eval against a fleet serving production traffic.
 
-No GPUs handy? `tools/stub_fleet.py` stands up a fake fleet that speaks the same routes, which is enough to exercise the plumbing and read the artifact shapes. Scores from it mean nothing.
+Without GPUs, `tools/stub_fleet.py` stands up a fake fleet that speaks the same routes, which is enough to exercise the plumbing and read the artifact shapes. Scores from it mean nothing.
 
 ## The configs
 
@@ -57,7 +57,7 @@ evals/topology-walk/fleet.aggregated.json     no disaggregation
 
 These are for reading and for diffing. `run.sh` derives the same shapes from *your* `FLEET` at run time, so an eval works on any fleet without editing a config by hand. Every field in them is documented in [Configuration](../docs/Configuration.md).
 
-Addresses in these files are placeholders (`<node-1-fabric-address>`). They name no host, no path, and no site. Anything added here publishes, so keep it that way.
+Addresses in these files are placeholders (`<node-1-fabric-address>`). They carry no host, path, or site. Anything added here publishes, so keep it that way.
 
 ## Artifacts
 
@@ -88,4 +88,4 @@ Client-scored attainment counts refusals as misses and is the deployer's number.
 
 ## Adding one
 
-An eval earns its place when it has a question a preflight cannot answer, a load shape chosen to answer it, and a pass/fail rule fixed before the run. Give it a directory, a `run.sh` that exits non-zero on failure, its cell configs with placeholder addresses, and a `README.md` that states the question, the mechanism it is looking for, and what a failure means for the operator.
+An eval belongs here when it has a question a preflight cannot answer, a load shape chosen to answer it, and a pass/fail rule fixed before the run. Give it a directory, a `run.sh` that exits non-zero on failure, its cell configs with placeholder addresses, and a `README.md` that states the question, the mechanism it is looking for, and what a failure means for the operator.

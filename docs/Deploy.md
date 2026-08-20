@@ -97,7 +97,7 @@ Two upstream vLLM behaviours apply on any accelerator, and both are version-boun
 
 If neither reproduces on your build, ignore both and let the gates arbitrate.
 
-`python3 tools/engine_image_probe.py <image>` reads the caps above out of a candidate image, along with the versions and AMDGPU targets it actually ships, and it needs no accelerator. Run it before a bump, because a boot check costs a whole engine wave on a build with the first behaviour. The tag is not evidence: nightly tags naming a torch and a ROCm version have shipped neither.
+`python3 tools/engine_image_probe.py <image>` reads the caps above out of a candidate image, along with the versions and AMDGPU targets it actually ships, and it needs no accelerator. Run it before a bump, because a boot check costs a whole engine wave on a build with the first behaviour. Do not read the tag as evidence: nightly tags naming a torch and a ROCm version have shipped neither.
 
 ### One address, one rail
 

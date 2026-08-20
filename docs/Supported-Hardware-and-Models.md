@@ -4,16 +4,16 @@ The table lists hardware and model pairs that have been run and verified on this
 
 | Hardware                                                       | Model                | Verification  | Preset                                                                                               |
 | -------------------------------------------------------------- | -------------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
-| AMD Instinct MI355X (TP8, one engine per node)                 | `moonshotai/Kimi-K3` | L4: Evaluated | [`presets/mi355x-kimi-k3`](https://github.com/athrael-soju/Narwhal/tree/main/presets/mi355x-kimi-k3) |
-| NVIDIA B200 (TP8 + EP, one engine per node, experts offloaded) | `moonshotai/Kimi-K3` | L1: Gated     | [`presets/b200-kimi-k3`](https://github.com/athrael-soju/Narwhal/tree/main/presets/b200-kimi-k3)     |
+| AMD Instinct MI355X (TP8, one engine per node)                 | `moonshotai/Kimi-K3` | L4 (Evaluated) | [`presets/mi355x-kimi-k3`](https://github.com/athrael-soju/Narwhal/tree/main/presets/mi355x-kimi-k3) |
+| NVIDIA B200 (TP8 + EP, one engine per node, experts offloaded) | `moonshotai/Kimi-K3` | L1 (Gated)     | [`presets/b200-kimi-k3`](https://github.com/athrael-soju/Narwhal/tree/main/presets/b200-kimi-k3)     |
 
 Verification levels, from strongest to weakest. Each level includes everything the lower ones require.
 
-- **L4: Evaluated.** A comparative evaluation has run on the pair: architectures and controllers raced on identical traces, and scored deterministically.
-- **L3: Served.** Sustained serving with the full operator surface (admission, health, failover, observability).
-- **L2: Profiled.** Per-engine curves fitted and SLOs calibrated from the pair's own measurements.
-- **L1: Gated.** All eight preflight gates pass, with `produce` and `consume` moving real KV between every ordered engine pair.
-- **L0: Runway.** The engine contract is satisfied on paper only, and nothing has run on the pair.
+- **L4 (Evaluated).** A comparative evaluation has run on the pair: architectures and controllers raced on identical traces, and scored deterministically.
+- **L3 (Served).** Sustained serving with the full operator surface (admission, health, failover, observability).
+- **L2 (Profiled).** Per-engine curves fitted and SLOs calibrated from the pair's own measurements.
+- **L1 (Gated).** All eight preflight gates pass, with `produce` and `consume` moving real KV between every ordered engine pair.
+- **L0 (Runway).** The engine contract is satisfied on paper only, and nothing has run on the pair.
 
 Support is bounded by the engine contract: stateless vLLM engines with NIXL `kv_both`, on a fabric the KV cache can cross. Any accelerator and model such a build can serve is a candidate. For a stack the table does not list, the `produce` and `consume` gates are the decision procedure. Rows appear at L1 and above. An L0 row is added only when the hardware is already planned.
 
