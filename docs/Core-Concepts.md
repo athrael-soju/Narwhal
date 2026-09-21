@@ -69,11 +69,11 @@ Urgent D-to-P evaluation keeps profile coverage, decode capacity, consolidation 
 
 The controller consolidates at source pressure up to `shrink`, or moves decode capacity to prefill under sustained prefill pressure at or above `expand`; both paths apply the profile, safety and confirmation gates before changing the split.
 
-`/narwhal/state` exposes each decision's retained demand, overflow and priced inputs under the [demand accounting contract](09-API-and-Data-Reference.md#demand-accounting).
+`/narwhal/state` exposes each decision's retained demand, overflow and priced inputs under the [demand accounting contract](API-and-Data-Reference.md#demand-accounting).
 
 Before moving a decode engine to prefill, the controller closes its arrival-evidence window and checks decode stability. The window closes after `controller.reactive.evidence_span_s` with `controller.reactive.evidence_min_arrivals` samples, or after `controller.reactive.evidence_max_span_s` under sparse traffic. Candidate pricing uses the larger short- or long-horizon demand estimate and includes resident requests plus output work still in prefill.
 
-A first-token timeout or decode-recovery move restarts the consolidation evidence window, while decode expansion and emergency floor restoration can proceed under the open-window thresholds in the [role-control reference](07-Configuration.md#role-control).
+A first-token timeout or decode-recovery move restarts the consolidation evidence window, while decode expansion and emergency floor restoration can proceed under the open-window thresholds in the [role-control reference](Configuration.md#role-control).
 
 `controller.advisory: true` runs the decision path and records the proposed split, caller, reason and advisory result while preserving the current roles.
 
@@ -136,7 +136,7 @@ When configured, the scheduler quarantines a failed engine for `recovery.failure
 
 A contracted engine must pass health, attestation, model, generation, role-permitted KV transfer, and final health before it returns to placement. Planned maintenance adds a newer-process requirement. An operator drain survives health answers, router resume, and standby takeover until readmission succeeds.
 
-The default policy returns saturation after one prefill/decode attempt, while [bounded serving](07-Configuration.md#bounded-serving) can queue or retry within the original deadline and acquires fresh KV ownership for every retry.
+The default policy returns saturation after one prefill/decode attempt, while [bounded serving](Configuration.md#bounded-serving) can queue or retry within the original deadline and acquires fresh KV ownership for every retry.
 
 ## Durable state
 
@@ -146,11 +146,11 @@ Each handoff writer atomically renames a process-unique temporary file over the 
 
 A warm standby follows the active router's handoff and accepts traffic after acquiring the shared lease; the previous holder fences itself before local lease expiry, and load balancers select the current owner through `/ready`.
 
-The [API and data reference](09-API-and-Data-Reference.md) defines the state documents. [Operate Narwhal](04-Operate.md) covers lifecycle and failover procedures.
+The [API and data reference](API-and-Data-Reference.md) defines the state documents. [Operate Narwhal](Operate.md) covers lifecycle and failover procedures.
 
 ## References
 
-- [Backend continuation contract](09-API-and-Data-Reference.md#backend-continuation-contract): producer ownership, local decode, descriptor validation and timing boundaries.
-- [Configuration](07-Configuration.md): placement, role guards, serving limits and engine health.
-- [Measure a fleet](06-Measure.md): profiles, transfer checks, deployment load and occupied-role canaries for the pinned backend.
+- [Backend continuation contract](API-and-Data-Reference.md#backend-continuation-contract): producer ownership, local decode, descriptor validation and timing boundaries.
+- [Configuration](Configuration.md): placement, role guards, serving limits and engine health.
+- [Measure a fleet](Measure.md): profiles, transfer checks, deployment load and occupied-role canaries for the pinned backend.
 - [Source responsibilities](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#source-responsibilities): package ownership and import constraints.

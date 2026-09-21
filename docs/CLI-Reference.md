@@ -40,9 +40,9 @@ Starts one router process. `--fleet` is required.
 | `--lease-safety-margin SECONDS` | `1.0` | Maximum relative clock skew reserved before local expiry. Must be nonnegative. |
 | `--resume` | Config `recovery.resume` | Forces state resume on. |
 
-Before loading the fleet, `narwhal-serve` exits with status 2 if the selected port is already in use. [Configuration](07-Configuration.md#paths-and-cli-precedence) records option precedence.
+Before loading the fleet, `narwhal-serve` exits with status 2 if the selected port is already in use. [Configuration](Configuration.md#paths-and-cli-precedence) records option precedence.
 
-Automatic standby takeover requires shared lease storage. [Operate Narwhal](04-Operate.md#start-production-routers) defines its filesystem contract, partition behaviour, and load-balancer checks.
+Automatic standby takeover requires shared lease storage. [Operate Narwhal](Operate.md#start-production-routers) defines its filesystem contract, partition behaviour, and load-balancer checks.
 
 ## `narwhal-profile`
 
@@ -94,4 +94,4 @@ Runs deterministic correctness probes beside idle or live traffic and writes ver
 | `--out PATH` | required | Result JSONL path. |
 | `--digest` | false | Retains a run-keyed HMAC-SHA-256 completion digest. |
 
-Copy [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace its model-specific values. `narwhal-canary` compares each returned completion and token sequence with its case, then writes verdicts, timings, token counts, digests, observed control events and a terminal summary under the [canary artifact contracts](09-API-and-Data-Reference.md#canary-artifacts).
+Copy [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace its model-specific values. `narwhal-canary` compares each returned completion and token sequence with its case, then writes verdicts, timings, token counts, digests, observed control events and a terminal summary under the [canary artifact contracts](API-and-Data-Reference.md#canary-artifacts).

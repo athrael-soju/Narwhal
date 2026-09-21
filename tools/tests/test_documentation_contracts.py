@@ -36,7 +36,7 @@ class DocumentationContractTests(unittest.TestCase):
         fleet = document(cfg)
         section = ""
         checked = 0
-        for line in (ROOT / "docs/07-Configuration.md").read_text().splitlines():
+        for line in (ROOT / "docs/Configuration.md").read_text().splitlines():
             if line.startswith("## "):
                 section = line
             match = re.match(r"\| `([^`]+)` \| `([^`]+)` \|", line)
@@ -67,7 +67,7 @@ class DocumentationContractTests(unittest.TestCase):
         sections = dict(
             re.findall(
                 r"## `(narwhal-[^`]+)`\n([\s\S]*?)(?=\n## |\Z)",
-                (ROOT / "docs/08-CLI-Reference.md").read_text(),
+                (ROOT / "docs/CLI-Reference.md").read_text(),
             )
         )
         self.assertEqual(set(sections), set(project["scripts"]))
@@ -110,7 +110,7 @@ class DocumentationContractTests(unittest.TestCase):
 
     def test_reference_versions_cover_the_contract_registry(self):
         """Every persisted interface appears with its current schema version."""
-        text = (ROOT / "docs/09-API-and-Data-Reference.md").read_text()
+        text = (ROOT / "docs/API-and-Data-Reference.md").read_text()
         rows = re.findall(r"^\|[^|]+\|\s*`(narwhal\.[^`]+)`\s*\|\s*(\d+)\s*\|", text, re.M)
         self.assertEqual(
             {schema: int(version) for schema, version in rows},
@@ -119,7 +119,7 @@ class DocumentationContractTests(unittest.TestCase):
 
     def test_reference_names_demand_history_and_decode_floor_metrics(self):
         """The metrics inventory includes every demand-history gauge and the floor target."""
-        text = (ROOT / "docs/09-API-and-Data-Reference.md").read_text()
+        text = (ROOT / "docs/API-and-Data-Reference.md").read_text()
 
         for metric in (
             "narwhal_decode_floor",

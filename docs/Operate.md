@@ -26,7 +26,7 @@ The deployment platform provisions GPUs and containers.
 
 ## Keep a deployment set
 
-Store the [deployment evidence set](06-Measure.md#2-validate-the-deployment-under-load) under one release identifier. Install its Narwhal release, fleet config and profile store on both routers in an HA pair.
+Store the [deployment evidence set](Measure.md#2-validate-the-deployment-under-load) under one release identifier. Install its Narwhal release, fleet config and profile store on both routers in an HA pair.
 
 Both routers in an HA pair must use compatible handoff contracts. Check each installed build before an upgrade.
 
@@ -81,7 +81,7 @@ On shutdown, a standby or fenced router retains its saved primary handoff, while
 
 ## Monitor the fleet
 
-Follow [Set up observability](10-Observability.md) to generate engine targets, start Prometheus and Grafana, verify collection and open the dashboard through an SSH tunnel.
+Follow [Set up observability](Observability.md) to generate engine targets, start Prometheus and Grafana, verify collection and open the dashboard through an SSH tunnel.
 
 `/health` probes the router process through backend outages, returning HTTP 200 with the configured fleet size in `instances` and placement-eligible engines in `available_instances` after ejection, drain and quarantine exclusions.
 
@@ -200,4 +200,4 @@ Before production, repeat the permitted engine restart procedure and router fail
 | Whole-wave restart | The policy routes every action through the wave, withdraws readiness before stop, and readmits after every restarted engine passes attestation and the KV ring. |
 | Router failover | The load balancer selects one lease owner; roles and cumulative counters survive; the previous primary stays fenced. |
 
-The [troubleshooting guide](05-Troubleshoot.md) gives the failure procedures. [Measure a fleet](06-Measure.md) defines the production evidence.
+The [troubleshooting guide](Troubleshoot.md) gives the failure procedures. [Measure a fleet](Measure.md) defines the production evidence.

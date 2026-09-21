@@ -6,6 +6,11 @@
 # Site-specific: a fleet config names real hosts, an engine.env real paths.
 config/fleet.*.json
 config/fleet.json
+config/ssh.known_hosts
+config/engine-launch.*.json
+!config/engine-launch.example.json
+config/hosts.*.json
+!config/hosts.example.json
 !config/fleet.example.json
 !config/fleet.stub.json
 engine.env

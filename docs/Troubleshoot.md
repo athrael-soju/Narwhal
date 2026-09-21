@@ -49,13 +49,13 @@ A longer queue or timeout can turn an immediate refusal into a late SLO miss, so
 
 ## One planned engine restart
 
-Use the [drain sequence](04-Operate.md#restart-one-engine), and let the external supervisor stop the process after `ready_to_stop: true` confirms that placement has stopped and resident work has drained; readmission then proves a newer process identity alongside the recovery gates.
+Use the [drain sequence](Operate.md#restart-one-engine), and let the external supervisor stop the process after `ready_to_stop: true` confirms that placement has stopped and resident work has drained; readmission then proves a newer process identity alongside the recovery gates.
 
 ## NIXL peer failure or mixed engine generation
 
 Treat a stale-peer assertion, transfer stall that kills a peer, or generation mismatch as a whole-wave event.
 
-1. Stop new traffic with a lifecycle whole-wave drain. If drain identity capture fails for an engine, follow the [unplanned whole-wave procedure](04-Operate.md#restart-an-engine-wave) to restore the endpoint and retry the drain.
+1. Stop new traffic with a lifecycle whole-wave drain. If drain identity capture fails for an engine, follow the [unplanned whole-wave procedure](Operate.md#restart-an-engine-wave) to restore the endpoint and retry the drain.
 2. Wait for `wave.ready_to_stop: true` and router `/ready` HTTP 503.
 3. Stop the full engine process trees through the external supervisor.
 4. Verify accelerator memory belongs only to the current worker.
@@ -95,4 +95,4 @@ Older builds load handoffs that declare a supported schema version. To start fro
 
 ## Required drills
 
-Use the [release and production drills](04-Operate.md#required-drills) to check the repaired deployment's lifecycle and failover paths.
+Use the [release and production drills](Operate.md#required-drills) to check the repaired deployment's lifecycle and failover paths.
