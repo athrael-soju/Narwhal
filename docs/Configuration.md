@@ -52,13 +52,33 @@ From the management checkout, `python3 tools/deploy_hosts.py prepare --out <dire
 | --- | --- | --- |
 | `.env.router` | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `.env.engine-<n>` | Revision, launch and artifact fields, selected node URLs, fabric peer addresses and configured engine API credential. | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values and the configured engine API credential. |
+| `config/engine-launch.engine-<n>.json` | Selected GPU allocation, TP size, device mappings, resolved UCX selection and generated launch arguments. | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`. |
 | `config/fleet.local.json` on the router | Supplied fleet document, copied before deployment edits. | The file selected by workstation `NARWHAL_FLEET`. |
 
-The engine exporter requires `NARWHAL_ENGINE_IMAGE`, `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_DIR`, `NARWHAL_RUN_DIR`, `NARWHAL_MODEL_CONFIG_SHA256`, `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT`, `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_UCX_TCP_PORT_RANGE`. It also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths identify artifacts on the engine host; artifact provisioning belongs to the engine preparation and launch steps.
+The engine exporter requires `NARWHAL_ENGINE_IMAGE`, `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_DIR`, `NARWHAL_RUN_DIR`, `NARWHAL_MODEL_CONFIG_SHA256`, `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT`, `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_UCX_TCP_PORT_RANGE`. It sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json` and also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths identify artifacts on the engine host; artifact provisioning belongs to the engine preparation and launch steps.
 
 For a per-node override, insert `NODE_<n>_` after `NARWHAL_`: `NARWHAL_NODE_2_ENGINE_PORT` becomes `NARWHAL_ENGINE_PORT` in `.env.engine-2`. An empty override for a required field reports that field for correction. Fleet endpoint and API-key references select their named environment variables; names containing `SSH` and access variables referenced by the host inventory are rejected. The exporter selects other values through the listed role fields. Store management login destinations, passwords, identity configuration and host keys in the workstation's private access files.
 
 Generated files live under ignored `runs/deployment-env/` on the workstation. Git ignores `.env.router`, `.env.engine-<n>` and `config/fleet.local.json` on remote hosts. `deploy_hosts.py shell --run <directory> --role <role>` loads the appropriate role file with shell tracing disabled. A host serving both roles keeps both files in one checkout; each shell loads its own role file.
+
+### Engine launch records
+
+`NARWHAL_LAUNCH_CONFIG` selects the supplied private `config/engine-launch.local.json` on the management workstation. Its `engines` object contains one entry per assigned `engine-<n>` role. When preparing a new inventory, use [the example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) and fill each entry from the approved engine launcher, container device definition or scheduler allocation. Keep allocation, device and transfer source descriptions in that entry's `sources`; store any supporting extracts with the private configuration. An existing supplied record goes directly into deployment preparation.
+
+| Field | Deployment use |
+| --- | --- |
+| `accelerator`, `gpu_ids`, `tensor_parallel_size` | Declare the product, selected GPU indices or UUIDs and TP size for one replica; compare with host inspection and fleet hardware fields. |
+| `gpu_visibility_env` | Select `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`; preparation joins `gpu_ids` into its value. |
+| `accelerator_devices` | List host device paths mapped into the container. ROCm requires `/dev/kfd` and the DRI mappings for the allocated GPUs. |
+| `network_mode` | Set `host` for the recorded network and port allocation. |
+| `transfer.transport` | Declare `ucx_tcp` or `ucx_rdma` for inspection and transport verification. |
+| `transfer.net_devices` | Select Ethernet interface names for TCP or HCA:port names for RDMA; `${NARWHAL_FABRIC_INTERFACE}` resolves from the selected engine's environment. |
+| `transfer.devices` | List transport device paths mapped into the container; RDMA requires its character devices. A TCP record uses an empty list. |
+| `sources` | Name the allocation, device and transfer definitions that supply the record. |
+
+`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. Apply those arguments and mappings in the complete engine launcher, then inspect the running process and transfer behaviour during deployment.
+
+Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct an invalid record at the workstation and prepare a fresh run so its manifest captures the corrected inputs.
 
 ### Host inventory and SSH access
 
@@ -68,7 +88,7 @@ Store destinations and credentials in the workstation's `.env`; the inventory ho
 
 `tools/deploy_hosts.py plan` validates unique host IDs, role ownership, required access variables and distinct destination entries. The helper groups deployment work by host ID. Two aliases for the same physical machine belong in one host entry with the combined roles; the supplied inventory determines machine identity. `check-access` opens one verified connection per host. `shell --role <role>` resolves the role through that inventory.
 
-Store verified management host keys in checkout-local `config/ssh.known_hosts` and select it with `NARWHAL_SSH_KNOWN_HOSTS`. Supply that file, `.env`, the host inventory and fleet JSON with a fresh management checkout, keeping private file permissions at mode 0600. The helper uses strict host-key checking against this store and passes a selected password to `sshpass` through a private file descriptor. Install OpenSSH and, for password access, `sshpass` on the management workstation.
+Store verified management host keys in checkout-local `config/ssh.known_hosts` and select it with `NARWHAL_SSH_KNOWN_HOSTS`. Supply that file, `.env`, the host inventory, engine launch records and fleet JSON with a fresh management checkout, keeping private file permissions at mode 0600. The helper uses strict host-key checking against this store and passes a selected password to `sshpass` through a private file descriptor. Install OpenSSH and, for password access, `sshpass` on the management workstation.
 
 For key or SSH-agent authentication, configure the workstation's private SSH configuration with the host's address, username, identity and optional `Port` or `ProxyJump`. Point the inventory's `ssh_env` variable to that alias. Verify a new or changed server key through the supplied private access source before updating the checkout-local host-key store. Record remote `hostname` output as an observed label; SSH keys establish server identity.
 

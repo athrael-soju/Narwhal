@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.engine_launch import load_launches
 from tools.prepare_host_env import select_values, write_environment
 
 
@@ -60,6 +61,7 @@ def load_hosts(path: Path, env: dict[str, str]) -> list[Host]:
 
 def role_files(host: Host) -> list[str]:
     files = [f".env.{role}" for role in host.roles]
+    files += [f"engine-launch.{role}.json" for role in host.roles if role.startswith("engine-")]
     if "router" in host.roles:
         files.append("fleet.local.json")
     return files
@@ -122,6 +124,12 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
         for role in host.roles:
             node = int(role.split("-")[1]) if role.startswith("engine-") else None
             selected[role] = select_values("engine" if node else "router", node, fleet, env)
+    engine_roles = [role for role in selected if role.startswith("engine-")]
+    launches = load_launches(
+        Path(env.get("NARWHAL_LAUNCH_CONFIG", "config/engine-launch.local.json")),
+        engine_roles,
+        selected,
+    )
     access_names = {name for h in hosts for name in (h.ssh_env, h.password_env) if name}
     if any(access_names.intersection(values) for values in selected.values()):
         raise ValueError(
@@ -135,6 +143,11 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
         directory.mkdir(mode=0o700)
         for role in host.roles:
             write_environment(directory / f".env.{role}", selected[role])
+            if role in launches:
+                write_private(
+                    directory / f"engine-launch.{role}.json",
+                    json.dumps(launches[role], indent=2).encode() + b"\n",
+                )
         if "router" in host.roles:
             write_private(directory / "fleet.local.json", fleet_path.read_bytes())
     paths = ["source.bundle", *[f"{h.id}/{name}" for h in hosts for name in role_files(h)]]
@@ -272,7 +285,7 @@ def install_script(host: Host, manifest: dict) -> str:
     root, revision = manifest["remote_dir"], manifest["revision"]
     copies = []
     for name in role_files(host):
-        target = f"config/{name}" if name == "fleet.local.json" else name
+        target = f"config/{name}" if name.endswith(".json") else name
         copies.append(
             f"if test -e {target}; then cmp ../{name} {target}; "
             f"else install -m 600 ../{name} {target}; fi"

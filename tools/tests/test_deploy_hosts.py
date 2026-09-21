@@ -12,6 +12,7 @@ from unittest.mock import patch
 from tools.check_publication import private_path
 from tools.deploy_hosts import SSH, Host, install, load_hosts, load_run, main, prepare
 from tools.prepare_host_env import ENGINE_FIELDS
+from tools.tests.test_engine_launch import launch_document
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -92,6 +93,11 @@ class HostDeploymentTests(unittest.TestCase):
             json.dumps({"engines": [{"url": "http://one.invalid"}, {"url": "http://two.invalid"}]})
         )
         self.env["NARWHAL_FLEET"] = str(fleet)
+        launch = root / "launch.json"
+        document = launch_document()
+        document["engines"]["engine-2"] = document["engines"]["engine-1"]
+        launch.write_text(json.dumps(document))
+        self.env["NARWHAL_LAUNCH_CONFIG"] = str(launch)
         run = root / "prepared"
         prepare(self.hosts, self.env, run, ROOT)
         return run, load_run(run, self.hosts, self.env)
@@ -135,6 +141,9 @@ class HostDeploymentTests(unittest.TestCase):
             checkout = root / "node-1" / manifest["remote_dir"] / "checkout"
             self.assertTrue((checkout / ".env.router").is_file())
             self.assertTrue((checkout / ".env.engine-1").is_file())
+            record = json.loads((checkout / "config/engine-launch.engine-1.json").read_text())
+            self.assertEqual(record["tensor_parallel_size"], 2)
+            self.assertIn("NARWHAL_ENGINE_LAUNCH_CONFIG", (checkout / ".env.engine-1").read_text())
             for path in checkout.glob(".env.*"):
                 if path.name != ".env.example":
                     self.assertNotIn("synthetic-management-secret", path.read_text())
@@ -190,6 +199,8 @@ class HostDeploymentTests(unittest.TestCase):
     def test_private_host_inventory_is_excluded_from_publication(self):
         self.assertTrue(private_path("config/hosts.local.json"))
         self.assertFalse(private_path("config/hosts.example.json"))
+        self.assertTrue(private_path("config/engine-launch.local.json"))
+        self.assertFalse(private_path("config/engine-launch.example.json"))
 
     def test_documented_gpu_discovery_uses_pci_vendor_on_the_engine_host(self):
         blocks = re.findall(r"```bash\n(.*?)\n```", (ROOT / "docs/Deploy.md").read_text(), re.S)

@@ -6,7 +6,7 @@ From your management workstation, use the supplied inventory and private access 
 
 | Host | Work performed here | Supplied inputs |
 | --- | --- | --- |
-| Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON and verified `config/ssh.known_hosts`. |
+| Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON, `config/engine-launch.local.json` and verified `config/ssh.known_hosts`. |
 | Router host | Install Narwhal, create the fleet config, profile and check engines, run the router. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets. |
 | Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
 | Load-client and observability hosts | Generate deployment traffic, scrape metrics and inspect the dashboard. | Ingress route and credentials, workload, scrape targets and dashboard access. |
@@ -19,7 +19,7 @@ Create a private deployment record before the first command. At each gate, recor
 
 ## 1. Open the management shells
 
-On the management workstation, use the supplied private `.env`, host inventory, fleet JSON and verified SSH host-key file in the Narwhal checkout. `NARWHAL_HOSTS` selects `config/hosts.local.json`, `NARWHAL_FLEET` selects the engine fleet document, and `NARWHAL_SSH_KNOWN_HOSTS` selects `config/ssh.known_hosts`. The host inventory defines each physical machine once, names its access variables and assigns its router and engine roles. [Host inventory and SSH access](Configuration.md#host-inventory-and-ssh-access) defines the format.
+On the management workstation, use the supplied private `.env`, host inventory, fleet JSON and verified SSH host-key file in the Narwhal checkout. `NARWHAL_HOSTS` selects `config/hosts.local.json`, `NARWHAL_FLEET` selects the engine fleet document, `NARWHAL_LAUNCH_CONFIG` selects the supplied per-engine allocation and device records, and `NARWHAL_SSH_KNOWN_HOSTS` selects `config/ssh.known_hosts`. The host inventory defines each physical machine once, names its access variables and assigns its router and engine roles. [Host inventory and SSH access](Configuration.md#host-inventory-and-ssh-access) defines the format.
 
 A fresh clone receives those private files separately from the public source. Preserve the supplied values and load `.env` from the management checkout with shell tracing disabled:
 
@@ -52,7 +52,7 @@ With `.env` loaded, prepare a new deployment directory. The supplied `NARWHAL_DE
 python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
-The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and records hashes for the source bundle and role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
+The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. The manifest records hashes for the source bundle and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
 
 Choose a fresh `--out` path for a new deployment; subsequent commands reuse that path through `--run`. The mode-0600 manifest records the approved revision, host assignments, input hashes and a unique remote directory under `~/Narwhal-deploy/`. Record its path in the private deployment record. A missing field or unavailable revision stops preparation on the workstation; correct the named input or recover the approved source, then prepare a fresh directory.
 
@@ -95,7 +95,23 @@ For a transfer mismatch, compare the private command log and prepared manifest w
 
 ## 3. Inspect each engine host
 
-Run these read-only commands in each installed engine-role shell. The PCI vendor and device class select the NVIDIA or AMD inspection tool on that remote host:
+In each installed engine-role shell, `NARWHAL_ENGINE_LAUNCH_CONFIG` selects the transferred `config/engine-launch.engine-<n>.json`. Read its allocation and device fields before inspecting hardware:
+
+```bash
+python3 - <<'PY_LAUNCH'
+import json
+import os
+from pathlib import Path
+record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
+              "accelerator_devices", "network_mode", "transfer", "environment", "vllm_args"):
+    print(f"{field}: {json.dumps(record[field])}")
+PY_LAUNCH
+```
+
+The supplied private record declares the replica allocation, container device mappings and UCX selection; its `sources` entries identify the allocation and device definitions used to prepare it. [Engine launch records](Configuration.md#engine-launch-records) defines these fields. Retain this output in the private deployment record.
+
+Run these read-only commands in that engine-role shell. The PCI vendor and device class select the NVIDIA or AMD inspection tool on that remote host:
 
 ```bash
 (
@@ -127,7 +143,7 @@ Run these read-only commands in each installed engine-role shell. The PCI vendor
 
 Record the reported product name and visible physical GPU count per host. For ROCm, count agents whose `Device Type` is `GPU` and use their `Marketing Name`; CPU agents describe the host processor. A missing inspection command, driver error or empty GPU enumeration requires repair of that host's driver tools, permissions or device exposure before launch.
 
-Use these observations to replace `<accelerator-model>` in the router's working `config/fleet.local.json` under `hardware.accelerator`. Confirm that every participating engine has the declared accelerator model. The launch configuration determines `hardware.accelerators_per_engine` and `hardware.tensor_parallel`: compare them with the GPU devices allocated to one engine replica. A host's total GPU count describes available hardware; the selected replica allocation determines its TP shape. Record the observations with the deployment and retain the corrected fleet config for subsequent runs.
+Use these observations to replace `<accelerator-model>` in the router's working `config/fleet.local.json` under `hardware.accelerator`. Confirm that every participating engine has the declared accelerator model. Set `hardware.accelerators_per_engine` to the length of the record's `gpu_ids` and `hardware.tensor_parallel` to its `tensor_parallel_size`; verify that the selected indices or UUIDs identify available GPUs on this host. A host's total GPU count describes available hardware; the selected replica allocation determines its TP shape. Record the observations with the deployment and retain the corrected fleet config for subsequent runs.
 
 Take the engine image, model and run paths, model-config hash, fabric interface and ports from this host's supplied deployment values; [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) names these inputs. The router's ignored fleet document holds one entry per engine; the private inventory holds each engine's fabric address and peers. Replace angle-bracket placeholders in this guide from that inventory before executing commands.
 
@@ -141,16 +157,35 @@ ip address show dev "$NARWHAL_FABRIC_INTERFACE"
 ss -ltnp
 ```
 
-The Docker equality check applies when `NARWHAL_ENGINE_IMAGE` is an image ID; a registry digest requires the container runtime's resolved-digest inspection. The `config.json` hash identifies the model configuration; retain the checkpoint revision or weights manifest separately. Confirm that the accelerator and transfer devices named by the launch configuration exist and are available to the engine container. Inspect `ss` for owners of the planned engine HTTP, attestation, NIXL side-channel, and transport ports. Treat a listener owned by another deployment as a stop condition and resolve ownership before launch.
+The Docker equality check applies when `NARWHAL_ENGINE_IMAGE` is an image ID; a registry digest requires the container runtime's resolved-digest inspection. The `config.json` hash identifies the model configuration; retain the checkpoint revision or weights manifest separately. Check the declared device paths on this host:
+
+```bash
+python3 - <<'PY_DEVICES'
+import json
+import os
+from pathlib import Path
+record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+paths = record["accelerator_devices"] + record["transfer"]["devices"]
+missing = [path for path in paths if not Path(path).exists()]
+for path in paths:
+    print(f"{path}: {'missing' if path in missing else 'present'}")
+if missing:
+    raise SystemExit("Restore the declared device exposure before launch.")
+PY_DEVICES
+```
+
+For ROCm, `/dev/kfd` and the selected DRI devices provide container GPU access; mapping the whole `/dev/dri` directory exposes the host's DRI devices. Check ownership and container-user permissions for the declared mappings using the [ROCm container instructions](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html). Inspect `ss` for owners of the planned engine HTTP, attestation, NIXL side-channel, and transport ports. Treat a listener owned by another deployment as a stop condition and resolve ownership before launch.
 
 ## 4. Prepare the transfer fabric
 
 On each engine host, inspect the fabric and measure directed bandwidth using its supplied peer inventory before launching engines. NIXL advertises one address from each engine to every peer. Site automation must establish these conditions:
 
-- The kernel route to each advertised peer selects the RDMA-capable interface and its advertised source address.
+- The kernel route to each advertised peer selects the declared fabric interface and its advertised source address.
 - Every engine can open the NIXL side channel and register memory through the selected transport.
 - Directed bandwidth between eligible peers sustains the deployment's peak KV handoff rate.
-- Every node uses uniform firewall, MTU, GID, device and port configuration.
+- Each node applies the declared firewall, MTU, device and port configuration; RDMA deployments also verify the selected HCA port and GID.
+
+Read `transfer.transport` and `transfer.net_devices` from the engine record: `ucx_tcp` selects Ethernet interfaces, while `ucx_rdma` selects HCA ports and requires the listed RDMA device mappings. `environment.UCX_NET_DEVICES` carries that selection into the engine container. Verify the active transport in the engine logs and the directed transfer checks. The [UCX device selection reference](https://openucx.readthedocs.io/en/master/faq.html) describes both forms.
 
 Use Kubernetes, Ansible, Terraform or site tooling to provision hosts, distribute artifacts, configure persistent routes and measure directed fabric edges, recording the route and bandwidth checks with the deployment evidence.
 
@@ -160,7 +195,7 @@ For every peer address, run `ip -6 route get <peer-address> from <this-node-addr
 
 On the router host, edit the transferred `config/fleet.local.json` using the supplied inventory. Set the model, engine IDs, opening roles, engine and attestation URLs, SLOs and a fresh profile path under `runs/`, then add the complete production `engine_contract` defined by the [configuration reference](Configuration.md#engine-contract). [Node URL references](Configuration.md#node-urls-from-the-environment) resolve endpoints from `.env.router`; `engine.engine_api_key_env` selects the exported engine credential. The exported `NARWHAL_FLEET=config/fleet.local.json` selects this file for observability. Keep this ignored config with its profile and deployment load evidence in private storage, and replace site addresses before sharing an extract.
 
-On the engine hosts, use the site's deployment system to provision the declared image, model mounts, accelerator devices, tensor-parallel size and vLLM/NIXL launch configuration with effective `kv_both` behaviour. Use the fabric configuration from step 4 and confirm each engine serves the declared model and HTTP port before starting its sidecar. An engine startup failure requires its process logs and the image, device, model or fabric check implicated by the error. Preserve existing processes and resolve listener ownership before starting replacements.
+On the engine hosts, apply the selected record's `environment`, `vllm_args`, `accelerator_devices`, `transfer.devices` and `network_mode` through the engine launcher, alongside the supplied image, model mounts and vLLM/NIXL configuration with effective `kv_both` behaviour. The record supplies allocation and device arguments; the runtime launcher supplies the complete serving command and connector settings. Use the fabric configuration from step 4 and confirm each engine serves the declared model and HTTP port before starting its sidecar. An engine startup failure requires its process logs and the image, device, model or fabric check implicated by the error. Preserve existing processes and resolve listener ownership before starting replacements.
 
 ## 6. Attest each engine process
 
@@ -282,10 +317,10 @@ Share sanitised extracts from the private deployment record, using stable host a
 | Step and documentation | Required knowledge | Likely failure and recovery | Private value location |
 | --- | --- | --- | --- |
 | [Management access](#1-open-the-management-shells) | Physical host IDs, assigned roles, access variable names and verified server keys. | Missing access input: fill the named environment field. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, `config/hosts.local.json`, `config/ssh.known_hosts` and `runs/access-<id>/`. |
-| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
-| [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine-host environment and private inventory. |
-| [Fabric](#4-prepare-the-transfer-fabric) | Advertised peer addresses, interface, source address and expected KV rate. | Route, bandwidth or transfer failure: inspect the affected directed edge, transport devices, firewall, MTU and NIXL logs. | Private peer inventory, host-network configuration and fabric measurements. |
-| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment and private engine launcher. |
+| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
+| [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
+| [Fabric](#4-prepare-the-transfer-fabric) | Advertised peer addresses, declared TCP or RDMA transport, device selection, source address and expected KV rate. | Route, bandwidth or transfer failure: inspect the affected directed edge, transport devices, firewall, MTU and NIXL logs. | Engine launch record, private peer inventory, host-network configuration and fabric measurements. |
+| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment, engine launch record and private engine launcher. |
 | [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |

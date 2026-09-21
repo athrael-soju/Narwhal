@@ -62,6 +62,7 @@ def select_values(
     elif role == "engine":
         if node is None or node < 1:
             raise ValueError("engine export requires a positive --node number")
+        values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
         for field in (*ENGINE_FIELDS, *ENGINE_OPTIONAL):
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
