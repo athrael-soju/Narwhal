@@ -1,6 +1,8 @@
-# Get started
+# Optional CPU walkthrough
 
-The profiler and preflight check qualify six CPU engine stubs; the router then selects one prefill engine and one decode engine for the completion. The stubs emit deterministic fixture timings so the walkthrough exercises the control path reproducibly.
+For a GPU fleet, start with [Deploy](03-Deploy.md) from your management workstation and use the supplied private management access and inventory to reach the designated router and engine hosts. Install Narwhal on those hosts and check GPUs on the engine hosts before continuing through the deployment gates.
+
+This optional walkthrough runs six CPU stubs locally, profiles their deterministic fixture timings, and routes a completion through one prefill stub and one decode stub. A passing run validates the local stub request path; fleet acceptance requires real-engine attestation, GPU execution, KV transfers, measured profiles and the deployment workload in Deploy.
 
 ## Prerequisites
 
@@ -17,12 +19,9 @@ make setup
 source .venv/bin/activate
 ```
 
-Run subsequent commands from the checkout root. Activate `.venv` in each terminal
-to invoke `narwhal-*` commands by name, or use their `.venv/bin/` paths.
-`make setup` creates `.venv` with `python3`; on a multi-version host, select the
-interpreter before that first run with `make setup PYTHON=python3.12`.
+Run subsequent commands from the checkout root. Activate `.venv` in each terminal to invoke `narwhal-*` commands by name, or use their `.venv/bin/` paths. `make setup` creates `.venv` with `python3`; on a multi-version host, select the interpreter before that first run with `make setup PYTHON=python3.12`.
 
-The CPU stubs use the repository's fixture model and loopback endpoints. The [environment setup](07-Configuration.md#environment-variables) provides a copyable example for engine credentials, fleet selection and observability when you connect a GPU fleet.
+Run this walkthrough in three local terminals using the repository's fixture model and loopback endpoints.
 
 Use the same settings in all three terminals. The stub fleet needs six consecutive free loopback ports; the router needs one more. Inspect listeners with `ss -ltnp` before starting. If the defaults are occupied, select a free six-port block and a separate router port while existing listeners keep their ports. The generated fleet config and profiles go under ignored `runs/stub/`.
 
@@ -95,10 +94,7 @@ curl -fsS "http://127.0.0.1:${ROUTER_PORT}/v1/completions" \
   -d '{"model":"stub","prompt":"Explain why narwhals have tusks.","max_tokens":32}'
 ```
 
-Once every engine passes attestation, the router answers `/health` with all six
-instances. `/ready` returns HTTP 200 with the standalone controller values
-shown below; HA deployments populate `epoch` and `holder` from their
-[controller lease](09-API-and-Data-Reference.md#get-ready).
+Once every engine passes attestation, the router answers `/health` with all six instances. `/ready` returns HTTP 200 with the standalone controller values shown below; HA deployments populate `epoch` and `holder` from their [controller lease](09-API-and-Data-Reference.md#get-ready).
 
 ```json
 {"status":"ok","instances":6,"available_instances":6}
@@ -114,10 +110,7 @@ For this non-streaming request, the router buffers the decode engine's token str
 curl -fsS "http://127.0.0.1:${ROUTER_PORT}/narwhal/state" | python3 -m json.tool
 ```
 
-The state response lists every stub under `pools`. The router appends one
-terminal request row to `journal.jsonl` beside the generated profile, while
-monitor passes add `controller_decision` rows to the same file. With the default
-base port, the journal is `runs/stub/8101/journal.jsonl`.
+The state response lists every stub under `pools`. The router appends one terminal request row to `journal.jsonl` beside the generated profile, while monitor passes add `controller_decision` rows to the same file. With the default base port, the journal is `runs/stub/8101/journal.jsonl`.
 
 Stop the router with Ctrl-C in the second terminal, then stop the stub fleet with Ctrl-C in the first. The profiler and router leave profiles, raw samples, and the append-only journal under `runs/stub/`. A new run directory starts a new journal; reusing the directory appends.
 
