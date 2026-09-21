@@ -48,17 +48,7 @@ The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K
 
 ## Getting started
 
-Requirements: Linux, Python 3.11+ with `venv`, Git and Make.
-
-```bash
-git clone https://github.com/athrael-soju/Narwhal.git
-cd Narwhal
-make setup
-```
-
-`make setup` installs Narwhal and its development dependencies in `.venv`. A provisioned fleet follows the [deployment guide](docs/03-Deploy.md) from its supplied management access and node inventory. The optional [CPU walkthrough](docs/01-Get-Started.md) starts six loopback stubs, profiles them, and routes one request.
-
-The CPU walkthrough uses fixture engines on loopback. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
+Start with [Deploy a fleet](docs/03-Deploy.md) from your management workstation and fresh checkout. Use the supplied private management access and inventory to open shells on the designated router and engine hosts; the guide places installation on those hosts and GPU checks on the engine hosts. The workstation needs Git and access tooling; its hardware describes only that workstation.
 
 ## GPU deployment
 
@@ -75,7 +65,7 @@ Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model t
 
 ## Contributing
 
-[Contributing](CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md) covers vulnerability reports.
+[Contributing](CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. The optional [CPU walkthrough](docs/01-Get-Started.md) exercises the local request path with fixture timings; fleet acceptance uses the real-engine deployment gates. Participation follows the [code of conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 
