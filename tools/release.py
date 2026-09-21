@@ -26,7 +26,10 @@ def command(*args: str) -> str:
 
 
 def api(path: str, *args: str):
-    result = command("gh", "api", f"repos/{REPOSITORY}/{path}", *args)
+    endpoint = f"repos/{REPOSITORY}"
+    if path:
+        endpoint += f"/{path}"
+    result = command("gh", "api", endpoint, *args)
     return json.loads(result) if result else None
 
 

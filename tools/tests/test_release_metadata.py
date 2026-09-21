@@ -3,11 +3,17 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from tools.release import INITIAL_RELEASE_BRANCH, RELEASE_BRANCH, REPOSITORY, release_pr, version
+from tools.release import INITIAL_RELEASE_BRANCH, RELEASE_BRANCH, REPOSITORY, api, release_pr, version
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_repository_api_uses_endpoint_without_trailing_slash(self):
+        with mock.patch("tools.release.command", return_value='{"private": false}') as command:
+            self.assertEqual(api(""), {"private": False})
+        command.assert_called_once_with("gh", "api", f"repos/{REPOSITORY}")
+
     def test_version_uses_package_and_citation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
