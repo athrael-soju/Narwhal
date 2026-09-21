@@ -33,6 +33,8 @@ CI is started manually and runs `make check` on GitHub-hosted runners. It also r
 
 The CI jobs use the repository's CPU fixtures and a standard read-only GitHub token. For a narrower test pass, `make test` runs the unit tests and three CPU integration drills.
 
+The optional [developer CPU walkthrough](tools/CPU-Walkthrough.md) runs the local stub request path interactively and records fixture output.
+
 ### Coverage and test scope
 
 Run `make coverage` to measure lines and branches across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts. CI retains these artifacts for 14 days.
