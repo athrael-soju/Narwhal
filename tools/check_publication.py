@@ -22,6 +22,11 @@ def private_path(name: str) -> bool:
         or name == "config/fleet.json"
         or name.startswith(("runs/", "profiles/"))
         or (
+            name.startswith("config/hosts.")
+            and name.endswith(".json")
+            and name != "config/hosts.example.json"
+        )
+        or (
             name.startswith("config/fleet.")
             and name.endswith(".json")
             and name not in {"config/fleet.example.json", "config/fleet.stub.json"}

@@ -6,7 +6,7 @@ From your management workstation, use the supplied inventory and private access 
 
 | Host | Work performed here | Supplied inputs |
 | --- | --- | --- |
-| Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, private fleet JSON and verified `config/ssh.known_hosts`. |
+| Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON and verified `config/ssh.known_hosts`. |
 | Router host | Install Narwhal, create the fleet config, profile and check engines, run the router. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets. |
 | Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
 | Load-client and observability hosts | Generate deployment traffic, scrape metrics and inspect the dashboard. | Ingress route and credentials, workload, scrape targets and dashboard access. |
@@ -19,234 +19,115 @@ Create a private deployment record before the first command. At each gate, recor
 
 ## 1. Open the management shells
 
-On the management workstation, use the supplied private `.env`, fleet JSON and verified SSH host-key file in the Narwhal checkout. The environment identifies the fleet file through `NARWHAL_FLEET` and the host-key file through `NARWHAL_SSH_KNOWN_HOSTS`, normally `config/ssh.known_hosts`. Read these local inputs to identify the router, engine hosts and SSH logins.
+On the management workstation, use the supplied private `.env`, host inventory, fleet JSON and verified SSH host-key file in the Narwhal checkout. `NARWHAL_HOSTS` selects `config/hosts.local.json`, `NARWHAL_FLEET` selects the engine fleet document, and `NARWHAL_SSH_KNOWN_HOSTS` selects `config/ssh.known_hosts`. The host inventory defines each physical machine once, names its access variables and assigns its router and engine roles. [Host inventory and SSH access](Configuration.md#host-inventory-and-ssh-access) defines the format.
 
-A fresh clone receives those private files separately from the public source. Preserve existing deployment values and keep the private files with their checkout. Load `.env` from that checkout root with shell tracing disabled:
+A fresh clone receives those private files separately from the public source. Preserve the supplied values and load `.env` from the management checkout with shell tracing disabled:
 
 ```bash
 set +x
 set -a
 . ./.env
 set +a
+python3 tools/deploy_hosts.py plan
+python3 tools/deploy_hosts.py check-access
 ```
 
-`NARWHAL_ROUTER_SSH` identifies the router's management login; each `NARWHAL_NODE_<n>_SSH` identifies the engine host with the same node number in the fleet inventory. Password authentication uses the corresponding `NARWHAL_ROUTER_SSH_PASSWORD` or `NARWHAL_NODE_<n>_SSH_PASSWORD` value. [SSH management access](Configuration.md#ssh-management-access) defines their storage and authentication options. Fabric and HTTP addresses retain their declared service roles.
+`plan` lists host IDs and assigned roles. `check-access` verifies the pinned SSH key and login once per host, recording `hostname` and the executed command in private logs under `runs/access-<id>/`. A successful verified login completes the access gate for every role on that host. Hostnames serve as observed labels and can repeat across machines. Management destinations open shells; engine HTTP, attestation and fabric addresses retain their service roles.
 
-Open the first engine shell from a management terminal. The following block selects password authentication when that host's password is loaded; otherwise OpenSSH uses its configured key or SSH agent.
+Open a shell by role when inspecting a host:
 
 ```bash
-: "${NARWHAL_NODE_1_SSH:?load the first engine SSH destination}"
-: "${NARWHAL_SSH_KNOWN_HOSTS:?set the verified management host-key store}"
-if test -n "${NARWHAL_NODE_1_SSH_PASSWORD:-}"; then
-  sshpass -d 3 ssh \
-    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-    -o StrictHostKeyChecking=yes \
-    -o GlobalKnownHostsFile=/dev/null \
-    -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS" \
-    "$NARWHAL_NODE_1_SSH" 3<<<"$NARWHAL_NODE_1_SSH_PASSWORD"
-else
-  ssh -o StrictHostKeyChecking=yes \
-    -o GlobalKnownHostsFile=/dev/null \
-    -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS" \
-    "$NARWHAL_NODE_1_SSH"
-fi
+python3 tools/deploy_hosts.py shell --role engine-1
 ```
 
-Open the designated router shell from a second management terminal after loading the same local `.env`:
-
-```bash
-: "${NARWHAL_ROUTER_SSH:?set the router SSH destination in the private environment}"
-: "${NARWHAL_SSH_KNOWN_HOSTS:?set the verified management host-key store}"
-if test -n "${NARWHAL_ROUTER_SSH_PASSWORD:-}"; then
-  sshpass -d 3 ssh \
-    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-    -o StrictHostKeyChecking=yes \
-    -o GlobalKnownHostsFile=/dev/null \
-    -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS" \
-    "$NARWHAL_ROUTER_SSH" 3<<<"$NARWHAL_ROUTER_SSH_PASSWORD"
-else
-  ssh -o StrictHostKeyChecking=yes \
-    -o GlobalKnownHostsFile=/dev/null \
-    -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS" \
-    "$NARWHAL_ROUTER_SSH"
-fi
-```
-
-OpenSSH verifies the server key for the selected management destination against the supplied `config/ssh.known_hosts` through these commands. A successful login with that verification completes this gate and permits installation on the selected host. Run `hostname` in each remote shell and record it as an observed label alongside the management destination and assigned role; image-provided hostnames can repeat across machines. When the inventory assigns router and engine roles to the same management destination, both shells reach the same host. Repeat the engine connection with its corresponding `NARWHAL_NODE_<n>_SSH` value as you reach the remaining hosts.
-
-If these sources leave a required host role, management destination or credential unresolved, report the specific missing input and the sources inspected as the first blocked gate. For an unknown or changed host key, confirm the destination and fingerprint through the supplied private access source, then update the checkout-local host-key entry after verification and retry with strict checking enabled. For an authentication rejection, check the configured username and the selected password, identity file or SSH agent. For a connection timeout or refusal, check the management address, SSH port, bastion route and firewall. Retain the exact error in the private deployment record before recovery. Reports use host aliases, variable names and sanitised errors; credentials and raw environment contents stay private.
-
-Step 2 exports the supplied deployment values into separate router and engine files and transfers them through the verified management connection. Management credentials remain in the workstation checkout.
+Use `--role router` for the router shell and the corresponding numbered engine role for other hosts. Both roles resolve to the same authentication entry when they share a machine. For a missing access variable, inspect the named field in the supplied `.env`. For an unknown or changed host key, verify the destination and fingerprint through the supplied private access source before updating the checkout-local host-key entry. For authentication or connection failures, check the username, credential, management route, SSH port and firewall. Record the first blocked host and gate before recovery; share sanitised extracts from the private command log.
 
 ## 2. Install Narwhal on the remote hosts
 
-### Prepare the role environments on the workstation
+### Prepare the source and role environments on the workstation
 
-From the management checkout with `.env` loaded, export the approved full commit SHA as `NARWHAL_DEPLOYMENT_REVISION`. Run the exporter with Python 3.11 or newer on the workstation; it uses the standard library. The router file receives the revision, fleet endpoint references, configured engine API credential and router settings. Each engine file receives the revision, launch settings, its endpoint values, fabric peer addresses and configured engine API credential. SSH destinations, passwords and host-key paths stay in the workstation's `.env`.
-
-```bash
-set +x
-: "${NARWHAL_DEPLOYMENT_REVISION:?load the approved full commit SHA}"
-: "${NARWHAL_FLEET:?load the supplied fleet path}"
-umask 077
-mkdir -p runs/deployment-env
-NARWHAL_ENV_DIR=$(mktemp -d "$PWD/runs/deployment-env/transfer.XXXXXX")
-export NARWHAL_ENV_DIR
-export NARWHAL_ENGINE_NODE=1
-python3 tools/prepare_host_env.py --role router \
-  --fleet "$NARWHAL_FLEET" --out "$NARWHAL_ENV_DIR/.env.router"
-python3 tools/prepare_host_env.py --role engine --node "$NARWHAL_ENGINE_NODE" \
-  --fleet "$NARWHAL_FLEET" --out "$NARWHAL_ENV_DIR/.env.engine-$NARWHAL_ENGINE_NODE"
-install -m 600 "$NARWHAL_FLEET" "$NARWHAL_ENV_DIR/fleet.local.json"
-```
-
-The exporter creates mode-0600 files and reports variable names for missing inputs. It reads shared `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR` and other launch values from the loaded environment. A `NARWHAL_NODE_<n>_<field>` override, such as `NARWHAL_NODE_2_MODEL_DIR`, supplies that host's value under the usual `NARWHAL_MODEL_DIR` name. [Host environment files](Configuration.md#host-environment-files) lists the fields and locations. Record the generated directory in the private deployment record. For each remaining engine, set `NARWHAL_ENGINE_NODE` to its inventory number and repeat the engine export into the same directory.
-
-### Package the approved revision on the workstation
-
-Create a Git bundle from the exact commit named by `NARWHAL_DEPLOYMENT_REVISION`. The temporary bare repository gives that commit a `deployment` branch inside the bundle. The bundle carries committed source objects; the role files carry the private deployment values separately. The management checkout supplies the approved commit, so its object database must contain that revision before packaging.
+With `.env` loaded, prepare a new deployment directory. The supplied `NARWHAL_DEPLOYMENT_REVISION` selects the full approved commit in the management checkout. The helper packages that commit into a Git bundle and verifies the exact SHA with a fresh local clone before writing the completed manifest.
 
 ```bash
-(
-  set -e
-  umask 077
-  source_repo=$(git rev-parse --show-toplevel)
-  test ! -e "$NARWHAL_ENV_DIR/source.bundle"
-  test "$(git rev-parse --verify "$NARWHAL_DEPLOYMENT_REVISION^{commit}")" = "$NARWHAL_DEPLOYMENT_REVISION"
-  bundle_repo=$(mktemp -d "$NARWHAL_ENV_DIR/source.XXXXXX")
-  trap 'rm -rf "$bundle_repo"' EXIT
-  git init --bare "$bundle_repo"
-  git -C "$bundle_repo" fetch --no-tags "$source_repo" \
-    "$NARWHAL_DEPLOYMENT_REVISION:refs/heads/deployment"
-  git -C "$bundle_repo" bundle create "$NARWHAL_ENV_DIR/source.bundle" \
-    refs/heads/deployment
-  git -C "$bundle_repo" bundle verify "$NARWHAL_ENV_DIR/source.bundle"
-  git clone --branch deployment "$NARWHAL_ENV_DIR/source.bundle" "$bundle_repo/verify"
-  test "$(git -C "$bundle_repo/verify" rev-parse HEAD)" = "$NARWHAL_DEPLOYMENT_REVISION"
-)
+python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
-Successful verification and the fresh local clone establish that the bundle supplies the approved revision. If revision lookup or bundle verification fails, report that gate on the management workstation and recover the approved commit from its supplied source before repeating preparation in a fresh transfer directory. Keep the bundle with the private deployment artifacts.
+The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and records hashes for the source bundle and role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
 
-### Transfer the source bundle from the workstation
+Choose a fresh `--out` path for a new deployment; subsequent commands reuse that path through `--run`. The mode-0600 manifest records the approved revision, host assignments, input hashes and a unique remote directory under `~/Narwhal-deploy/`. Record its path in the private deployment record. A missing field or unavailable revision stops preparation on the workstation; correct the named input or recover the approved source, then prepare a fresh directory.
 
-Run these commands in the management terminal that holds `NARWHAL_ENV_DIR` and the loaded private `.env`. `narwhal_send` streams each selected file through verified SSH, using a separate file descriptor for password authentication. The receiver creates mode-0600 files and rejects an existing destination.
+### Install by host
+
+Install the host assigned to the first engine role:
 
 ```bash
-set +x
-narwhal_send() {
-  local destination=$1 password=$2 input=$3 receiver=$4
-  : "${destination:?load the management destination}"
-  : "${NARWHAL_SSH_KNOWN_HOSTS:?load the verified host-key store}"
-  local options=(
-    -o StrictHostKeyChecking=yes
-    -o GlobalKnownHostsFile=/dev/null
-    -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS"
-  )
-  if test -n "$password"; then
-    sshpass -d 3 ssh "${options[@]}" \
-      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-      "$destination" "$receiver" 3<<<"$password" < "$input"
-  else
-    ssh "${options[@]}" "$destination" "$receiver" < "$input"
-  fi
-}
+python3 tools/deploy_hosts.py install \
+  --run runs/deployment-env/first-deploy --role engine-1
 ```
 
-Send the bundle to the router destination, then repeat for each distinct engine destination. When router and engine roles share a destination, transfer the bundle once to that host.
+The helper transfers one source bundle and that host's role files over verified SSH, clones the bundle, checks the approved revision, and installs Narwhal in the checkout's `.venv`. A host serving both router and engine roles receives both environment files and one installation. The command log records each remote script, its exit status and output under the prepared directory's `logs/` subdirectory.
+
+After this host passes, install the remaining hosts through the same prepared run:
 
 ```bash
-narwhal_send "$NARWHAL_ROUTER_SSH" "${NARWHAL_ROUTER_SSH_PASSWORD:-}" \
-  "$NARWHAL_ENV_DIR/source.bundle" \
-  '(umask 077; set -C; cat > narwhal-source.bundle)'
+python3 tools/deploy_hosts.py install --run runs/deployment-env/first-deploy
 ```
 
-For each engine, set its inventory number below. Matching router and engine destinations share the router's transferred bundle; distinct destinations receive a copy:
+The helper iterates host IDs and reuses matching transferred files and completed installations. Repeating a role or running the full host list after the first host succeeds preserves that host's completed work. An existing file with different content or a changed source checkout stops the command at that host before further hosts run. Keep each prepared run's files intact; their hashes and host assignments are checked before SSH operations.
+
+### Open the installed role shells
+
+Open the router and engine shells from management terminals with the workstation `.env` loaded:
 
 ```bash
-export NARWHAL_ENGINE_NODE=1
-engine_destination=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH
-engine_password=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH_PASSWORD
-if test "${!engine_destination}" != "$NARWHAL_ROUTER_SSH"; then
-  narwhal_send "${!engine_destination}" "${!engine_password:-}" \
-    "$NARWHAL_ENV_DIR/source.bundle" \
-    '(umask 077; set -C; cat > narwhal-source.bundle)'
-fi
+python3 tools/deploy_hosts.py shell \
+  --run runs/deployment-env/first-deploy --role router
 ```
-
-### Clone once on each distinct remote host
-
-In each verified remote shell, clone the transferred bundle into a fresh checkout under the login home directory:
 
 ```bash
-cd ~
-git clone --branch deployment narwhal-source.bundle Narwhal
+python3 tools/deploy_hosts.py shell \
+  --run runs/deployment-env/first-deploy --role engine-1
 ```
 
-When router and engine roles share a host, use this checkout for both roles. An existing `~/Narwhal` or `~/narwhal-source.bundle` owned by another deployment requires a separate path; substitute the chosen paths in the transfer and shell commands. Record the bundle and checkout paths with their host in the private deployment record. The source bundle supplies the `deployment` branch at the approved revision, and the role files supply the SHA for the final comparison before installation.
+Each shell starts in that host's prepared checkout, loads its role environment and activates `.venv`. Use the corresponding engine role for other hosts. Run the following preparation and launch steps in these remote shells.
 
-### Transfer the role files from the workstation
-
-In the management terminal containing `narwhal_send` and the loaded environment, transfer the router configuration:
-
-```bash
-(
-  set -e
-  narwhal_send "$NARWHAL_ROUTER_SSH" "${NARWHAL_ROUTER_SSH_PASSWORD:-}" \
-    "$NARWHAL_ENV_DIR/.env.router" \
-    '(cd Narwhal && umask 077 && set -C && cat > .env.router)'
-  narwhal_send "$NARWHAL_ROUTER_SSH" "${NARWHAL_ROUTER_SSH_PASSWORD:-}" \
-    "$NARWHAL_ENV_DIR/fleet.local.json" \
-    '(cd Narwhal && umask 077 && set -C && cat > config/fleet.local.json)'
-)
-```
-
-Transfer the first engine file with the block below. For each additional engine, change `NARWHAL_ENGINE_NODE` to its inventory number and repeat this block.
-
-```bash
-export NARWHAL_ENGINE_NODE=1
-engine_destination=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH
-engine_password=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH_PASSWORD
-narwhal_send "${!engine_destination}" "${!engine_password:-}" \
-  "$NARWHAL_ENV_DIR/.env.engine-$NARWHAL_ENGINE_NODE" \
-  "(cd Narwhal && umask 077 && set -C && cat > .env.engine-$NARWHAL_ENGINE_NODE)"
-```
-
-A transfer rejection identifies the destination or access error; record the first failure, then inspect ownership and completeness before choosing a fresh path or removing a partial file created by this transfer. Preserve configuration belonging to an existing deployment.
-
-### Load the role files and install
-
-In the router shell:
-
-```bash
-cd ~/Narwhal
-set +x
-. ./.env.router
-```
-
-In the first engine shell, load its numbered file. Use the corresponding number in each remaining engine shell:
-
-```bash
-cd ~/Narwhal
-set +x
-. ./.env.engine-1
-```
-
-Both files export their selected values when sourced. Run the following commands once per distinct checkout, using either role shell when a host serves both roles:
-
-```bash
-: "${NARWHAL_DEPLOYMENT_REVISION:?load the role environment}"
-git switch --detach "$NARWHAL_DEPLOYMENT_REVISION"
-test "$(git rev-parse HEAD)" = "$NARWHAL_DEPLOYMENT_REVISION"
-make setup
-source .venv/bin/activate
-```
-
-Run later commands from this checkout root with the relevant role file loaded. Activate `.venv` with `source .venv/bin/activate` in additional shells on the same host. If checkout or SHA comparison fails, compare the loaded role-file revision with `git rev-parse deployment` and confirm that the bundle and role files came from the same preparation directory. For setup failures, use the error to repair Python, `venv`, package access or permissions on that host. Retain the source bundle, role files and fleet config with the deployment's private artifacts.
+For a transfer mismatch, compare the private command log and prepared manifest with the existing remote artifact before recovery. For a revision mismatch, confirm that the bundle and role files belong to the same run. An interrupted dependency installation can resume with the same `install --run` command; the completion marker is written after the installed CLI responds. A host's `.install-lock` directory prevents concurrent installation; remove a lock left by an interrupted session only after confirming its installer has ended. Preserve existing deployments and report the first blocked gate before cleaning artifacts owned by this test.
 
 ## 3. Inspect each engine host
 
-Run read-only checks in the selected engine-host shell. Use `nvidia-smi` for an NVIDIA host or `rocminfo` for an AMD ROCm host, according to the supplied inventory, and compare the visible accelerators and device count with its declared tensor-parallel shape. A driver error or device mismatch requires inspection of that engine host's driver, device exposure and allocation before launch. Inspect the host-local image, model, devices, listeners, and routes next.
+Run these read-only commands in each installed engine-role shell. The PCI vendor and device class select the NVIDIA or AMD inspection tool on that remote host:
+
+```bash
+(
+  set -e
+  vendors=
+  for device in /sys/bus/pci/devices/*; do
+    test -r "$device/class" && test -r "$device/vendor" || continue
+    case "$(cat "$device/class")" in
+      0x03*|0x12*) ;;
+      *) continue ;;
+    esac
+    case "$(cat "$device/vendor")" in
+      0x10de) vendors="$vendors nvidia" ;;
+      0x1002) vendors="$vendors amd" ;;
+    esac
+  done
+  if test -z "$vendors"; then
+    printf '%s\n' 'Inspect GPU PCI device exposure on this engine host.' >&2
+    exit 1
+  fi
+  case "$vendors" in
+    *nvidia*) nvidia-smi --query-gpu=pci.bus_id,name,uuid --format=csv ;;
+  esac
+  case "$vendors" in
+    *amd*) rocminfo ;;
+  esac
+)
+```
+
+Record the reported product name and visible physical GPU count per host. For ROCm, count agents whose `Device Type` is `GPU` and use their `Marketing Name`; CPU agents describe the host processor. A missing inspection command, driver error or empty GPU enumeration requires repair of that host's driver tools, permissions or device exposure before launch.
+
+Use these observations to replace `<accelerator-model>` in the router's working `config/fleet.local.json` under `hardware.accelerator`. Confirm that every participating engine has the declared accelerator model. The launch configuration determines `hardware.accelerators_per_engine` and `hardware.tensor_parallel`: compare them with the GPU devices allocated to one engine replica. A host's total GPU count describes available hardware; the selected replica allocation determines its TP shape. Record the observations with the deployment and retain the corrected fleet config for subsequent runs.
 
 Take the engine image, model and run paths, model-config hash, fabric interface and ports from this host's supplied deployment values; [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) names these inputs. The router's ignored fleet document holds one entry per engine; the private inventory holds each engine's fabric address and peers. Replace angle-bracket placeholders in this guide from that inventory before executing commands.
 
@@ -400,9 +281,9 @@ Share sanitised extracts from the private deployment record, using stable host a
 
 | Step and documentation | Required knowledge | Likely failure and recovery | Private value location |
 | --- | --- | --- | --- |
-| [Management access](#1-open-the-management-shells) | Router and engine SSH destinations, login usernames, credentials and verified server keys. | Unresolved access input: inspect the supplied environment and referenced inventory, then identify the missing field. Host-key rejection: verify the destination and fingerprint through the private access source before updating its entry. Login failure: check the credential and route. | Checkout-local `.env`, fleet JSON and `config/ssh.known_hosts`. |
-| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management object database, shared launch fields, per-node overrides and host prerequisites. | Revision or bundle failure: recover the approved commit from its supplied source and prepare a verified bundle. Export failure: fill the named field in the workstation environment. Transfer rejection: inspect access, destination ownership and partial files. Checkout mismatch: compare the bundle branch and role-file SHA. Setup failure: check Python, `venv` and permissions. | Workstation `.env` and `runs/deployment-env/`; remote `narwhal-source.bundle`, `.env.router`, `.env.engine-<n>` and router `config/fleet.local.json`. |
-| [Engine preparation](#3-inspect-each-engine-host) | Accelerator shape, image identity, model hash, run path, interfaces and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine-host environment and private inventory. |
+| [Management access](#1-open-the-management-shells) | Physical host IDs, assigned roles, access variable names and verified server keys. | Missing access input: fill the named environment field. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, `config/hosts.local.json`, `config/ssh.known_hosts` and `runs/access-<id>/`. |
+| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
+| [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine-host environment and private inventory. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Advertised peer addresses, interface, source address and expected KV rate. | Route, bandwidth or transfer failure: inspect the affected directed edge, transport devices, firewall, MTU and NIXL logs. | Private peer inventory, host-network configuration and fabric measurements. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment and private engine launcher. |
 | [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |

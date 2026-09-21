@@ -1,19 +1,16 @@
 """Deployment bundles supply the approved revision to an isolated clone."""
 
-import os
-import re
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from tools.deploy_hosts import prepare_bundle
+
 
 class SourceBundleTests(unittest.TestCase):
     def test_documented_bundle_clones_the_selected_local_commit(self):
         root = Path(__file__).resolve().parents[2]
-        guide = (root / "docs/Deploy.md").read_text()
-        blocks = re.findall(r"```bash\n(.*?)\n```", guide, re.S)
-        preparation = next(block for block in blocks if "bundle create" in block)
         revision = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
@@ -22,26 +19,12 @@ class SourceBundleTests(unittest.TestCase):
                 transfer = Path(folder) / "transfer"
                 transfer.mkdir()
                 (transfer / ".env.router").write_text("synthetic-private-value")
-                env = {
-                    "PATH": os.environ["PATH"],
-                    "HOME": os.environ["HOME"],
-                    "NARWHAL_ENV_DIR": str(transfer),
-                    "NARWHAL_DEPLOYMENT_REVISION": selected,
-                    "GIT_TERMINAL_PROMPT": "0",
-                }
-                result = subprocess.run(
-                    ["bash", "--noprofile", "--norc"],
-                    input=preparation,
-                    cwd=root,
-                    env=env,
-                    text=True,
-                    capture_output=True,
-                )
                 if selected != revision:
-                    self.assertNotEqual(result.returncode, 0)
+                    with self.assertRaisesRegex(ValueError, "Source preparation failed"):
+                        prepare_bundle(root, selected, transfer / "source.bundle")
                     self.assertFalse((transfer / "source.bundle").exists())
                     continue
-                self.assertEqual(result.returncode, 0, result.stderr)
+                prepare_bundle(root, selected, transfer / "source.bundle")
                 self.assertEqual((transfer / "source.bundle").stat().st_mode & 0o777, 0o600)
                 checkout = Path(folder) / "remote"
                 subprocess.run(

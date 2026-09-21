@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import subprocess
 import tempfile
 import unittest
@@ -78,61 +77,6 @@ class HostEnvironmentTests(unittest.TestCase):
                 fleet["engine"][field] = "NARWHAL_NODE_1_SSH_PASSWORD"
             with self.assertRaisesRegex(ValueError, "deployment variable names"):
                 select_values("router", None, fleet, self.env)
-
-    def test_documented_transfer_preserves_payload_and_existing_destination(self):
-        root = Path(__file__).resolve().parents[2]
-        guide = (root / "docs/Deploy.md").read_text()
-        function = re.search(r"narwhal_send\(\) \{.*?\n\}", guide, re.S)
-        self.assertIsNotNone(function)
-        mocks = r"""
-ssh() {
-  local args=" $* "
-  [[ "$args" == *' -o StrictHostKeyChecking=yes '* ]] || return 41
-  [[ "$args" == *' -o GlobalKnownHostsFile=/dev/null '* ]] || return 42
-  [[ "$args" == *' -o UserKnownHostsFile=config/ssh.known_hosts '* ]] || return 43
-  while [[ "$1" == '-o' ]]; do shift 2; done
-  [[ "$1" == 'operator@host.example.invalid' ]] || return 44
-  shift
-  (cd "$TEST_REMOTE" && sh -c "$1")
-}
-sshpass() {
-  [[ "$1 $2" == '-d 3' ]] || return 45
-  local credential
-  IFS= read -r credential <&3
-  [[ "$credential" == 'synthetic-management-secret' ]] || return 46
-  shift 2
-  "$@"
-}
-"""
-        invocation = r"""
-narwhal_send operator@host.example.invalid "$TEST_PASSWORD" "$TEST_INPUT" \
-  '(cd Narwhal && umask 077 && set -C && cat > .env.router)'
-"""
-        for password in ("", "synthetic-management-secret"):
-            with tempfile.TemporaryDirectory() as folder:
-                remote = Path(folder) / "remote"
-                (remote / "Narwhal").mkdir(parents=True)
-                source = Path(folder) / "source.env"
-                write_environment(source, {"ENGINE_TOKEN": "synthetic-api-token"})
-                env = {
-                    "PATH": os.environ["PATH"],
-                    "TEST_REMOTE": str(remote),
-                    "TEST_INPUT": str(source),
-                    "TEST_PASSWORD": password,
-                    "NARWHAL_SSH_KNOWN_HOSTS": "config/ssh.known_hosts",
-                }
-                for expected in (0, 1):
-                    result = subprocess.run(
-                        ["bash", "--noprofile", "--norc", "-e"],
-                        input=mocks + function[0] + invocation,
-                        env=env,
-                        text=True,
-                        capture_output=True,
-                    )
-                    self.assertEqual(result.returncode == 0, expected == 0, result.stderr)
-                    target = remote / "Narwhal/.env.router"
-                    self.assertEqual(target.read_bytes(), source.read_bytes())
-                    self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
     def test_shell_literals_permissions_and_existing_files(self):
         values = {"ENGINE_TOKEN": "spaces 'quotes' $HOME $(exit 7) `exit 8`\nnext line"}

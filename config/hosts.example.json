@@ -1,0 +1,16 @@
+{
+  "hosts": [
+    {
+      "id": "node-1",
+      "ssh_env": "NARWHAL_NODE_1_SSH",
+      "password_env": "NARWHAL_NODE_1_SSH_PASSWORD",
+      "roles": ["router", "engine-1"]
+    },
+    {
+      "id": "node-2",
+      "ssh_env": "NARWHAL_NODE_2_SSH",
+      "password_env": "NARWHAL_NODE_2_SSH_PASSWORD",
+      "roles": ["engine-2"]
+    }
+  ]
+}
