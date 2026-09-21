@@ -14,16 +14,24 @@ Operators provision one hardware and tensor-parallel shape, launch vLLM with NIX
 
 ## Router host: install Narwhal
 
-Install Narwhal on the router host. A fresh checkout verifies the router tooling there; engine-host inspection follows on the host that will run vLLM.
+Select the full commit SHA approved for this deployment and export it as
+`NARWHAL_DEPLOYMENT_REVISION` on the router and every engine host. Clone Narwhal
+on the router host, check out that commit, and install the CLI tools. Run
+engine-host checks on the hosts that will run vLLM.
 
 ```bash
+: "${NARWHAL_DEPLOYMENT_REVISION:?set the approved commit SHA}"
 git clone https://github.com/athrael-soju/Narwhal
 cd Narwhal
+git switch --detach "$NARWHAL_DEPLOYMENT_REVISION"
+test "$(git rev-parse HEAD)" = "$NARWHAL_DEPLOYMENT_REVISION"
 make setup
 source .venv/bin/activate
 ```
 
-Run later router commands from this checkout root with the environment active. Install the same pinned Narwhal revision on each engine host before starting its attestation sidecar.
+Run later router commands from this checkout root with the environment active.
+Repeat the clone, checkout, revision check, and setup on each engine host before
+starting its attestation sidecar.
 
 ## 1. Prepare each engine host
 
