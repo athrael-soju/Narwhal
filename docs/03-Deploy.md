@@ -12,7 +12,9 @@ Connect one model fleet to a Narwhal router on idle engines, then add public ing
 
 Operators provision one hardware and tensor-parallel shape, launch vLLM with NIXL and effective `kv_both` behaviour across a compatible model and KV layout, then bind that running contract to the fleet config, attestation documents and profiles measured from the deployed image and launch configuration.
 
-## 1. Install Narwhal
+## Router host: install Narwhal
+
+Install Narwhal on the router host. A fresh checkout verifies the router tooling there; engine-host inspection follows on the host that will run vLLM.
 
 ```bash
 git clone https://github.com/athrael-soju/Narwhal
@@ -21,7 +23,33 @@ make setup
 source .venv/bin/activate
 ```
 
-Run the documentation's commands from the checkout root with this environment active.
+Run later router commands from this checkout root with the environment active. Install the same pinned Narwhal revision on each engine host before starting its attestation sidecar.
+
+## 1. Prepare each engine host
+
+Run read-only checks on one selected engine host, then repeat them on the remaining hosts after the first passes. Inspect the host-local image, model, devices, listeners, and routes before launching its engine.
+
+Before launching vLLM, identify each engine host, its opening role, the immutable engine image and model checkpoint, the address NIXL will advertise, the peer addresses, and the ports the engine and attestation sidecar will bind. Record the intended accelerator and tensor-parallel shape. Pin one Narwhal revision for the router and sidecars, and record each engine's process generation separately.
+
+Keep site values in a private, Git-ignored `.env` based on [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example), or inject the same variables through the site's deployment system. The example names the engine image, model and run paths, model-config hash, fabric interface, and ports. The ignored fleet document holds one engine entry per node; the site's deployment inventory holds fabric addresses when they differ from engine HTTP addresses. Source `.env` in the shell running host checks, including a remote engine-host shell when it runs those checks. The tracked guide uses placeholders for site addresses and paths.
+
+On each host, check the declared artifacts and local resources before creating a new engine process. For a Docker image identified by its image ID, the following checks fail on a missing or different image and model config:
+
+```bash
+set -a
+. ./.env
+set +a
+
+test "$(docker image inspect "$NARWHAL_ENGINE_IMAGE" --format '{{.Id}}')" = "$NARWHAL_ENGINE_IMAGE"
+test "$(sha256sum "$NARWHAL_MODEL_DIR/config.json" | cut -d' ' -f1)" = "$NARWHAL_MODEL_CONFIG_SHA256"
+test -d "$NARWHAL_RUN_DIR"
+ip address show dev "$NARWHAL_FABRIC_INTERFACE"
+ss -ltnp
+```
+
+The Docker equality check applies when `NARWHAL_ENGINE_IMAGE` is an image ID; a registry digest requires the container runtime's resolved-digest inspection. The `config.json` hash identifies the model configuration; retain the checkpoint revision or weights manifest separately. Confirm that the accelerator and transfer devices named by the launch configuration exist and are available to the engine container. Inspect `ss` for owners of the planned engine HTTP, attestation, NIXL side-channel, and transport ports. Treat a listener owned by another deployment as a stop condition and resolve ownership before launch.
+
+For every peer address, run `ip -6 route get <peer-address> from <this-node-address>` for IPv6 or `ip -4 route get <peer-address> from <this-node-address>` for IPv4. The result must select the intended fabric interface and this node's advertised source address. An address or route mismatch sends the operator back to inventory or host-network configuration before vLLM starts. The [fabric checks](#7-check-the-fabric) later measure directed bandwidth and exercise real KV transfers.
 
 ## 2. Create the fleet config
 

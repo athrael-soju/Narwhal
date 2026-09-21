@@ -39,6 +39,8 @@ Narwhal does not load `.env` automatically. Run these commands from the checkout
 
 Model names, hardware, profiles and SLOs belong in the fleet JSON. Engine launch credentials and public client authentication belong to the deployment's engine launcher and ingress.
 
+The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR`, and `NARWHAL_FABRIC_INTERFACE`, belong to the [engine-host preparation](03-Deploy.md#1-prepare-each-engine-host) shell or site automation. Narwhal reads the fleet JSON; its `engines` array defines inventory size. The loader resolves engine `url` and `attestation_url` when their entire values are environment references. Model path and image variables remain inputs to the engine launcher.
+
 ### Node URLs from the environment
 
 An engine URL identifies the running vLLM HTTP API, for example `http://10.0.0.11:8000`; it can use an IP address without a DNS name. Choose an address and port reachable from the router. The attestation URL identifies the separately running sidecar, for example `http://10.0.0.11:8010/v1/attestation`. Use the actual listening ports from your engine deployment.
@@ -62,7 +64,7 @@ Use those references in the corresponding engine entry in `config/fleet.json`:
 }
 ```
 
-Add one entry per node to the fleet's `engines` array. `.env.example` provides commented URL pairs for six nodes. Both `config/fleet.json` and working `config/fleet.*.json` files are ignored by Git; the shipped example and stub configs remain tracked.
+Add one entry per running engine to the fleet's `engines` array. `.env.example` shows one URL pair; define a pair for each engine whose URLs you reference from the environment. Both `config/fleet.json` and working `config/fleet.*.json` files are ignored by Git; the shipped example and stub configs remain tracked.
 
 After loading `.env`, pass `--fleet "$NARWHAL_FLEET"` to profiling, preflight and serving commands. Missing or blank referenced variables fail configuration loading with the field and variable name. References support complete URL values only, with no shell expressions, defaults or recursive expansion. Other JSON fields retain their literal values; engine credentials continue to use `engine.engine_api_key_env`.
 
