@@ -30,7 +30,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
       - name: Validate the release PR metadata
-        if: github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
+        if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
         run: python tools/release.py check --release
 
   unit:
