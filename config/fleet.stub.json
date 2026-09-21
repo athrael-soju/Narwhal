@@ -1,0 +1,87 @@
+{
+  "schema": "narwhal.fleet",
+  "schema_version": 1,
+  "model": "stub",
+  "hardware": {
+    "accelerator": "cpu-stub",
+    "accelerators_per_engine": 1,
+    "tensor_parallel": 1
+  },
+  "engines": [
+    {
+      "iid": "e0",
+      "url": "http://127.0.0.1:8101",
+      "attestation_url": "http://127.0.0.1:8101/v1/attestation",
+      "role": "prefill"
+    },
+    {
+      "iid": "e1",
+      "url": "http://127.0.0.1:8102",
+      "attestation_url": "http://127.0.0.1:8102/v1/attestation",
+      "role": "prefill"
+    },
+    {
+      "iid": "e2",
+      "url": "http://127.0.0.1:8103",
+      "attestation_url": "http://127.0.0.1:8103/v1/attestation",
+      "role": "prefill"
+    },
+    {
+      "iid": "e3",
+      "url": "http://127.0.0.1:8104",
+      "attestation_url": "http://127.0.0.1:8104/v1/attestation",
+      "role": "decode"
+    },
+    {
+      "iid": "e4",
+      "url": "http://127.0.0.1:8105",
+      "attestation_url": "http://127.0.0.1:8105/v1/attestation",
+      "role": "decode"
+    },
+    {
+      "iid": "e5",
+      "url": "http://127.0.0.1:8106",
+      "attestation_url": "http://127.0.0.1:8106/v1/attestation",
+      "role": "decode"
+    }
+  ],
+  "engine_contract": {
+    "vllm_version": "0.0.0-stub",
+    "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "nixl_version": "stub",
+    "nixl_connector_version": 1,
+    "model_architecture": "StubForCausalLM",
+    "model_dtype": "float32",
+    "kv_heads": 1,
+    "head_size": 1,
+    "hidden_layers": 1,
+    "attention_backend": "STUB",
+    "kv_cache_dtype": "auto",
+    "cross_layers_blocks": false,
+    "hybrid_kv_cache_manager": false,
+    "connector": "NixlConnector",
+    "kv_role": "kv_both",
+    "transfer_mode": "pull",
+    "speculative_config": "disabled",
+    "enforce_handshake_compat": true
+  },
+  "_slo": "Synthetic timings include host event-loop scheduling. The 0.5-second TPOT target accommodates loaded CPU test hosts.",
+  "slo": {
+    "ttft_s": 10.0,
+    "tpot_s": 0.5
+  },
+  "controller": {
+    "monitor_interval_s": 1.0,
+    "thresholds": {
+      "expand": 1.0,
+      "shrink": 0.5,
+      "cooldown_s": 10.0
+    }
+  },
+  "engine": {
+    "tokenize": true
+  },
+  "profiles": {
+    "path": "runs/stub/profiles.json"
+  }
+}

@@ -1,0 +1,98 @@
+name: ci
+on:
+  workflow_dispatch: {}
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - run: make check VENV_PYTHON=python
+      - run: make coverage VENV_PYTHON=python COVERAGE_ARGS='--out runs/coverage/ci'
+      - name: Retain coverage reports and CPU drill evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpu-coverage-python-3.12
+          path: runs/coverage/ci
+          include-hidden-files: true
+          retention-days: 14
+      - name: Validate the release PR metadata
+        if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
+        run: python tools/release.py check --release
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - run: make unit VENV_PYTHON=python
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Smoke-test the installed wheel outside the checkout
+        run: |
+          export EXPECTED_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          python -m pip install dist/*.whl
+          source_root="$PWD"
+          cd "$(mktemp -d)"
+          python "$source_root/tools/check_installed.py" \
+            --expected-version "$EXPECTED_VERSION" --source-root "$source_root"
+
+      - name: Run unit tests and integration drills from the source distribution
+        if: matrix.python == '3.12'
+        run: |
+          archive_dir=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$archive_dir"
+          cd "$archive_dir"/*/
+          python -m pip install '.[dev]' -c constraints-dev.txt
+          make test VENV_PYTHON=python
+
+  gates:
+    if: always()
+    needs: [checks, unit, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require source, version-matrix and package checks
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: test "$CHECKS_RESULT" = success && test "$UNIT_RESULT" = success && test "$PACKAGE_RESULT" = success

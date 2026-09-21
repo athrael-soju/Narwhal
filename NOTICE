@@ -1,0 +1,14 @@
+Narwhal
+Copyright 2026 athrael-soju
+
+Distributed under the Apache License, Version 2.0. See LICENSE.
+
+Research attribution
+
+Narwhal's scheduling algorithms derive from:
+Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture
+Yu Wu et al. (2025), arXiv:2505.11916
+https://arxiv.org/abs/2505.11916
+
+Cite Arrow for those algorithms and Narwhal for this software.
+The software citation and full paper reference are in CITATION.cff.

@@ -1,0 +1,2885 @@
+{
+    "kind": "Dashboard",
+    "apiVersion": "dashboard.grafana.app/v2alpha1",
+    "metadata": {
+        "name": "narwhal-router",
+        "namespace": "default"
+    },
+    "spec": {
+        "annotations": [
+            {
+                "kind": "AnnotationQuery",
+                "spec": {
+                    "datasource": {
+                        "type": "grafana",
+                        "uid": "-- Grafana --"
+                    },
+                    "query": {
+                        "kind": "grafana",
+                        "spec": {}
+                    },
+                    "enable": true,
+                    "hide": true,
+                    "iconColor": "rgba(0, 211, 255, 1)",
+                    "name": "Annotations & Alerts",
+                    "builtIn": true,
+                    "legacyOptions": {
+                        "type": "dashboard"
+                    }
+                }
+            }
+        ],
+        "cursorSync": "Crosshair",
+        "description": "Fleet status, client traffic, role control and native engine metrics for one Prometheus data source.",
+        "editable": true,
+        "elements": {
+            "panel-32": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 32,
+                    "title": "",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "text",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "content": "<div style=\"display:flex;align-items:center;gap:clamp(6px,1vw,18px);padding:6px 12px;border-left:4px solid #43C9C5;height:100%;box-sizing:border-box;overflow:hidden\">\n<img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTMiIGhlaWdodD0iNTQ3LjM0IiB2aWV3Qm94PSIwIDAgNTEzIDU0Ny4zNCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJOYXJ3aGFsIj48dGl0bGU+TmFyd2hhbDwvdGl0bGU+PHBhdGggZmlsbD0iIzRERDlEOCIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNIDQwLjU4Nzc0ODE4MjU3NTEyNiwwLjAgQyA0NS43MjUyNzMzMTgxODQ2MDUsMC41ODU1MjE1NDYxMjgzNDc4IDU4Ljk5OTQwMDQ4ODA4NzA1LDExLjg0NDI2Njk0MTQ3NTgzNyA2My41OTY2Njk5MDQzMjQyMTYsMTUuMzg0NTUxMzgxMjUzMjYgQyA3My44MDU1NzU5NTM3ODI5MiwyMy4yNjQzNDQzNTI3Mjk0NjYgOTQuNDk4OTU0NTYyMDIwNiwzOC4yMzMxMzEyNzAwNDk1MSA5OS4xNjY3MDgyOTAyMzg2Myw0OS45NzI3NDY4OTk3MzI5IEMgMTAxLjU3NDI3OTc5ODAzNzU0LDU2LjA0ODkzODA5NDQ1NjM2IDEwMS4xODk3OTY5NTI3NTcsNjMuMjYwNDQwOTE1NzYxMDIgMTAxLjA1MTEzNzIxODQ5NjM2LDY5LjY3NzIyOTMyNDE1NDY3IEMgMTAwLjk4MDIyNzY1MTQzNjg1LDczLjEyNzQ4NjEwMjAzMzU3IDEwMS45MTAzMzY4NjQ1NjY4Niw3OC4wOTEzMzUwOTc2ODcxMSAxMDAuNzk1NTQ2MTAyOTk5ODgsODEuMjczMDU1MDAzMzIzOCBDIDk3Ljk0MDcyOTAwNzgzMTU1LDgwLjQzMzI4MTYwOTQwNDUgODguNDgwOTY3MDU3Njk3OCw2Ni44NjI1ODUwOTY0NDY4MiA4Ni4wNjE3NDMzNTg2NjI5Nyw2My43MDk4Nzg4NDcyMDE4MiBDIDc0LjUxNzkyNzU2MTA0NTI0LDQ4LjY1NDQ4NzIyNzIzMTU4NCA2Mi43MTEzNjcxMjQyNTksMzMuNzU2MTQ3MzY0OTM0NDEgNTEuMzI0NjI1NjU5MzQzODEsMTguNTgwMjI1MDI2ODYyNzM1IEMgNDcuOTk0NjQzOTMzMjc3MzksMTQuMTQ3NzA2MzYzMTYxMDkyIDQwLjA3NDQ2NzU3ODExMDg0LDUuNjYxNDM0NzE0MDE3MzMyIDQwLjU4Nzc0ODE4MjU3NTEyNiwwLjBNIDEwOS43NTY4NDc0ODUwMDE0LDUyLjY1Nzg2MzYyNjM0ODI3NCBDIDExMi45ODM3NDI5MTcyNzYwNiw1My4xMjI5OTM1NzUwMzQ0MyAxMTkuMzU2MDQ3NzMxODQ1NjUsNTkuODgyNDc4MTIyNzA2MiAxMjEuNzEwMDgyNzAxMzIzOTgsNjIuMzgxMDgxNjA1MTQ4NTggQyAxMzMuOTg0MDQxMDQ5MDU3MzcsNzUuNDE0NDcxMjgyMzYyNDYgMTMzLjYwMzM4Njk2MTQxOTYzLDg4LjQ5NjY4ODMxNDEwMzEgMTMyLjg0MjM2ODU5MTA0NTczLDEwNS4zMTExODY1NTM0MTg4OCBDIDEzMi42NjM5MzQ0NDY3NTQ4NCwxMDkuMjcxNzc1MDUyMTMzNTkgMTMzLjMyMTY1OTEyNTQ1MjQsMTE0LjE1OTQyMjU2ODc4NTMzIDEzMi4yNjAwNTg5MzU3OTkwNCwxMTcuOTMzMTQ4MTg2NDM3OTkgQyAxMjkuMTc1ODgxNDE2MjA1MDcsMTE3LjQ1NjU0NjY0Njc1MiAxMjMuNTQ4NTM0NDEzMzI3NjIsMTA5LjYzNTIwNjI0MzEzNzkzIDEyMS40MDQ1MzQ5Mjc2ODgyMiwxMDcuMDczNDc1MTQ3NjUyMjkgQyAxMDguNDkzMDQ5Mzc0ODkzOTMsOTEuNzU3MzU0ODU0OTY3NyAxMTAuNDM5MTM5NjQzNTUwMDgsODMuNDA5OTQ2MTE1MzUwMjQgMTEwLjQ4OTAxNzAxMzAxNzYyLDY0Ljk0ODU0ODIyMDA2NTczIEMgMTEwLjQ5MjM3OTU4ODE0MTYsNjEuMDE1MzQ0ODU3MjcyNDUgMTA5LjMyNDMwMDYxMzU3ODc0LDU2LjQwMzQ0ODEyMDY1OTE5IDEwOS43NTY4NDc0ODUwMDE0LDUyLjY1Nzg2MzYyNjM0ODI3NE0gMTY2LjAyNzQxMzIyODA2OTc1LDE2Mi40NjEwODg2NzQ0MDg3NiBDIDE2Mi42OTI1Nzk1MjcwNjgyLDE2MC42NzA1MzQ1MTgxMDI5IDE1OS43MjY4MjI3ODg1MjEyLDE1Ni4zMDYxMzQ1NjMwMzg4NSAxNTcuMTczOTk0NTA1NDI2NSwxNTMuNDc4NzczOTk5MzYyNiBDIDE0MC42MDQ0ODA5ODI2OTMyMiwxMzUuMTQ5NDYwODIwMTk2MzQgMTQzLjY0MjczODU1MTgxMjA0LDEyMi4zMzYzOTc1Mjc0NTkwMSAxNDMuNjE1NjMyMjA5MzQ1ODUsOTkuNzA5MzIxNTk1MTU2MjEgQyAxNDMuNjE2MTMyNTMwNDc3MjcsOTUuNjQ0NjE5OTE0ODc1MjUgMTQxLjgzNTQ1NTU4MzMxMzU1LDgxLjg5NDYwOTM4MzYxMjM5IDE0Mi40NTc4NjY3MTA0NTAxLDc5LjQ2NTA2MTE5NzQ2NDA1IEMgMTQ1LjkzMzM1NzIwNzYxOTE0LDgwLjgwMDA3NjQ3OTgwNjQyIDE0OS4zNDQyMTE3ODczODYzNyw4NS4zODQ0NDg5NTk4MzkwOSAxNTIuMDM2MTE3MTY2NzE5MzUsODcuOTk4MTMzMjIzMjMzOTkgQyAxNjkuOTIxNzEyMTQ3Njc0MjcsMTA1LjM3MTAzMTQzMjE0NjYyIDE2OS4wODg1NjU3MTA3ODM4OCwxMTkuNzQ1MjQzMzA2NzA1MDYgMTY3LjM0NDMyNjI5MTkwMTI3LDE0Mi45NTYxMjkzMDU1MTIxIEMgMTY3LjA3MTcxNjAwNzE3Mzc2LDE0Ni43MTI2ODEzOTkyMDkzIDE2Ny4zMjU4Mzk3NDU3NTE5MiwxNjAuMDI5NzUzOTQyNTgzNSAxNjYuMDI3NDEzMjI4MDY5NzUsMTYyLjQ2MTA4ODY3NDQwODc2TSAxNzcuNjY1MTg4NDEzMjAzNTcsMTEwLjUyNTc0NTMyNTc3Njg3IEMgMTgxLjc5ODY5NzA2NDQ1MzksMTExLjc2NTgyODQ4MDI2MjMxIDE4Ni4wNTI1MTA2ODM1MTA0NiwxMTYuOTk1NzM5NTQwMTQ5MzYgMTg4Ljk1NDY4MDk2NzQ1OTY3LDEyMC4wODA4OTg3OTc0NTg4MyBDIDIwMS40ODQ4MzU3MzM4Njc2LDEzMy4zOTAwODQ0MDQ3NzAyMiAyMDQuMjc4MDkzMzUyMzM4NywxNDcuMjYzMzAzNjM3NDA4OCAyMDMuMTA2MzQ2NzYzNjg0OTQsMTY1LjA1MjUzMzgwNDMzNzgzIEMgMjAyLjgxOTYwOTQ3OTcxMjc3LDE2OS40NTI3NDc2MzIwOTQ0MyAyMDIuMDgyODA1ODMzOTU1NTIsMTczLjgyMzk3NDA0ODk3MDkgMjAyLjAwNTU3NzQ2NzE3OTI1LDE3OC4yNDE2ODExMjE1NzgyNyBDIDIwMS45NTQ1MTk0MDczNDk1NSwxODEuMzExMjcyODAwMzczMSAyMDIuMzgyMzIyOTU2MzY1NzMsMjAwLjUxMTMzMjI4MjY2MjQ0IDIwMS45Nzc1OTM4MTY5MDczNiwyMDEuNTE3MTEyNzM3NjY5MDQgQyAxOTguMjE4NzUxMTg1OTE5NjQsMjAwLjI2NTgzMjU2MzAyMDA0IDE5My4xNzgzOTYyMjQ0MzQyNywxOTMuMzQ4ODM3NDE2MTIwNjYgMTkwLjYzNjI4MzU0NDkxOTA1LDE5MC4yMTAyMTMwMTYwNjEzMiBDIDE3My40ODc3MjE2MzA0OTg2NCwxNjkuMDAwNjkwOTk3MjI5OTggMTc4LjcyNzUzOTgxNTUyMTYsMTU2LjAxMzQ3MDE0Nzk1MjcgMTc5LjI3MTY5MjU2OTc2MjAyLDEzMS4xOTIxODI5NTc3MTkxMyBDIDE3OS4zNzE4ODY2OTM1Njc0MywxMjYuNjc2NjM2MzUzMjAzMjYgMTc3LjE4MjYzMjk0NDc1NTE3LDExMi44MTIzMjM2MDM0Mzc3MyAxNzcuNjY1MTg4NDEzMjAzNTcsMTEwLjUyNTc0NTMyNTc3Njg3TSAyMTAuNzA1Nzk2ODY5MDk1MywxMzkuMjczODY1MTQwMjAwNDggQyAyMTUuOTAzMzM1MzY3OTQ4NzMsMTM5Ljc4NjU5NjYwMjk5MjE4IDIyMC42MzgyNDQ5NzE2MzYzLDE0OS43OTAxMjc1MzE4NjQ1OCAyMjMuMjIzMzU5MTg2MTI4NzMsMTUzLjc1MTQwMDYyMjQyODk1IEMgMjI3LjMxMDM5MDg1MjEzMDMsMTYwLjAxODQxNTIzNTU1MjIgMjMyLjE2Njg4MDYzNjcyMzMsMTY1LjY1MDQyMjYwMTY4MjM1IDIzNi42OTE0NzY1MTUyNTM1MywxNzEuNTgxNjczMDcxNTIzMTQgQyAyNDEuODE3NDIwODU1MTk3NzgsMTc4LjMwODIwOTY3MDk3NzEgMjQ2LjAxMjk2MjUwNjYyODM2LDE4NS4wNTM0NzY5MTkyODYyIDI1Mi4yMTI1OTkxNjQ0NjkwMywxOTAuOTAyNjM5NzA2NDUxMzcgQyAyNTUuNDU5NjkyMDcwMzgwNDcsMTkzLjk3MjY4NjU1NjMxODYgMjY1LjQ2Njg3NDgyNzE0MTYsMjAyLjU0MjA1MDIwMDg4Mjk1IDI3MC4xMDA3MDY3NjI1Mjc0NywyMDEuMDU0MDk4MDUyOTI5NzMgQyAyNzAuNjgzMjUzMTc5NTE1NjUsMTk3LjcwMTQ1MTM4NjE4MjA3IDI2Ny42MjY5MTU5NjY5MTU1LDE5NC4xMDE3NzA0NDk5MjE4NCAyNjguNjc0OTE1NzIzOTY3MywxOTAuODkxMDg1NzA4NDM0NTMgQyAyNzMuNzAzNjMzNzI4MjgyLDE5MS42MTM1NzgwODQyMjg5IDI3OC4zMjQ3NDE0MzQ1OTgzNywxOTcuOTYwOTg0MTM0NDY4OTMgMjgwLjgxODc5Mzc1ODQ1MzUsMjAyLjAwMTA0NjM4NzE5MTM3IEMgMjg5LjU1MzE5NzQwODMxODE3LDIxNi4xMDE2MDY0MDczMTkzIDI4Ny4wMDMxMzY4NTY0NzkwNSwyMzcuMTU4OTAxODQ1NzY0MjYgMjY5LjEzNDIwNzE4NTI0NzIsMjQyLjQ5MjM5NTI5Nzk1NTYgQyAyMzguODEzNjk3MTcwOTE2NiwyNTEuNTQyNTg3MTQ1MTQyMTQgMjE1Ljk4OTcyNzg5Nzk1ODcyLDIyMy40MTMxNjI1NzUzNTk4MiAyMTAuOTM4MDIyMTEzNzIyMSwxOTYuNTg0MzcyNjUzNTMzMTQgQyAyMDkuMjI0NjQzODMzMTY5MjQsMTg3LjUzMzMzNzYzNzE1MzUyIDIxMC42MTA1MjkyMzQxNDEsMTc1LjMxOTc0NTk2MDAzNTIyIDIxMS4wNDEwNTY0Njg2MjczNywxNjUuOTk2MTg3Mjg4NTY0MDQgQyAyMTEuMjc1MTI5NzQ3MzI4OTgsMTYwLjkyMzM0Njg5MDg5NzQ1IDIwOC44OTQ0MDU3OTczNjIwOCwxNDIuMDAwNzc5NTg0MjY0NTQgMjEwLjcwNTc5Njg2OTA5NTMsMTM5LjI3Mzg2NTE0MDIwMDQ4Ii8+PHBhdGggZmlsbD0iIzFBMUExQSIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNIDkzLjI4NzQzMTcxMjQ1MDg1LDMyMy44MDc2NDIwNTkwNjQgQyA4Ny41MzYxMjM2OTEyNTk0NiwzMjAuOTEyMjU2NzU3MzUwMyA4MC43ODYyMDM5NzI3OTg3NSwzMTkuOTMyOTI4NTIxMDkwODQgNzQuOTE3MjI3NDg3NDk4NTYsMzE3LjAxMTk2NzIwNDE2MjI2IEMgNjEuMjE4MzM5MDcwNjcxODIsMzEwLjIwNTg3MDIyMTA2NDYzIDUwLjQ1NTc5ODk0OTA1MjI1LDI5Ny42NDM3NzEyNjcwNDcwNCA0My43Nzk0MTQyODk5MDIxNSwyODQuMDc2MzY5NjA0MTI0ODYgQyA0Mi41NjEzNzU1Mzg4NTQ2MzQsMjgxLjYwNjI3MjExNTk3ODUgNDAuODI4ODYwMjU4OTE1NDMsMjc4LjUyMzc5MDg0MTk0MzQgNDAuNTYzOTM3OTU3NjAzOTcsMjc1Ljc4NTc5NTkyMzM0NTUgQyA0Mi4xNDUxNDQ4OTI0MDI2NywyNzQuMTE3ODk3NjU2MjYwNjUgNDQuOTAwNDAzNjM1MDc0MDcsMjczLjEwODg2MzgzMDc5NTU0IDQ3LjAyMzQ3MjIzNDY4NTksMjcyLjIyODQyMDkxODc2NjQ2IEMgNTcuNjc5Nzc4MjI2MjM4NDU0LDI2Ny44MjE1MTI0MDg4OTI0MyA2OC43MjU5MTE0NjYwMzcxLDI2Ny4zNDkxMzQ5NjU5MzQwNyA3OS45MjUwMjMwNTEwMjM1NCwyNjkuODUyMTczMDYxMzMzOTMgQyA4My41MDA3MzM5MTc1MDk2NSwyNzAuNjU1NzIyNTYxNTQ3NCA4Ny42MjQyMzc4MDI1NDE3NiwyNzMuNDI3NjAyMDE2MDE5NTMgOTEuMTMwMDY1OTg5NzQyODMsMjczLjUzNjA4NTc1NTkzNjggQyA5Mi40MDE5MDg1MDg5ODI5MywyNzAuNjE3MTEwNDg5NDY4NjQgOTEuNjcyNjUzNzI1OTgyNTEsMjY2LjQyNjA4NTg1ODAxMjcgOTIuMjczOTc1OTQxODg0OTEsMjYzLjIzNzI5MTE2NTIzODg0IEMgOTMuODM4ODc0NTQ0ODEzODgsMjU0Ljk1MDY1MTc3NjI4NTY3IDEwMS40NDYxODUzNDA3NzU0LDIzNy40NjM5MzMzMTc1OTExNCAxMDkuNjg2OTM0Njk1MjQ3MjMsMjM0LjA5MDYwNDA5MDE0MDYgQyAxMTMuNDU0NTkzNTA4OTg5ODksMjM2LjI3MDk4MTgyNDIxMDM0IDExNi44ODA1ODMwNzEyMjg5MywyNDAuODE3MDAxNTY4OTM1MzIgMTE5LjQ1ODk0MjIxOTQ3OTU1LDI0NC4yOTMyNDQzODMwNDI1OCBDIDEzMy4xNzQwOTc0ODg1OTkwNSwyNjIuODUxOTg5MzgyMjA1MiAxMzQuNDc0MDU4MDA0MDE0NTUsMjg3LjUzMjc1NTIyNjQ0ODQgMTIzLjYyMjcwNDQ5NzMzNDU1LDMwNy43NDk0MzQ2NTM5MTc3IEMgMTIxLjk1MjcwMzYzNDE1OTU4LDMxMC44NTgwNjczMzAzNTIgMTE5Ljk5MDY3MzU3NTA3MDIyLDMxNS4xODkwNDE1OTEwOTYzIDExNy4yNjA2NDg1NTE2ODg5MiwzMTcuNDYyMTgxMTMxODQ0MyBDIDExMy4wNTMwNDQ2ODgwMDkwNywzMTYuMTcxOTk5MDgwMjE1MSAxMTAuMTQ4Mzc3MDIxMDIxNTksMzExLjE5MDI5MTk2ODc1NjQgMTA2LjAwNDQyNzMzNzAyODA2LDMxMC4wMjk1MjQ1NDMwNzIwNiBDIDEwNC4zMDkyNjQxNTAxMzM2OSwzMTUuMDkxNTgxNjEyMDcwNiAxMTUuNTIxMjM0ODYyMjI5ODIsMzM0LjA0NzAyMTgwMDg2ODYgMTE4LjgzNTU1NTAzOTE4MTQzLDMzOC41OTg1MTQwNTc3NzIwNCBDIDEzNy4xMDY4MzYxMzA4MDg1NSwzNjMuNzY4NDQwMzA0NTk5OCAxNjMuODkzNTM3OTc4MTQ4MjMsMzgyLjI1MjU1MjUxMzI0MzQgMTkzLjU1OTkxNDc1NzU0NTYsMzkxLjUwMzUyNDgyODc4MDQgQyAyNDguMjg5MDEyMzc1Mjk3OTIsNDA4LjU4MjQ2MTM4NjYxNTEgMzEzLjExMDM5MzkyMjg1ODc1LDM5OC4wMzIyNDgzOTAzOTg0IDM1NC41NTUzNjQzNzkyNDYxNiwzNTYuNTc2NzY3MTYyMTA3NTYgQyAzNjIuNzA4MjA3NTcyNDU2OTYsMzQ4LjQzMTE0NTc2OTc5NDA2IDM2OS42NjQwNTU3NzU3OTU1LDMzOS4zNDEyMjQxMTA0OTk0NyAzNzUuMDYxODIwODI2NTcxLDMyOS4xMzg0MzM2ODU0OTE5IEMgMzc2Ljg4NjU2MDMzNTA5OTAzLDMyNS42OTcxNTExMTU1NzQ1NyAzODAuNTE3MjE0NzMyNjk5OCwzMTUuMDQ5OTI4NTM2NjQ5IDM4Mi4wNzE1NjMwOTgyMjAxNywzMTMuMTI2MzM3ODQyNTAzMjMgQyAzODUuMjE2NDE5NjY4MzYwMzQsMzE1LjUxNzIzMjQ3Njk5NTk2IDM4Ny4xMzgxNTk3NjIyMjI3LDMyMS45MTI3NDc3MDM0MzcyIDM4OC41MDM1NDI2NTA1OTA5MywzMjUuNTYyMTYyNjY1ODg2OSBDIDM5My41NDk1MTI5MTUzOTYsMzM5LjAyNTg4NzQxMzc2Nzg2IDM5NC4xNzIzMDM1OTU0MTUzNywzNTIuMzAwNzE0NDA5NTg1MiAzOTIuMjUzMDA3ODQxNDMxMSwzNjYuNDIwOTk3ODI3NzMwMSBDIDM5MS44MjE1MzY2NzgzMjQwNCwzNjkuNjIyMDY1MjQ4OTgzMDYgMzg5LjE3NzY4MDA5MTA2Nzk0LDM3OS41OTIyODcwMjkxNjU0IDM4OS40MjU2ODA4NjQyMzA3NCwzODEuNjkyNjE5MjkyNTI1MzYgQyAzOTEuOTE1MDU4MTQyOTA0NzQsMzgwLjk0MTA4NzAxNDgyNzY0IDM5NC4yOTg0NDE3MjM3MzU0NCwzNzYuODU3MjE4NDE5MTY2NTQgMzk1Ljg4OTU4NTY5OTY2MzcsMzc0LjgwNzM0OTkyMzkwNDcgQyA0MDEuMjcwOTgyMDM0NDQ1MywzNjcuODcwMzU2ODA4MTUyMDUgNDA2LjEzOTQ1ODk2NTIzNDgsMzYwLjQ2MjM5MjY5MDA5ODQ1IDQxMC4xNTM0ODI2OTA3MDU3LDM1Mi42NDk0NDc0MzY3Nzk2IEMgNDI3LjUzNzQ5NTUxMjc2NDg1LDMxOC44MTg5MTk4MjkyNjk3NiA0MzEuODgwODY3NDkyODU1OCwyNzguNjIxOTY1NzE3NzYzMjYgNDIxLjUzMDkzNjY1NzkyOTk0LDI0Mi4wMDc5OTI1NDIwNDQ1NSBDIDQwNy4xODc4NDU4MTA2MDkxMywxOTEuMjExNTUyMjYzNzU4MyAzNjAuNjgwMjkzMzc0OTkwNCwxNTEuMjkwMjUzODU3NDE2NTMgMzA2LjMzNTg4NDg5NjEyOTY0LDE1NC41MDUxMDQ4Nzc3MTU3MiBDIDI5NC4yMDkwNTIyNzYzODYsMTU1LjIxODQ5ODYwNjgxNzggMjgyLjI3NDY3MTU5NTUxMjUzLDE1Ny42MTEzNzUwNjkxNTIwNyAyNzEuMTI4ODcwNzk4NTUxNTMsMTYyLjUxODY3ODI1ODczMjI1IEMgMjY2LjM0MzQxNDQ2NzYxMiwxNjQuNjIyMTA1ODY3MzQ0MTUgMjYxLjY3MDI5MzIwOTI2MjA3LDE2OC43MDcxNDQxNDE5MjEwNSAyNTcuMDUwMDE2NTU2NDE4OSwxNzAuMzk4NjA2MTI4MjQ4NzMgQyAyNTMuMzI4MjY2NjgxNzA0OTcsMTY4LjQwNTgyNDY4NzYzMTgyIDI0MC45NTIxODg1NDM4MywxNTcuMTQ0MjYyMTg4MzUwNzggMjM4Ljg0OTQ3MTc3MjU3OTQsMTUzLjU3OTMzODMyMTAxNDg2IEMgMjM5Ljk3OTU4MTc4NzMzNjM3LDE1MS42NjA0MTkwMDE1NjgxIDI0Mi40MDI5OTE3NzQwMDQwOCwxNTAuMTg0MDc3NTY1MjczODcgMjQ0LjE2NDQ2ODIxOTMxMTc0LDE0OC44MzI0MTE2NTUxMzY5OCBDIDI1Ni4yODI5MzYxNTY4OTA2LDEzOS41MjQ0MTMyMjEyMTYxOCAyNzEuMjQ2OTI3MjYwNzgxLDEzMy44MDg1MTY5NDQ4MDQ5OCAyODYuMjEyMDQyODkzNTI4MDYsMTMxLjE0ODkwOTA2MDQ1MjggQyAzMzcuMzA0MDQzOTc5NTA1NywxMjIuMDY5NDE0MzA0MTA5NzYgMzkwLjkxOTcyNzM2MDM1NDU2LDE0NS41Mzc2ODY0MDkzMjgwNSA0MjIuMjExMDI2NTY1MjM0NCwxODYuMTE4NzEwMjI2NzU2MzggQyA0MzAuNzI5NTc2MjUyNjc0ODYsMTk3LjE4NTE0NjQ3NDM3NTA3IDQzNy44NDY5ODE2NzAwNzc4LDIwOS4zMTc4MzUzODE3OTg4IDQ0My4yOTM3NDMxMTIwMzMxLDIyMi4xODg3OTg0MzAyNDM1NCBDIDQ0NS4xOTMxNTY4OTA2NTY5NSwyMjYuNjg1MTU1NTQ0MzQ5NzUgNDQ5LjE0NTg4MDQ3NjIwMTU3LDI0MC43OTE2OTU3Mzg3NTE3NCA0NTEuNzUxOTQ0NDgxMjY5LDI0My40NDQ1MTEyOTk5MDQxNSBDIDQ1NC45MTczNjMzOTYwMDAyNywyNDYuNjc1MjczMjk4OTE2MzggNDYwLjE5NDE0OTg5ODU2NjI1LDI0OC4zNDgyNzE4NjYyNjA5NyA0NjQuMDQzOTg2Njk1MTAyNiwyNTAuNjcwNTg4OTUwNTYxNiBDIDQ2OC4wMTQ4ODA3NzYzODM1LDI1My4wNjkzNTk1MDk2NzA4IDQ3MS44Mjc2NDczOTE2NzU1NSwyNTUuNzQ5OTAyNTAyNjY5NCA0NzUuNDI4MDIwMjYwNzQ5NywyNTguNjY0NzI5MjkwNTk5NSBDIDQ5My4wMjQxOTI2MzM0OTM4NCwyNzIuODcyNzgzOTcxOTY1MSA1MDYuMDAzNTI1OTk0NTcxNTMsMjkyLjQyMzk4MzU2NDM2OSA1MTAuNzQxNjI4NTg0NTkzNCwzMTQuNjYyNTgyNTI3NTc3NzQgQyA1MTEuODY0NTMyMDMyNTE4MzUsMzE5LjkyNDE0MDA3NzA3MTggNTEzLjc2MTIwMzc3MzI2MTUsMzMxLjEwNzMzNDQ0NjY1NDUzIDUxMi41NDU4NTAzNDY0NTI3LDMzNi4yMDIyOTQzMTM4MTE5IEMgNTA4LjU4NjYxMjEyNjg4OTgsMzM1LjI0NzM5NDk4ODg4MTA3IDUwNC43MTEyNDQ0NjUxOTc1LDMzMi4yNzYxOTU2NTQxNDk0MyA1MDAuOTU2MzM5Nzk2NTE4LDMzMC42MTE4OTY3MjM5MzAxIEMgNDg4LjY2MTMyMjQ1MzU0NDI0LDMyNS4xNzA2OTc1NDIxMzQ0NiA0NjkuODg5NzEwMTg0NjgwNiwzMjAuNTgxNTA2NjczNjQyNiA0NTYuOTM3MDczMTQ1MDU1OCwzMjYuMTg4OTgzMjY0NzQyODMgQyA0NTIuNTEwMTE3MjkzNjUwNSwzMjguMDk3NTMyOTQ3MDE3MDQgNDUxLjQ0NzA5OTA5OTc1NjY2LDMzMy43OTc1NDk4MTcxMTkzIDQ0OS43MTY1MTMxNTY2MzU3LDMzNy44MjYxNDQxNDkzMjQgQyA0NDYuMDM3NDUyNDM2OTY3OTUsMzQ2LjM4OTIyMjU4MDY0NzYgNDQxLjUxODc5ODkyMzYxNjk0LDM1NC43NDA5MTUyNDg5ODAyIDQzNi4yMzMxMTMyNzkxNDIxLDM2Mi40MDY2MzI5MTA2MDgwNCBDIDQyMS4wNTEwODYzMjgwNjU3LDM4NC40MTM0MTQ5OTM3OTI5IDQwMC45MTc1MDIwMTQzNjIzLDQwMi40Mjk4MjM3MDAzODU4NCAzNzcuMzc2NDk3MDkxNTg2Myw0MTUuMTQ2MTg2NjcxOTk5OSBDIDI5OS4yMDkwNTg3MDgxMTY0Niw0NTcuMzU1MzU4MzgzNDQ3MyAxOTMuMjE2MjkyNDg5OTIwNiw0NDAuMzE2MTkxNDYwODg3MjQgMTMwLjA5MzUyMDc2NzgwNTUzLDM3OC40Mjg1MDUzNjY0OTcyMyBDIDExNy41MTYwODQyMDgxODc0MSwzNjYuMDkxNDY0MDAzNjQyODQgMTA2Ljk2MTA1OTYxMjMzOTA2LDM1MS45NTI5NjQ5Mzk3MDI2IDk4Ljg5NTQ1NzQ0NTIyMzY2LDMzNi4yOTYzODI4ODM1MjUgQyA5Ni44MDcxMTk2NjkwMjQ1LDMzMi4yMzkxMjQ1MzE4MTc2IDk1LjQzNDQ3NzcyMjgwMTAzLDMyNy44MDIwMjQ3OTM1MzQ5NCA5My4yODc0MzE3MTI0NTA4NSwzMjMuODA3NjQyMDU5MDY0TSAzMzYuODA1OTQ4NjM5OTg5MjUsMjQyLjAxMDMwNzY2ODQzNjMgQyAzMjcuODY1ODk0NzQ2NTY1MywyNDIuMTE0NDA1NjE1OTM3MjcgMzIwLjc0ODkyOTI2NjE2OTQ1LDIzNS44MDE1NTM0NTkzNTU5MiAzMTkuODM0NzA3MzUyNDQ5MzYsMjI2Ljg4NTk3NzI5NzgwMTY3IEMgMzE5LjM4NDYzMzY0OTcwMDA1LDIxOC4xMjIyNzc1Mjc2MDc5NiAzMjUuNDcyMzYwNDkwMDI5NywyMTAuMzQwMjQxNjgxMDIzMjMgMzM0LjQwMDE4NjgwNTAzMzYsMjA5LjYzOTQ0NDA3MTc3NzggQyAzNDMuMjYwMTQ2NDA3MjA2NywyMDkuNDU0MTk4Njk5NzM5NzIgMzUwLjY5NTQ1MDUxMTEyMjcsMjE1LjI2NDI5NzkxNDIzNTkzIDM1MS43NTc4NjI4NDk3MDE4LDIyNC4yODAwNzE4NzAwNzc3IEMgMzUyLjMyNDAyNTMxNjYzMDc1LDIzMy4zMTEyMTAyMjkxNjg1IDM0Ni4wNTgzNDIwNzgxMTIwNSwyNDEuMzcyNDA4MjUxNDU2ODUgMzM2LjgwNTk0ODYzOTk4OTI1LDI0Mi4wMTAzMDc2Njg0MzYzTSAxNTAuMDQ1MDU2OTE4NDI0MDIsMzQxLjU2NzE0ODgzNjUxMzY0IEMgMTUzLjIyOTc3NDUyODIzMDQsMzQwLjUxMzc4NTc3MTk0ODg1IDE1OC42NjM4ODczNTkzMDU3NiwzNDIuMjE3NTgwODcwODgwMDYgMTYyLjA1NTE2MTMzMjE5NzM3LDM0Mi41ODMzMTQxNjI3NTgwMyBDIDE2Ny43NTMxMTcwODU3ODY0NywzNDMuMjAyMjY1MDczNjg4MyAxNzMuNzUwMzgzNjY4MTc0NzgsMzQzLjAwMzI4MzgxODg3MTUgMTc5LjQzMDkzNjQ3NzAzMTA4LDM0Mi4yOTg2NDIyMTc5MTggQyAyMDguNTE3NTQ2Njg2NDE1ODQsMzM4LjcxNDE2MDg3MDg3MjcgMjM1LjI3NzAzNzIwOTI0Mjc2LDMxOC42MzQ4NzM4NTc2NjU5IDIzNy43ODQwODg4ODUxNDA0NSwyODguMDIwMjE3MzY5NDAyMyBDIDIzOC40MDcwNjgwNTg0OTY5NSwyODAuMzc2MTQxNDMxMTYzNCAyMzYuOTg1MDU2OTU3MDM4MzgsMjcyLjQ4MzAzNzgzMTk4NzEzIDIzNC4yNjQ0NTc2NDIyMDg5OCwyNjUuMzM2ODQwMjg1ODY4NyBDIDIzMy4zNjcwNzA2MjcwMDE2NSwyNjIuOTU5Mzg0Mzg4Mjg4NzUgMjMxLjMwMjY4NDAxNjAyOTIyLDI1OS43OTI4NzA4NjA2OTQ1IDIzMS4yNjQyMTQ3MzUwOTE4NSwyNTcuMzI2NzU2NDg0OTE1NDUgQyAyMzQuNjcxNDAyMjUyOTA1MDcsMjU3LjcyNDg0MzQzMzI3OTYgMjQwLjU4Mjk5MjgyNzE5ODU1LDI2My42MTY3NzgzMzQ2NDQ3IDI0Mi45MzkxMTE0ODgyMTk2MiwyNjYuMTc2MTczNzQyNzgwODYgQyAyNTMuNTEyODE3OTEyMzgyLDI3Ny42NDQyNzAwMzAxMTc2NCAyNTcuNzk4NjA1MDgyOTA1MTcsMjkzLjc0MTMwNDc5ODMyODE0IDI1NC4yMDM5NDg4Mjg3MTUxNywzMDguOTQyMTc0NzIxMjcwNTMgQyAyNDYuNDg4NTA3NjAwMjA3NSwzNDEuNjU1MDE1NzI2NzQ0ODYgMjA4LjA5NjAyMzU3NTg4NDgsMzU0LjYzNTMyNjYwMjkxOTEgMTc4LjA1NzI3NDk4Mzk5NzQsMzUwLjc0MTU3NzM3NzEyNCBDIDE3MS45OTgyMzEwNjc3MTc3LDM0OS45NTQwNTc5Njc0NjE4NCAxNTMuNzQ2MDQxMjczMjgxMiwzNDYuMTY5NTQxMTI4MDQwMSAxNTAuMDQ1MDU2OTE4NDI0MDIsMzQxLjU2NzE0ODgzNjUxMzY0Ii8+PHBhdGggZmlsbD0iIzFBMUExQSIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNIDQ3Mi43OSw0ODUuNDcyNDY2MTMyNTM1OTQgQyA0NzIuNzksNDc5LjkzMjQ2NjEzMjUzNTkgNDcxLjMyLDQ2Ny45MjI0NjYxMzI1MzU5MyA0NzQuMTUsNDYzLjM2MjQ2NjEzMjUzNTkgQyA0NzcuNzEsNDU3LjYwMjQ2NjEzMjUzNTk0IDQ4OC42Myw0NTkuNDIyNDY2MTMyNTM1OTMgNDkwLjIsNDY1Ljg2MjQ2NjEzMjUzNTkgQyA0OTEuOTgsNDczLjE1MjQ2NjEzMjUzNTk1IDQ5MC43MSw1MDEuNjIyNDY2MTMyNTM1OSA0OTAuNzEsNTExLjAzMjQ2NjEzMjUzNTk0IEMgNDkwLjcxLDUxNi4xNjI0NjYxMzI1MzU5IDQ4OS4yOSw1MjQuMTcyNDY2MTMyNTM1OSA0OTEuOTUsNTI4LjcyMjQ2NjEzMjUzNTkgQyA0OTQuMzksNTI5LjkyMjQ2NjEzMjUzNTkgNDk3LjQyLDUyOS4zNTI0NjYxMzI1MzU5IDQ5OS42NCw1MzEuMjcyNDY2MTMyNTM1OSBDIDUwMy41NSw1MzQuNjUyNDY2MTMyNTM1OSA1MDIuODEsNTQ0LjE4MjQ2NjEzMjUzNTkgNDk3LjkyLDU0Ni4zMjI0NjYxMzI1MzYgQyA0OTAuNjYsNTQ5LjQ5MjQ2NjEzMjUzNTggNDc3LjE0LDU0NC45NDI0NjYxMzI1MzU5IDQ3NC4zNiw1MzYuNTQyNDY2MTMyNTM2IEMgNDcxLjE1LDUyNi44OTI0NjYxMzI1MzU5IDQ3Mi43OSw0OTcuMjEyNDY2MTMyNTM1OSA0NzIuNzksNDg1LjQ3MjQ2NjEzMjUzNTk0TSAzNTcuMzksNTE5LjY1MjQ2NjEzMjUzNTkgQyAzNTcuMzksNTI1LjYxMjQ2NjEzMjUzNTkgMzU4Ljk2LDUzOC41OTI0NjYxMzI1MzYgMzU1LjkyLDU0My41MDI0NjYxMzI1MzU5IEMgMzUyLjQ0LDU0OS4xMjI0NjYxMzI1MzU5IDM0MS40OSw1NDcuODgyNDY2MTMyNTM1OSAzMzkuOSw1NDEuMzUyNDY2MTMyNTM1OSBDIDMzOC4xNiw1MzQuMjUyNDY2MTMyNTM1OSAzMzkuMzcsNTIxLjE2MjQ2NjEzMjUzNTkgMzM5LjM3LDUxMy40MzI0NjYxMzI1MzU5IEMgMzM5LjM3LDUwMy40MzI0NjYxMzI1MzU5IDMzOS4zNyw0OTMuNDIyNDY2MTMyNTM1OTMgMzM5LjM3LDQ4My40MjI0NjYxMzI1MzU5MyBDIDMzOS4zNyw0NzguMTUyNDY2MTMyNTM1OTUgMzM4Ljk2LDQ3Mi42ODI0NjYxMzI1MzU5IDMzOS42MSw0NjcuNDQyNDY2MTMyNTM1OSBDIDM0MC41OSw0NTkuNTkyNDY2MTMyNTM1OTUgMzUyLjE5LDQ1Ny40OTI0NjYxMzI1MzU5IDM1NS45Myw0NjMuNTQyNDY2MTMyNTM1OTQgQyAzNjAuMSw0NzAuMjgyNDY2MTMyNTM1OTQgMzU1LjQsNDg0Ljk2MjQ2NjEzMjUzNTkgMzU3LjY3LDQ5Mi41NzI0NjYxMzI1MzU5IEMgMzU5LjIsNDkyLjI1MjQ2NjEzMjUzNTkgMzYwLjY2LDQ5MC44MTI0NjYxMzI1MzU5IDM2Mi4wNSw0ODkuOTgyNDY2MTMyNTM1OTMgQyAzNjguMDIsNDg2LjQwMjQ2NjEzMjUzNTk1IDM3NS4zMyw0ODYuNzgyNDY2MTMyNTM1OTQgMzgxLjUyLDQ4OS42NzI0NjYxMzI1MzU5MyBDIDM5Ny41MSw0OTcuMTMyNDY2MTMyNTM1OSAzOTcuMTksNTEzLjI2MjQ2NjEzMjUzNTkgMzk3LjE5LDUyOC4yOTI0NjYxMzI1MzYgQyAzOTcuMTksNTMyLjk3MjQ2NjEzMjUzNTkgMzk4LjU0LDU0MC44MzI0NjYxMzI1MzYgMzk0Ljk5LDU0NC41MzI0NjYxMzI1MzYgQyAzOTEuMiw1NDguNDgyNDY2MTMyNTM1OCAzODIuMTUsNTQ3Ljc5MjQ2NjEzMjUzNiAzODAuMDYsNTQyLjM1MjQ2NjEzMjUzNTkgQyAzNzYuNTgsNTMzLjM2MjQ2NjEzMjUzNTkgMzgyLjUxLDUxNy4xMzI0NjYxMzI1MzU5IDM3Ny4wNSw1MDkuMzIyNDY2MTMyNTM1OSBDIDM3Mi41NSw1MDIuODgyNDY2MTMyNTM1OSAzNjEuNzcsNTA0LjU4MjQ2NjEzMjUzNTkgMzU4LjU1LDUxMS40MTI0NjYxMzI1MzU5NCBDIDM1Ny4zNCw1MTMuOTcyNDY2MTMyNTM1OSAzNTcuNCw1MTYuODgyNDY2MTMyNTM1OSAzNTcuMzksNTE5LjY1MjQ2NjEzMjUzNTlNIDcwLjI2LDQ5Ni45MDI0NjYxMzI1MzU5NSBDIDY4Ljg3LDQ5OS40MTI0NjYxMzI1MzU5NCA2OS43Myw1MDQuNTEyNDY2MTMyNTM1OSA2OS43Myw1MDcuNDEyNDY2MTMyNTM1OTQgQyA2OS43Myw1MTUuODMyNDY2MTMyNTM2IDY5Ljc0LDUyNC4yNTI0NjYxMzI1MzU5IDY5LjczLDUzMi42NjI0NjYxMzI1MzU5IEMgNjkuNzMsNTM3LjgyMjQ2NjEzMjUzNiA3MC4xNyw1NDQuMzQyNDY2MTMyNTM2IDY0LjI0LDU0Ni4zNTI0NjYxMzI1MzU5IEMgNTguNjYsNTQ4LjI0MjQ2NjEzMjUzNTggNTIuNTUsNTQ1LjcyMjQ2NjEzMjUzNTggNTEuODIsNTM5LjU0MjQ2NjEzMjUzNiBDIDUxLjExLDUzMy40OTI0NjYxMzI1MzU5IDUxLjYsNTI3LjE1MjQ2NjEzMjUzNTkgNTEuNiw1MjEuMDcyNDY2MTMyNTM2IEMgNTEuNiw1MDkuMDcyNDY2MTMyNTM1OSA1MS42LDQ5Ny4wNzI0NjYxMzI1MzU5IDUxLjYsNDg1LjA3MjQ2NjEzMjUzNTkgQyA1MS42LDQ3OS44ODI0NjYxMzI1MzU5IDUwLjAsNDY4LjA5MjQ2NjEzMjUzNTk1IDU1LjAyLDQ2NS4wNzI0NjYxMzI1MzU5IEMgNjMuNTEsNDU5Ljk4MjQ2NjEzMjUzNTkzIDY5LjY2LDQ2Ny4yNTI0NjYxMzI1MzU5IDc0LjExLDQ3My4zNTI0NjYxMzI1MzU5NCBDIDc4Ljk2LDQ3OS45OTI0NjYxMzI1MzU5IDEwMC4yMyw1MTEuMDgyNDY2MTMyNTM1OSAxMDQuMyw1MTQuMjMyNDY2MTMyNTM1OSBDIDEwNS43Miw1MTEuMTMyNDY2MTMyNTM1OSAxMDQuNyw1MDUuMzgyNDY2MTMyNTM1OSAxMDQuNyw1MDEuOTEyNDY2MTMyNTM1OTQgQyAxMDQuNyw0OTIuMzQyNDY2MTMyNTM1OTUgMTA0LjQ0LDQ4Mi43MzI0NjYxMzI1MzU5MyAxMDQuNzQsNDczLjE3MjQ2NjEzMjUzNTkzIEMgMTA0Ljk5LDQ2NS4zNTI0NjYxMzI1MzU5NCAxMTEuMjksNDYxLjIzMjQ2NjEzMjUzNTkzIDExOC42OCw0NjQuNjgyNDY2MTMyNTM1OSBDIDEyNC44Myw0NjcuNTYyNDY2MTMyNTM1OSAxMjIuOCw0NzguNTQyNDY2MTMyNTM1OTQgMTIyLjgsNDg0LjAxMjQ2NjEzMjUzNTkgQyAxMjIuOCw0OTkuOTIyNDY2MTMyNTM1OTMgMTIyLjgxLDUxNS44NDI0NjYxMzI1MzYgMTIyLjgsNTMxLjc2MjQ2NjEzMjUzNTkgQyAxMjIuOCw1MzguNTkyNDY2MTMyNTM2IDEyMi45Nyw1NDYuNDcyNDY2MTMyNTM1OCAxMTQuMTgsNTQ2Ljk2MjQ2NjEzMjUzNTggQyAxMDYuMTQsNTQ3LjQyMjQ2NjEzMjUzNTkgMTAyLjM2LDU0MC4xMjI0NjYxMzI1MzU5IDk4LjIxLDUzNC41MDI0NjYxMzI1MzU5IEMgOTMuNDgsNTI4LjEwMjQ2NjEzMjUzNTkgNzQuMTgsNTAwLjI5MjQ2NjEzMjUzNTk0IDcwLjI2LDQ5Ni45MDI0NjYxMzI1MzU5NU0gMjE4LjQsNDkxLjg5MjQ2NjEzMjUzNTkgQyAyMjEuMDEsNDkwLjIwMjQ2NjEzMjUzNTkgMjIzLjI0LDQ4OC4zMzI0NjYxMzI1MzU5IDIyNi4zMyw0ODcuNDgyNDY2MTMyNTM1OTMgQyAyMzUuNjEsNDg0LjkwMjQ2NjEzMjUzNTk1IDI0Ny45OSw0ODkuNzYyNDY2MTMyNTM1OSAyNDIuMDYsNTAxLjE5MjQ2NjEzMjUzNTkgQyAyMzcuMzQsNTEwLjI4MjQ2NjEzMjUzNTk0IDIyOC4wLDUwMC45MzI0NjYxMzI1MzU5IDIyMS40LDUwNi40MzI0NjYxMzI1MzU5IEMgMjE2LjMzLDUxMC42NzI0NjYxMzI1MzU5MyAyMTguNjgsNTMyLjY0MjQ2NjEzMjUzNTkgMjE4LjI1LDUzOS43ODI0NjYxMzI1MzYgQyAyMTYuOTIsNTQ4LjEwMjQ2NjEzMjUzNTkgMjAzLjY5LDU1MC4wNDI0NjYxMzI1MzYgMjAxLjA4LDU0Mi4wNjI0NjYxMzI1MzYgQyAxOTguOTksNTM1LjY0MjQ2NjEzMjUzNTkgMjAwLjM0LDUxNS41MzI0NjYxMzI1MzYgMjAwLjM0LDUwNy43MTI0NjYxMzI1MzU5IEMgMjAwLjM0LDUwMi43ODI0NjYxMzI1MzU5NCAxOTkuNTEsNDk2Ljg1MjQ2NjEzMjUzNTk0IDIwMS4xMSw0OTIuMTIyNDY2MTMyNTM1OSBDIDIwMi44Nyw0ODYuODgyNDY2MTMyNTM1OSAyMTAuNDUsNDg2LjIxMjQ2NjEzMjUzNTkgMjE0Ljc3LDQ4OC41MDI0NjYxMzI1MzU5IEMgMjE2LjM5LDQ4OS4zNjI0NjYxMzI1MzU5IDIxNy4yLDQ5MC43MDI0NjYxMzI1MzU5IDIxOC40LDQ5MS44OTI0NjYxMzI1MzU5TSAyOTAuMjIsNTE5LjAwMjQ2NjEzMjUzNTkgQyAyODYuMzcsNTI2LjExMjQ2NjEzMjUzNTkgMjg1LjIyLDUzOC4yODI0NjYxMzI1MzYgMjgwLjE2LDU0NC4yODI0NjYxMzI1MzYgQyAyNzYuMTQsNTQ5LjA1MjQ2NjEzMjUzNiAyNjguOTgsNTQ3LjA1MjQ2NjEzMjUzNiAyNjYuMiw1NDIuMTMyNDY2MTMyNTM1OSBDIDI2My4xMiw1MzYuNjkyNDY2MTMyNTM1OSAyNDkuMzEsNTAyLjc1MjQ2NjEzMjUzNTkgMjQ4LjE3LDQ5Ny4xMzI0NjYxMzI1MzU5IEMgMjQ2Ljg0LDQ5MC41NjI0NjYxMzI1MzU5IDI1My44Nyw0ODUuMzIyNDY2MTMyNTM1OSAyNjAuMTgsNDg3LjExMjQ2NjEzMjUzNTkgQyAyNjcuNzYsNDg5LjI2MjQ2NjEzMjUzNTkgMjY5LjA3LDUwOS42NTI0NjYxMzI1MzU5NSAyNzMuODEsNTE0LjMzMjQ2NjEzMjUzNiBDIDI3Ni4zOSw1MTIuMDIyNDY2MTMyNTM1OSAyNzkuOTQsNDk3LjgzMjQ2NjEzMjUzNTkgMjgxLjg0LDQ5My42NDI0NjYxMzI1MzU5IEMgMjgzLjIzLDQ5MC41NjI0NjYxMzI1MzU5IDI4NS40LDQ4Ny45MzI0NjYxMzI1MzU5IDI4OC45Myw0ODcuNDAyNDY2MTMyNTM1OTUgQyAyOTkuMyw0ODUuODUyNDY2MTMyNTM1OTQgMzAxLjU3LDUwMC4wNDI0NjYxMzI1MzU5NCAzMDQuMTQsNTA3LjI0MjQ2NjEzMjUzNTkgQyAzMDQuOTYsNTA5LjUyMjQ2NjEzMjUzNTkgMzA1LjY1LDUxMi45NTI0NjYxMzI1MzU4IDMwNy4zMyw1MTQuNjUyNDY2MTMyNTM1OSBDIDMxMC4yNyw1MTAuMTAyNDY2MTMyNTM1OTQgMzEyLjQzLDUwMS4yMjI0NjYxMzI1MzU5NCAzMTQuNDcsNDk1Ljg3MjQ2NjEzMjUzNTkgQyAzMTUuNTIsNDkzLjExMjQ2NjEzMjUzNTkgMzE2LjY2LDQ5MC4wNDI0NjYxMzI1MzU5NCAzMTkuMDgsNDg4LjE5MjQ2NjEzMjUzNTkgQyAzMjMuNTksNDg0Ljc2MjQ2NjEzMjUzNTkgMzMyLjE2LDQ4OC4zODI0NjYxMzI1MzU5IDMzMy4wOCw0OTMuOTQyNDY2MTMyNTM1OSBDIDMzMy44LDQ5OC4zNDI0NjYxMzI1MzU5NSAzMzAuNDcsNTAzLjcxMjQ2NjEzMjUzNTkgMzI4Ljg2LDUwNy42ODI0NjYxMzI1MzU5IEMgMzI0LjY5LDUxNy45ODI0NjYxMzI1MzU5IDMyMC42Myw1MjguMzQyNDY2MTMyNTM2IDMxNi4zMiw1MzguNTkyNDY2MTMyNTM2IEMgMzE0LjQ4LDU0Mi45NjI0NjYxMzI1MzU4IDMxMS43MSw1NDcuNTAyNDY2MTMyNTM2IDMwNi4yNSw1NDYuOTAyNDY2MTMyNTM1OSBDIDI5NS41OCw1NDUuNzMyNDY2MTMyNTM1OCAyOTUuNDcsNTIzLjU5MjQ2NjEzMjUzNiAyOTAuMjIsNTE5LjAwMjQ2NjEzMjUzNTlNIDE3Mi45OSw1NDEuNzIyNDY2MTMyNTM1OSBDIDE3MS4xNSw1NDIuMjcyNDY2MTMyNTM1OSAxNjkuNDMsNTQzLjgyMjQ2NjEzMjUzNiAxNjcuNjMsNTQ0LjY4MjQ2NjEzMjUzNTkgQyAxNjAuOTcsNTQ3Ljg2MjQ2NjEzMjUzNTkgMTUzLjA4LDU0Ny4wNzI0NjYxMzI1MzYgMTQ2LjcxLDU0My41NjI0NjYxMzI1MzYgQyAxMjMuODQsNTMwLjk4MjQ2NjEzMjUzNTkgMTI3LjAsNDk0LjI2MjQ2NjEzMjUzNTkgMTUzLjE3LDQ4OC4wOTI0NjYxMzI1MzU5NSBDIDE1OC42OCw0ODYuNzkyNDY2MTMyNTM1OTQgMTY0LjI3LDQ4Ny41NDI0NjYxMzI1MzU5NCAxNjkuMTgsNDkwLjM1MjQ2NjEzMjUzNTk0IEMgMTcwLjUxLDQ5MS4xMTI0NjYxMzI1MzU5IDE3MS43OSw0OTIuMjYyNDY2MTMyNTM1OSAxNzMuMjMsNDkyLjYzMjQ2NjEzMjUzNTkgQyAxNzYuMzIsNDg1LjkwMjQ2NjEzMjUzNTk1IDE4OC41Niw0ODQuOTIyNDY2MTMyNTM1OTMgMTkwLjM4LDQ5My4yODI0NjYxMzI1MzU5NCBDIDE5MS40NSw0OTguMTkyNDY2MTMyNTM1OSAxOTEuNDgsNTM2LjQzMjQ2NjEzMjUzNTkgMTkwLjMyLDU0MS4xMjI0NjYxMzI1MzU5IEMgMTg4LjM0LDU0OS4xNzI0NjYxMzI1MzU5IDE3Ny41OCw1NDcuOTgyNDY2MTMyNTM1OCAxNzIuOTksNTQxLjcyMjQ2NjEzMjUzNTlNIDQ0NS4xOSw1NDEuNTcyNDY2MTMyNTM2IEMgNDM5LjMxLDU0NC4zMTI0NjYxMzI1MzYgNDM0Ljk3LDU0Ny40NjI0NjYxMzI1MzU4IDQyOC4wMyw1NDYuNTIyNDY2MTMyNTM2IEMgMzk2LjgyLDU0Mi4yODI0NjYxMzI1MzYgMzk1LjAyLDQ5NC41MDI0NjYxMzI1MzU5IDQyNS45Miw0ODcuOTYyNDY2MTMyNTM1OSBDIDQzMS4zOCw0ODYuODAyNDY2MTMyNTM1OSA0MzYuODUsNDg3LjY5MjQ2NjEzMjUzNTkgNDQxLjY1LDQ5MC41MzI0NjYxMzI1MzU5NCBDIDQ0Mi44OCw0OTEuMjYyNDY2MTMyNTM1OSA0NDQuMTMsNDkyLjM5MjQ2NjEzMjUzNTkgNDQ1LjQ0LDQ5Mi43NzI0NjYxMzI1MzU5IEMgNDQ4LjE3LDQ4NS44NzI0NjYxMzI1MzU5IDQ2MC43NCw0ODQuOTAyNDY2MTMyNTM1OTUgNDYyLjUxLDQ5My4xNTI0NjYxMzI1MzU5NSBDIDQ2My41Niw0OTguMDMyNDY2MTMyNTM1OTQgNDYzLjU5LDUzNi42NzI0NjYxMzI1MzU5IDQ2Mi40NCw1NDEuMjcyNDY2MTMyNTM1OSBDIDQ2MC45NCw1NDcuMjQyNDY2MTMyNTM1OCA0NTIuNTMsNTQ4LjEyMjQ2NjEzMjUzNTkgNDQ4LjAzLDU0NS4wMjI0NjYxMzI1MzU5IEMgNDQ2LjY2LDU0NC4wNzI0NjYxMzI1MzYgNDQ2LjA5LDU0Mi44NDI0NjYxMzI1MzYgNDQ1LjE5LDU0MS41NzI0NjYxMzI1MzZNIDE2Mi43Miw1MjguNjEyNDY2MTMyNTM1OSBDIDE2OS4yMyw1MjcuMjMyNDY2MTMyNTM1OSAxNzIuNjcsNTIxLjMwMjQ2NjEzMjUzNiAxNzEuODcsNTE0Ljg5MjQ2NjEzMjUzNTkgQyAxNzAuNjIsNTA4LjQyMjQ2NjEzMjUzNTkzIDE2NS4wNSw1MDQuNDQyNDY2MTMyNTM1OSAxNTguNTMsNTA1LjQwMjQ2NjEzMjUzNTk1IEMgMTUyLjE5LDUwNi44MTI0NjYxMzI1MzU5IDE0OC4zMyw1MTIuNjkyNDY2MTMyNTM1OSAxNDkuMTksNTE5LjA3MjQ2NjEzMjUzNiBDIDE1MC41NCw1MjUuMzgyNDY2MTMyNTM1OSAxNTYuMzEsNTI5LjQ1MjQ2NjEzMjUzNTggMTYyLjcyLDUyOC42MTI0NjYxMzI1MzU5TSA0MzQuODgsNTI4LjYxMjQ2NjEzMjUzNTkgQyA0NDEuMzQsNTI3LjI1MjQ2NjEzMjUzNTkgNDQ0LjkzLDUyMS4zMDI0NjYxMzI1MzYgNDQ0LjA5LDUxNC45MTI0NjYxMzI1MzU5IEMgNDQyLjc3LDUwOC40NTI0NjYxMzI1MzU5IDQzNy4yOSw1MDQuNDQyNDY2MTMyNTM1OSA0MzAuNzMsNTA1LjM5MjQ2NjEzMjUzNTkgQyA0MjQuNDIsNTA2Ljc5MjQ2NjEzMjUzNTk0IDQyMC40Nyw1MTIuNjkyNDY2MTMyNTM1OSA0MjEuMzYsNTE5LjA2MjQ2NjEzMjUzNiBDIDQyMi43Myw1MjUuMzcyNDY2MTMyNTM1OSA0MjguNDYsNTI5LjQ1MjQ2NjEzMjUzNTggNDM0Ljg4LDUyOC42MTI0NjYxMzI1MzU5Ii8+PC9zdmc+\" alt=\"Narwhal\" style=\"display:block;height:100%;width:auto;max-width:28%;object-fit:contain;flex-shrink:0;background:#F1F8F8;border-radius:8px;padding:5px;box-sizing:border-box\" />\n<div style=\"flex-grow:1;flex-shrink:1;flex-basis:0px;min-width:0;height:calc(100% + 12px);overflow:hidden\"><img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAwIDIxNiIgcHJlc2VydmVBc3BlY3RSYXRpbz0ibm9uZSI+CiAgPHRpdGxlPk5hcndoYWwgb2NlYW4gY3VycmVudHM8L3RpdGxlPgogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJ3YXRlciIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiIHgxPSIwIiB5MT0iMCIgeDI9IjEyMDAiIHkyPSIwIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNDNDOUM1IiBzdG9wLW9wYWNpdHk9IjAuMTIiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjU1IiBzdG9wLWNvbG9yPSIjNDNDOUM1IiBzdG9wLW9wYWNpdHk9IjAuMDUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNDNDOUM1IiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9InN1cmZhY2UiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iMCIgeTE9IjAiIHgyPSIxMjAwIiB5Mj0iMCI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzQzQzlDNSIgc3RvcC1vcGFjaXR5PSIwLjQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjU1IiBzdG9wLWNvbG9yPSIjNDNDOUM1IiBzdG9wLW9wYWNpdHk9IjAuMTgiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNDNDOUM1IiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxwYXRoIGZpbGw9InVybCgjd2F0ZXIpIiBkPSJNMCA4QzgwLTIgMTQ4LTQgMjE2IDIyQzMwMCA1NCAzNTAgMTE2IDQ2OCAxMzNDNTg2IDE1MCA2NDEgOTEgNzM4IDc2Qzg1MiA1OCA4ODYgMTI2IDk4MCAxNDlDMTA2MCAxNjkgMTEzNCAxNjMgMTIwMCAxNjZWMjA4SDBaIi8+CiAgPHBhdGggZmlsbD0idXJsKCN3YXRlcikiIGQ9Ik0wIDY2QzkwIDU1IDE2MiA0OCAyNDcgNzRDMzMyIDEwMCAzODMgMTUwIDQ4OSAxNThDNjA0IDE2NyA2NTkgMTE5IDc1NiAxMTFDODYxIDEwMiA5MDUgMTU0IDk5MiAxNjhDMTA3MiAxODEgMTEzOCAxODEgMTIwMCAxODRWMjA4SDBaIi8+CiAgPGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ1cmwoI3N1cmZhY2UpIiBzdHJva2Utd2lkdGg9IjEuNCI+CiAgICA8cGF0aCBkPSJNMCA4QzgwLTIgMTQ4LTQgMjE2IDIyQzMwMCA1NCAzNTAgMTE2IDQ2OCAxMzNDNTg2IDE1MCA2NDEgOTEgNzM4IDc2Qzg1MiA1OCA4ODYgMTI2IDk4MCAxNDlDMTA2MCAxNjkgMTEzNCAxNjMgMTIwMCAxNjYiLz4KICAgIDxwYXRoIG9wYWNpdHk9IjAuNyIgZD0iTTAgMzZDODQgMjUgMTU2IDIwIDIzMiA0OEMzMTcgNzkgMzY3IDEzNCA0NzkgMTQ2QzU5NSAxNTggNjUwIDEwNSA3NDcgOTRDODU3IDgxIDg5NSAxNDAgOTg2IDE1OUMxMDY2IDE3NSAxMTM2IDE3MiAxMjAwIDE3NSIvPgogICAgPHBhdGggb3BhY2l0eT0iMC41IiBkPSJNMCA2NkM5MCA1NSAxNjIgNDggMjQ3IDc0QzMzMiAxMDAgMzgzIDE1MCA0ODkgMTU4QzYwNCAxNjcgNjU5IDExOSA3NTYgMTExQzg2MSAxMDIgOTA1IDE1NCA5OTIgMTY4QzEwNzIgMTgxIDExMzggMTgxIDEyMDAgMTg0Ii8+CiAgPC9nPgo8L3N2Zz4K\" alt=\"\" aria-hidden=\"true\" style=\"display:block;width:100%;height:100%\" /></div>\n</div>",
+                                "mode": "html"
+                            },
+                            "fieldConfig": {
+                                "defaults": {},
+                                "overrides": []
+                            }
+                        }
+                    },
+                    "transparent": true
+                }
+            },
+            "panel-1": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 1,
+                    "title": "Admission / controller",
+                    "description": "Admission readiness of the selected router and controller execution mode, with trailing-area sparklines. Automatic mode applies eligible role changes; advisory mode records proposed changes.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) or ((-1 * (up{job=\"narwhal-router\",instance=~\"$router\"} == 0)) < 0)",
+                                                "instant": false,
+                                                "legendFormat": "Admission",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(narwhal_controller_advisory{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "instant": false,
+                                                "legendFormat": "Controller",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "horizontal",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 24
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 0,
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 6,
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Admission"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "type": "value",
+                                                        "options": {
+                                                            "-1": {
+                                                                "text": "Offline",
+                                                                "color": "#EF8585"
+                                                            },
+                                                            "0": {
+                                                                "text": "Not ready",
+                                                                "color": "#EF8585"
+                                                            },
+                                                            "1": {
+                                                                "text": "Ready",
+                                                                "color": "#8CCF7E"
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Controller"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "type": "value",
+                                                        "options": {
+                                                            "0": {
+                                                                "text": "Automatic",
+                                                                "color": "text"
+                                                            },
+                                                            "1": {
+                                                                "text": "Advisory",
+                                                                "color": "text"
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-2": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 2,
+                    "title": "Engine scrapes",
+                    "description": "Scrape status of all configured engine targets, with a trailing-area sparkline.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(up{job=\"engines\"})",
+                                                "instant": false,
+                                                "legendFormat": "Targets up",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 24
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 0,
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 6,
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-5": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 5,
+                    "title": "Requests",
+                    "description": "Per-second completed, failed, expired, refused and rejected terminal outcomes with trailing-area sparklines, plus the corresponding totals over the displayed interval on the selected router. Client cancellations count separately.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "Successful/s",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Unsuccessful/s",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(increase(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "instant": false,
+                                                "legendFormat": "Successful total",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "instant": false,
+                                                "legendFormat": "Unsuccessful total",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 24
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "noValue": "No data"
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Successful/s"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 2
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "reqps"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Unsuccessful/s"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 2
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "reqps"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Successful total"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Unsuccessful total"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-49": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 49,
+                    "title": "Tokens",
+                    "description": "Per-second prefill and decode token rates with trailing-area sparklines, and the corresponding totals over the displayed interval, across the selected router's fleet.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(vllm:prompt_tokens_total{job=\"engines\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Prefill/s",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_decode_tokens_observed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Decode/s",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(increase(vllm:prompt_tokens_total{job=\"engines\"}[$__range]))",
+                                                "instant": false,
+                                                "legendFormat": "Prefill total",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(increase(narwhal_decode_tokens_observed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "instant": false,
+                                                "legendFormat": "Decode total",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 24
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "noValue": "No data"
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Prefill/s"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 2
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Decode/s"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 2
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Prefill total"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Decode total"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-7": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 7,
+                    "title": "Engine assignments and work",
+                    "description": "Select Engine detail to filter current assignments, resident work and native vLLM load by engine.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) ((((sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) + 2 * ((sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) or on(iid) (0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"})))",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) (up{job=\"engines\",iid=~\"$iid\"})",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "E",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum by(iid) (vllm:num_requests_running{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "F",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "G",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) (vllm:kv_cache_usage_perc{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "H",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max by(iid) ((narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) or on(iid) (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "I",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [
+                                {
+                                    "kind": "joinByField",
+                                    "spec": {
+                                        "id": "joinByField",
+                                        "options": {
+                                            "byField": "iid",
+                                            "mode": "outer"
+                                        }
+                                    }
+                                },
+                                {
+                                    "kind": "filterFieldsByName",
+                                    "spec": {
+                                        "id": "filterFieldsByName",
+                                        "options": {
+                                            "include": {
+                                                "pattern": "^(iid|Value.*)$"
+                                            }
+                                        }
+                                    }
+                                },
+                                {
+                                    "kind": "organize",
+                                    "spec": {
+                                        "id": "organize",
+                                        "options": {
+                                            "indexByName": {
+                                                "iid": 0,
+                                                "Value #A": 1,
+                                                "Value #B": 2,
+                                                "Value #C": 3,
+                                                "Value #D": 4,
+                                                "Value #E": 5,
+                                                "Value #F": 6,
+                                                "Value #G": 7,
+                                                "Value #H": 8,
+                                                "Value #I": 9
+                                            },
+                                            "renameByName": {
+                                                "iid": "Engine",
+                                                "Value #A": "Role",
+                                                "Value #B": "Scrape",
+                                                "Value #C": "Drain",
+                                                "Value #D": "Prefills",
+                                                "Value #E": "Decodes",
+                                                "Value #F": "Running",
+                                                "Value #G": "Waiting",
+                                                "Value #H": "KV cache",
+                                                "Value #I": "Ejected"
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "table",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "cellHeight": "sm",
+                                "footer": {
+                                    "show": false
+                                },
+                                "showHeader": true,
+                                "sortBy": [
+                                    {
+                                        "desc": false,
+                                        "displayName": "Engine"
+                                    }
+                                ]
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 0,
+                                    "min": 0,
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "N/A"
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "color": {
+                                        "mode": "palette-classic"
+                                    },
+                                    "noValue": "N/A",
+                                    "custom": {
+                                        "fillOpacity": 6,
+                                        "lineWidth": 2,
+                                        "minWidth": 80,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Role"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "options": {
+                                                            "0": {
+                                                                "color": "#A3AAB4",
+                                                                "text": "N/A"
+                                                            },
+                                                            "1": {
+                                                                "color": "#279B98",
+                                                                "text": "Prefill"
+                                                            },
+                                                            "2": {
+                                                                "color": "#607FA8",
+                                                                "text": "Decode"
+                                                            },
+                                                            "3": {
+                                                                "color": "#8B83A3",
+                                                                "text": "Colocated"
+                                                            }
+                                                        },
+                                                        "type": "value"
+                                                    },
+                                                    {
+                                                        "options": {
+                                                            "match": "nan",
+                                                            "result": {
+                                                                "text": "N/A"
+                                                            }
+                                                        },
+                                                        "type": "special"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "color-text"
+                                                }
+                                            },
+                                            {
+                                                "id": "custom.width",
+                                                "value": 120
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Scrape"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "options": {
+                                                            "0": {
+                                                                "color": "#EF8585",
+                                                                "text": "Down"
+                                                            },
+                                                            "1": {
+                                                                "color": "#8CCF7E",
+                                                                "text": "Up"
+                                                            }
+                                                        },
+                                                        "type": "value"
+                                                    },
+                                                    {
+                                                        "options": {
+                                                            "match": "nan",
+                                                            "result": {
+                                                                "text": "N/A"
+                                                            }
+                                                        },
+                                                        "type": "special"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "color-text"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Drain"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "options": {
+                                                            "0": {
+                                                                "color": "text",
+                                                                "text": "No"
+                                                            },
+                                                            "1": {
+                                                                "color": "#E9B96E",
+                                                                "text": "Draining"
+                                                            }
+                                                        },
+                                                        "type": "value"
+                                                    },
+                                                    {
+                                                        "options": {
+                                                            "match": "nan",
+                                                            "result": {
+                                                                "text": "N/A"
+                                                            }
+                                                        },
+                                                        "type": "special"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "color-text"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Ejected"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "options": {
+                                                            "0": {
+                                                                "color": "text",
+                                                                "text": "No"
+                                                            },
+                                                            "1": {
+                                                                "color": "#EF8585",
+                                                                "text": "Ejected"
+                                                            }
+                                                        },
+                                                        "type": "value"
+                                                    },
+                                                    {
+                                                        "options": {
+                                                            "match": "nan",
+                                                            "result": {
+                                                                "text": "N/A"
+                                                            }
+                                                        },
+                                                        "type": "special"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "color-text"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "KV cache"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "max",
+                                                "value": 1
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-8": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 8,
+                    "title": "Engine role history",
+                    "description": "Routing assignments over time for the selected engines.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))) > 0",
+                                                "instant": false,
+                                                "legendFormat": "{{iid}}",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "state-timeline",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "alignValue": "center",
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "mergeValues": true,
+                                "rowHeight": 0.8,
+                                "showValue": "auto",
+                                "tooltip": {
+                                    "mode": "single"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "min": 0,
+                                    "mappings": [
+                                        {
+                                            "type": "value",
+                                            "options": {
+                                                "1": {
+                                                    "text": "Prefill",
+                                                    "color": "#279B98"
+                                                },
+                                                "2": {
+                                                    "text": "Decode",
+                                                    "color": "#607FA8"
+                                                },
+                                                "3": {
+                                                    "text": "Colocated",
+                                                    "color": "#8B83A3"
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "color": {
+                                        "mode": "palette-classic"
+                                    },
+                                    "custom": {
+                                        "fillOpacity": 75,
+                                        "lineWidth": 0,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-11": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 11,
+                    "title": "Arrivals and completions",
+                    "description": "Original arrivals and successful completions per second on the selected router.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "offered",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "completed",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "reqps",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "offered"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#607FA8",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "completed"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#279B98",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-12": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 12,
+                    "title": "Request exceptions",
+                    "description": "Request exceptions by type. A request can contribute to multiple counters.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "failed",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "predictively refused",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "auth / capacity rejected",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "deadline expired",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "cancelled",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "E",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "rate(narwhal_retry_attempts_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "instant": false,
+                                                "legendFormat": "retry attempts",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "F",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "reqps",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "failed"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#EF8585",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "predictively refused"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#E9B96E",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "auth / capacity rejected"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#E9B96E",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "deadline expired"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "purple",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "cancelled"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "gray",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "failed"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#EF8585",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "predictively refused"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#E9B96E",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "auth / capacity rejected"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#E9B96E",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "deadline expired"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "purple",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "cancelled"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "gray",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-50": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 50,
+                    "title": "Time to first token",
+                    "description": "Router arrival to prefill completion on the selected router. Quantiles use process-local histogram rates; the SLO series comes from the running router configuration.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.50, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p50",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.99, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p99",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}",
+                                                "instant": false,
+                                                "legendFormat": "SLO",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "s",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 7,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-51": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 51,
+                    "title": "Time per output token",
+                    "description": "Mean decode interval per completed request on the selected router. Quantiles use process-local histogram rates; the SLO series comes from the running router configuration.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.50, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p50",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.99, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "p99",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}",
+                                                "instant": false,
+                                                "legendFormat": "SLO",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "D",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "s",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 7,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-52": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 52,
+                    "title": "Request waiting time",
+                    "description": "The selected router's p95 queue wait and admission-seat duration separate waiting from retained request lifetime.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "queue wait p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_seat_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                                                "instant": false,
+                                                "legendFormat": "seat time p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "s",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 7,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-9": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 9,
+                    "title": "Pool pressure",
+                    "description": "Scheduler pressure as a fraction of each pool's latency target, including the decode idle-floor correction.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(narwhal_pool_load{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "instant": false,
+                                                "legendFormat": "{{role}}",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "min": 0,
+                                    "thresholds": {
+                                        "mode": "absolute",
+                                        "steps": [
+                                            {
+                                                "value": null,
+                                                "color": "transparent"
+                                            },
+                                            {
+                                                "value": 1,
+                                                "color": "#E9B96E"
+                                            }
+                                        ]
+                                    },
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false,
+                                        "thresholdsStyle": {
+                                            "mode": "line"
+                                        }
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "prefill"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#279B98",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "decode"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#607FA8",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-37": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 37,
+                    "title": "Fleet events",
+                    "description": "Firing Narwhal alerts at page and warning severity, with the affected engine when the alert carries an iid label.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity!=\"info\"}",
+                                                "format": "table",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [
+                                {
+                                    "kind": "organize",
+                                    "spec": {
+                                        "id": "organize",
+                                        "options": {
+                                            "includeByName": {
+                                                "alertname": true,
+                                                "iid": true,
+                                                "severity": true
+                                            },
+                                            "indexByName": {
+                                                "alertname": 0,
+                                                "iid": 2,
+                                                "severity": 1
+                                            },
+                                            "renameByName": {
+                                                "alertname": "Alert",
+                                                "iid": "Engine",
+                                                "severity": "Severity"
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "table",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "cellHeight": "sm",
+                                "footer": {
+                                    "show": false
+                                },
+                                "showHeader": true
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "cellOptions": {
+                                            "type": "auto"
+                                        },
+                                        "minWidth": 70
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Severity"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "mappings",
+                                                "value": [
+                                                    {
+                                                        "options": {
+                                                            "page": {
+                                                                "color": "#EF8585",
+                                                                "text": "Page"
+                                                            },
+                                                            "warn": {
+                                                                "color": "#E9B96E",
+                                                                "text": "Warning"
+                                                            }
+                                                        },
+                                                        "type": "value"
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "id": "custom.width",
+                                                "value": 90
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-10": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 10,
+                    "title": "Pool assignments",
+                    "description": "Engines assigned to each pool and engines held out by the breaker.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "instant": false,
+                                                "legendFormat": "{{role}}",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "instant": false,
+                                                "legendFormat": "ejected",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "displayMode": "table",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "prefill"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#279B98",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "decode"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#607FA8",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "ejected"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#EF8585",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "layout": {
+            "kind": "GridLayout",
+            "spec": {
+                "items": [
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 24,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-32"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 4,
+                            "width": 3,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-1"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 3,
+                            "y": 4,
+                            "width": 3,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-2"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 6,
+                            "y": 4,
+                            "width": 6,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-5"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 4,
+                            "width": 6,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-49"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 18,
+                            "y": 4,
+                            "width": 6,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-37"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 8,
+                            "width": 24,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-7"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 16,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-10"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 16,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-8"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 24,
+                            "width": 8,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-50"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 8,
+                            "y": 24,
+                            "width": 8,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-51"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 16,
+                            "y": 24,
+                            "width": 8,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-52"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 32,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-11"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 32,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-12"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 40,
+                            "width": 24,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-9"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        "links": [],
+        "liveNow": false,
+        "preload": false,
+        "tags": [
+            "narwhal",
+            "inference",
+            "orchestrator"
+        ],
+        "timeSettings": {
+            "timezone": "browser",
+            "from": "now-15m",
+            "to": "now",
+            "autoRefresh": "5s",
+            "autoRefreshIntervals": [
+                "5s",
+                "10s",
+                "30s",
+                "1m",
+                "5m",
+                "15m",
+                "30m",
+                "1h",
+                "2h",
+                "1d"
+            ],
+            "hideTimepicker": false,
+            "fiscalYearStartMonth": 0
+        },
+        "title": "Narwhal Orchestrator",
+        "variables": [
+            {
+                "kind": "DatasourceVariable",
+                "spec": {
+                    "name": "DS_PROMETHEUS",
+                    "pluginId": "prometheus",
+                    "refresh": "onDashboardLoad",
+                    "regex": "",
+                    "current": {
+                        "text": "Prometheus",
+                        "value": "Prometheus"
+                    },
+                    "options": [],
+                    "multi": false,
+                    "includeAll": false,
+                    "label": "Data source",
+                    "hide": "dontHide",
+                    "skipUrlSync": false,
+                    "allowCustomValue": true
+                }
+            },
+            {
+                "kind": "QueryVariable",
+                "spec": {
+                    "name": "router",
+                    "current": {
+                        "text": "All",
+                        "value": "$__all"
+                    },
+                    "label": "Router",
+                    "hide": "dontHide",
+                    "refresh": "onDashboardLoad",
+                    "skipUrlSync": false,
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "query": {
+                        "kind": "prometheus",
+                        "spec": {
+                            "query": "label_values(up{job=\"narwhal-router\"}, instance)",
+                            "refId": "router"
+                        }
+                    },
+                    "regex": "",
+                    "sort": "alphabeticalAsc",
+                    "options": [],
+                    "multi": false,
+                    "includeAll": true,
+                    "allValue": ".*",
+                    "allowCustomValue": true
+                }
+            },
+            {
+                "kind": "QueryVariable",
+                "spec": {
+                    "name": "iid",
+                    "current": {
+                        "text": [
+                            "All"
+                        ],
+                        "value": [
+                            "$__all"
+                        ]
+                    },
+                    "label": "Engine detail",
+                    "hide": "dontHide",
+                    "refresh": "onTimeRangeChanged",
+                    "skipUrlSync": false,
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "query": {
+                        "kind": "prometheus",
+                        "spec": {
+                            "query": "label_values(up{job=\"engines\"}, iid)",
+                            "refId": "iid"
+                        }
+                    },
+                    "regex": "",
+                    "sort": "alphabeticalAsc",
+                    "definition": "label_values(up{job=\"engines\"}, iid)",
+                    "options": [],
+                    "multi": true,
+                    "includeAll": true,
+                    "allValue": ".*",
+                    "allowCustomValue": true
+                }
+            }
+        ]
+    }
+}
