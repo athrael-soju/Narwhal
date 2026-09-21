@@ -12,19 +12,20 @@ The loader accepts `model`, `hardware`, `engines`, `engine_contract`, `slo`, `co
 
 Booleans use JSON `true` or `false`, counts use JSON integers, and durations and ratios use finite JSON numbers. The parser reports each mistyped field by its public path, for example `engine.tokenize must be a boolean; serving.max_connections must be an integer; controller.monitor_interval_s must be a number`.
 
-Fleet configs declare `"schema": "narwhal.fleet"` and `"schema_version": 1`. Version 1 assigns client identity and content capture to ingress while Narwhal retains one global admission budget and request timings over token counts and durations. The loader checks the schema before reading fleet fields, and the [API and data reference](09-API-and-Data-Reference.md#contract-versions) lists the complete interface set.
+Fleet configs declare `"schema": "narwhal.fleet"` and `"schema_version": 1`. Version 1 assigns client identity and content capture to ingress while Narwhal retains one global admission budget and request timings over token counts and durations. The loader checks the schema before reading fleet fields, and the [API and data reference](API-and-Data-Reference.md#contract-versions) lists the complete interface set.
 
 ## Environment variables
 
-The checkout includes an annotated [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) with CPU-fleet defaults and optional engine credentials. Create your local copy once, preserving any existing `.env`:
+Use an existing supplied `.env` or injected environment for deployment values. The annotated [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) describes the deployment fleet path and optional engine credentials; create a template copy only when preparing a new configuration file:
 
 ```bash
 test -f .env || install -m 600 .env.example .env
 ```
 
-Edit `.env`, then export its values in each terminal that runs Narwhal or `make observe`:
+Inspect the supplied values locally, fill any required fields for that host, then export them in each terminal that runs Narwhal or `make observe`. Keep shell tracing disabled and retain credentials in private configuration:
 
 ```bash
+set +x
 set -a
 . ./.env
 set +a
@@ -39,7 +40,40 @@ Narwhal does not load `.env` automatically. Run these commands from the checkout
 
 Model names, hardware, profiles and SLOs belong in the fleet JSON. Engine launch credentials and public client authentication belong to the deployment's engine launcher and ingress.
 
-The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR`, and `NARWHAL_FABRIC_INTERFACE`, belong to the [engine-host preparation](03-Deploy.md#1-prepare-each-engine-host) shell or site automation. Narwhal reads the fleet JSON; its `engines` array defines inventory size. The loader resolves engine `url` and `attestation_url` when their entire values are environment references. Model path and image variables remain inputs to the engine launcher.
+The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR`, and `NARWHAL_FABRIC_INTERFACE`, belong to the [engine-host preparation](Deploy.md#3-inspect-each-engine-host) shell or site automation. Narwhal reads the fleet JSON; its `engines` array defines inventory size. The loader resolves engine `url` and `attestation_url` when their entire values are environment references. Model path and image variables remain inputs to the engine launcher.
+
+### SSH management access
+
+The management workstation uses `NARWHAL_ROUTER_SSH` for the router shell and one `NARWHAL_NODE_<n>_SSH` per engine host. Each destination accepts an SSH alias or `user@management-host`; the node number maps it to that engine's HTTP and attestation URLs. Store the destinations and credentials in the checkout's private `.env`. Narwhal CLI processes consume HTTP endpoints; the operator's shell passes management destinations to OpenSSH.
+
+Store the verified management host keys in `config/ssh.known_hosts` and set `NARWHAL_SSH_KNOWN_HOSTS=config/ssh.known_hosts` in `.env`. Git ignores both files. Supply them with the private fleet JSON when preparing a fresh checkout, restrict their permissions to mode 0600 and run the access commands from that checkout root. The deployment commands require a matching server key for the selected management destination in this store. Record the remote `hostname` output as a machine label; SSH host keys establish server identity.
+
+For password authentication, populate `NARWHAL_ROUTER_SSH_PASSWORD` and the corresponding `NARWHAL_NODE_<n>_SSH_PASSWORD` values in `.env`. Install the OpenSSH client and `sshpass` on the management workstation, load `.env` using the commands above, and pass the selected password through a file descriptor:
+
+```bash
+: "${NARWHAL_NODE_1_SSH:?set the first engine SSH destination}"
+: "${NARWHAL_NODE_1_SSH_PASSWORD:?load the first engine SSH password}"
+: "${NARWHAL_SSH_KNOWN_HOSTS:?set the verified management host-key store}"
+sshpass -d 3 ssh \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  -o StrictHostKeyChecking=yes \
+  -o GlobalKnownHostsFile=/dev/null \
+  -o "UserKnownHostsFile=$NARWHAL_SSH_KNOWN_HOSTS" \
+  "$NARWHAL_NODE_1_SSH" 3<<<"$NARWHAL_NODE_1_SSH_PASSWORD"
+```
+
+For key or SSH-agent authentication, configure the workstation's private `~/.ssh/config` with each host's management address and login username. An identity-file entry can use this form, with the values supplied by the deployment:
+
+```sshconfig
+Host narwhal-engine-1
+    HostName engine-1-management.example.invalid
+    User operator
+    IdentityFile ~/.ssh/fleet_key
+    IdentitiesOnly yes
+```
+
+Set `Port` for a custom SSH port and `ProxyJump` for a bastion route. Agent authentication uses identities loaded into the workstation's SSH agent. Verify a new server's host-key fingerprint against the supplied fingerprint before accepting it, and protect private identity files with owner-only permissions.
 
 ### Node URLs from the environment
 
@@ -109,7 +143,7 @@ Set the SLOs from measurements on the deployed engine shape. The router derives 
 
 ## Engine contract
 
-`recovery.engine_restart_policy` selects `individual` (default) or `whole_wave`. `whole_wave` requires a complete `engine_contract` and `recovery.liveness_every > 0`; an ejection or identity failure then holds the fleet until an operator completes the [wave procedure](04-Operate.md#restart-an-engine-wave).
+`recovery.engine_restart_policy` selects `individual` (default) or `whole_wave`. `whole_wave` requires a complete `engine_contract` and `recovery.liveness_every > 0`; an ejection or identity failure then holds the fleet until an operator completes the [wave procedure](Operate.md#restart-an-engine-wave).
 
 `engine_contract` declares one expected engine generation for the fleet. Preflight and lifecycle readmission compare the running engines with it. Use a complete contract for fleets serving client traffic.
 
@@ -348,7 +382,7 @@ Contracted resume and automatic takeover require handoff schema version 1, inclu
 
 On a successful resume, the router restores saved roles, ejections and lifecycle holds, including a complete backend outage. Per-engine dwell timestamps start fresh, and the P-to-D cooldown begins when the router constructs the replacement scheduler.
 
-Automatic warm-standby takeover is CLI-configured because router IDs and the shared lease path differ by host. [Operate Narwhal](04-Operate.md#start-production-routers) defines readiness, fencing, recovery, and partition behaviour.
+Automatic warm-standby takeover is CLI-configured because router IDs and the shared lease path differ by host. [Operate Narwhal](Operate.md#start-production-routers) defines readiness, fencing, recovery, and partition behaviour.
 
 ## Engine authentication
 
@@ -370,7 +404,7 @@ Ingress terminates client credentials. Narwhal attaches the configured engine cr
 
 ## Request journal
 
-Narwhal writes request timings to `journal.jsonl` beside `profiles.path` unless `narwhal-serve --journal` selects another path. The [API and data reference](09-API-and-Data-Reference.md#request-journal) documents its fields.
+Narwhal writes request timings to `journal.jsonl` beside `profiles.path` unless `narwhal-serve --journal` selects another path. The [API and data reference](API-and-Data-Reference.md#request-journal) documents its fields.
 
 ## Protocol adapters
 
@@ -404,7 +438,7 @@ The serving CLI applies these overrides after loading the fleet config.
 | `--graceful-timeout` | `serving.graceful_timeout_s` | Overrides Uvicorn's shutdown drain time. |
 | `--resume` | `recovery.resume` | Forces resume on. A configured `true` remains enabled. |
 
-`--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options are CLI-only. The [CLI reference](08-CLI-Reference.md) lists their defaults and validation.
+`--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options are CLI-only. The [CLI reference](CLI-Reference.md) lists their defaults and validation.
 
 ## Config provenance
 
