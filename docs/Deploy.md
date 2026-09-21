@@ -7,7 +7,7 @@ From your management workstation, use the supplied inventory and private access 
 | Host | Work performed here | Supplied inputs |
 | --- | --- | --- |
 | Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, private fleet JSON and verified `config/ssh.known_hosts`. |
-| Router host | Install Narwhal, create the fleet config, profile and check engines, run the router. | Narwhal revision, engine and attestation URLs, API credential, model and SLO targets. |
+| Router host | Install Narwhal, create the fleet config, profile and check engines, run the router. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets. |
 | Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
 | Load-client and observability hosts | Generate deployment traffic, scrape metrics and inspect the dashboard. | Ingress route and credentials, workload, scrape targets and dashboard access. |
 
@@ -90,7 +90,7 @@ set +x
 : "${NARWHAL_FLEET:?load the supplied fleet path}"
 umask 077
 mkdir -p runs/deployment-env
-NARWHAL_ENV_DIR=$(mktemp -d runs/deployment-env/transfer.XXXXXX)
+NARWHAL_ENV_DIR=$(mktemp -d "$PWD/runs/deployment-env/transfer.XXXXXX")
 export NARWHAL_ENV_DIR
 export NARWHAL_ENGINE_NODE=1
 python3 tools/prepare_host_env.py --role router \
@@ -102,18 +102,33 @@ install -m 600 "$NARWHAL_FLEET" "$NARWHAL_ENV_DIR/fleet.local.json"
 
 The exporter creates mode-0600 files and reports variable names for missing inputs. It reads shared `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR` and other launch values from the loaded environment. A `NARWHAL_NODE_<n>_<field>` override, such as `NARWHAL_NODE_2_MODEL_DIR`, supplies that host's value under the usual `NARWHAL_MODEL_DIR` name. [Host environment files](Configuration.md#host-environment-files) lists the fields and locations. Record the generated directory in the private deployment record. For each remaining engine, set `NARWHAL_ENGINE_NODE` to its inventory number and repeat the engine export into the same directory.
 
-### Clone once on each distinct remote host
+### Package the approved revision on the workstation
 
-In the verified remote shell, create a fresh checkout under the login home directory:
+Create a Git bundle from the exact commit named by `NARWHAL_DEPLOYMENT_REVISION`. The temporary bare repository gives that commit a `deployment` branch inside the bundle. The bundle carries committed source objects; the role files carry the private deployment values separately. The management checkout supplies the approved commit, so its object database must contain that revision before packaging.
 
 ```bash
-cd ~
-git clone https://github.com/athrael-soju/Narwhal Narwhal
+(
+  set -e
+  umask 077
+  source_repo=$(git rev-parse --show-toplevel)
+  test ! -e "$NARWHAL_ENV_DIR/source.bundle"
+  test "$(git rev-parse --verify "$NARWHAL_DEPLOYMENT_REVISION^{commit}")" = "$NARWHAL_DEPLOYMENT_REVISION"
+  bundle_repo=$(mktemp -d "$NARWHAL_ENV_DIR/source.XXXXXX")
+  trap 'rm -rf "$bundle_repo"' EXIT
+  git init --bare "$bundle_repo"
+  git -C "$bundle_repo" fetch --no-tags "$source_repo" \
+    "$NARWHAL_DEPLOYMENT_REVISION:refs/heads/deployment"
+  git -C "$bundle_repo" bundle create "$NARWHAL_ENV_DIR/source.bundle" \
+    refs/heads/deployment
+  git -C "$bundle_repo" bundle verify "$NARWHAL_ENV_DIR/source.bundle"
+  git clone --branch deployment "$NARWHAL_ENV_DIR/source.bundle" "$bundle_repo/verify"
+  test "$(git -C "$bundle_repo/verify" rev-parse HEAD)" = "$NARWHAL_DEPLOYMENT_REVISION"
+)
 ```
 
-When router and engine roles share a host, use this checkout for both roles. An existing `~/Narwhal` owned by another deployment requires a separate checkout path; substitute the chosen path in the transfer and shell commands below. The clone provides the directory for the private files; the revision checkout and installation follow their transfer.
+Successful verification and the fresh local clone establish that the bundle supplies the approved revision. If revision lookup or bundle verification fails, report that gate on the management workstation and recover the approved commit from its supplied source before repeating preparation in a fresh transfer directory. Keep the bundle with the private deployment artifacts.
 
-### Transfer the files from the workstation
+### Transfer the source bundle from the workstation
 
 Run these commands in the management terminal that holds `NARWHAL_ENV_DIR` and the loaded private `.env`. `narwhal_send` streams each selected file through verified SSH, using a separate file descriptor for password authentication. The receiver creates mode-0600 files and rejects an existing destination.
 
@@ -136,7 +151,45 @@ narwhal_send() {
     ssh "${options[@]}" "$destination" "$receiver" < "$input"
   fi
 }
+```
 
+Send the bundle to the router destination, then repeat for each distinct engine destination. When router and engine roles share a destination, transfer the bundle once to that host.
+
+```bash
+narwhal_send "$NARWHAL_ROUTER_SSH" "${NARWHAL_ROUTER_SSH_PASSWORD:-}" \
+  "$NARWHAL_ENV_DIR/source.bundle" \
+  '(umask 077; set -C; cat > narwhal-source.bundle)'
+```
+
+For each engine, set its inventory number below. Matching router and engine destinations share the router's transferred bundle; distinct destinations receive a copy:
+
+```bash
+export NARWHAL_ENGINE_NODE=1
+engine_destination=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH
+engine_password=NARWHAL_NODE_${NARWHAL_ENGINE_NODE}_SSH_PASSWORD
+if test "${!engine_destination}" != "$NARWHAL_ROUTER_SSH"; then
+  narwhal_send "${!engine_destination}" "${!engine_password:-}" \
+    "$NARWHAL_ENV_DIR/source.bundle" \
+    '(umask 077; set -C; cat > narwhal-source.bundle)'
+fi
+```
+
+### Clone once on each distinct remote host
+
+In each verified remote shell, clone the transferred bundle into a fresh checkout under the login home directory:
+
+```bash
+cd ~
+git clone --branch deployment narwhal-source.bundle Narwhal
+```
+
+When router and engine roles share a host, use this checkout for both roles. An existing `~/Narwhal` or `~/narwhal-source.bundle` owned by another deployment requires a separate path; substitute the chosen paths in the transfer and shell commands. Record the bundle and checkout paths with their host in the private deployment record. The source bundle supplies the `deployment` branch at the approved revision, and the role files supply the SHA for the final comparison before installation.
+
+### Transfer the role files from the workstation
+
+In the management terminal containing `narwhal_send` and the loaded environment, transfer the router configuration:
+
+```bash
 (
   set -e
   narwhal_send "$NARWHAL_ROUTER_SSH" "${NARWHAL_ROUTER_SSH_PASSWORD:-}" \
@@ -189,7 +242,7 @@ make setup
 source .venv/bin/activate
 ```
 
-Run later commands from this checkout root with the relevant role file loaded. Activate `.venv` with `source .venv/bin/activate` in additional shells on the same host. If checkout or setup fails, use the error to repair source access, revision availability, Python, `venv`, package access or permissions on that host. Retain the role files and fleet config with the deployment's private artifacts.
+Run later commands from this checkout root with the relevant role file loaded. Activate `.venv` with `source .venv/bin/activate` in additional shells on the same host. If checkout or SHA comparison fails, compare the loaded role-file revision with `git rev-parse deployment` and confirm that the bundle and role files came from the same preparation directory. For setup failures, use the error to repair Python, `venv`, package access or permissions on that host. Retain the source bundle, role files and fleet config with the deployment's private artifacts.
 
 ## 3. Inspect each engine host
 
@@ -348,7 +401,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | Step and documentation | Required knowledge | Likely failure and recovery | Private value location |
 | --- | --- | --- | --- |
 | [Management access](#1-open-the-management-shells) | Router and engine SSH destinations, login usernames, credentials and verified server keys. | Unresolved access input: inspect the supplied environment and referenced inventory, then identify the missing field. Host-key rejection: verify the destination and fingerprint through the private access source before updating its entry. Login failure: check the credential and route. | Checkout-local `.env`, fleet JSON and `config/ssh.known_hosts`. |
-| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved revision, shared launch fields, per-node overrides and host prerequisites. | Export failure: fill the named field in the workstation environment. Transfer rejection: inspect access, destination ownership and partial files. Checkout or setup failure: check source access, revision availability, Python, `venv` and permissions. | Workstation `.env` and `runs/deployment-env/`; remote `.env.router`, `.env.engine-<n>` and router `config/fleet.local.json`. |
+| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management object database, shared launch fields, per-node overrides and host prerequisites. | Revision or bundle failure: recover the approved commit from its supplied source and prepare a verified bundle. Export failure: fill the named field in the workstation environment. Transfer rejection: inspect access, destination ownership and partial files. Checkout mismatch: compare the bundle branch and role-file SHA. Setup failure: check Python, `venv` and permissions. | Workstation `.env` and `runs/deployment-env/`; remote `narwhal-source.bundle`, `.env.router`, `.env.engine-<n>` and router `config/fleet.local.json`. |
 | [Engine preparation](#3-inspect-each-engine-host) | Accelerator shape, image identity, model hash, run path, interfaces and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine-host environment and private inventory. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Advertised peer addresses, interface, source address and expected KV rate. | Route, bandwidth or transfer failure: inspect the affected directed edge, transport devices, firewall, MTU and NIXL logs. | Private peer inventory, host-network configuration and fabric measurements. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment and private engine launcher. |

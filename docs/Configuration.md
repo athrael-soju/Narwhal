@@ -44,6 +44,8 @@ The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE
 
 ### Host environment files
 
+`NARWHAL_DEPLOYMENT_REVISION` selects the full commit SHA in the management checkout. The deployment procedure packages that commit into `source.bundle`, verifies it with a fresh local clone, and transfers it to each distinct host. Remote checkouts clone that bundle and compare their revision with the role file before installation. Store the bundle with the generated environment files under ignored `runs/deployment-env/`.
+
 From the management checkout, `python3 tools/prepare_host_env.py` reads the exported workstation environment and the fleet JSON supplied through `--fleet`, then writes the selected `--role router` or `--role engine --node <n>` to `--out`. [Host installation](Deploy.md#2-install-narwhal-on-the-remote-hosts) gives the generation, SSH transfer and loading commands. The exporter validates the full `NARWHAL_DEPLOYMENT_REVISION`, preserves shell literals, creates mode-0600 files and rejects existing output paths.
 
 | Remote file | Exported values | Workstation source |
