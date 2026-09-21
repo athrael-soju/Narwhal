@@ -1,0 +1,37 @@
+name: Bug report
+description: Something the router, a gate, or a harness did wrong
+labels: ["correctness"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what should have happened
+      description: One paragraph each. If a request failed, include the HTTP status and any error body.
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: narwhal-check output
+      description: Include existing preflight output when available. Remove credentials, live addresses, and private paths. Run fresh probes only on an idle fleet.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Fleet config, sanitized
+      description: Your fleet JSON with addresses elided. Include the SLOs, thresholds, and timeouts.
+      render: json
+  - type: textarea
+    id: topology
+    attributes:
+      label: Hardware, model, and parallelism
+      description: GPU model and count per node, node count, engines per node, TP/EP/PP sizes, model revision and precision, and KV connector. Use a redacted identifier for a private model.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: "`pip show narwhal-inference | head -2`, `python --version`, and the engine (vLLM) version. If you have a journal, its first line names the exact build that wrote it."
+    validations:
+      required: true

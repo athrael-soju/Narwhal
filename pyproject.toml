@@ -1,0 +1,86 @@
+# setuptools 77 is the PEP 639 floor for `license` as an SPDX expression.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# The distribution name differs from the import package.
+name = "narwhal-inference"
+version = "0.1.0"
+description = "Adaptive hot-swap disaggregation for LLM inference"
+readme = "README.md"
+authors = [{ name = "Athrael Soju" }]
+keywords = [
+  "llm", "inference", "disaggregation", "prefill", "decode",
+  "scheduling", "vllm", "kv-cache",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Distributed Computing",
+]
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+
+# Narwhal talks to engines over HTTP and KV transfer.
+# Engine builds are pinned in fleet configuration.
+dependencies = [
+  "fastapi>=0.141.1",
+  "httpx>=0.28.1",
+  "pydantic>=2.13.5",
+  "uvicorn>=0.52.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "coverage==7.16.1",
+  "ruff==0.16.7",
+  "mypy==2.3.1",
+  "pre-commit>=4",
+  "build>=1.2",
+  "twine>=5",
+]
+
+[project.scripts]
+narwhal-check = "narwhal.diagnostics.check:main"
+narwhal-attest = "narwhal.engines.attestation:main"
+narwhal-serve = "narwhal.cli:serve"
+narwhal-profile = "narwhal.profiling.probe:main"
+narwhal-canary = "narwhal.diagnostics.canary:main"
+
+[project.urls]
+Documentation = "https://github.com/athrael-soju/Narwhal/wiki"
+Repository = "https://github.com/athrael-soju/Narwhal"
+Issues = "https://github.com/athrael-soju/Narwhal/issues"
+
+[tool.setuptools.package-data]
+narwhal = ["py.typed", "fleet.example.json"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Require docstrings on public package callables and security checks in source.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101", "D102", "D103"]
+
+[tool.ruff.lint.per-file-ignores]
+# Standalone drivers adjust sys.path and may contain long evidence lines.
+# Harnesses use assertions, fixed seeds, and fake credentials.
+"tools/*.py" = ["E402", "E731", "D", "S"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["narwhal"]
+mypy_path = "src"
+# Check annotated and unannotated function bodies.
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

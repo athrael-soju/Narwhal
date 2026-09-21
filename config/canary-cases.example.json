@@ -1,0 +1,14 @@
+{
+  "schema": "narwhal.canary-cases",
+  "schema_version": 1,
+  "model": "replace-with-served-model",
+  "cases": [
+    {
+      "id": "replace-with-stable-case-id",
+      "prompt": "Return the expected completion exactly.",
+      "expected": "replace-with-exact-completion",
+      "expected_token_ids": [1],
+      "allowed_token_ids": [1, 2]
+    }
+  ]
+}

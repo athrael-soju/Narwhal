@@ -1,0 +1,42 @@
+# Cite this software for Narwhal and the Arrow paper for the scheduling algorithms.
+cff-version: 1.2.0
+message: "If you use narwhal, cite the software below. Cite the Arrow paper for the algorithms the scheduling core implements."
+title: "narwhal"
+type: software
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/athrael-soju/Narwhal"
+authors:
+  - name: "Athrael Soju"
+keywords:
+  - llm
+  - inference
+  - disaggregation
+  - scheduling
+references:
+  - type: article
+    title: "Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture"
+    year: 2025
+    authors:
+      - family-names: "Wu"
+        given-names: "Yu"
+      - family-names: "Liu"
+        given-names: "Tongxuan"
+      - family-names: "Zeng"
+        given-names: "Yuting"
+      - family-names: "Wu"
+        given-names: "Siyu"
+      - family-names: "Xiong"
+        given-names: "Jun"
+      - family-names: "Dong"
+        given-names: "Xianzhe"
+      - family-names: "Yang"
+        given-names: "Hailong"
+      - family-names: "Zhang"
+        given-names: "Ke"
+      - family-names: "Li"
+        given-names: "Jing"
+    identifiers:
+      - type: other
+        value: "arXiv:2505.11916"
+        description: "arXiv preprint"

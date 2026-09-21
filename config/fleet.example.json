@@ -1,0 +1,42 @@
+{
+  "schema": "narwhal.fleet",
+  "schema_version": 1,
+  "_deployment": "Provision one model and one hardware/TP shape through site automation, then bind its running engines here.",
+  "model": "<served-model>",
+  "hardware": {
+    "accelerator": "<accelerator-model>",
+    "accelerators_per_engine": 1,
+    "tensor_parallel": 1
+  },
+  "_engines": "List every vLLM endpoint. Each engine runs NixlConnector with kv_role kv_both. role sets the opening pool; pin fixes that role.",
+  "engines": [
+    {
+      "iid": "n0",
+      "url": "http://node0:8000",
+      "attestation_url": "http://node0:8010/v1/attestation",
+      "role": "prefill"
+    },
+    {
+      "iid": "n1",
+      "url": "http://node1:8000",
+      "attestation_url": "http://node1:8010/v1/attestation",
+      "role": "decode"
+    }
+  ],
+  "_slo": "Set both budgets from profiles measured on this engine shape. TPOT exceeds the fitted zero-contention intercept.",
+  "slo": {
+    "ttft_s": 10.0,
+    "tpot_s": 0.125
+  },
+  "controller": {
+    "min_prefill": 1,
+    "min_decode": 1,
+    "thresholds": {
+      "expand": 1.0,
+      "shrink": 0.5
+    }
+  },
+  "profiles": {
+    "path": "runs/profiles.json"
+  }
+}

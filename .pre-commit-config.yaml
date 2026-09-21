@@ -1,0 +1,29 @@
+# Install with `pip install pre-commit && pre-commit install`.
+# Keep these hooks aligned with the corresponding CI gates.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7  # keep in lockstep with the pin in pyproject.toml
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: publication
+        name: tracked files are suitable for publication
+        entry: python3 tools/check_publication.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: markdown-links
+        name: markdown paths and heading anchors resolve
+        entry: python3 tools/check_links.py
+        language: system
+        pass_filenames: false
+        files: \.md$
+      - id: mypy
+        name: mypy (src)
+        entry: .venv/bin/mypy
+        language: system
+        pass_filenames: false
+        types: [python]
