@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPOSITORY = "athrael-soju/Narwhal"
 RELEASE_BRANCH = "release-please--branches--main"
+INITIAL_RELEASE_BRANCH = "release/v0.1.0"
 VERSION = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
 HEADING = re.compile(
     rf"^## (?:v?({VERSION})|\[v?({VERSION})\]\([^\n]+\))(?: \(\d{{4}}-\d{{2}}-\d{{2}}\))?$", re.M
@@ -76,13 +77,14 @@ def validate(root: Path, tag: str | None = None) -> str:
     return value
 
 
-def release_pr(pr: dict, sha: str) -> bool:
+def release_pr(pr: dict, sha: str, value: str) -> bool:
     labels = {label["name"] for label in pr["labels"]}
+    branch = pr["head"]["ref"]
     return (
         bool(pr.get("merged_at"))
         and pr["merge_commit_sha"] == sha
         and pr["base"]["ref"] == "main"
-        and pr["head"]["ref"] == RELEASE_BRANCH
+        and (branch == RELEASE_BRANCH or (value == "0.1.0" and branch == INITIAL_RELEASE_BRANCH))
         and pr["head"]["repo"] is not None
         and pr["head"]["repo"]["full_name"] == REPOSITORY
         and bool(labels & {"autorelease: pending", "autorelease: tagged"})
@@ -93,7 +95,8 @@ def candidate(root: Path) -> tuple[str, int] | None:
     sha = command("git", "rev-parse", "HEAD")
     command("git", "diff", "--exit-code", "HEAD")
     command("git", "merge-base", "--is-ancestor", sha, "origin/main")
-    prs = [pr for pr in api(f"commits/{sha}/pulls") if release_pr(pr, sha)]
+    value = version(root)
+    prs = [pr for pr in api(f"commits/{sha}/pulls") if release_pr(pr, sha, value)]
     if not prs:
         return None
     if len(prs) != 1:
