@@ -16,6 +16,8 @@ Operators provision one hardware and tensor-parallel shape, launch vLLM with NIX
 
 ## Use the provided fleet access
 
+Read the deployment handoff for the supplied private inventory and access locations before checking host prerequisites. A fresh clone supplies source and documentation; the handoff supplies the deployment values separately. If the named inventory, credential source or management route is unavailable, record fleet access as the first blocked gate and resolve it before installation.
+
 On the management workstation, load the supplied management credentials through the private environment or access tooling named in the deployment handoff. Read the supplied inventory there to identify the router host, engine hosts, management destinations and host roles. Use its connection method, such as an SSH alias or a bastion route, to open the remote shells. The management route opens a shell on a host; each engine's HTTP URL reaches vLLM, its attestation URL reaches the sidecar, and its advertised fabric address carries NIXL traffic. Keep those endpoints distinct in the private inventory.
 
 Open a management shell on the designated router host and one selected engine host. Run `hostname` in each shell and match the result to the supplied inventory before installing Narwhal. Check accelerator availability in the engine-host shell in step 1; hardware detected on the management workstation describes that workstation alone. Resolve credential, route, or host-mapping failures against the supplied access configuration before continuing to the remaining engine hosts.

@@ -22,4 +22,4 @@ Start with [Deploy a fleet](03-Deploy.md) from your management workstation and f
 
 ## Development
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers development setup and checks. The optional [CPU walkthrough](01-Get-Started.md) exercises the local request path with fixture timings; fleet acceptance uses the real-engine deployment gates.
+[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers development setup and checks.

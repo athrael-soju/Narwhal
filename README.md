@@ -65,7 +65,7 @@ Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model t
 
 ## Contributing
 
-[Contributing](CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. The optional [CPU walkthrough](docs/01-Get-Started.md) exercises the local request path with fixture timings; fleet acceptance uses the real-engine deployment gates. Participation follows the [code of conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md) covers vulnerability reports.
+[Contributing](CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 
