@@ -42,6 +42,22 @@ Model names, hardware, profiles and SLOs belong in the fleet JSON. Engine launch
 
 The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR`, and `NARWHAL_FABRIC_INTERFACE`, belong to the [engine-host preparation](Deploy.md#3-inspect-each-engine-host) shell or site automation. Narwhal reads the fleet JSON; its `engines` array defines inventory size. The loader resolves engine `url` and `attestation_url` when their entire values are environment references. Model path and image variables remain inputs to the engine launcher.
 
+### Host environment files
+
+From the management checkout, `python3 tools/prepare_host_env.py` reads the exported workstation environment and the fleet JSON supplied through `--fleet`, then writes the selected `--role router` or `--role engine --node <n>` to `--out`. [Host installation](Deploy.md#2-install-narwhal-on-the-remote-hosts) gives the generation, SSH transfer and loading commands. The exporter validates the full `NARWHAL_DEPLOYMENT_REVISION`, preserves shell literals, creates mode-0600 files and rejects existing output paths.
+
+| Remote file | Exported values | Workstation source |
+| --- | --- | --- |
+| `.env.router` | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
+| `.env.engine-<n>` | Revision, launch and artifact fields, selected node URLs, fabric peer addresses and configured engine API credential. | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values and the configured engine API credential. |
+| `config/fleet.local.json` on the router | Supplied fleet document, copied before deployment edits. | The file selected by workstation `NARWHAL_FLEET`. |
+
+The engine exporter requires `NARWHAL_ENGINE_IMAGE`, `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_DIR`, `NARWHAL_RUN_DIR`, `NARWHAL_MODEL_CONFIG_SHA256`, `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT`, `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_UCX_TCP_PORT_RANGE`. It also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths identify artifacts on the engine host; artifact provisioning belongs to the engine preparation and launch steps.
+
+For a per-node override, insert `NODE_<n>_` after `NARWHAL_`: `NARWHAL_NODE_2_ENGINE_PORT` becomes `NARWHAL_ENGINE_PORT` in `.env.engine-2`. An empty override for a required field reports that field for correction. Fleet endpoint and API-key references select their named environment variables; names containing `SSH` are rejected. The exporter selects other values through the listed role fields. Store management login destinations, passwords, identity configuration and host keys in the workstation's private access files.
+
+Generated files live under ignored `runs/deployment-env/` on the workstation. Git ignores `.env.router`, `.env.engine-<n>` and `config/fleet.local.json` on remote hosts. Source the appropriate role file with shell tracing disabled in every new role shell. A host serving both roles keeps both files in one checkout; each shell loads its own role file.
+
 ### SSH management access
 
 The management workstation uses `NARWHAL_ROUTER_SSH` for the router shell and one `NARWHAL_NODE_<n>_SSH` per engine host. Each destination accepts an SSH alias or `user@management-host`; the node number maps it to that engine's HTTP and attestation URLs. Store the destinations and credentials in the checkout's private `.env`. Narwhal CLI processes consume HTTP endpoints; the operator's shell passes management destinations to OpenSSH.
