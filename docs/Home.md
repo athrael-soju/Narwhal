@@ -6,17 +6,20 @@
 
 Narwhal profiles the fleet's engines, admits each request against measured SLO budgets, assigns prefill and decode to separate engines, and shifts the live split as demand changes while model weights stay resident.
 
-The local CPU path exercises the router on loopback stubs. Operators with a provisioned GPU fleet can start with [Deploy](03-Deploy.md).
+Start with [Deploy a fleet](03-Deploy.md) from your management workstation and fresh checkout. Use the supplied private management access and inventory to reach the designated router and engine hosts, install there, and check GPUs on the engine hosts.
 
 | Page | Use it for |
 | --- | --- |
-| [1. Get started](01-Get-Started.md) | Run the complete request path on CPU stubs. |
-| [2. Core concepts](02-Core-Concepts.md) | Understand engines, request placement, reactive control, and state. |
-| [3. Deploy](03-Deploy.md) | Connect and verify a GPU fleet. |
-| [4. Operate Narwhal](04-Operate.md) | Run ingress, telemetry, failover, and engine maintenance. |
-| [5. Troubleshoot a fleet](05-Troubleshoot.md) | Respond to overload, engine faults, and router faults. |
-| [6. Measure a fleet](06-Measure.md) | Calibrate SLOs and validate the deployment under load. |
-| [7. Configuration](07-Configuration.md) | Look up fleet fields and defaults. |
-| [8. CLI reference](08-CLI-Reference.md) | Look up commands, options, and exit behaviour. |
-| [9. API and data reference](09-API-and-Data-Reference.md) | Integrate HTTP routes, state, metrics, and journals. |
-| [10. Observability](10-Observability.md) | Generate targets, verify Prometheus scrapes, and inspect the Grafana dashboard. |
+| [Deploy a fleet](03-Deploy.md) | Start here with supplied fleet access and verify one engine host before launch. |
+| [Core concepts](02-Core-Concepts.md) | Understand engines, request placement, reactive control, and state. |
+| [Operate Narwhal](04-Operate.md) | Run ingress, telemetry, failover, and engine maintenance. |
+| [Troubleshoot a fleet](05-Troubleshoot.md) | Respond to overload, engine faults, and router faults. |
+| [Measure a fleet](06-Measure.md) | Calibrate SLOs and validate the deployment under load. |
+| [Configuration](07-Configuration.md) | Look up fleet fields and defaults. |
+| [CLI reference](08-CLI-Reference.md) | Look up commands, options, and exit behaviour. |
+| [API and data reference](09-API-and-Data-Reference.md) | Integrate HTTP routes, state, metrics, and journals. |
+| [Observability](10-Observability.md) | Generate targets, verify Prometheus scrapes, and inspect the Grafana dashboard. |
+
+## Development
+
+[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers development setup and checks.

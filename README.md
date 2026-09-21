@@ -48,17 +48,7 @@ The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K
 
 ## Getting started
 
-Requirements: Linux, Python 3.11+ with `venv`, Git and Make.
-
-```bash
-git clone https://github.com/athrael-soju/Narwhal.git
-cd Narwhal
-make setup
-```
-
-`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
-
-The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
+Start with [Deploy a fleet](docs/03-Deploy.md) from your management workstation and fresh checkout. Use the supplied private management access and inventory to open shells on the designated router and engine hosts; the guide places installation on those hosts and GPU checks on the engine hosts. The workstation needs Git and access tooling; its hardware describes only that workstation.
 
 ## GPU deployment
 
