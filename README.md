@@ -56,9 +56,9 @@ cd Narwhal
 make setup
 ```
 
-`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
+`make setup` installs Narwhal and its development dependencies in `.venv`. A provisioned fleet follows the [deployment guide](docs/03-Deploy.md) from its supplied management access and node inventory. The optional [CPU walkthrough](docs/01-Get-Started.md) starts six loopback stubs, profiles them, and routes one request.
 
-The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
+The CPU walkthrough uses fixture engines on loopback. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
 
 ## GPU deployment
 

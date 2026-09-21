@@ -5,6 +5,7 @@ Connect one model fleet to a Narwhal router on idle engines, then add public ing
 ## Requirements
 
 - Linux with Python 3.11 or newer, its `venv` module, Git, Make, and curl on the router host.
+- A supplied node inventory and authenticated management access to the router and engine hosts.
 - One model and KV layout across every engine.
 - A transfer fabric reachable by every engine.
 - Engines that can produce and consume KV for every eligible peer.
@@ -12,12 +13,15 @@ Connect one model fleet to a Narwhal router on idle engines, then add public ing
 
 Operators provision one hardware and tensor-parallel shape, launch vLLM with NIXL and effective `kv_both` behaviour across a compatible model and KV layout, then bind that running contract to the fleet config, attestation documents and profiles measured from the deployed image and launch configuration.
 
+## Use the provided fleet access
+
+Load the fleet's supplied management credentials through its private environment or access tooling. The management route opens a shell on a host; each engine's HTTP URL reaches vLLM, its attestation URL reaches the sidecar, and its advertised fabric address carries NIXL traffic. Keep those endpoints distinct in the site inventory.
+
+Open a management shell on the designated router host and one selected engine host. Run `hostname` in each shell and match the result to the supplied inventory. Run the installation below on the router host and the host checks in step 1 on the selected engine host. Resolve credential, route, or host-mapping failures against the supplied access configuration before continuing to the remaining engine hosts.
+
 ## Router host: install Narwhal
 
-Select the full commit SHA approved for this deployment and export it as
-`NARWHAL_DEPLOYMENT_REVISION` on the router and every engine host. Clone Narwhal
-on the router host, check out that commit, and install the CLI tools. Run
-engine-host checks on the hosts that will run vLLM.
+Select the full commit SHA approved for this deployment and export it as `NARWHAL_DEPLOYMENT_REVISION` on the router and every engine host. Clone Narwhal on the router host, check out that commit, and install the CLI tools.
 
 ```bash
 : "${NARWHAL_DEPLOYMENT_REVISION:?set the approved commit SHA}"
@@ -29,13 +33,11 @@ make setup
 source .venv/bin/activate
 ```
 
-Run later router commands from this checkout root with the environment active.
-Repeat the clone, checkout, revision check, and setup on each engine host before
-starting its attestation sidecar.
+Run later router commands from this checkout root with the environment active. Repeat the clone, checkout, revision check, and setup on the selected engine host before step 1. Provision its private deployment values through the site's environment mechanism or a Git-ignored `.env` in that checkout. Repeat this setup on the remaining engine hosts after the first passes.
 
 ## 1. Prepare each engine host
 
-Run read-only checks on one selected engine host, then repeat them on the remaining hosts after the first passes. Inspect the host-local image, model, devices, listeners, and routes before launching its engine.
+Run read-only checks in the selected engine-host shell. Inspect the host-local image, model, devices, listeners, and routes before launching its engine.
 
 Before launching vLLM, identify each engine host, its opening role, the immutable engine image and model checkpoint, the address NIXL will advertise, the peer addresses, and the ports the engine and attestation sidecar will bind. Record the intended accelerator and tensor-parallel shape. Pin one Narwhal revision for the router and sidecars, and record each engine's process generation separately.
 
@@ -44,9 +46,11 @@ Keep site values in a private, Git-ignored `.env` based on [.env.example](https:
 On each host, check the declared artifacts and local resources before creating a new engine process. For a Docker image identified by its image ID, the following checks fail on a missing or different image and model config:
 
 ```bash
-set -a
-. ./.env
-set +a
+if test -f .env; then
+  set -a
+  . ./.env
+  set +a
+fi
 
 test "$(docker image inspect "$NARWHAL_ENGINE_IMAGE" --format '{{.Id}}')" = "$NARWHAL_ENGINE_IMAGE"
 test "$(sha256sum "$NARWHAL_MODEL_DIR/config.json" | cut -d' ' -f1)" = "$NARWHAL_MODEL_CONFIG_SHA256"
