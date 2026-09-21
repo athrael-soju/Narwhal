@@ -100,7 +100,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 
 Store local profiles, journals and run outputs under `runs/`, and use `config/fleet.json` or the ignored `config/fleet.*.json` pattern for working fleet configs. Keep live engine addresses and site paths in those ignored files or reference node URLs from the ignored `.env` through the documented endpoint syntax.
 
-Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/03-Deploy.md#7-check-the-fabric) defines the engine-facing fabric contract that automation must establish.
+Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/Deploy.md#4-prepare-the-transfer-fabric) defines the engine-facing fabric contract that automation must establish.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 

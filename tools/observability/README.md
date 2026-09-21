@@ -1,15 +1,10 @@
 # Observability asset contracts
 
-The pinned Compose project supplies Prometheus, Grafana, Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. [Set up observability](../../docs/10-Observability.md) owns listener selection, startup, verification, access and recovery procedures.
+The pinned Compose project supplies Prometheus, Grafana, Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. [Set up observability](../../docs/Observability.md) owns listener selection, startup, verification, access and recovery procedures.
 
 ## Dashboard
 
-**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by
-`iid`. The first row reports admission, controller mode, engine reachability, terminal
-request rates, token rates and firing Narwhal alerts. The engine table shows current role,
-drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool
-assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by
-request flow, exceptions and pool pressure.
+**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports admission, controller mode, engine reachability, terminal request rates, token rates and firing Narwhal alerts. The engine table shows current role, drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by request flow, exceptions and pool pressure.
 
 The dashboard selects every router target in the data source when it opens. The shipped scrape configuration binds one router and one fleet to each data source, so the bare dashboard URL immediately populates router totals and pool pressure. **Engine detail** filters the engine table and role timeline.
 
@@ -27,16 +22,11 @@ Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collec
 
 **Requests** counts completed, failed, expired, refused and rejected terminal outcomes per second, while client cancellations have their own counter. **Tokens** counts engine prompt tokens as prefill and router-observed output tokens as decode. Each panel sums `increase()` over the displayed interval, so router and engine counter resets preserve the interval count.
 
-**Time to first token** and **Time per output token** calculate p50, p95 and p99 from
-bucket rates grouped by `instance` and `le`. **Request waiting time** applies the same
-boundary to queue-wait and seat-time p95. Each restart begins a fresh histogram. The dashboard selects one router before
-calculating quantiles, while `narwhal_slo_seconds` supplies that process's configured TTFT
-and TPOT lines. Aggregating latency buckets across routers requires identical SLO-derived
-bucket edges.
+**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** applies the same boundary to queue-wait and seat-time p95. Each restart begins a fresh histogram. The dashboard selects one router before calculating quantiles, while `narwhal_slo_seconds` supplies that process's configured TTFT and TPOT lines. Aggregating latency buckets across routers requires identical SLO-derived bucket edges.
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[API and data reference](../../docs/09-API-and-Data-Reference.md#metrics) defines the metric groups and lifecycle.
+[API and data reference](../../docs/API-and-Data-Reference.md#metrics) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 

@@ -1,6 +1,6 @@
 # Optional developer CPU walkthrough
 
-For a GPU fleet, start with [Deploy](../docs/03-Deploy.md) from your management workstation and use the supplied private management access and inventory to reach the designated router and engine hosts. Install Narwhal on those hosts and check GPUs on the engine hosts before continuing through the deployment gates.
+For a GPU fleet, start with [Deploy](../docs/Deploy.md) from your management workstation and use the supplied private management access and inventory to reach the designated router and engine hosts. Install Narwhal on those hosts and check GPUs on the engine hosts before continuing through the deployment gates.
 
 This optional walkthrough runs six CPU stubs locally, profiles their deterministic fixture timings, and routes a completion through one prefill stub and one decode stub. A passing run validates the local stub request path; fleet acceptance requires real-engine attestation, GPU execution, KV transfers, measured profiles and the deployment workload in Deploy.
 
@@ -58,7 +58,7 @@ Run these commands in the second terminal. The `&&` runs preflight only after pr
 .venv/bin/narwhal-check --fleet "$STUB_FLEET"
 ```
 
-The reduced profile writes `profiles.json` beside the generated fleet config. Use the workload-shaped sweep in [Deploy](../docs/03-Deploy.md) for real engines.
+The reduced profile writes `profiles.json` beside the generated fleet config. Use the workload-shaped sweep in [Deploy](../docs/Deploy.md) for real engines.
 
 With the default `STUB_BASE_PORT=8101`, the profiler confirms its output path:
 
@@ -94,7 +94,7 @@ curl -fsS "http://127.0.0.1:${ROUTER_PORT}/v1/completions" \
   -d '{"model":"stub","prompt":"Explain why narwhals have tusks.","max_tokens":32}'
 ```
 
-Once every engine passes attestation, the router answers `/health` with all six instances. `/ready` returns HTTP 200 with the standalone controller values shown below; HA deployments populate `epoch` and `holder` from their [controller lease](../docs/09-API-and-Data-Reference.md#get-ready).
+Once every engine passes attestation, the router answers `/health` with all six instances. `/ready` returns HTTP 200 with the standalone controller values shown below; HA deployments populate `epoch` and `holder` from their [controller lease](../docs/API-and-Data-Reference.md#get-ready).
 
 ```json
 {"status":"ok","instances":6,"available_instances":6}
@@ -116,8 +116,8 @@ Stop the router with Ctrl-C in the second terminal, then stop the stub fleet wit
 
 ## Where to go next
 
-- [Core concepts](../docs/02-Core-Concepts.md) explains request placement and fleet control.
-- [Deploy](../docs/03-Deploy.md) connects a real engine fleet.
-- [Observability](../docs/10-Observability.md) adds Prometheus and the Grafana dashboard to a running fleet.
-- [Measure a fleet](../docs/06-Measure.md) calibrates the same path under load.
-- [API and data reference](../docs/09-API-and-Data-Reference.md) defines the routes used above.
+- [Core concepts](../docs/Core-Concepts.md) explains request placement and fleet control.
+- [Deploy](../docs/Deploy.md) connects a real engine fleet.
+- [Observability](../docs/Observability.md) adds Prometheus and the Grafana dashboard to a running fleet.
+- [Measure a fleet](../docs/Measure.md) calibrates the same path under load.
+- [API and data reference](../docs/API-and-Data-Reference.md) defines the routes used above.

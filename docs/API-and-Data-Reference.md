@@ -69,9 +69,9 @@ A validation rejection records one invalid terminal outcome before reserving adm
 
 Narwhal generates the response `x-request-id` when the request arrives and assigns a separate ID to each engine attempt and phase for KV ownership. The journal retains the client's original ID as `client_rid` so the request can still be traced end to end.
 
-Ingress owns client authentication and strips client credentials before forwarding the request. Set `engine.engine_api_key_env` to attach the deployment engine credential to every serving and control leg. [Configure Narwhal](07-Configuration.md#engine-authentication) defines this boundary.
+Ingress owns client authentication and strips client credentials before forwarding the request. Set `engine.engine_api_key_env` to attach the deployment engine credential to every serving and control leg. [Configure Narwhal](Configuration.md#engine-authentication) defines this boundary.
 
-Configure ingress to strip client-supplied internal credentials and request IDs before setting trusted replacements, following [Operate Narwhal](04-Operate.md#configure-ingress); Narwhal resolves client identity from those trusted replacements.
+Configure ingress to strip client-supplied internal credentials and request IDs before setting trusted replacements, following [Operate Narwhal](Operate.md#configure-ingress); Narwhal resolves client identity from those trusted replacements.
 
 ### Admission
 
@@ -325,7 +325,7 @@ Excess shapes keep every count and use the largest input and requested output le
 
 Each reactive decision captures profile coefficients, offered-work demand, observed phase pressure, pending output estimates and old-role resident work before comparing splits. Frozen profiles and value-only split inputs prevent later live-state changes from altering those candidate scores. Output-length estimates and decode correction are built once and shared with both demand horizons.
 
-Priced prefill waiters set `recovery_prefill_ratio` to the larger of observed prefill pressure and resident-plus-queued prefill seconds divided by the current prefill engine count and TTFT SLO. Observed pressure supplies the ratio at zero priced prefill waiters. Incomplete-demand decisions expose this ratio, `queued_prefill_s`, both observed phase ratios and a `decision_basis` of `prefill_pressure_recovery` or `decode_pressure_recovery`. [Role control](07-Configuration.md#role-control) defines the movement and confirmation gates.
+Priced prefill waiters set `recovery_prefill_ratio` to the larger of observed prefill pressure and resident-plus-queued prefill seconds divided by the current prefill engine count and TTFT SLO. Observed pressure supplies the ratio at zero priced prefill waiters. Incomplete-demand decisions expose this ratio, `queued_prefill_s`, both observed phase ratios and a `decision_basis` of `prefill_pressure_recovery` or `decode_pressure_recovery`. [Role control](Configuration.md#role-control) defines the movement and confirmation gates.
 
 Consolidation evidence keeps full-precision demand through the source-pressure and movement checks. Rounded state and journal fields are output only. Role floors, live availability, cooldown, dwell, profile coverage and physical KV limits constrain each move.
 
@@ -349,7 +349,7 @@ Validates health, process-bound attestation, configured model, direct generation
 {"engines":["e0"]}
 ```
 
-[Operate Narwhal](04-Operate.md#restart-one-engine) defines the external-supervisor sequence and whole-wave rule.
+[Operate Narwhal](Operate.md#restart-one-engine) defines the external-supervisor sequence and whole-wave rule.
 
 ## Request journal
 
@@ -442,7 +442,7 @@ The six request totals survive resume and standby takeover: `narwhal_served_tota
 
 Role-change totals accumulate from scheduler startup. `narwhal_flip_reversals_total` counts an engine's moves back from its previous recorded target role, starting with its second recorded move. `narwhal_flips_refused_total` counts attempts blocked by timing, availability, pins, floors, the resident guard or advisory mode. Controller decision metrics record evaluation outcomes.
 
-Pool load uses the phase-specific normalization defined in [Role control](07-Configuration.md#role-control). A value of `1.0` reaches the phase target.
+Pool load uses the phase-specific normalization defined in [Role control](Configuration.md#role-control). A value of `1.0` reaches the phase target.
 
 `narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through its `metric` label. TTFT and TPOT histogram edges use these fractions of the corresponding budget: `0.025`, `0.05`, `0.1`, `0.2`, `0.35`, `0.5`, `0.7`, `1.0`, `1.5`, `3.0`, `10.0`, and `+Inf`. Queue-wait and seat-time histograms use their configured request-lifecycle bounds. Calculate quantiles from bucket rates grouped by `instance` and `le`; combining routers requires identical bucket edges.
 

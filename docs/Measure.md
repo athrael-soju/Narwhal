@@ -15,7 +15,7 @@ Router TTFT includes token counting, placement wait, prefill queueing, and prefi
 
 Configure the deployment client to record scheduled requests, response status, TTFT, TPOT, requested output length, completed output length, and terminal errors. Count refused and failed scored requests as SLO misses. Preserve its stream-accounting rule with the results so another run can reproduce the denominator.
 
-The router journal counts identified output tokens, including tokens with empty text and reasoning-only output. Its TPOT requires at least two tokens. The [journal contract](09-API-and-Data-Reference.md#request-journal) defines the router denominator and terminal outcomes.
+The router journal counts identified output tokens, including tokens with empty text and reasoning-only output. Its TPOT requires at least two tokens. The [journal contract](API-and-Data-Reference.md#request-journal) defines the router denominator and terminal outcomes.
 
 ## 1. Calibrate SLOs
 
@@ -90,8 +90,8 @@ narwhal-canary \
   --out runs/local/canary-results.jsonl
 ```
 
-The run compares returned text and token IDs with the case, then writes verdicts, timing, token counts, digests and nearby controller events under the [canary artifact contracts](09-API-and-Data-Reference.md#canary-artifacts).
+The run compares returned text and token IDs with the case, then writes verdicts, timing, token counts, digests and nearby controller events under the [canary artifact contracts](API-and-Data-Reference.md#canary-artifacts).
 
 The deployment acceptance record should name the highest offered rate meeting the client SLO target, the tested request shape, the canary result, the preflight revision, and the retained artifact paths. The deployment system owns that policy and decides when a configuration change requires another run.
 
-Return the completed run to the [deployment acceptance sequence](03-Deploy.md#8-validate-production-capacity) for reconciliation, dashboard queries and the post-load KV ring. The [API and data reference](09-API-and-Data-Reference.md) defines journals, state, metrics and canary contracts; [Operate Narwhal](04-Operate.md) covers rollout and recovery.
+Return the completed run to the [deployment acceptance sequence](Deploy.md#10-validate-ingress-and-capacity) for reconciliation, dashboard queries and the post-load KV ring. The [API and data reference](API-and-Data-Reference.md) defines journals, state, metrics and canary contracts; [Operate Narwhal](Operate.md) covers rollout and recovery.
