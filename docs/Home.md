@@ -6,7 +6,7 @@
 
 Narwhal profiles the fleet's engines, admits each request against measured SLO budgets, assigns prefill and decode to separate engines, and shifts the live split as demand changes while model weights stay resident.
 
-Start with the local path, then follow the pages in order for a real deployment.
+The local CPU path exercises the router on loopback stubs. Operators with a provisioned GPU fleet can start with [Deploy](03-Deploy.md).
 
 | Page | Use it for |
 | --- | --- |

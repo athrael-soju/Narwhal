@@ -19,7 +19,17 @@ source .venv/bin/activate
 
 Run subsequent commands from the checkout root. Activate `.venv` in each terminal to invoke `narwhal-*` commands by name, or use their `.venv/bin/` paths.
 
-This CPU walkthrough needs no credentials or `.env` file. The optional [environment setup](07-Configuration.md#environment-variables) provides a copyable example for engine credentials, fleet selection and observability when you connect a GPU fleet.
+The CPU stubs use the repository's fixture model and loopback endpoints. The [environment setup](07-Configuration.md#environment-variables) provides a copyable example for engine credentials, fleet selection and observability when you connect a GPU fleet.
+
+Use the same settings in all three terminals. The stub fleet needs six consecutive free loopback ports; the router needs one more. Inspect listeners with `ss -ltnp` before starting. If the defaults are occupied, select a free six-port block and a separate router port while existing listeners keep their ports. The generated fleet config and profiles go under ignored `runs/stub/`.
+
+```bash
+export STUB_BASE_PORT=8101
+export ROUTER_PORT=8000
+export STUB_FLEET="runs/stub/${STUB_BASE_PORT}/fleet.json"
+```
+
+On a repeat run, the selected directory may already contain `profiles.json`. Before starting the stubs, set `STUB_FLEET` to a new path in all three terminals, for example `export STUB_FLEET="runs/stub/${STUB_BASE_PORT}-run2/fleet.json"`. Keep the existing path only if you intend to replace its profile and raw samples: add `--overwrite` before `&&` in step 3's profile command.
 
 ## 2. Start the stub engines
 
@@ -29,29 +39,29 @@ Keep this process running in the first terminal.
 make stub-fleet
 ```
 
-The stubs listen on ports 8101 through 8106 and serve the model name `stub`. Each stub includes a process-bound attestation endpoint.
+The stubs listen on `127.0.0.1` from `STUB_BASE_PORT` through the next five ports and serve the model name `stub`. The launcher checks the full port range before starting any process and writes `STUB_FLEET` with matching URLs. Each stub includes a process-bound attestation endpoint.
 
 ## 3. Profile and check the fleet
 
-Run these commands in the second terminal.
+Run these commands in the second terminal. The `&&` runs preflight only after profiling produces fresh evidence. Start the router after preflight reports `all gates pass`.
 
 ```bash
 .venv/bin/narwhal-profile \
-  --fleet config/fleet.stub.json \
+  --fleet "$STUB_FLEET" \
   --prefill-lens 256,512,1024,2048,4096,8192,12288,16384 \
   --prefill-repeats 1 \
   --decode-input-lens 256,1024 \
   --decode-concurrency 1,4 \
-  --decode-tokens 8
-.venv/bin/narwhal-check --fleet config/fleet.stub.json
+  --decode-tokens 8 &&
+.venv/bin/narwhal-check --fleet "$STUB_FLEET"
 ```
 
-The reduced profile writes `runs/stub/profiles.json`. Use the workload-shaped sweep in [Deploy](03-Deploy.md) for real engines.
+The reduced profile writes `profiles.json` beside the generated fleet config. Use the workload-shaped sweep in [Deploy](03-Deploy.md) for real engines.
 
-The profiler confirms its output path:
+With the default `STUB_BASE_PORT=8101`, the profiler confirms its output path:
 
 ```text
-wrote 6 profile(s) to runs/stub/profiles.json
+wrote 6 profile(s) to runs/stub/8101/profiles.json
 ```
 
 The check then reports every gate and exits with:
@@ -65,7 +75,7 @@ all gates pass
 Keep the router running in the second terminal.
 
 ```bash
-.venv/bin/narwhal-serve --fleet config/fleet.stub.json --port 8000
+.venv/bin/narwhal-serve --fleet "$STUB_FLEET" --port "$ROUTER_PORT"
 ```
 
 After loading all six engine profiles, the router emits a startup log with the journal path and run ID.
@@ -75,9 +85,9 @@ After loading all six engine profiles, the router emits a startup log with the j
 Use the third terminal.
 
 ```bash
-curl -s http://localhost:8000/health
-curl -fsS http://localhost:8000/ready
-curl -s http://localhost:8000/v1/completions \
+curl -fsS "http://127.0.0.1:${ROUTER_PORT}/health"
+curl -fsS "http://127.0.0.1:${ROUTER_PORT}/ready"
+curl -fsS "http://127.0.0.1:${ROUTER_PORT}/v1/completions" \
   -H 'content-type: application/json' \
   -d '{"model":"stub","prompt":"Explain why narwhals have tusks.","max_tokens":32}'
 ```
@@ -88,15 +98,15 @@ Once every engine passes attestation, the router answers `/health` with all six 
 {"status":"ok","instances":6,"available_instances":6}
 ```
 
-For this non-streaming request, the router buffers the decode engine's token stream, assembles `choices[0].text`, and returns the completed JSON response. Query `/narwhal/state` to inspect the placement and accounting after completion.
+For this non-streaming request, the router buffers the decode engine's token stream, assembles `choices[0].text`, and returns the completed JSON response. The CPU stubs emit `t0` through `t31`; those 32 placeholders confirm the routed completion. Query `/narwhal/state` to inspect placement and accounting.
 
 ```bash
-curl -s http://localhost:8000/narwhal/state | python3 -m json.tool
+curl -fsS "http://127.0.0.1:${ROUTER_PORT}/narwhal/state" | python3 -m json.tool
 ```
 
-The state response lists every stub under `pools`, and the router appends one request row to `runs/stub/journal.jsonl`.
+The state response lists every stub under `pools`, and the router appends one request row to `journal.jsonl` beside the generated profile. With the default base port, that is `runs/stub/8101/journal.jsonl`.
 
-Stop the router with Ctrl-C in the second terminal, then stop the stub fleet with Ctrl-C in the first. The profiler and router leave profiles and journals under `runs/stub/` for the next run.
+Stop the router with Ctrl-C in the second terminal, then stop the stub fleet with Ctrl-C in the first. The profiler and router leave profiles, raw samples, and the append-only journal under `runs/stub/`. A new run directory starts a new journal; reusing the directory appends.
 
 ## Where to go next
 
