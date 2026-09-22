@@ -73,6 +73,8 @@ The pace gate compares engines with the fleet median when at least three probes 
 
 Run `narwhal-check` against the final fleet, then send the deployment workload through the same ingress, authentication, model route, cache policy, and request limits used by clients.
 
+The [first-deployment trial](Deploy.md#10-validate-ingress-and-capacity) uses the management workstation as its client and the existing router SSH destination as its private route. Record both endpoint hosts and the tunnel mapping with the workload. Attribute its throughput and latency to that route, then repeat through the service ingress when accepting service traffic.
+
 Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router, engine, ingress and supervisor configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots, metrics and canary results.
 
 Hold the source revision, model, runtime, profiles, workload shape, cache policy, and latency targets fixed across the run. Start with two offered rates to establish the scaling direction, then extend the sweep until the client attainment target fails or the intended operating ceiling passes. Let resident requests and transfer leases drain between runs.

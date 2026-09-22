@@ -8,15 +8,15 @@ The shipped Compose project runs Prometheus and Grafana on the router host. Prom
 - Linux, Docker Engine with the Compose plugin, Python 3.11 or newer, and curl.
 - Network reachability from the router host to every engine metrics endpoint.
 
-Run the following commands from the deployed checkout. The Compose file pins Prometheus `3.14.0` and Grafana `13.2.1`.
+Run the collection commands from the deployed checkout in the [installed router-role shell](Deploy.md#open-the-installed-role-shells). That shell loads `.env.router` and activates the installed environment. The Compose file pins Prometheus `3.14.0` and Grafana `13.2.1`.
 
 ## 1. Select the deployment
 
-If you use the repository's [environment example](Configuration.md#environment-variables), set `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL` in `.env` to the deployed fleet and running router, then load it in this terminal. You can also export those values directly:
+In the router-role shell, select the deployed fleet and local router listener:
 
 ```bash
 export NARWHAL_FLEET=config/fleet.local.json
-export NARWHAL_ROUTER_URL=http://localhost:8000
+export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 
 `NARWHAL_FLEET` supplies every engine identity and metrics address. Engine URLs may use the [environment references](Configuration.md#node-urls-from-the-environment) loaded in this terminal. `make observe` uses the project's Python environment created by `make setup`. `NARWHAL_ROUTER_URL` supplies the router origin Prometheus reaches from its host network. Deployment automation can route that origin directly or through a stable local tunnel.
@@ -46,13 +46,14 @@ The Prometheus query returns one router series and one series for each configure
 
 ## 3. Open the dashboard
 
-Forward the loopback listeners from an operator workstation:
+From the management checkout with the step 1 workstation `.env` loaded, forward the loopback listeners through the inventory's existing router access entry. The [step 10 tunnel](Deploy.md#open-the-private-trial-route-from-the-workstation) already includes these forwards; reuse that running connection or open this dashboard-only connection:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 user@router-host
+python3 tools/deploy_hosts.py tunnel --role router \
+  --forward 13000:3000 --forward 19090:9090
 ```
 
-Open `http://127.0.0.1:3000/d/narwhal-router/narwhal-orchestrator`. Grafana grants anonymous Viewer access through this local tunnel. Deployments that publish the services directly apply their established ingress, authentication and TLS policy.
+Open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`; Prometheus is available at `http://127.0.0.1:19090`. Keep the forwarding terminal open. For the isolated listener example above, add `--remote-address 127.0.0.2` and use `--forward 19090:19090` for Prometheus. Grafana grants anonymous Viewer access through this local tunnel. Deployments that publish the services directly apply their established ingress, authentication and TLS policy.
 
 Use the [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) when selecting router and engine scopes. Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collect sensor telemetry, then present those metrics through its hardware dashboard.
 

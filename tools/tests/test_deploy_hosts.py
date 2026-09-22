@@ -1,5 +1,6 @@
 """Host grouping, private authentication and retries for deployment preparation."""
 
+import argparse
 import json
 import os
 import re
@@ -10,7 +11,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.check_publication import private_path
-from tools.deploy_hosts import SSH, Host, install, load_hosts, load_run, main, prepare
+from tools.deploy_hosts import (
+    SSH,
+    Host,
+    forward_ports,
+    install,
+    load_hosts,
+    load_run,
+    main,
+    prepare,
+)
 from tools.prepare_host_env import ENGINE_FIELDS
 from tools.tests.test_engine_launch import launch_document
 
@@ -305,6 +315,97 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
             for path in (root / "logs").iterdir():
                 self.assertNotIn(self.env["NODE_1_PASSWORD"], path.read_text())
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_tunnel_reuses_inventory_authentication_and_opens_no_remote_shell(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            known_hosts = root / "known-hosts"
+            known_hosts.touch()
+            self.env["NARWHAL_SSH_KNOWN_HOSTS"] = str(known_hosts)
+            ssh = SSH(self.env, root / "logs")
+
+            def execute(args, **kwargs):
+                self.assertIn("StrictHostKeyChecking=yes", args)
+                self.assertIn(f"UserKnownHostsFile={known_hosts}", args)
+                self.assertIn("ExitOnForwardFailure=yes", args)
+                self.assertIn("ServerAliveInterval=30", args)
+                self.assertIn("-N", args)
+                self.assertNotIn("-t", args)
+                self.assertEqual(args[args.index("-L") + 1], "127.0.0.1:18000:127.0.0.1:8000")
+                self.assertIn(args[-1], [self.env[h.ssh_env] for h in self.hosts])
+                self.assertIsNone(kwargs["stderr"])
+                self.assertNotIn(self.env["NODE_1_PASSWORD"], args)
+                self.assertNotIn("NODE_1_PASSWORD", kwargs["env"])
+                if args[0] == "sshpass":
+                    self.assertEqual(
+                        os.read(kwargs["pass_fds"][0], 1024), b"synthetic-management-secret\n"
+                    )
+                else:
+                    self.assertEqual(kwargs["pass_fds"], ())
+                return subprocess.CompletedProcess(args, 0, b"", None)
+
+            with patch("tools.deploy_hosts.subprocess.run", side_effect=execute):
+                for host in self.hosts:
+                    ssh.run(host, "service tunnel", "", forwards=["127.0.0.1:18000:127.0.0.1:8000"])
+            for path in (root / "logs").iterdir():
+                self.assertNotIn(self.env["NODE_1_PASSWORD"], path.read_text())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with (
+                patch(
+                    "tools.deploy_hosts.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 255, b"", None),
+                ),
+                self.assertRaisesRegex(ValueError, "blocked at service tunnel"),
+            ):
+                ssh.run(
+                    self.hosts[0],
+                    "service tunnel",
+                    "",
+                    forwards=["127.0.0.1:18000:127.0.0.1:8000"],
+                )
+
+    def test_tunnel_selects_shared_router_host_and_checks_local_ports(self):
+        with (
+            patch("tools.deploy_hosts.load_hosts", return_value=self.hosts),
+            patch("tools.deploy_hosts.SSH") as ssh,
+            patch.dict(os.environ, self.env),
+        ):
+            self.assertEqual(
+                main(["tunnel", "--forward", "18000:8000", "--forward", "19090:9090"]), 0
+            )
+            ssh.return_value.run.assert_called_once_with(
+                self.hosts[0],
+                "service tunnel",
+                "",
+                forwards=[
+                    "127.0.0.1:18000:127.0.0.1:8000",
+                    "127.0.0.1:19090:127.0.0.1:9090",
+                ],
+            )
+            ssh.return_value.run.reset_mock()
+            with self.assertRaises(SystemExit):
+                main(["tunnel", "--forward", "18000:8000", "--forward", "18000:9090"])
+            ssh.return_value.run.assert_not_called()
+            self.assertEqual(
+                main(["tunnel", "--remote-address", "::1", "--forward", "18000:8000"]), 0
+            )
+            self.assertEqual(
+                ssh.return_value.run.call_args.kwargs["forwards"],
+                ["127.0.0.1:18000:[::1]:8000"],
+            )
+
+    def test_tunnel_ports_reject_ambiguous_or_invalid_forward_specs(self):
+        self.assertEqual(forward_ports("18000:8000"), (18000, 8000))
+        for value in (
+            "0:8000",
+            "18000:65536",
+            "*:8000",
+            "18000:host:8000",
+            "-L:8000",
+            "18000:8000\n",
+        ):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                forward_ports(value)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -236,17 +237,32 @@ class SSH:
         script: str,
         payload: Path | None = None,
         interactive: bool = False,
+        forwards: list[str] | None = None,
     ) -> str:
         """Use the host's authentication for each operation, retaining private command logs."""
         args = ["ssh", *self.options]
-        if interactive:
+        if forwards:
+            args += [
+                "-N",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "ServerAliveInterval=30",
+                "-o",
+                "ServerAliveCountMax=3",
+            ]
+            for forward in forwards:
+                args += ["-L", forward]
+        elif interactive:
             args.append("-t")
         if host.password_env:
             args += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"]
-        args += [self.env[host.ssh_env], "sh -c " + shlex.quote(script)]
+        args.append(self.env[host.ssh_env])
+        if not forwards:
+            args.append("sh -c " + shlex.quote(script))
         fd = os.open(self.logs / f"{host.id}.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "w") as log, tempfile.TemporaryFile() as password:
-            log.write(f"\n[{gate}] {script}\n")
+            log.write(f"\n[{gate}] {forwards if forwards else script}\n")
             log.flush()
             pass_fds = ()
             if host.password_env:
@@ -259,7 +275,7 @@ class SSH:
                     args,
                     stdin=None if interactive else stream,
                     stdout=None if interactive else subprocess.PIPE,
-                    stderr=None if interactive else subprocess.PIPE,
+                    stderr=None if interactive or forwards else subprocess.PIPE,
                     pass_fds=pass_fds,
                     env=self.client_env,
                 )
@@ -345,6 +361,16 @@ def install(hosts: list[Host], manifest: dict, run: Path, ssh: SSH) -> None:
         print(f"{host.id}: installation ready", flush=True)
 
 
+def forward_ports(value: str) -> tuple[int, int]:
+    """Accept explicit local and remote ports before constructing SSH arguments."""
+    if not re.fullmatch(r"[0-9]{1,5}:[0-9]{1,5}", value):
+        raise argparse.ArgumentTypeError("Use LOCAL_PORT:REMOTE_PORT")
+    local, remote = map(int, value.split(":"))
+    if not all(1 <= port <= 65535 for port in (local, remote)):
+        raise argparse.ArgumentTypeError("Ports must be between 1 and 65535")
+    return local, remote
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -363,6 +389,16 @@ def main(argv: list[str] | None = None) -> int:
     shell = commands.add_parser("shell")
     shell.add_argument("--role", required=True)
     shell.add_argument("--run", type=Path)
+    tunnel = commands.add_parser("tunnel", help="Forward workstation loopback ports to a role host")
+    tunnel.add_argument("--role", default="router")
+    tunnel.add_argument(
+        "--forward",
+        type=forward_ports,
+        action="append",
+        required=True,
+        metavar="LOCAL_PORT:REMOTE_PORT",
+    )
+    tunnel.add_argument("--remote-address", type=ipaddress.ip_address, default="127.0.0.1")
     args = parser.parse_args(argv)
     env = dict(os.environ)
     try:
@@ -398,6 +434,25 @@ def main(argv: list[str] | None = None) -> int:
                 host = next((h for h in hosts if args.role in h.roles), None)
                 if host is None:
                     raise ValueError("Select a role from the inventory plan")
+                if args.command == "tunnel":
+                    if len({local for local, _ in args.forward}) != len(args.forward):
+                        raise ValueError("Select a distinct local port for each forward")
+                    address = str(args.remote_address)
+                    if args.remote_address.version == 6:
+                        address = f"[{address}]"
+                    forwards = [
+                        f"127.0.0.1:{local}:{address}:{remote}" for local, remote in args.forward
+                    ]
+                    print(
+                        "Keep this terminal open; Ctrl-C closes its forwards. "
+                        "SSH errors appear here.",
+                        flush=True,
+                    )
+                    try:
+                        ssh.run(host, "service tunnel", "", forwards=forwards)
+                    except KeyboardInterrupt:
+                        return 130
+                    return 0
                 script = "exec bash -l"
                 if manifest:
                     inner = (
