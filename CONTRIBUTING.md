@@ -94,7 +94,7 @@ Runtime helpers take `NarwhalRouter` explicitly. Type injected HTTP transports a
 
 Use the installed `narwhal-*` commands in deployment scripts. `python -m narwhal.cli` also starts the router. Internal Python module paths may change between releases. Document schema identifiers such as `narwhal.state` name wire contracts.
 
-Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers and paper working files outside the tracked source tree. Profiling, preflight and canary commands produce Narwhal-owned deployment evidence; the deployment load toolchain owns workload acceptance.
+Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers and paper working files outside the tracked source tree. Profiling and preflight commands produce Narwhal-owned deployment evidence; the deployment load toolchain owns workload acceptance.
 
 Store local profiles, journals and run outputs under `runs/`, and use `config/fleet.json` or the ignored `config/fleet.*.json` pattern for working fleet configs. Keep live engine addresses and site paths in those ignored files or reference node URLs from the ignored `.env` through the documented endpoint syntax.
 

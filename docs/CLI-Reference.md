@@ -79,25 +79,3 @@ Runs these gates in order: `reach`, `contract`, `model`, `pace`, `tokenize`, `pr
 Preflight requires `--fleet`. Exit status 1 means a gate failed or the config could not be read or validated. Exit status 2 means the arguments are invalid.
 
 Gate output and tables are intended for operator diagnosis. Automation should consume the contract registry and versioned artifacts.
-
-## `narwhal-canary`
-
-Sends deterministic correctness probes alongside idle or live traffic. Results include verdicts, timings, placements, and nearby control events.
-
-| Option                   | Default                 | Contract                                                                     |
-| ------------------------ | ----------------------- | ---------------------------------------------------------------------------- |
-| `--base URL`             | `http://127.0.0.1:8000` | Router base URL                                                              |
-| `--model NAME`           | Case-file model         | Served model override                                                        |
-| `--cases PATH`           | required                | Exact-output case JSON                                                       |
-| `--rate FLOAT`           | `0.1`                   | Canary requests per second. Must be positive.                                |
-| `--duration SECONDS`     | required                | Arrival duration. Must be positive.                                          |
-| `--timeout SECONDS`      | `30.0`                  | Whole-request timeout                                                        |
-| `--state-poll SECONDS`   | `1.0`                   | Router-state poll interval. `0` disables polling.                            |
-| `--event-window SECONDS` | `15.0`                  | Time on either side of a control event included in event scoring             |
-| `--markers PATH`         | `""`                    | `""` scores router-observed events. A path also loads operator marker JSONL. |
-| `--out PATH`             | required                | Result JSONL path                                                            |
-| `--digest`               | false                   | Retains a run-keyed HMAC-SHA-256 completion digest                           |
-
-Copy [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace the model-specific values.
-
-`narwhal-canary` compares each completion and token sequence with its case. The result stream contains verdicts, timings, token counts, digests, observed control events, and a terminal summary defined by the [canary artifact contracts](Telemetry-and-Artifacts.md#canary-artifacts).

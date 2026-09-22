@@ -56,7 +56,6 @@ narwhal-check = "narwhal.diagnostics.check:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe:main"
-narwhal-canary = "narwhal.diagnostics.canary:main"
 
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"

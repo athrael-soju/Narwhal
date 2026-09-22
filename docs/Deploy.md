@@ -577,7 +577,7 @@ A failed startup should be traced to the corresponding device, model, memory, li
 
 If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, retain the failed launch evidence and run step 1 discovery again from the corrected approved revision into fresh private outputs.
 
-Discovery adds the required argument or runtime environment to affected roles. Prepare a new step 2 run, install engine 1 into its new checkout, and retain the other hosts' existing checkouts while validating the corrected canary.
+Discovery adds the required argument or runtime environment to affected roles. Prepare a new step 2 run, install engine 1 into its new checkout, and retain the other hosts' existing checkouts while validating the corrected engine 1 launch.
 
 Compare old and new:
 
@@ -1060,11 +1060,12 @@ Create attestations after every engine passes the HTTP gate.
 
 Run per-host attestation work concurrently where inspection containers and device allocations do not interfere.
 
-Start from an ignored `runs/` path without overwriting any existing attestation:
+Capture the complete startup log for the checked serving container. The generator reads the resolved attention backend and binds each contract field to retained evidence:
 
 ```bash
-mkdir -p runs
-(set -o noclobber; cat config/engine-attestation.example.json > runs/engine-attestation.production.json)
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
+(set -o noclobber; docker logs "$ENGINE_CONTAINER" > "$ENGINE_STARTUP_LOG" 2>&1)
 ```
 
 ### Capture the NIXL connector protocol version
@@ -1077,48 +1078,17 @@ The integer participates in vLLM's peer compatibility hash.
 
 The installed definition is in the image's [NIXL metadata module](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py).
 
-Against the running container:
+Against the running container, capture the protocol constant together with the checked plan, image ID and container ID:
 
 ```bash
-umask 077
-export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
-(set -o noclobber
-  docker exec -i "$ENGINE_CONTAINER" python3 - > "$ENGINE_RUN/nixl-connector-version.json" <<'PY_NIXL_VERSION'
-import contextlib
-import hashlib
-import importlib
-import json
-import sys
-from pathlib import Path
-with contextlib.redirect_stdout(sys.stderr):
-    module = importlib.import_module("vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata")
-version = module.NIXL_CONNECTOR_VERSION
-if type(version) is not int or version < 1:
-    raise SystemExit("Installed NIXL_CONNECTOR_VERSION must be a positive integer")
-source = Path(module.__file__)
-print(json.dumps({
-    "nixl_connector_version": version,
-    "module": module.__name__,
-    "constant": "NIXL_CONNECTOR_VERSION",
-    "module_file": str(source),
-    "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-}, indent=2))
-PY_NIXL_VERSION
-)
+.venv/bin/python tools/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-Copy the captured integer into:
-
-- `contract.nixl_connector_version` in the engine attestation;
-- `engine_contract.nixl_connector_version` in the router fleet configuration.
-
-Point `sources.nixl_connector_version` at the capture and its module/constant reference.
-
-Collect the value from every engine and compare the integers before finalising the fleet contract.
+The engine attestation generator reads the capture, and the router finalisation command checks every engine's resulting contract.
 
 The checked image ID and serving container ID tie the capture to the deployed build.
 
-An import or missing-constant failure requires inspection of the pinned build's compatibility-hash implementation before filling the field.
+An import or missing-constant failure requires inspection of the pinned build's compatibility-hash implementation before regenerating the capture.
 
 If the serving container no longer exists, restore that checked serving plan before collecting process-bound attestation evidence.
 
@@ -1146,22 +1116,17 @@ kv_lora_rank + qk_rope_head_dim
 
 The contract should contain the getter results from the actual pinned runtime and launch settings.
 
-Create a fresh configuration-inspection plan:
+Read the model dimensions from the same checked serving plan:
 
 ```bash
 umask 077
-export MODEL_INSPECT_RUN="$(mktemp -d runs/model-inspection-XXXXXX)/plan"
-python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$MODEL_INSPECT_RUN"
-python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$MODEL_INSPECT_RUN"
-python3 "$NARWHAL_ENGINE_LAUNCHER" model-dimensions --run "$MODEL_INSPECT_RUN"
-cat "$MODEL_INSPECT_RUN/model-dimensions.json"
+python3 "$NARWHAL_ENGINE_LAUNCHER" model-dimensions --run "$ENGINE_RUN"
+cat "$ENGINE_RUN/model-dimensions.json"
 ```
 
 The temporary image process exits after reading configuration and does not create model workers.
 
-Copy the three integers from the capture's `contract` object into the engine and router contracts.
-
-For each field, record the capture path and corresponding getter in `sources`.
+The generator reads the three integers and records their capture path and getter names in `sources`.
 
 Keep these inspection values with:
 
@@ -1169,11 +1134,11 @@ Keep these inspection values with:
 - model-config hash;
 - image identity;
 - application revision;
-- inspection plan hash.
+- serving plan hash.
 
-Compare inspection inputs with the serving plan before accepting the values.
+The model inspection uses the checked serving plan; the generator requires its plan hash to match the captured dimensions.
 
-Run the same inspection for each engine's image and launch configuration.
+Run the same inspection on every engine's checked serving plan.
 
 A model import, hash or getter error belongs to that runtime's model metadata or argument compatibility. Retain `model-dimensions.log` and use a fresh plan after repair.
 
@@ -1202,8 +1167,8 @@ Point `ENGINE_STARTUP_LOG` at the serving launch log and inspect the enum from t
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
-  --run "$MODEL_INSPECT_RUN" --startup-log "$ENGINE_STARTUP_LOG"
-cat "$MODEL_INSPECT_RUN/cache-registration.json"
+  --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
+cat "$ENGINE_RUN/cache-registration.json"
 ```
 
 The command requires exactly one resolved layout name.
@@ -1217,9 +1182,9 @@ The command requires exactly one resolved layout name.
 - checked plan hash;
 - image identity.
 
-Copy the boolean into both contracts and cite the capture plus enum property in `sources.cross_layers_blocks`.
+The generator reads the boolean and cites the capture plus enum property in `sources.cross_layers_blocks`.
 
-Verify that the startup log belongs to a serving plan with the same inputs as the checked inspection plan.
+The retained startup log belongs to the serving container recorded in `ENGINE_RUN`; the generator checks its cache layout against the live cache capture.
 
 Now compare each live role with its cache representative:
 
@@ -1230,7 +1195,7 @@ import json
 import os
 from pathlib import Path
 
-record = json.loads((Path(os.environ["MODEL_INSPECT_RUN"]) / "cache-registration.json").read_text())
+record = json.loads((Path(os.environ["ENGINE_RUN"]) / "cache-registration.json").read_text())
 actual = record["kv_cache_layout"]
 expected = os.environ["REPRESENTATIVE_LAYOUT"]
 if actual != expected:
@@ -1245,7 +1210,7 @@ For a representative engine with no startup-layout line, the serving capture can
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
-  --run "$MODEL_INSPECT_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
+  --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
 The helper checks image identity, model-config hash, launch-record hash, TP rank coverage and layout agreement.
@@ -1317,12 +1282,7 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-Copy the resulting string into:
-
-- engine `contract.transfer_mode`;
-- router `engine_contract.transfer_mode`.
-
-Record the capture path and resolved class in `sources.transfer_mode`.
+The generator reads the resolved string and records the capture path and class in `sources.transfer_mode`.
 
 Check the class against the serving startup log.
 
@@ -1376,9 +1336,7 @@ The accepted result must be Boolean `true`.
 
 The temporary process exits before model-worker creation, so the live serving container remains untouched.
 
-Copy the Boolean into the engine and router contracts.
-
-Set `sources.enforce_handshake_compat` to the capture plus:
+The generator reads the Boolean and cites the capture plus:
 
 ```text
 NixlBaseConnectorWorker.__init__: self.enforce_compat_hash
@@ -1392,7 +1350,14 @@ The peer handshake and KV-transfer checks in step 8 exercise this policy between
 
 ### Start the attestation sidecar
 
-Fill `contract` from the deployed image, package versions, model and launch configuration. The same values must appear in the router fleet's `engine_contract`.
+Generate the role-specific private document from the checked plan, live cache capture, pinned runtime inspections and serving startup log. The command rejects mismatched plan hashes, missing evidence, incomplete fields and an existing destination:
+
+```bash
+.venv/bin/python tools/attestation_contract.py generate \
+  --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
+export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["role"])' "$ENGINE_RUN/launch.json")"
+export ATTEST_DOCUMENT="runs/engine-attestation.${ENGINE_ROLE}.json"
+```
 
 Before starting the sidecar, reconfirm:
 
@@ -1402,19 +1367,13 @@ Before starting the sidecar, reconfirm:
 
 These identify the process being attested.
 
-Start the sidecar from the engine-role shell:
+Start the sidecar from the engine-role shell. The helper reads the engine endpoint from the checked plan and the sidecar bind address and port from the role environment's `NARWHAL_NODE_<n>_ATTESTATION_URL`:
 
 ```bash
-.venv/bin/narwhal-attest \
-  --document runs/engine-attestation.production.json \
-  --engine-base <engine-http-url> \
-  --host <node-serving-address> \
-  --port <attestation-port>
+.venv/bin/python tools/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
-Set the engine's `attestation_url` in the fleet config to the sidecar's `/v1/attestation` route.
-
-Both `/health` and `/v1/attestation` must be reachable from the router over the trusted control network.
+Discovery placed that attestation URL in the generated router fleet. Verify that `/health` and `/v1/attestation` are reachable from the router over the trusted control network.
 
 ### Verify the sidecar against the live process
 
@@ -1423,8 +1382,11 @@ Open a second shell for the same engine role.
 Set `ATTEST_BASE` to the sidecar base URL and `ATTEST_DOCUMENT` to the file used to launch it. Reuse the serving launch directory through `ENGINE_RUN`.
 
 ```bash
-export ATTEST_BASE="http://<node-serving-address>:<attestation-port>"
-export ATTEST_DOCUMENT="runs/engine-attestation.production.json"
+export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["role"])' "$ENGINE_RUN/launch.json")"
+export ATTEST_URL_VAR="NARWHAL_NODE_${ENGINE_ROLE#engine-}_ATTESTATION_URL"
+export ATTEST_BASE="${!ATTEST_URL_VAR}"
+export ATTEST_BASE="${ATTEST_BASE%/v1/attestation}"
+export ATTEST_DOCUMENT="runs/engine-attestation.${ENGINE_ROLE}.json"
 umask 077
 export ATTEST_RUN="$(mktemp -d "$ENGINE_RUN/attestation-check-XXXXXX")"
 .venv/bin/python - <<'PY_ATTEST_CHECK'
@@ -1465,6 +1427,14 @@ PY_ATTEST_CHECK
 ```
 
 Run this check for every engine and store its capture directory in the deployment record.
+
+After all sidecars pass, run this once in the router role shell. It reads each live engine and sidecar, verifies the process identity and complete contract, requires the same contract across the fleet, retains the initial generated fleet under `runs/`, and fills `engine_contract` in `config/fleet.local.json`:
+
+```bash
+.venv/bin/python tools/attestation_contract.py finalize-fleet --fleet config/fleet.local.json
+```
+
+A differing contract identifies a specific engine launch or capture input to correct before profiling. Restart the affected engine and its sidecar from a checked plan, then rerun finalisation.
 
 Keep all engines and sidecars running through profiling, preflight and the workload trial.
 
@@ -1712,7 +1682,7 @@ When sharing deployment evidence outside the private environment, replace privat
 | [Engine inspection](#3-inspect-each-engine-host)                  | PCI accelerator identity, visible device count, replica allocation, TP size, image identity, model hash, paths and ports.                                                            | Restore missing devices or artifacts and resolve listener ownership before launch.                                                                                                                                                                                                                                                                            | Engine `.env.engine-<n>`, `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                        |
 | [Fabric qualification](#4-qualify-the-transfer-fabric)            | Peer addresses, TCP or RDMA transport, checked serving representative, captured cache pages, prompt length, handoff rate, burst allowance and transfer-time budget.                            | For serving capture errors, inspect the recorded container and startup log to isolate model, device, runtime or cache-spec input. For network failures, inspect route, source binding, listener, firewall, HCA and GID selection. For insufficient bandwidth, inspect link state, MTU, retransmissions or RDMA counters, CPU use and concurrent traffic before collecting another sample.           | Role environment, engine launch record, model config, delivered helper and digest, serving `ENGINE_RUN`, cache layout, container ID and log, budget, directed samples, link fingerprints, comparisons and edge matrix.                             |
 | [Engine launch](#5-configure-the-fleet-and-launch-engines)        | Qualified host and fabric state, immutable image, package pins, model flags, library environment, cache shape, TP allocation and selected devices.                                   | Package, tokenizer, connector or convolutional-layout mismatches fail the image check before model loading. For process or HTTP failure, inspect the exact recorded container and logs before creating a corrected plan.                                                                                                                                                                                              | Router fleet config, engine role environment, launch record, launcher snapshot, `runs/engine-launch-*/`, container environment, image-check output, container ID and HTTP captures.                                           |
-| [Attestation](#6-attest-each-engine-process)                      | Live engine identity, NIXL protocol constant, runtime-resolved model dimensions, physical KV layout, transfer direction, handshake policy, contract fields and sidecar bind address. | For connector or getter failures, inspect the pinned build's compatibility-hash code and resolved model configuration. For identity or contract mismatch, verify the serving process and attestation document before restarting the sidecar.                                                                                                                  | `nixl-connector-version.json`, `transfer-mode.json`, `handshake-policy.json`, `model-dimensions.json`, `cache-registration.json`, inspection logs, checked image and container ID, `runs/engine-attestation.production.json`. |
+| [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | A capture or plan mismatch requires a fresh checked plan and matching inspection. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-attestation.<engine-role>.json`; router `config/fleet.local.json` and `runs/fleet.before-attestation-*.json`. |
 | [Profiling](#7-profile-idle-engines)                              | Idle engine reservation, cache policy, workload input lengths and concurrency.                                                                                                       | Inspect the failing engine, measured range and sample output. Correct the cause and write the next sweep to a fresh profile path.                                                                                                                                                                                                                             | Router fleet configuration and profile/sample files under `runs/`.                                                                                                                                                            |
 | [Preflight](#8-run-preflight-against-the-engine-and-kv-contract)  | Current engine processes, profile set and SLO targets.                                                                                                                               | Use the reported engine, leg and budget to select the matching check in [fleet troubleshooting](Troubleshoot.md).                                                                                                                                                                                                                                             | Router environment, fleet configuration and private preflight output.                                                                                                                                                         |
 | [Router verification](#9-start-the-router-and-verify-one-request) | Router bind address, served model, engine count and initial pool split.                                                                                                              | For bind or readiness failure, inspect listener ownership, address family and the corresponding router or engine error.                                                                                                                                                                                                                                       | Router environment, fleet configuration and endpoint captures.                                                                                                                                                                |

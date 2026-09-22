@@ -1,6 +1,6 @@
 # Telemetry and artifact reference
 
-Narwhal records requests, profiles, metrics, canary runs, and contract versions for deployment inspection and compatibility checks.
+Narwhal records requests, profiles, metrics, and contract versions for deployment inspection and compatibility checks.
 
 ## Request journal
 
@@ -180,38 +180,6 @@ When a probe resolves, Narwhal either clears the relevant failure streaks or eje
 
 `tools/prometheus-alerts.yml` contains the shipped alert expressions. `tools/grafana-narwhal.json` contains the dashboard definition. [Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents panel scope and metric boundaries.
 
-## Canary artifacts
-
-`narwhal-canary` validates and loads a version 1 `narwhal.canary-cases` JSON object before sending requests. Start from [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace the model-specific fields.
-
-| Field                        | Type             | Contract                                                                  |
-| ---------------------------- | ---------------- | ------------------------------------------------------------------------- |
-| `model`                      | string, optional | Served model unless overridden by `--model`.                              |
-| `cases`                      | nonempty array   | Exact-output test cases with unique IDs.                                  |
-| `cases[].id`                 | string           | Stable case ID copied into result rows.                                   |
-| `cases[].prompt`             | string           | Request prompt stored in the input file.                                  |
-| `cases[].expected`           | string           | Exact expected completion text.                                           |
-| `cases[].expected_token_ids` | integer array    | Positive token IDs for the expected completion.                           |
-| `cases[].allowed_token_ids`  | integer array    | Unique strict superset of the expected IDs, with at least one distractor. |
-
-The command writes version 1 `narwhal.canary` JSON Lines with the following row types, in order:
-
-| Row              | Fields                                                                                                                                                                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build provenance | `meta` with schema, package version, Git description, and source digest.                                                                                                                                              |
-| Run envelope     | `meta` with schema, `kind: narwhal-canary`, model, rate, duration, timeout, case filename, case-file SHA-256, and case IDs.                                                                                           |
-| Request outcome  | `kind: canary`; sequence ID, case ID, scheduled/start/completion times, dispatch delay, TTFT, latency, expected and observed token counts, correctness, status, optional HTTP status, and optional completion digest. |
-| Control event    | `kind: control_event`; event, client-clock timestamp, source, optional engine ID, and optional destination role.                                                                                                      |
-| Summary          | `kind: canary_summary`; request count, correctness count, terminal-error count, status counts, TTFT percentiles, and per-event windows.                                                                               |
-
-Each request terminates as one of:
-
-`correct`, `wrong`, `truncated`, `malformed`, `terminal_error`, `timeout`, `http_error`, `transport_error`
-
-`terminal_error` increments both `correctness_failures` and `terminal_errors`.
-
-With `--digest`, Narwhal stores a run-keyed HMAC-SHA-256 of each completion. Result rows still retain token counts and verdicts.
-
 ## Contract versions
 
 Versioned Narwhal interfaces declare both a schema name and a schema version. Readers accept documents with the expected schema name and current version. Other schema/version combinations fail validation.
@@ -233,8 +201,6 @@ narwhal-check --print-contract-versions
 | Request journal      | `narwhal.journal`           |       1 |
 | Live state           | `narwhal.state`             |       1 |
 | Prometheus metrics   | `narwhal.metrics`           |       1 |
-| Canary cases         | `narwhal.canary-cases`      |       1 |
-| Canary results       | `narwhal.canary`            |       1 |
 | Contract manifest    | `narwhal.contract-manifest` |       1 |
 
 Fields documented by these schema versions are compatibility commitments. Incompatible changes require a new schema version. Native Python modules, undocumented fields, log text, and human-readable tables are outside that compatibility contract.

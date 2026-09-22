@@ -146,8 +146,8 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 self.assertEqual(log.read_bytes(), original)
 
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
-        guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
-        script = guide.split("<<'PY_NIXL_VERSION'\n", 1)[1].split("\nPY_NIXL_VERSION", 1)[0]
+        from tools.attestation_contract import NIXL_CAPTURE
+
         for version in (17, 0, "1.4.1", True):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
                 source = Path(folder) / "metadata.py"
@@ -160,10 +160,10 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()) as output,
                 ):
                     if version == 17:
-                        exec(compile(script, "docs/Deploy.md:PY_NIXL_VERSION", "exec"), {})
+                        exec(compile(NIXL_CAPTURE, "tools/attestation_contract.py", "exec"), {})
                     else:
-                        with self.assertRaisesRegex(SystemExit, "positive integer"):
-                            exec(compile(script, "docs/Deploy.md:PY_NIXL_VERSION", "exec"), {})
+                        with self.assertRaisesRegex(ValueError, "positive integer"):
+                            exec(compile(NIXL_CAPTURE, "tools/attestation_contract.py", "exec"), {})
                 load.assert_called_once_with(module.__name__)
                 if version == 17:
                     record = json.loads(output.getvalue())

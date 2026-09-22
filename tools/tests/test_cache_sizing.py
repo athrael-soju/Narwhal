@@ -67,6 +67,7 @@ class CacheSizingTests(unittest.TestCase):
                     get_total_num_kv_heads=Mock(return_value=8),
                     get_total_num_hidden_layers=Mock(return_value=48),
                     use_mla=use_mla,
+                    architecture="SyntheticForCausalLM",
                     hf_text_config=SimpleNamespace(
                         qk_nope_head_dim=128, qk_rope_head_dim=64, v_head_dim=128, kv_lora_rank=512
                     ),
@@ -84,6 +85,7 @@ class CacheSizingTests(unittest.TestCase):
                 )
                 self.assertEqual(value["sources"]["head_size"], "ModelConfig.get_head_size()")
                 self.assertEqual(value["use_mla"], use_mla)
+                self.assertEqual(value["model_architecture"], "SyntheticForCausalLM")
                 self.assertEqual(value["plan_sha256"], digest(path))
                 model.get_head_size.assert_called_once_with()
 

@@ -129,7 +129,7 @@ Each admitted request receives one prefill/decode attempt by default. Before vis
 
 For engines that expose token IDs, Narwhal adds `return_token_ids: true` and `stream_interval: 1` to decode requests. Identified tokens are counted across text, reasoning and tool-call output.
 
-Valid token IDs are nonnegative integers; booleans are invalid. Serving, profiling and canary paths require valid token identity for text, reasoning, tool-call and refusal output whenever they perform exact counting. Invalid identity fails the decode attempt or measurement and marks canary evidence malformed.
+Valid token IDs are nonnegative integers; booleans are invalid. Serving and profiling paths require valid token identity for text, reasoning, tool-call and refusal output whenever they perform exact counting. Invalid identity fails the decode attempt or measurement.
 
 The `token_ids` accounting dialect provides exact token identity for output length and TPOT scoring. All other dialects report `unavailable`. Decode correction, drift scoring and output-length learning require identified tokens.
 

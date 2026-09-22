@@ -17,8 +17,6 @@ JOURNAL = "journal"
 STATE = "state"
 METRICS = "metrics"
 ATTESTATION = "attestation"
-CANARY_CASES = "canary_cases"
-CANARY = "canary"
 CLI = "cli"
 
 
@@ -40,8 +38,6 @@ CONTRACTS: dict[str, Contract] = {
     STATE: Contract("narwhal.state"),
     METRICS: Contract("narwhal.metrics"),
     ATTESTATION: Contract("narwhal.attestation"),
-    CANARY_CASES: Contract("narwhal.canary-cases"),
-    CANARY: Contract("narwhal.canary"),
     CLI: Contract("narwhal.contract-manifest"),
 }
 

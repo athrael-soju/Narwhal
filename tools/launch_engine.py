@@ -453,6 +453,7 @@ def runtime_model_dimensions(plan_path: Path) -> dict:
     return {
         "contract": values,
         "sources": {field: f"ModelConfig.{method}()" for field, method in methods.items()},
+        "model_architecture": model.architecture,
         "use_mla": model.use_mla,
         "model_config_sha256": plan["model_config_sha256"],
         "plan_sha256": digest(plan_path),

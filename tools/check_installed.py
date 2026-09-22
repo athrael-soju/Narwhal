@@ -67,7 +67,6 @@ def main(argv=None):
     )
     expected_entries = {
         "narwhal-attest",
-        "narwhal-canary",
         "narwhal-check",
         "narwhal-profile",
         "narwhal-serve",

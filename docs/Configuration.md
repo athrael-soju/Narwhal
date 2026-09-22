@@ -471,9 +471,9 @@ Verify the running shape through process-bound attestation, profiles, transfer t
 
 ### Attestation document
 
-Copy [`config/engine-attestation.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json).
+The [attestation generator](Deploy.md#6-attest-each-engine-process) writes `runs/engine-attestation.<engine-role>.json` on each engine host from its checked serving plan, runtime inspections, live cache capture and startup log. The router finalisation command reads the live sidecars, requires matching complete contracts and fills `engine_contract` in `config/fleet.local.json`.
 
-Replace `contract` with the complete fleet contract. Under `sources`, associate each contract field with the relevant container inspection, package record, model configuration, launch configuration, or startup log.
+[`config/engine-attestation.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) describes the document shape for development and schema review.
 
 The attestation file declares:
 

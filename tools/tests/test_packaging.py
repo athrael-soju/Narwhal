@@ -30,13 +30,12 @@ class PackagingTests(unittest.TestCase):
                         )
 
     def test_console_scripts_match_the_reviewed_public_surface(self):
-        """The wheel exposes only the five router and engine commands."""
+        """The wheel exposes only the router and engine commands."""
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         self.assertEqual(
             set(project["scripts"]),
             {
                 "narwhal-attest",
-                "narwhal-canary",
                 "narwhal-check",
                 "narwhal-profile",
                 "narwhal-serve",
