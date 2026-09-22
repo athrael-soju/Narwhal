@@ -30,10 +30,10 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 ## Dashboard maintenance
 
-Grafana polls `tools/grafana-narwhal.json` every 30 seconds and replaces UI edits from the provisioned file. Recreate Grafana after replacing the file so Docker attaches its current inode:
+`make observe` stages `tools/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
 
 ```bash
-docker compose -f tools/observability/compose.yml up -d --no-deps --force-recreate grafana
+make observe
 curl -fsS http://127.0.0.1:3000/api/health
 ```
 
