@@ -49,6 +49,8 @@ def select_values(
     key_name = fleet.get("engine", {}).get("engine_api_key_env")
     if key_name:
         include(key_name)
+        if role == "engine":
+            values["NARWHAL_ENGINE_API_KEY"] = values[key_name]
 
     if role == "router":
         values["NARWHAL_FLEET"] = "config/fleet.local.json"
@@ -62,6 +64,7 @@ def select_values(
     elif role == "engine":
         if node is None or node < 1:
             raise ValueError("engine export requires a positive --node number")
+        values["NARWHAL_ENGINE_LAUNCHER"] = "runs/deployment-tools/launch_engine.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
         for field in (*ENGINE_FIELDS, *ENGINE_OPTIONAL):

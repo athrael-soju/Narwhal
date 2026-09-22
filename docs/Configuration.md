@@ -53,6 +53,7 @@ From the management checkout, `python3 tools/deploy_hosts.py prepare --out <dire
 | `.env.router` | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `.env.engine-<n>` | Revision, launch and artifact fields, selected node URLs, fabric peer addresses and configured engine API credential. | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values and the configured engine API credential. |
 | `config/engine-launch.engine-<n>.json` | Selected GPU allocation, TP size, device mappings, resolved UCX selection and generated launch arguments. | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`. |
+| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, path and SHA-256 in the engine role environment. | `tools/launch_engine.py` in the management checkout at preparation time. |
 | `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with its path and SHA-256 exported in `.env.engine-<n>`. | `tools/fabric_budget.py` in the management checkout at preparation time. |
 | `config/fleet.local.json` on the router | Supplied fleet document, copied before deployment edits. | The file selected by workstation `NARWHAL_FLEET`. |
 
@@ -77,17 +78,32 @@ Generated files live under ignored `runs/deployment-env/` on the workstation. Gi
 | `transfer.devices` | List transport device paths mapped into the container; RDMA requires its character devices. A TCP record uses an empty list. |
 | `sources` | Name the allocation, device and transfer definitions that supply the record. |
 
-`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. Apply those arguments and mappings in the complete engine launcher, then inspect the running process and transfer behaviour during deployment.
+`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. The delivered engine launcher combines those arguments and mappings with the runtime fields below, then records the complete container command for inspection.
 
 Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct an invalid record at the workstation and prepare a fresh run so its manifest captures the corrected inputs.
+
+### Runtime launch records
+
+Each supplied engine record's `runtime` object completes the serving configuration for `launch_engine.py`. Store image-specific values in the private `config/engine-launch.local.json`; preparation carries the selected record and launcher snapshot to the engine host. The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the structure.
+
+| Runtime field | Operator input |
+| --- | --- |
+| `expected_packages` | Exact installed distribution versions for `vllm` and `nixl` or `nixl-rocm`; include other image packages whose identity the check should verify. |
+| `model_dtype`, `kv_cache_dtype`, `block_size` | `bfloat16` or `float16`, `auto`, and the requested runtime block size; cache planning records the adjusted token block size and padded page bytes for the fabric budget. |
+| `environment` | Image-local ROCm/CUDA, UCX, NIXL and library-path settings. The launcher supplies GPU visibility, advertised addresses/ports, transport selection and engine authentication from the selected role. |
+| `extra_args` | Model-specific vLLM arguments: context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling or hybrid-cache policy. |
+
+The launcher fixes the model mount, served name, bind family and HTTP port from the role environment; it applies the declared TP size and uses `NixlConnector` with `kv_both`, UCX and failure propagation. Extra arguments are checked against the supported model options so they preserve those managed settings. The image check validates its identity, exact distribution package pins and connector configuration/import before model startup. It records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, bound to the launch-plan hash and image ID; the HTTP probe compares `/version` with that captured string. Pin an image whose NIXL connector supports the fleet's `kv_both` behaviour; the running transfer probes verify producer and consumer operations.
+
+When `engine.engine_api_key_env` selects an engine credential, the engine exporter also supplies it as `NARWHAL_ENGINE_API_KEY`. The launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and passes its filename to Docker. Keep the launch directory, environment file and runtime captures under ignored `runs/`; record the application revision, launcher digest and container ID with the deployment.
 
 ### Fabric workload budget
 
 `prepare` snapshots the management checkout's `tools/fabric_budget.py` into each engine host's prepared files and records its SHA-256 in the manifest and role environment. `install` verifies the transfer and places the snapshot under ignored `runs/deployment-tools/`; the approved application bundle retains its selected revision. Record that revision and `NARWHAL_FABRIC_BUDGET_SHA256` together with the budget. A fresh preparation directory captures a changed helper while earlier prepared runs retain their recorded content.
 
-In the installed engine-role shell, `python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate` reads the engine host's model config and `NARWHAL_ENGINE_LAUNCH_CONFIG`, sums cache bytes across TP ranks and calculates the link rate needed for the declared prompt length, peak remote-handoff rate, burst and transfer-time budget. [Transfer fabric preparation](Deploy.md#4-prepare-the-transfer-fabric) supplies an initial trial workload, commands for each directed edge and the pass condition. Keep workload values, cache dtype and block size aligned with the intended runtime; a workload or cache-layout change requires a new budget and comparison.
+In the installed engine-role shell, `python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate` uses `--runtime-layout` with the `cache-layout.json` captured by `launch_engine.py measure-cache`, verifies its model and launch-record hashes, sums padded cache page bounds across TP ranks and calculates the link rate needed for the declared prompt length, peak remote-handoff rate, burst and transfer-time budget. [Transfer fabric preparation](Deploy.md#4-prepare-the-transfer-fabric) supplies an initial trial workload, commands for each directed edge and the pass condition. Keep workload values, cache dtype and block size aligned with the intended runtime; a workload or cache-layout change requires a new budget and comparison.
 
-The generated mode-0600 `runs/fabric-*/budget.json` records input hashes, padded token count, payload bytes, sizing assumptions and required decimal Gbit/s. TCP comparisons use the iperf3 receiver's aggregate bitrate; RDMA comparisons use the retained perftest report's average Gbit/s. The budget covers one directed host edge under the recorded workload. Running-engine KV probes and concurrent capacity tests supply the later deployment acceptance.
+The generated mode-0600 `runs/fabric-*/budget.json` records input and runtime-layout hashes, prompt length, the padded-page payload bound, sizing assumptions and required decimal Gbit/s. The layout retains each rank's per-layer page bytes, token block size and state/boundary allowances, together with the image, packages, application revision and launch-plan hash. The probe reaches cache planning after model loading and memory profiling, then shuts down its workers before serving. Explicit `--uniform-cache` selects an analytical attention/MLA estimate; `--bytes-per-token` supplies a measured uniform-cache override. Those uniform modes require `--element-bytes` and `--block-tokens`; the deployment procedure uses the runtime page record for hybrid and uniform models. TCP comparisons use the iperf3 receiver's aggregate bitrate; RDMA comparisons use the retained perftest report's average Gbit/s. The budget covers one directed host edge under the recorded workload. Running-engine KV probes and concurrent capacity tests supply the later deployment acceptance.
 
 ### Host inventory and SSH access
 
@@ -188,21 +204,21 @@ The external launcher selects vLLM's TP size. Match `hardware.tensor_parallel` t
 | `vllm_version` | required | Exact value returned by every engine's `/version` route. |
 | `image_digest` | `""` | Immutable `sha256:<64 hex>` container digest reported by the engine-side attestation document. |
 | `nixl_version` | `""` | NIXL package version carried by the image. |
-| `nixl_connector_version` | `0` | vLLM NIXL wire-protocol version. Zero means undeclared. |
+| `nixl_connector_version` | `0` | Positive `NIXL_CONNECTOR_VERSION` integer from the deployed vLLM connector's metadata module; [capture it in step 6](Deploy.md#read-the-nixl-connector-protocol-version). |
 | `model_architecture` | `""` | Model implementation name relevant to KV layout. |
 | `model_dtype` | `""` | Model execution dtype. |
-| `kv_heads` | `0` | Number of KV heads. Zero means undeclared. |
-| `head_size` | `0` | KV head size. Zero means undeclared. |
-| `hidden_layers` | `0` | Hidden-layer count. Zero means undeclared. |
+| `kv_heads` | `0` | Positive model-wide value from the pinned runtime's `ModelConfig.get_total_num_kv_heads()`. |
+| `head_size` | `0` | Positive value from `ModelConfig.get_head_size()`, as consumed by NIXL's compatibility hash; [capture resolved model dimensions](Deploy.md#read-the-model-dimensions-used-by-nixl). |
+| `hidden_layers` | `0` | Positive model-wide value from `ModelConfig.get_total_num_hidden_layers()`. |
 | `attention_backend` | `""` | Runtime attention backend expected from the launch. |
 | `kv_cache_dtype` | `""` | KV cache dtype. |
-| `cross_layers_blocks` | `null` | Whether NIXL registers cross-layer KV blocks. |
+| `cross_layers_blocks` | `null` | Resolved physical cache block grouping: `KVCacheLayout.is_block_outermost` for the pinned layout API. [Capture the layout and boolean](Deploy.md#capture-cache-block-grouping) from serving or sizing evidence. |
 | `hybrid_kv_cache_manager` | `null` | Whether vLLM's hybrid KV cache manager participates in the layout. |
 | `connector` | `"NixlConnector"` | Engine-side connector name. Must be nonempty. |
 | `kv_role` | `""` | Engine-side role semantics, such as `kv_both`. |
-| `transfer_mode` | `""` | Pull or push transfer mode. |
+| `transfer_mode` | `""` | `pull` for the resolved `NixlPullConnector`; `push` for `NixlPushConnector`. [Retain the resolved class and mode](Deploy.md#capture-the-resolved-transfer-mode) from the checked image. |
 | `speculative_config` | `""` | Stable name for the speculation configuration, or `disabled`. |
-| `enforce_handshake_compat` | `true` | Declares that vLLM's NIXL compatibility hash is enabled. `false` is rejected. |
+| `enforce_handshake_compat` | `true` | Effective boolean from the pinned NIXL worker's extra-config lookup; [capture the configured value and installed default](Deploy.md#capture-handshake-compatibility-enforcement). Narwhal requires `true`. |
 
 ### Attestation document
 

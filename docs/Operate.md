@@ -111,6 +111,8 @@ Use request journals for per-request timing and placement, and metrics for proce
 
 ## Restart one engine
 
+During first deployment, [check attestation across one engine restart](Deploy.md#check-attestation-across-one-engine-restart) to capture sidecar rejection and recovery on an idle engine. The procedure below adds router draining and readmission once the router is serving the fleet.
+
 With `recovery.engine_restart_policy: individual`, drain the engine from new placement before the supervisor touches its process.
 
 ```bash
