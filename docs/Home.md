@@ -23,7 +23,8 @@
 | [Core concepts](Core-Concepts.md) | Understand the engine contract, request placement, role control and state. |
 | [Configuration](Configuration.md) | Look up fleet fields, environment inputs and defaults. |
 | [CLI reference](CLI-Reference.md) | Look up commands, options and exit behaviour. |
-| [API and data reference](API-and-Data-Reference.md) | Integrate HTTP routes, state, metrics and journals. |
+| [HTTP API reference](HTTP-API.md) | Integrate completion, inspection and lifecycle routes. |
+| [Telemetry and artifact reference](Telemetry-and-Artifacts.md) | Read journals, profiles, metrics and persisted contract versions. |
 
 ## Contributing
 

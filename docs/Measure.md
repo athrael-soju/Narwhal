@@ -15,7 +15,7 @@ Router TTFT includes token counting, placement wait, prefill queueing, and prefi
 
 Configure the deployment client to record scheduled requests, response status, TTFT, TPOT, requested output length, completed output length, and terminal errors. Count refused and failed scored requests as SLO misses. Preserve its stream-accounting rule with the results so another run can reproduce the denominator.
 
-The router journal counts identified output tokens, including tokens with empty text and reasoning-only output. Its TPOT requires at least two tokens. The [journal contract](API-and-Data-Reference.md#request-journal) defines the router denominator and terminal outcomes.
+The router journal counts identified output tokens, including tokens with empty text and reasoning-only output. Its TPOT requires at least two tokens. The [journal contract](Telemetry-and-Artifacts.md#request-journal) defines the router denominator and terminal outcomes.
 
 ## 1. Calibrate SLOs
 
@@ -133,4 +133,4 @@ Run artifacts use a fresh mode-0700 directory and mode-0600 files. The helper ru
 
 The deployment acceptance record should name the highest offered rate meeting the candidate client target, the tested request shape and SSH route, the preflight revision, and the retained artifact paths. The deployment system owns that policy and decides when a configuration change requires another run.
 
-The [capacity gate](Deploy.md#10-validate-private-route-capacity) completes setup with a measured workload, reconciled journal, working dashboard and passing post-load KV ring. The [API and data reference](API-and-Data-Reference.md) defines the retained journal, state and metrics.
+The [capacity gate](Deploy.md#10-validate-private-route-capacity) completes setup with a measured workload, reconciled journal, working dashboard and passing post-load KV ring. The [HTTP API](HTTP-API.md) defines live state, and the [telemetry reference](Telemetry-and-Artifacts.md) defines retained journals and metrics.

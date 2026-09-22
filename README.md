@@ -12,7 +12,7 @@
 <p align="center">
   <a href="docs/Home.md">Documentation</a> |
   <a href="docs/Deploy.md">Deployment</a> |
-  <a href="docs/API-and-Data-Reference.md">API reference</a> |
+  <a href="docs/HTTP-API.md">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -53,7 +53,7 @@ Follow [Deploy a fleet](docs/Deploy.md) from your management workstation. The gu
 
 - [Architecture and scheduling](docs/Core-Concepts.md)
 - [Fleet configuration](docs/Configuration.md)
-- [API compatibility and limits](docs/API-and-Data-Reference.md#response-compatibility)
+- [API compatibility and limits](docs/HTTP-API.md#response-compatibility)
 - [Fleet measurement](docs/Measure.md)
 - [Ingress, monitoring and maintenance](docs/Operate.md)
 - [Troubleshooting](docs/Troubleshoot.md)

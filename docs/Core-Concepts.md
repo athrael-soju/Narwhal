@@ -69,7 +69,7 @@ Urgent D-to-P evaluation keeps profile coverage, decode capacity, consolidation 
 
 The controller consolidates at source pressure up to `shrink`, or moves decode capacity to prefill under sustained prefill pressure at or above `expand`; both paths apply the profile, safety and confirmation gates before changing the split.
 
-`/narwhal/state` exposes each decision's retained demand, overflow and priced inputs under the [demand accounting contract](API-and-Data-Reference.md#demand-accounting).
+`/narwhal/state` exposes each decision's retained demand, overflow and priced inputs under the [demand accounting contract](HTTP-API.md#demand-accounting).
 
 Before moving a decode engine to prefill, the controller closes its arrival-evidence window and checks decode stability. The window closes after `controller.reactive.evidence_span_s` with `controller.reactive.evidence_min_arrivals` samples, or after `controller.reactive.evidence_max_span_s` under sparse traffic. Candidate pricing uses the larger short- or long-horizon demand estimate and includes resident requests plus output work still in prefill.
 
@@ -146,11 +146,11 @@ Each handoff writer atomically renames a process-unique temporary file over the 
 
 A warm standby follows the active router's handoff and accepts traffic after acquiring the shared lease; the previous holder fences itself before local lease expiry, and load balancers select the current owner through `/ready`.
 
-The [API and data reference](API-and-Data-Reference.md) defines the state documents. [Operate Narwhal](Operate.md) covers lifecycle and failover procedures.
+The [HTTP API reference](HTTP-API.md) defines the state documents. [Operate Narwhal](Operate.md) covers lifecycle and failover procedures.
 
 ## References
 
-- [Backend continuation contract](API-and-Data-Reference.md#backend-continuation-contract): producer ownership, local decode, descriptor validation and timing boundaries.
+- [Backend continuation contract](HTTP-API.md#backend-continuation-contract): producer ownership, local decode, descriptor validation and timing boundaries.
 - [Configuration](Configuration.md): placement, role guards, serving limits and engine health.
 - [Measure a fleet](Measure.md): profiles, transfer checks, deployment load and occupied-role canaries for the pinned backend.
 - [Source responsibilities](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#source-responsibilities): package ownership and import constraints.

@@ -110,7 +110,7 @@ class DocumentationContractTests(unittest.TestCase):
 
     def test_reference_versions_cover_the_contract_registry(self):
         """Every persisted interface appears with its current schema version."""
-        text = (ROOT / "docs/API-and-Data-Reference.md").read_text()
+        text = (ROOT / "docs/Telemetry-and-Artifacts.md").read_text()
         rows = re.findall(r"^\|[^|]+\|\s*`(narwhal\.[^`]+)`\s*\|\s*(\d+)\s*\|", text, re.M)
         self.assertEqual(
             {schema: int(version) for schema, version in rows},
@@ -119,7 +119,7 @@ class DocumentationContractTests(unittest.TestCase):
 
     def test_reference_names_demand_history_and_decode_floor_metrics(self):
         """The metrics inventory includes every demand-history gauge and the floor target."""
-        text = (ROOT / "docs/API-and-Data-Reference.md").read_text()
+        text = (ROOT / "docs/Telemetry-and-Artifacts.md").read_text()
 
         for metric in (
             "narwhal_decode_floor",

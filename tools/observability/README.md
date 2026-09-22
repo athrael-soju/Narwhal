@@ -26,7 +26,7 @@ Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collec
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[API and data reference](../../docs/API-and-Data-Reference.md#metrics) defines the metric groups and lifecycle.
+[Telemetry and artifact reference](../../docs/Telemetry-and-Artifacts.md#metrics) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 

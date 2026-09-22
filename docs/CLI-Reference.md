@@ -94,4 +94,4 @@ Runs deterministic correctness probes beside idle or live traffic and writes ver
 | `--out PATH` | required | Result JSONL path. |
 | `--digest` | false | Retains a run-keyed HMAC-SHA-256 completion digest. |
 
-Copy [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace its model-specific values. `narwhal-canary` compares each returned completion and token sequence with its case, then writes verdicts, timings, token counts, digests, observed control events and a terminal summary under the [canary artifact contracts](API-and-Data-Reference.md#canary-artifacts).
+Copy [`config/canary-cases.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/canary-cases.example.json) and replace its model-specific values. `narwhal-canary` compares each returned completion and token sequence with its case, then writes verdicts, timings, token counts, digests, observed control events and a terminal summary under the [canary artifact contracts](Telemetry-and-Artifacts.md#canary-artifacts).
