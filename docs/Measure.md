@@ -1,31 +1,29 @@
 # Measure a fleet
 
-Attribute every production claim to one model, engine build, hardware shape, topology, workload and latency-target pair measured together.
+Treat every production result as a property of the exact model, engine build, hardware shape, topology, workload, and latency targets used to produce it.
 
-## Read the measurement boundaries
+## Measurement boundaries
 
-The router journal and deployment client use different timing boundaries.
+The router journal and deployment client measure different intervals.
 
-| Metric | Router journal                                                              | Deployment client                                                        |
-| ------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| TTFT   | Router arrival through prefill completion.                                  | HTTP request start through the first identified output token.            |
-| TPOT   | Prefill completion through final decode token, divided by `output_len - 1`. | First through last identified output token, divided by `output_len - 1`. |
+| Metric | Router journal                                                         | Deployment client                                                                           |
+| ------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| TTFT   | Router arrival to prefill completion.                                  | HTTP request start to the first identified output token.                                    |
+| TPOT   | Prefill completion to final decode token, divided by `output_len - 1`. | First identified output token to last identified output token, divided by `output_len - 1`. |
 
-Router TTFT includes token counting, placement wait, prefill queueing, and prefill execution. `first_byte_s - ttft_s` covers KV transfer and decode queueing before the first visible token.
+Router TTFT covers token counting, placement wait, prefill queueing, and prefill execution. `first_byte_s - ttft_s` covers KV transfer and decode queueing before the first visible token.
 
-Configure the deployment client to record scheduled requests, response status, TTFT, TPOT, requested output length, completed output length, and terminal errors. Count refused and failed scored requests as SLO misses. Preserve its stream-accounting rule with the results so another run can reproduce the denominator.
+The deployment client must record scheduled requests, response status, TTFT, TPOT, requested output length, completed output length, and terminal errors. Refused and failed scored requests count as SLO misses. Retain the stream-accounting rule with the results so later runs use the same denominator.
 
-The router journal counts identified output tokens, including tokens with empty text and reasoning-only output. Its TPOT requires at least two tokens. The [journal contract](Telemetry-and-Artifacts.md#request-journal) defines the router denominator and terminal outcomes.
+The router journal counts identified output tokens, including empty-text tokens and reasoning-only output. TPOT is defined only when at least two output tokens are present. The [journal contract](Telemetry-and-Artifacts.md#request-journal) defines router-side denominators and terminal outcomes.
 
 ## 1. Calibrate SLOs
 
-### Idle fleet
+### Profile an idle fleet
 
-Reserve the engines, warm the model and disable prefix caching before profiling.
+Reserve the engines, warm the model, and disable prefix caching.
 
-### Profile sweep
-
-Profile the intended serving shape over its input and decode ranges.
+Profile the production serving shape across its expected input lengths, decode context lengths, and active sequence counts.
 
 ```bash
 narwhal-profile \
@@ -35,103 +33,189 @@ narwhal-profile \
   --decode-concurrency <comma-separated-stream-counts>
 ```
 
-Use at least three distinct prefill lengths and include the workload's longest inputs.
+Use at least three prefill lengths, including the longest inputs expected in production.
 
-The decode sweep must cover both context lengths and active sequence counts. The profiler requires at least two input lengths and two concurrency values. For production calibration, use at least three concurrency values, including one stream and the intended operating range. The default decode input lengths end at 8,192 tokens; explicitly extend them for longer-context workloads.
+For decode, cover both context length and concurrency. The profiler requires at least two input lengths and two concurrency values. Production calibration should use at least three concurrency values, including one stream and the intended operating range. The default decode input sweep stops at 8,192 tokens, so longer-context deployments must extend it explicitly.
 
-Decode probes request exact output token IDs and one token per SSE event; the profiler checks stream completion, per-event identity, token cardinality and interval count, aborting at the first failed check.
+Decode probes request exact output token IDs with one token per SSE event. The profiler verifies stream completion, per-event token identity, token cardinality, and interval count. Any failed check aborts the probe.
 
-### Profile artifacts
+### Retain the profile data
 
-Alongside `profiles.json`, the command writes `profiles.samples.json` with software identity, sweep settings, per-engine prefill observations, decode intervals, cell medians, and fitted profiles. A partial run retains completed engines. `--overwrite` starts a fresh pair containing the selected engines. Keep both files with the deployment record.
+`narwhal-profile` writes `profiles.json` and `profiles.samples.json`.
 
-The profiler reads `kv_cache_size_tokens` from vLLM's `cache_config_info` metric. Engine builds that supply the field add a physical KV constraint; other builds use the TPOT-derived capacity limit.
+`profiles.samples.json` contains software identity, sweep settings, per-engine prefill observations, decode intervals, cell medians, and fitted profiles. If the run stops part-way through, completed engines remain in the output. `--overwrite` creates a new pair containing only the selected engines.
 
-### Profile acceptance
+Keep both files with the deployment record.
 
-Validate prefill coverage and fit error manually. Measured prefill latency includes the HTTP round trip and one generated token.
+The profiler reads `kv_cache_size_tokens` from vLLM's `cache_config_info` metric. Builds exposing that field receive a physical KV constraint. Builds without it fall back to the TPOT-derived capacity limit.
 
-Equal resident-token totals can run at different token intervals when their sequence counts differ. The profiler samples intervals inside a complete decoding cohort, after every stream has produced its first token and before a stream completes. It infers active requests and resident KV tokens from client observations; compare those estimates with engine request and inter-token metrics near scheduler saturation.
+### Accept or reject the profile
 
-The profiler fits nonnegative coefficients and uses the same constrained estimator for leave-one-cell-out cross-validation. It saves the measured minimum and maximum on each axis, forming the rectangle inside which the controller can price decode work.
+Inspect prefill coverage and fit error manually. Measured prefill latency includes the HTTP round trip and one generated token.
 
-Repeat the sweep and measure intermediate workload-shaped cells. Leave-one-cell-out error measures interpolation inside one run; the separate repeat establishes run-to-run stability and tail latency.
+Resident-token count alone does not determine decode interval. Two cells with the same resident KV total can behave differently when their sequence counts differ.
 
-`profiles.max_decode_fit_mape` defaults to `0.05`, and `profiles.max_decode_cv_mape` defaults to `0.13`. Set the fit limit at or below `controller.reactive.movement_margin`, then choose both limits from measurements covering the deployment's expected decode domain.
+The profiler samples token intervals from the interior of a complete decoding cohort: after every stream has emitted its first token and before any stream finishes. Active-request count and resident KV tokens are inferred from client observations. Near scheduler saturation, compare those estimates with engine request metrics and inter-token metrics.
 
-`narwhal-check` names the engine, value and limit when profile error exceeds either bound or the measured domain contains one point on an axis; gate reactive control on the current schema and measured decode evidence from the accepted sweep.
+Decode fitting uses nonnegative coefficients. Leave-one-cell-out cross-validation uses the same constrained estimator. Each profile records the measured minimum and maximum on both axes; that rectangle defines the decode domain the controller may price.
 
-Run light traffic and set `slo.ttft_s` and `slo.tpot_s` from the service requirement and observed distribution. A TPOT target below the measured per-token floor gives the engine shape zero feasible decode capacity. Run preflight after changing either target.
+Repeat the sweep, then measure intermediate cells shaped like the target workload. Leave-one-cell-out error tests interpolation within a run. The repeated sweep measures run-to-run stability and tail behaviour.
+
+The defaults are:
+
+```text
+profiles.max_decode_fit_mape = 0.05
+profiles.max_decode_cv_mape  = 0.13
+```
+
+Keep the fit limit at or below `controller.reactive.movement_margin`. Choose both error limits from measurements covering the deployment's expected decode domain.
+
+`narwhal-check` reports the engine, measured value, and configured limit when either error bound is exceeded. It also rejects profiles whose measured domain contains only one point on an axis. Reactive control should run only against the current schema and an accepted decode sweep.
+
+Once the profiles are accepted, run light traffic and set `slo.ttft_s` and `slo.tpot_s` from the service requirement and the measured latency distribution. A TPOT target below the engine shape's measured per-token floor produces zero feasible decode capacity.
+
+Run preflight after either SLO changes:
 
 ```bash
 narwhal-check --fleet config/fleet.production.json
 ```
 
-The pace gate compares engines with the fleet median when at least three probes succeed. Smaller fleets need a saved prefill profile for every engine and an exact `usage.prompt_tokens` count. The same 1.5-times slowdown limit applies to both comparisons.
+With at least three successful probes, the pace gate compares each engine with the fleet median. Smaller fleets require a saved prefill profile for every engine and an exact `usage.prompt_tokens` count. Both paths use the same 1.5× slowdown limit.
 
 ## 2. Validate the deployment under load
 
-Run `narwhal-check` against the final fleet before sending deployment traffic.
+Run `narwhal-check` against the final fleet before sending trial traffic.
 
-Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router and engine configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots and metrics. Record the workstation and router hosts and SSH tunnel mapping under that identifier.
+Assign a deployment identifier before the load test. Bind it to the exact Narwhal release, source revision, distribution digest, fleet configuration, profile files, sample store, engine image digest and launcher, attestation documents, router and engine configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
 
-Hold the source revision, model, runtime, profiles, router targets, workload shape, cache policy and latency targets fixed while varying the offered rate. Drain resident requests and transfer leases between rates; continue until the client attainment target fails or the intended operating ceiling passes.
+Record the workstation host, router host, and SSH tunnel mapping under the same identifier.
 
-### Run the initial synthetic workload
+During the rate sweep, keep these fixed:
 
-Through the [private tunnel](Deploy.md#open-the-private-trial-route-from-the-workstation), send 200 requests with 8,192 input tokens and exactly 128 output tokens from the management workstation at 0.5 request/s, then replay them at 1 request/s. A rate meets the candidate 95% attainment target when at least 190 requests complete with TTFT at most 2 seconds and TPOT at most 0.0333 seconds.
+- source revision
+- model
+- runtime
+- profiles
+- router targets
+- workload shape
+- cache policy
+- TTFT and TPOT targets
 
-Confirm that the workload fits the accepted profile range and engine context limit, retain the launch records containing `--no-enable-prefix-caching`, and reserve the router for trial traffic so its journal can be reconciled with client records.
+Change only the offered request rate. Drain resident work and transfer leases between rates. Stop when client attainment fails or the intended operating ceiling has been tested.
 
-From the management checkout, install the load helper's dependencies and create a private trial directory:
+### Synthetic trial
+
+Use the [private tunnel](Deploy.md#open-the-ssh-forwards) from the management workstation.
+
+The initial workload is 200 requests, each with 8,192 input tokens and exactly 128 output tokens. Run it first at 0.5 request/s, then at 1 request/s.
+
+A rate satisfies the candidate 95% target when at least 190 requests complete with:
+
+```text
+TTFT <= 2.0 s
+TPOT <= 0.0333 s
+```
+
+Before starting, confirm that the workload lies inside the accepted profile domain and engine context limit. Keep launch records showing `--no-enable-prefix-caching`. Reserve the router for trial traffic so every client record can be reconciled with the router journal.
+
+Install the load helper dependencies and create a private run directory:
 
 ```bash
 make setup
 export NARWHAL_TRIAL_URL=http://127.0.0.1:18000
 umask 077
 mkdir -p runs
+
 TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
+
 .venv/bin/python tools/load_trial.py prepare \
   --base "$NARWHAL_TRIAL_URL" \
   --input-tokens 8192 --output-tokens 128 --seed 1729 \
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` reads the served model, requests an unscored 32-token completion from a fixed public seed prompt, and saves its token IDs to `workload/workload.json`. The sampler draws each request's 8,192 input IDs from that pool using the seed plus sequence number; both rates use the same file with temperature zero, `add_special_tokens=false`, `min_tokens=max_tokens=128` and `ignore_eos=true`. Each run manifest records the workload and helper digests, workstation hostname, source revision, command, Python/httpx versions and selected limits.
+`prepare` queries the served model, requests an unscored 32-token completion from a fixed public seed prompt, and writes those token IDs to `workload/workload.json`.
 
-Run the first offered rate:
+For request sequence `n`, the sampler draws 8,192 input IDs from that pool using the configured seed plus `n`. Both rate tests reuse the same workload file with:
+
+```text
+temperature = 0
+add_special_tokens = false
+min_tokens = 128
+max_tokens = 128
+ignore_eos = true
+```
+
+Each run manifest records the workload digest, helper digest, workstation hostname, source revision, command, Python version, httpx version, and selected limits.
+
+Run 0.5 request/s:
 
 ```bash
 .venv/bin/python tools/load_trial.py run \
-  --base "$NARWHAL_TRIAL_URL" --workload "$TRIAL_DIR/workload/workload.json" \
-  --rate 0.5 --requests 200 --ttft 2 --tpot 0.0333 --attainment 0.95 \
+  --base "$NARWHAL_TRIAL_URL" \
+  --workload "$TRIAL_DIR/workload/workload.json" \
+  --rate 0.5 --requests 200 \
+  --ttft 2 --tpot 0.0333 --attainment 0.95 \
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
-After the 0.5 request/s run, inspect its saved records before starting the next rate:
+Inspect the saved records before changing the rate.
 
-| Exit | Recorded condition | Operator action |
-| --- | --- | --- |
-| `0` | The client met the schedule and candidate attainment target. | Let the router drain, then run the next rate. |
-| `2` | The run completed with an attainment or client-schedule miss. | Check `client_schedule_valid` in `summary.json`: retain a scheduled run with latency misses or HTTP refusals as a rate measurement; inspect `requests.jsonl` and correct missed client start times before repeating the run. |
-| `1` | The helper reported a blocking error. | Diagnose the printed error and retained artifacts before repeating the run. |
-| `130` | An interrupted run retained partial artifacts. | Inspect the partial record before repeating the run. |
+| Exit  | Recorded condition                                                | Operator action                                                                                                                                                                                                                                                                  |
+| ----- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`   | Schedule and candidate attainment target both passed.             | Drain the router, then run the next rate.                                                                                                                                                                                                                                        |
+| `2`   | The run finished with an attainment miss or client-schedule miss. | Inspect `client_schedule_valid` in `summary.json`. Keep a correctly scheduled run with latency misses or HTTP refusals as a valid rate measurement. If client start times were missed, inspect `requests.jsonl`, correct the client-side scheduling problem, and repeat the run. |
+| `1`   | The helper reported a blocking error.                             | Diagnose the reported error and retained artifacts before retrying.                                                                                                                                                                                                              |
+| `130` | The run was interrupted and partial artifacts were retained.      | Inspect the partial record before retrying.                                                                                                                                                                                                                                      |
 
-After the first trial drains, run the second offered rate:
+After the router has drained, run 1 request/s:
 
 ```bash
 .venv/bin/python tools/load_trial.py run \
-  --base "$NARWHAL_TRIAL_URL" --workload "$TRIAL_DIR/workload/workload.json" \
-  --rate 1 --requests 200 --ttft 2 --tpot 0.0333 --attainment 0.95 \
+  --base "$NARWHAL_TRIAL_URL" \
+  --workload "$TRIAL_DIR/workload/workload.json" \
+  --rate 1 --requests 200 \
+  --ttft 2 --tpot 0.0333 --attainment 0.95 \
   --out "$TRIAL_DIR/rate-1"
 ```
 
-Each run waits for empty router admission queues and resident work, checks one unscored warmup at the full workload shape, drains again, then schedules the 200 offers independently of response completion. The default client ceiling is 64 concurrent requests and the scheduling-lag limit is 50 ms. Missed scheduling slots receive terminal client-miss records and invalidate the offered-rate comparison. The client issues one attempt per sent offer and records HTTP refusals, stream errors and timeouts in the denominator. Increasing a client limit requires CPU, memory, network and scheduling evidence identifying the client bottleneck.
+Before each measured run, the helper waits for empty router admission queues and no resident work. It sends one unscored warmup at the full workload shape, drains again, then schedules all 200 offers independently of response completion.
 
-`requests.jsonl` retains one terminal row per scheduled offer, including `client_rid`, sequence, scheduled and actual start times, HTTP status, error details, input/output counts, TTFT and TPOT. SSE token IDs count empty-text and reasoning output; one identified token per event, a length finish, `[DONE]`, and matching final usage counts qualify a complete response. TTFT runs from HTTP dispatch to the first identified token; TPOT divides first-to-last token time by completed output tokens minus one. Latency percentiles describe complete responses. Match `client_rid` to the router journal's `client_rid` and reconcile each sent offer to its terminal class.
+The client permits 64 concurrent requests by default. Its scheduling-lag limit is 50 ms. A missed scheduling slot produces a terminal client-miss record and invalidates that offered-rate comparison.
 
-`summary.json` divides completed requests, output tokens and SLO-qualified requests by elapsed time through final response drain. Compare its client CPU time, peak memory and scheduling lag with workstation interface deltas in `network-before.json` and `network-after.json` and with router and engine metrics before attributing a throughput limit to serving. Read `state-before.json`, `state-after-warmup.json` and `state-after.json` to check admission and resident work around warmup and load.
+Each sent offer receives one attempt. HTTP refusals, stream errors, and timeouts remain in the denominator. Raise a client-side limit only after CPU, memory, network, and scheduling measurements identify the client as the bottleneck.
 
-Run artifacts use a fresh mode-0700 directory and mode-0600 files. The helper runs directly from the management checkout, so its recorded digest identifies a local helper update independently of the installed router revision. Continue with journal reconciliation, dashboard queries and the post-load KV ring in [Deploy step 10](Deploy.md#measure-and-retain-the-trial).
+### Reconcile client and router records
 
-The deployment acceptance record should name the highest offered rate meeting the candidate client target, the tested request shape and SSH route, the preflight revision, and the retained artifact paths.
+`requests.jsonl` contains one terminal row for every scheduled offer. Each row records:
+
+- `client_rid`
+- request sequence
+- scheduled start
+- actual start
+- HTTP status
+- error details
+- input token count
+- output token count
+- TTFT
+- TPOT
+
+SSE accounting includes identified token IDs even when their text is empty or they belong only to reasoning output.
+
+A response is complete only when the stream contains one identified token per event, terminates with a length finish and `[DONE]`, and reports matching final usage counts.
+
+Client TTFT runs from HTTP dispatch to the first identified output token. Client TPOT is the elapsed time from the first identified token to the last, divided by completed output tokens minus one. Latency percentiles include complete responses only.
+
+Join client records to the router journal on `client_rid`. Every sent offer should reconcile to one terminal class.
+
+`summary.json` reports completed-request throughput, output-token throughput, and SLO-qualified-request throughput using elapsed time through the final response drain as the denominator.
+
+Before assigning a throughput ceiling to serving, compare the client's CPU time, peak memory, and scheduling lag with workstation interface counters from `network-before.json` and `network-after.json`, plus router and engine metrics.
+
+Use `state-before.json`, `state-after-warmup.json`, and `state-after.json` to verify admission queues and resident work before warmup, after warmup, and after the measured run.
+
+Each run uses a new mode-0700 directory with mode-0600 files. The helper executes directly from the management checkout. Its recorded digest therefore identifies local helper changes separately from the installed router revision.
+
+Continue with journal reconciliation, dashboard queries, and the post-load KV ring described in [Deploy step 10](Deploy.md#run-and-retain-the-trial).
+
+The deployment acceptance record must contain the highest tested offered rate that met the candidate client target, the request shape, SSH route, preflight revision, and retained artifact paths.

@@ -1,10 +1,10 @@
 # HTTP API reference
 
-Narwhal serves two completion routes, seven inspection routes, and two lifecycle action routes. FastAPI publishes the typed response schemas at `/docs` and `/openapi.json`.
+Narwhal exposes two completion endpoints, seven inspection endpoints, and two lifecycle actions. FastAPI publishes typed schemas at `/docs` and `/openapi.json`.
 
 ## Public names
 
-Narwhal v0.1.0 uses these names for its public interfaces:
+Narwhal v0.1.0 uses the following public interfaces:
 
 | Interface                      | Namespace                                                                  |
 | ------------------------------ | -------------------------------------------------------------------------- |
@@ -16,122 +16,126 @@ Narwhal v0.1.0 uses these names for its public interfaces:
 | Router telemetry               | `narwhal_*`                                                                |
 | Persisted schema identifiers   | `narwhal.*`, versioned per document                                        |
 
-`narwhal_contract_info` identifies metrics contract version 1; cite Arrow research following [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).
+`narwhal_contract_info` identifies metrics contract version 1. Cite Arrow research according to [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).
 
 ## Completion routes
 
 ### `POST /v1/completions`
 
-Accepts an OpenAI completions request. Non-streaming responses use `object: "text_completion"` and `choices[0].text`.
+Accepts an OpenAI completions request. A non-streaming response has `object: "text_completion"` and returns generated text in `choices[0].text`.
 
 ### `POST /v1/chat/completions`
 
-Accepts an OpenAI chat completions request. Non-streaming responses use `object: "chat.completion"` and `choices[0].message`, with `role: "assistant"`. Responses composed entirely of reasoning or tool-call output carry null content.
+Accepts an OpenAI chat completions request. A non-streaming response has `object: "chat.completion"` and returns `choices[0].message` with `role: "assistant"`. If the response contains only reasoning or tool-call output, `content` is null.
 
 ### Response compatibility
 
-Narwhal folds the engine's stream for non-streaming clients. It preserves these fields when the engine emits them:
+For non-streaming clients, Narwhal consumes the engine stream and assembles a single response. Engine fields are preserved as follows:
 
-| Output                                                        | Non-streaming assembly                                                                                                                                        |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chat content, `reasoning`, `reasoning_content`, and `refusal` | String deltas concatenate under their original message field names.                                                                                           |
-| Function `tool_calls`                                         | Calls group by stream index and return in index order; each final call carries the concatenated ID, function name and arguments because the stream index serves as the grouping key. |
-| Legacy `function_call`                                        | Name and argument fragments concatenate into one message field.                                                                                               |
-| Logprobs                                                      | Chat content/refusal arrays and text-completion token/logprob/offset arrays concatenate in stream order.                                                      |
+| Output                                                      | Non-streaming assembly                                                                                                         |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Chat `content`, `reasoning`, `reasoning_content`, `refusal` | String deltas concatenate under the original message field.                                                                    |
+| Function `tool_calls`                                       | Calls are grouped by stream index and returned in index order. ID, function name and arguments are concatenated for each call. |
+| Legacy `function_call`                                      | Name and argument fragments concatenate into one message field.                                                                |
+| Logprobs                                                    | Chat content/refusal arrays and text-completion token, logprob and offset arrays concatenate in stream order.                  |
 
-Each tool call needs an ID and function name, and its arguments are returned as engine-generated strings for the client to handle. Support for tools, reasoning and input formats depends on the configured engine and model.
+Every tool call requires an ID and function name. Arguments remain engine-generated strings for the client to interpret. Tool, reasoning and input-format support depends on the configured model and engine.
 
-Non-streaming requests support text output and function tools. Requests for `audio`, `modalities` other than `["text"]`, or tools whose type differs from `function` receive `400` before engine work begins.
+Non-streaming requests support text output and function tools. Narwhal returns `400` before dispatching engine work when a request asks for `audio`, an output `modalities` value other than `["text"]`, or a tool type other than `function`.
 
-During response assembly, Narwhal accepts a fixed set of choice and chat-delta fields; any other non-null field, including audio, annotations and custom tool output, fails the response with `502`. Malformed accepted fields also count as failed requests.
+Response assembly accepts a fixed set of choice and chat-delta fields. Any other non-null field, including audio, annotations or custom tool output, causes the request to fail with `502`. Malformed values in otherwise accepted fields fail the request as well.
 
-Streaming responses retain the engine's delta shape and fields, subject to the token-ID exposure rule below. Both response paths enforce stream termination and serving limits.
+Streaming responses preserve the engine's delta fields and shape, subject to the token-ID exposure rules below. Stream termination and serving limits apply to both streaming and non-streaming paths.
 
-Narwhal builds both engine requests from the submitted body, checking the requested model name before setting `model` to the configured served model. Each request supports one sequence, so `n` or `best_of` above 1 receives `400` to keep the prefill and decode sampling widths consistent.
+Narwhal constructs engine requests from the submitted body. It first validates the requested model name, then replaces `model` with the configured served model. Only one sequence is supported per request. Values of `n` or `best_of` above 1 return `400`, keeping prefill and decode sampling widths aligned.
 
-Both routes require a JSON object and check the following field types before admission whenever the supplied value is non-null.
+Both completion endpoints require a JSON object. Non-null values for router-interpreted fields must have these types:
 
-| Field                        | Required type                        |
-| ---------------------------- | ------------------------------------ |
-| `model`                      | String                               |
-| `stream`                     | Boolean                              |
-| `n`, `best_of`, `max_tokens` | Integer; boolean values are rejected |
-| `prompt`                     | String or array                      |
-| `messages`                   | Array of objects                     |
+| Field                        | Required type                  |
+| ---------------------------- | ------------------------------ |
+| `model`                      | String                         |
+| `stream`                     | Boolean                        |
+| `n`, `best_of`, `max_tokens` | Integer; booleans are rejected |
+| `prompt`                     | String or array                |
+| `messages`                   | Array of objects               |
 
-Invalid JSON, body shape or field type receives `400` with an OpenAI error envelope; diagnostics carry the field name and violated rule.
+Invalid JSON, an invalid body shape, or an invalid field type returns `400` in an OpenAI error envelope. Diagnostics identify the field and violated rule.
 
 ```json
 {"error": {"message": "max_tokens must be an integer", "type": "invalid_request_error", "param": "max_tokens", "code": null}}
 ```
 
-A validation rejection records one invalid terminal outcome before reserving admission or engine capacity. Fields outside the router's validation pass through to the engine unchanged.
+Validation failures record one invalid terminal outcome before Narwhal reserves admission or engine capacity. Fields outside the router validation set pass through unchanged.
 
-Narwhal generates the response `x-request-id` when the request arrives and assigns a separate ID to each engine attempt and phase for KV ownership. The journal retains the client's original ID as `client_rid` so the request can still be traced end to end.
+Narwhal assigns `x-request-id` when the request reaches the router. Each engine attempt and phase receives a separate ID for KV ownership. The journal stores the original client ID as `client_rid`, preserving end-to-end traceability.
 
-Ingress owns client authentication and strips client credentials before forwarding the request. Set `engine.engine_api_key_env` to attach the deployment engine credential to every serving and control leg. [Configure Narwhal](Configuration.md#engine-authentication) defines this boundary.
+Ingress owns client authentication and removes client credentials before forwarding. Set `engine.engine_api_key_env` to attach the deployment engine credential to all serving and control requests. [Configure Narwhal](Configuration.md#engine-authentication) documents the authentication boundary.
 
-Configure ingress to strip client-supplied internal credentials and request IDs before setting trusted replacements, following [Operate Narwhal](Operate.md#configure-ingress); Narwhal resolves client identity from those trusted replacements.
+Ingress should also strip client-supplied internal credentials and request IDs before installing trusted replacements, as described in [Operate Narwhal](Operate.md#configure-ingress). Narwhal derives client identity from those trusted values.
 
 ### Admission
 
-| Condition                                                                                               | Status | Response detail                                                          |
-| ------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------ |
-| Invalid JSON, body shape or router-interpreted field type                                               | `400`  | `invalid_request_error` envelope with the field in `param`               |
-| Requested model differs from `model`                                                                    | `404`  | Error code `model_not_found`                                             |
-| `n` or `best_of` exceeds 1                                                                              | `400`  | Invalid sampling width                                                   |
-| Non-streaming request asks for audio, non-text output modalities or non-function tools                  | `400`  | `invalid_request_error` naming the rejected option in `param`            |
-| HTTP retention limit or admission queue is full                                                          | `429`  | `retry-after: 1`                                                         |
-| Request body exceeds `serving.max_request_bytes`                                                        | `413`  | `request_too_large`                                                      |
-| Admission wait or original deadline expires before headers                                              | `504`  | Terminal expiry                                                          |
-| Predictive admission prices the queue over the TTFT budget                                              | `429`  | `retry-after` contains the rounded queue overrun                         |
-| The prompt alone exceeds the TTFT budget                                                                | `429`  | Error envelope alone; shorten the prompt or raise the target.            |
-| Every engine is excluded from placement                                                                 | `503`  | Error code `backend_unavailable` with `retry-after: 1`                   |
-| Router is a standby, fenced, in whole-wave maintenance, or monitoring-degraded                          | `503`  | Retryable refusal with `retry-after: 1`; inspect `/ready` for the reason |
+| Condition                                                                              | Status | Response detail                                                      |
+| -------------------------------------------------------------------------------------- | -----: | -------------------------------------------------------------------- |
+| Invalid JSON, body shape or router-interpreted field type                              |  `400` | `invalid_request_error` with the field in `param`                    |
+| Requested model differs from `model`                                                   |  `404` | Error code `model_not_found`                                         |
+| `n` or `best_of` exceeds 1                                                             |  `400` | Invalid sampling width                                               |
+| Non-streaming request asks for audio, non-text output modalities or non-function tools |  `400` | `invalid_request_error` naming the rejected option in `param`        |
+| HTTP retention limit or admission queue is full                                        |  `429` | `retry-after: 1`                                                     |
+| Request body exceeds `serving.max_request_bytes`                                       |  `413` | `request_too_large`                                                  |
+| Admission wait or original deadline expires before headers                             |  `504` | Terminal expiry                                                      |
+| Predictive admission prices the queue above the TTFT budget                            |  `429` | `retry-after` contains the rounded queue overrun                     |
+| Prompt alone exceeds the TTFT budget                                                   |  `429` | Error envelope only; shorten the prompt or raise the target          |
+| All engines are excluded from placement                                                |  `503` | `backend_unavailable` with `retry-after: 1`                          |
+| Router is standby, fenced, in whole-wave maintenance or monitoring-degraded            |  `503` | Retryable refusal with `retry-after: 1`; `/ready` reports the reason |
 
-Global counters separate capacity rejections under `rejected` from predictive refusals under `refused`; malformed bodies increment `invalid_requests`.
+Global counters classify capacity rejections as `rejected`, predictive refusals as `refused`, and malformed bodies as `invalid_requests`.
 
-Every request arriving at a supported completion endpoint increments `offered` once. A body ending before sizing also increments `unsized_offered` before the router measures its workload shape.
+Every request reaching a supported completion endpoint increments `offered` once. If the body terminates before Narwhal can size the workload, the request also increments `unsized_offered`.
 
-Set `admission` to `open` to disable predictive refusal. Concurrency limits still apply.
+Set `admission` to `open` to disable predictive refusal. Concurrency limits remain active.
 
 ### Backend continuation contract
 
-The shipping vLLM/NIXL path requests a non-streaming, one-token producer completion. The producer's generated output is discarded. `PrefillResult` binds the backend-owned KV descriptor to the producer URL, endpoint, and request ID. Decode continues from the original prompt.
+The shipping vLLM/NIXL path sends the producer a non-streaming completion request for one token. Narwhal discards that generated token. `PrefillResult` associates the backend-owned KV descriptor with the producer URL, endpoint and request ID; decode then resumes from the original prompt.
 
-Remote decode receives the original prompt or messages, requested output limit, and sampling settings with the validated descriptor attached. Every client-visible output token comes from decode. Same-worker decode removes transfer parameters, including client-supplied ones, and uses engine prefix caching or prompt recomputation.
+Remote decode receives the original prompt or messages, requested output limit, sampling settings and validated descriptor. Decode produces every client-visible output token. Same-worker decode removes transfer parameters, including client-provided values, and relies on engine prefix caching or prompt recomputation.
 
-Descriptor validation rejects missing engine identity, malformed block IDs, and connector or endpoint mismatches before decode HTTP dispatch. It preserves opaque runtime fields. Preflight and occupied-role canaries test transfer correctness for the pinned engine contract.
+Descriptor validation runs before the decode HTTP request. Narwhal rejects missing engine identity, malformed block IDs, and connector or endpoint mismatches while retaining opaque runtime fields. Preflight and occupied-role canaries verify transfer correctness against the pinned engine contract.
 
-The original request lifecycle owns the handoff-age limit, phase reservations, retries, and cleanup. The age starts at the beginning of the producer HTTP leg. Each retry uses fresh backend request IDs and producer ownership. Producer HTTP completion, first client-visible decode output, and the intervening handoff delay remain separate measurements.
+The original request lifecycle owns the handoff-age limit, phase reservations, retries and cleanup. Handoff age begins when the producer HTTP leg starts. Every retry receives fresh backend request IDs and new producer ownership. Producer HTTP completion, first visible decode output and the handoff interval between them are measured separately.
 
-Python callers use `EngineClient` from `narwhal.engines.client` and `PrefillResult` from `narwhal.engines.connector`. Pass the result returned by `EngineClient.prefill()` directly to `EngineClient.decode()`. `result.parameters()` provides a detached dictionary for inspection. Internal Python paths may change between releases.
+Python callers import `EngineClient` from `narwhal.engines.client` and `PrefillResult` from `narwhal.engines.connector`. Pass the object returned by `EngineClient.prefill()` directly to `EngineClient.decode()`. `result.parameters()` returns a detached dictionary for inspection. Internal Python APIs may change between releases.
 
 ### Engine failures
 
-A failed leg returns `504` for timeout-shaped faults and `502` for other engine faults. A prefill failure occurs before streaming starts and can use the HTTP status directly.
+A failed engine leg returns `504` for timeout-shaped faults and `502` for other engine faults. Prefill fails before streaming begins, so Narwhal can return its HTTP error status directly.
 
-An ejected engine in a fleet with an `engine_contract` must pass lifecycle validation before breaker readmission. Uncontracted development fleets use health-only recovery.
+In fleets configured with an `engine_contract`, an ejected engine must pass lifecycle validation before breaker readmission. Development fleets without a contract recover on health checks alone.
 
-Once an engine reaches `recovery.eject_after` consecutive stream failures, including first-token timeouts or mid-stream silence, Narwhal removes it from placement until it passes an inference probe. After a crossed-decode failure, the probe starts from a fresh handoff produced by the original producer. Each probe leg uses `engine.first_token_timeout_s`; inconclusive probes return on the readmission cadence. Whole-wave restart rules continue to govern the fleet.
+After `recovery.eject_after` consecutive stream failures, Narwhal removes an engine from placement until it passes an inference probe. First-token timeouts and mid-stream silence count toward the streak. After a crossed-decode failure, the probe uses a fresh handoff generated by the original producer. Each probe leg uses `engine.first_token_timeout_s`; inconclusive probes return on the normal readmission cadence. Whole-wave restart policy still applies.
 
-A successful engine stream emits generated output followed by `data: [DONE]`. Closure before that marker is an engine failure. A marker received before the first generated token produces `502` with `stream ended with [DONE] before any token arrived`. Upstream error objects inside an HTTP 200 stream propagate with their own status.
+A successful engine stream contains generated output followed by `data: [DONE]`. Closing before `[DONE]` is an engine failure. Receiving `[DONE]` before the first generated token returns `502` with:
 
-`engine.first_token_timeout_s` limits the time from opening the decode HTTP stream to receiving the first generated token.
+`stream ended with [DONE] before any token arrived`
 
-After the first token, `engine.decode_read_timeout_s` bounds silence between transport chunks. Metadata chunks reset that read timeout. A timeout produces a `504` detail beginning `engine went silent between tokens`. A zero value uses the original request deadline as the stream bound.
+Error objects carried inside an upstream HTTP 200 stream propagate with their own status.
 
-Each admitted request gets one prefill/decode attempt by default. Transient retries can start a fresh attempt before visible output, within the same request deadline and retry budget. A positive `recovery.failure_quarantine_s` holds the failed engine out of subsequent placement while the breaker catches up. Streaming decode failures emit a terminal `data: {"error": ...}` event under the committed HTTP 200 status.
+`engine.first_token_timeout_s` limits the interval from opening the decode stream to receiving the first generated token.
 
-For engines that support token IDs, Narwhal sets `return_token_ids: true` and `stream_interval: 1` on decode requests and counts identified tokens from text, reasoning and tool-call output.
+After the first token, `engine.decode_read_timeout_s` limits silence between transport chunks. Metadata chunks reset the timer. Expiry returns `504` with detail beginning `engine went silent between tokens`. A value of zero uses the original request deadline as the stream bound.
 
-Exact token IDs are nonnegative integers; booleans are invalid. Serving, profiling and canaries require valid identity for text, reasoning, tool-call and refusal output when counting exact tokens. Invalid identity fails the decode attempt or measurement and marks canary evidence as malformed.
+Each admitted request receives one prefill/decode attempt by default. Before visible output, transient faults may trigger a fresh attempt if both the original request deadline and retry budget allow it. `recovery.failure_quarantine_s > 0` temporarily removes the failed engine from later placement while the breaker state catches up. A decode failure after streaming has committed HTTP 200 emits a terminal `data: {"error": ...}` event.
 
-Dialect token accounting uses `token_ids` for exact per-token identity with output length and TPOT scoring, and `unavailable` for every other dialect; decode correction, drift scoring and output-length learning require identified tokens.
+For engines that expose token IDs, Narwhal adds `return_token_ids: true` and `stream_interval: 1` to decode requests. Identified tokens are counted across text, reasoning and tool-call output.
 
-Clients receive token IDs when they request `return_token_ids`, in both streaming and non-streaming responses.
+Valid token IDs are nonnegative integers; booleans are invalid. Serving, profiling and canary paths require valid token identity for text, reasoning, tool-call and refusal output whenever they perform exact counting. Invalid identity fails the decode attempt or measurement and marks canary evidence malformed.
 
-Non-streaming responses preserve response metadata and non-null engine `usage` across metadata-only frames. When the engine omits usage, Narwhal supplies it from input length and measured output tokens. The engine supplies `finish_reason` and optional `stop_reason`; both survive a subsequent usage-only frame.
+The `token_ids` accounting dialect provides exact token identity for output length and TPOT scoring. All other dialects report `unavailable`. Decode correction, drift scoring and output-length learning require identified tokens.
+
+Clients receive token IDs in both streaming and non-streaming responses when they request `return_token_ids`.
+
+Non-streaming assembly retains response metadata and non-null engine `usage` values across metadata-only frames. If the engine omits usage, Narwhal calculates it from input length and measured output tokens. `finish_reason` and optional `stop_reason` come from the engine and survive later usage-only frames.
 
 ## Inspection routes
 
@@ -150,152 +154,170 @@ Returns the configured model in OpenAI list format.
 
 ### `GET /health`
 
-Reports process liveness as `ok`, `standby`, `fenced`, `maintenance` or `degraded`, the configured fleet size and the placement-eligible engine count.
+Reports process liveness as `ok`, `standby`, `fenced`, `maintenance` or `degraded`, together with configured fleet size and the number of placement-eligible engines.
 
 ```json
 {"status": "ok", "instances": 6, "available_instances": 6}
 ```
 
-Every status returns HTTP 200. `available_instances` counts engines eligible for placement under the router's latest ejection, drain and quarantine evidence; Prometheus scrape targets and breaker state report engine liveness.
+All health states return HTTP 200. `available_instances` counts engines currently eligible for placement after applying the router's latest ejection, drain and quarantine state. Prometheus scrape targets and breaker state provide engine-level liveness.
 
 ### `GET /ready`
 
-Returns HTTP 200 while the router owns control and admits requests. Standby, fencing, lease-storage failure, lifecycle holds, backend loss and monitoring degradation return HTTP 503 with a reason. Load balancers must use this route.
+Returns HTTP 200 while the router owns control and admits requests. Standby state, fencing, lease-storage failure, lifecycle holds, backend loss and monitoring degradation return HTTP 503 with a reason. Load balancers should use this endpoint.
 
-After `controller.monitor_failure_limit` consecutive failed passes, the reason is `monitoring degraded: <stage> <class>`. A standby counts these failures toward takeover. A fully successful monitoring pass clears the degradation.
+After `controller.monitor_failure_limit` consecutive failed monitoring passes, readiness reports `monitoring degraded: <stage> <class>`. Standbys count the same failures toward takeover. One fully successful monitoring pass clears the degraded state.
 
-If every engine is excluded from placement, `/ready` returns HTTP 503 with `reason: no available engines`, while new completion requests receive `backend_unavailable` and `Retry-After: 1`.
+If placement has no eligible engine, `/ready` returns HTTP 503 with `reason: no available engines`. New completion requests receive `backend_unavailable` and `Retry-After: 1`.
 
-A lifecycle or control hold takes precedence. During a whole-wave hold, `/health` reports `maintenance`, `/ready` reports the lifecycle reason, and completion requests receive HTTP 503 with error code `standby`.
+Lifecycle and control holds take precedence over backend state. During a whole-wave hold, `/health` reports `maintenance`, `/ready` reports the lifecycle reason, and completion requests return HTTP 503 with error code `standby`.
 
-The `control_ready` field stays true during backend loss or managed maintenance as long as the router owns its lease and monitoring remains healthy. Standbys use it to keep handoffs current; send client traffic only when `/ready` returns HTTP 200.
+`control_ready` remains true during backend loss or managed maintenance when the router still owns its lease and monitoring is healthy. Standbys use this state to keep handoffs current. Client traffic belongs only on routers where `/ready` returns HTTP 200.
 
 ### `GET /metrics`
 
-Returns Prometheus text in exposition format version 0.0.4; [Metrics](Telemetry-and-Artifacts.md#metrics) lists the operational series.
+Returns Prometheus exposition format 0.0.4. [Metrics](Telemetry-and-Artifacts.md#metrics) lists the operational series.
 
 ### `GET /narwhal/handoff`
 
 Returns a fresh control-plane handoff.
 
-| Field               | Meaning                                                                                                                                                                                     |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`            | `narwhal.handoff`                                                                                                                                                                           |
-| `schema_version`    | Handoff schema version. This release writes `1`.                                                                                                                                            |
-| `at`                | Unix wall-clock timestamp of the snapshot                                                                                                                                                   |
-| `run`               | Request-journal run ID of the writing process                                                                                                                                               |
-| `model`             | Configured served model                                                                                                                                                                     |
-| `epoch`             | Lease epoch held when the handoff was captured. Zero when HA fencing is disabled.                                                                                                           |
-| `holder`            | Unique lease holder token. Empty when HA fencing is disabled.                                                                                                                               |
-| `engines`           | Sorted configured engine IDs                                                                                                                                                                |
-| `roles`             | Engine ID to current `prefill` or `decode` role                                                                                                                                             |
-| `ejected`           | Engine IDs held out by the breaker                                                                                                                                                          |
-| `inference_sources` | Suspect engine IDs mapped to the producer IDs required for verification. An empty producer ID requests a local probe.                                                                       |
-| `counters`          | `served`, `failed`, `unserved`, `refused`, `rejected`, and `cancelled` totals                                                                                                               |
-| `lifecycle`         | Durable engine drain, validation, whole-wave state, restart policy, and accepted process starts                                                                                             |
-| `demand_risk`       | Newest consolidation risk event `kind`, elapsed `age_s`, and per-kind counts. The receiver reanchors the age to its clock and collects fresh arrival evidence. `null` marks a clear state. |
+| Field               | Meaning                                                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`            | `narwhal.handoff`                                                                                                                                                               |
+| `schema_version`    | Handoff schema version; this release writes `1`                                                                                                                                 |
+| `at`                | Unix wall-clock timestamp of the snapshot                                                                                                                                       |
+| `run`               | Request-journal run ID of the writing process                                                                                                                                   |
+| `model`             | Configured served model                                                                                                                                                         |
+| `epoch`             | Lease epoch at capture time; zero when HA fencing is disabled                                                                                                                   |
+| `holder`            | Unique lease-holder token; empty when HA fencing is disabled                                                                                                                    |
+| `engines`           | Sorted configured engine IDs                                                                                                                                                    |
+| `roles`             | Engine ID mapped to current `prefill` or `decode` role                                                                                                                          |
+| `ejected`           | Engine IDs currently held out by the breaker                                                                                                                                    |
+| `inference_sources` | Suspect engine IDs mapped to producer IDs required for verification; an empty producer ID requests a local probe                                                                |
+| `counters`          | `served`, `failed`, `unserved`, `refused`, `rejected` and `cancelled` totals                                                                                                    |
+| `lifecycle`         | Durable drain, validation, whole-wave state, restart policy and accepted process starts                                                                                         |
+| `demand_risk`       | Latest consolidation-risk event: `kind`, elapsed `age_s`, and per-kind counts; the receiver reanchors age to its own clock and gathers new arrival evidence; `null` means clear |
 
-Package and Git provenance comes from the journal header. The handoff restores the `served`, `failed`, `unserved`, `refused`, `rejected` and `cancelled` totals. The replacement initializes resident tracking, flip history, role-change and controller-decision counters, latency histograms, floor history and monitoring-failure counters for its process.
+Package and Git provenance live in the journal header.
 
-The router writes this handoff to `recovery.state_path` for `narwhal-serve --resume`. Warm standbys retrieve it through the HTTP route.
+A handoff restores the persisted `served`, `failed`, `unserved`, `refused`, `rejected` and `cancelled` totals. The replacement process starts fresh resident tracking, flip history, role-change and controller-decision counters, latency histograms, floor history and monitoring-failure counters.
 
-Bind this route to the trusted control network because it exposes resident state, counters and lifecycle details for standby takeover and operator tooling.
+Narwhal writes the handoff to `recovery.state_path` for `narwhal-serve --resume`. Warm standbys fetch it through this endpoint.
+
+Expose `/narwhal/handoff` only on the trusted control network. It contains resident state, counters and lifecycle data used for standby takeover and operator tooling.
 
 ### `GET /narwhal/state`
 
-Returns the live scheduler view as `narwhal.state` schema version 1.
+Returns the live scheduler state as `narwhal.state` schema version 1.
 
-| Field                                   | Meaning                                                                                                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`                                | `narwhal.state`                                                                                                                                                                                                                                                                                                                                                                              |
-| `schema_version`                        | State schema version. This release writes `1`.                                                                                                                                                                                                                                                                                                                                               |
-| `served`, `failed`                      | Completed requests and requests ending in error, preserved across resume and takeover                                                                                                                                                                                                                                                                                                        |
-| `offered`, `unsized_offered`, `expired` | Completion arrivals, arrivals that terminate before sizing, and deadline expiries in this router process                                                                                                                                                                                                                                                                                     |
-| `cancelled`                             | Client disconnects count as their own terminal outcome, preserved across resume and takeover; `served` and `failed` retain separate totals.                                                                                                                                                                                                                                                    |
-| `invalid_requests`                      | Client requests rejected as malformed before admission for the current run                                                                                                                                                                                                                                                                                                                   |
-| `controller`                            | Active role controller, always `reactive`                                                                                                                                                                                                                                                                                                                                                    |
-| `token_accounting`                      | Decode token accounting for this fleet: `token_ids` for exact per-token identity, `unavailable` for every other dialect                                                                                                                                                                                                                                                                       |
-| `control`                               | Advisory mode, the latest decision, and process-lifetime decision and role-change totals. `flips` keys are `<caller>:<target-role>`. `flip_reversals`, `flips_refused`, and `flip_inflight` record reversals, refused attempts, and resident requests by phase at applied moves.                                                                                                             |
-| `monitoring`                            | Monitoring-loop timing and failure accounting: current and process-high-water event-loop lag, the `degraded` admission gate, the streak's first failure as `reason` (`<class>:<stage>`), the `core_consecutive` failed-pass streak, the lifetime `core_failures` total, and per-stage `failures` totals, `consecutive` streaks, `last_class`, and `last_at`                                                      |
-| `ha`                                    | Readiness, standby flag, lease epoch and holder, and any fencing reason                                                                                                                                                                                                                                                                                                                      |
-| `lifecycle`                             | Per-engine drain state, resident work, process identities, validation results, and retained events                                                                                                                                                                                                                                                                                           |
-| `admission`                             | Active and queued occupancy, admission and phase waiters, limits, rejections, and predictive refusals                                                                                                                                                                                                                                                                                        |
-| `serving`                               | Retained HTTP work, attempt counts, retry budget, observed decode tokens, and upstream time                                                                                                                                                                                                                                                                                                  |
-| `http_pools`                            | Engine HTTP pool policy: the bounded data pool behind the admission limit, the reserved control pool for health and recovery probes, and the pool-wait timeout                                                                                                                                                                                                                               |
-| `pools`                                 | Engine IDs grouped by current prefill or decode role                                                                                                                                                                                                                                                                                                                                         |
-| `load`                                  | SLO-relative load per pool. `1.0` is the configured target.                                                                                                                                                                                                                                                                                                                                  |
-| `thresholds`                            | Active reactive-controller thresholds                                                                                                                                                                                                                                                                                                                                                        |
-| `slo`                                   | TTFT and TPOT targets used by placement and control                                                                                                                                                                                                                                                                                                                                          |
-| `first_token_timeout_s`                 | Decode first-token deadline                                                                                                                                                                                                                                                                                                                                                                  |
-| `resident`                              | In-flight prefill and decode counts by engine                                                                                                                                                                                                                                                                                                                                                |
-| `pinned`                                | Engines excluded from role changes                                                                                                                                                                                                                                                                                                                                                           |
-| `min_prefill`                           | Configured live-prefill floor                                                                                                                                                                                                                                                                                                                                                                |
-| `min_decode`                            | Configured live-decode floor                                                                                                                                                                                                                                                                                                                                                                 |
-| `below_floor`                           | Current and cumulative prefill-floor breach state                                                                                                                                                                                                                                                                                                                                            |
-| `ejected`                               | Engines excluded from scheduling by the breaker                                                                                                                                                                                                                                                                                                                                              |
-| `draining`                              | Engines excluded by an operator lifecycle action                                                                                                                                                                                                                                                                                                                                             |
-| `probation`                             | Engines carrying a predictive-health placement penalty                                                                                                                                                                                                                                                                                                                                       |
-| `health`                                | Per-engine drift window counts: `scored` and `undersampled` closed windows with observations, plus `last_scored_s_ago` measuring the silence since a window last reached a verdict. `prefill_paused` marks evidence held for local prefill interference, and `prefill_pauses` counts entries into that state. A confirmed ejection drops the record, so a readmitted engine restarts at zero |
-| `quarantined`                           | Engines held out of placement after an engine failure                                                                                                                                                                                                                                                                                                                                        |
-| `breaker`                               | Per-engine breaker accounting: consecutive failure streaks keyed by class (`connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, plus `liveness` sweep misses), and the engines with a health or inference verification probe in flight                                                                                                                           |
-| `decode_floor`                          | Live decode count, configured minimum, deficit state, and cumulative restorations.                                                                                                                                                                                                                                                                                                           |
-| `attainment`                            | Bounded diagnostic SLO outcome buckets                                                                                                                                                                                                                                                                                                                                                       |
-| `demand_history`                        | Retained sized and unsized demand, shape counts, and overflow bounds                                                                                                                                                                                                                                                                                                                         |
-| `demand_evidence`                       | Consolidation evidence behind every D-to-P gate: retained span and samples with their minimums and the bounded lookback, window closure, short and long decode estimates with their trend ratio, the conservative envelope, the armed risk event and per-kind counts                                                                                                                         |
-| `unserved`                              | Phase placements whose eligible candidates all exceeded the configured SLO                                                                                                                                                                                                                                                                                                                   |
-| `panic_bypasses`                        | Prefill-to-decode moves allowed through cooldown by the panic condition                                                                                                                                                                                                                                                                                                                      |
-| `flips_refused`                         | The 20 most recent role-change refusals                                                                                                                                                                                                                                                                                                                                                      |
-| `flips`                                 | Role changes retained up to `flip_history`                                                                                                                                                                                                                                                                                                                                                   |
+| Field                                   | Meaning                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`                                | `narwhal.state`                                                                                                                                                                                                                                                                                                                     |
+| `schema_version`                        | State schema version; this release writes `1`                                                                                                                                                                                                                                                                                       |
+| `served`, `failed`                      | Completed requests and requests ending in error, preserved across resume and takeover                                                                                                                                                                                                                                               |
+| `offered`, `unsized_offered`, `expired` | Completion arrivals, arrivals terminating before sizing, and deadline expiries in this router process                                                                                                                                                                                                                               |
+| `cancelled`                             | Client disconnects, recorded as their own terminal outcome and preserved across resume and takeover; `served` and `failed` retain separate totals                                                                                                                                                                                   |
+| `invalid_requests`                      | Malformed client requests rejected before admission during the current run                                                                                                                                                                                                                                                          |
+| `controller`                            | Active role controller; always `reactive`                                                                                                                                                                                                                                                                                           |
+| `token_accounting`                      | `token_ids` for exact per-token decode identity, otherwise `unavailable`                                                                                                                                                                                                                                                            |
+| `control`                               | Advisory mode, latest decision, process-lifetime decision totals and role-change totals; `flips` keys use `<caller>:<target-role>`; `flip_reversals`, `flips_refused` and `flip_inflight` record reversals, rejected changes and resident work at applied moves                                                                     |
+| `monitoring`                            | Monitoring-loop timing and failure state: current and high-water event-loop lag, degraded admission gate, first failure in the current streak as `<class>:<stage>`, `core_consecutive`, lifetime `core_failures`, and per-stage failures, streaks, last class and timestamp                                                         |
+| `ha`                                    | Readiness, standby state, lease epoch and holder, plus any fencing reason                                                                                                                                                                                                                                                           |
+| `lifecycle`                             | Engine drain state, resident work, process identities, validation results and retained events                                                                                                                                                                                                                                       |
+| `admission`                             | Active and queued occupancy, phase waiters, limits, rejections and predictive refusals                                                                                                                                                                                                                                              |
+| `serving`                               | Retained HTTP work, attempt counts, retry budget, observed decode tokens and upstream time                                                                                                                                                                                                                                          |
+| `http_pools`                            | Bounded engine data pool, reserved control pool and pool-wait timeout                                                                                                                                                                                                                                                               |
+| `pools`                                 | Engine IDs grouped by current prefill or decode role                                                                                                                                                                                                                                                                                |
+| `load`                                  | Per-pool SLO-relative load; `1.0` equals the configured target                                                                                                                                                                                                                                                                      |
+| `thresholds`                            | Active reactive-controller thresholds                                                                                                                                                                                                                                                                                               |
+| `slo`                                   | TTFT and TPOT targets used by placement and control                                                                                                                                                                                                                                                                                 |
+| `first_token_timeout_s`                 | Decode first-token deadline                                                                                                                                                                                                                                                                                                         |
+| `resident`                              | In-flight prefill and decode counts by engine                                                                                                                                                                                                                                                                                       |
+| `pinned`                                | Engines excluded from role changes                                                                                                                                                                                                                                                                                                  |
+| `min_prefill`                           | Configured minimum live prefill count                                                                                                                                                                                                                                                                                               |
+| `min_decode`                            | Configured minimum live decode count                                                                                                                                                                                                                                                                                                |
+| `below_floor`                           | Current and cumulative prefill-floor breach state                                                                                                                                                                                                                                                                                   |
+| `ejected`                               | Engines removed from scheduling by the breaker                                                                                                                                                                                                                                                                                      |
+| `draining`                              | Engines excluded by an operator lifecycle action                                                                                                                                                                                                                                                                                    |
+| `probation`                             | Engines carrying a predictive-health placement penalty                                                                                                                                                                                                                                                                              |
+| `health`                                | Per-engine drift-window accounting: scored and undersampled closed windows with observations, plus `last_scored_s_ago`; `prefill_paused` marks evidence suspended because of local prefill interference and `prefill_pauses` counts entries into that state; confirmed ejection removes the record, so readmission starts from zero |
+| `quarantined`                           | Engines temporarily excluded after an engine failure                                                                                                                                                                                                                                                                                |
+| `breaker`                               | Per-engine consecutive failure streaks by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness`; also records engines with a health or inference probe in flight                                                                                                                   |
+| `decode_floor`                          | Live decode count, configured minimum, deficit state and cumulative restorations                                                                                                                                                                                                                                                    |
+| `attainment`                            | Bounded diagnostic SLO outcome buckets                                                                                                                                                                                                                                                                                              |
+| `demand_history`                        | Retained sized and unsized demand, shape counts and overflow bounds                                                                                                                                                                                                                                                                 |
+| `demand_evidence`                       | Consolidation evidence for every D-to-P gate: retained span and sample counts, required minima, bounded lookback, closure state, short and long decode estimates, trend ratio, conservative envelope, armed risk event and per-kind counts                                                                                          |
+| `unserved`                              | Phase placements where every eligible candidate exceeded the configured SLO                                                                                                                                                                                                                                                         |
+| `panic_bypasses`                        | Prefill-to-decode moves allowed through cooldown by the panic condition                                                                                                                                                                                                                                                             |
+| `flips_refused`                         | 20 most recent role-change refusals                                                                                                                                                                                                                                                                                                 |
+| `flips`                                 | Role changes retained up to `flip_history`                                                                                                                                                                                                                                                                                          |
 
-The nested admission and serving records use these fields.
+The nested `admission` and `serving` objects expose the following fields:
 
-| Object           | Field                                                              | Meaning                                                                                 |
-| ---------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `admission`      | `inflight`                                                         | Requests holding a router admission seat                                                |
-| `admission`      | `queued`, `queue_capacity`, `queue_high_water`                     | Current admission waiters, configured queue bound, and peak waiters                     |
-| `admission`      | `waiting_prefill`, `waiting_decode`                                | Requests waiting for phase dispatch                                                     |
-| `admission`      | `limit`                                                            | Effective router limit after `--max-concurrent` precedence                              |
-| `admission`      | `rejected`                                                         | Global capacity rejections                                                              |
-| `admission`      | `refused`                                                          | Global predictive-admission refusals                                                    |
-| `admission`      | `engine_auth`                                                      | Engine-authentication mode: `boundary` or `engine-credential`.                          |
-| `serving`        | `http_retained`, `http_retained_limit`, `http_retained_high_water` | Completion requests retaining HTTP resources, their bound, and peak occupancy           |
-| `serving`        | `prefill_attempts`, `decode_attempts`, `retry_attempts`            | Cumulative actual phase dispatches and additional prefill attempts                      |
-| `serving`        | `retry_credits`, `retry_credits_spent`, `retry_denied`             | Available shared retry credit, spent credit, and denied retries                         |
-| `serving`        | `decode_tokens_observed`, `upstream_seconds`                       | Observed decode tokens and cumulative HTTP leg time by phase, including failed attempts |
+| Object      | Field                                                              | Meaning                                                                                 |
+| ----------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `admission` | `inflight`                                                         | Requests holding a router admission seat                                                |
+| `admission` | `queued`, `queue_capacity`, `queue_high_water`                     | Current queue depth, configured queue bound and peak waiters                            |
+| `admission` | `waiting_prefill`, `waiting_decode`                                | Requests waiting for phase dispatch                                                     |
+| `admission` | `limit`                                                            | Effective router limit after `--max-concurrent` precedence                              |
+| `admission` | `rejected`                                                         | Global capacity rejections                                                              |
+| `admission` | `refused`                                                          | Global predictive-admission refusals                                                    |
+| `admission` | `engine_auth`                                                      | Engine authentication mode: `boundary` or `engine-credential`                           |
+| `serving`   | `http_retained`, `http_retained_limit`, `http_retained_high_water` | Completion requests holding HTTP resources, their limit and peak occupancy              |
+| `serving`   | `prefill_attempts`, `decode_attempts`, `retry_attempts`            | Cumulative phase dispatches and additional prefill attempts                             |
+| `serving`   | `retry_credits`, `retry_credits_spent`, `retry_denied`             | Available shared retry credit, consumed credit and denied retries                       |
+| `serving`   | `decode_tokens_observed`, `upstream_seconds`                       | Observed decode tokens and cumulative HTTP leg time by phase, including failed attempts |
 
-`pools`, `load`, `resident`, and the control objects have these shapes.
+`pools`, `load`, `resident` and controller records use these shapes:
 
-| Object                  | Fields                                                                                                                                                                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pools`                 | `prefill`, `decode` arrays of engine IDs                                                                                                                                                                                                    |
-| `http_pools`            | `data_connections`, `control_connections`, `pool_timeout_s`                                                                                                                                                                                 |
-| `load`                  | `prefill`, `decode` SLO-relative floats                                                                                                                                                                                                     |
-| `thresholds`            | `expand`, `shrink`, `cooldown_s`, `sustained_intervals`, `dwell_s`, `panic_ratio`                                                                                                                                                           |
-| `slo`                   | `ttft_s`, `tpot_s`                                                                                                                                                                                                                          |
-| `resident.<iid>`        | `prefill`, `decode` in-flight counts                                                                                                                                                                                                        |
-| `below_floor`           | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                                                                                                                                                                               |
-| `attainment`            | `bucket_s`, `retained_s`, `covered_s`, `buckets`, `outcomes`, `pruned_buckets`, `pruned_outcomes`                                                                                                                                           |
-| `demand_evidence`       | `span_s`, `arrivals`, `required_span_s`, `required_arrivals`, `max_span_s`, `closed`, `risk_kind`, `risk_age_s`, `risk_events`, `short_decode_engines`, `long_decode_engines`, `trend_ratio`, `envelope_decode_engines`, `blocked_gate`     |
-| `control`               | `advisory`, `last_decision`, cumulative `decisions` by caller and result                                                                                                                                                                    |
-| `control.last_decision` | Current and proposed split, demand reference, phase work, projected SLO ratios, applied decode request limit, decode profile coverage and correction, objective change, reason, and result; D-to-P steps also carry the consolidation evidence snapshot |
-| `decode_floor`          | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                                                                                                                                                                             |
-| `flips_refused[]`       | `at`, requested `to` role, and `why`                                                                                                                                                                                                        |
+| Object                  | Fields                                                                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pools`                 | `prefill`, `decode` arrays of engine IDs                                                                                                                                                                                                                     |
+| `http_pools`            | `data_connections`, `control_connections`, `pool_timeout_s`                                                                                                                                                                                                  |
+| `load`                  | `prefill`, `decode` SLO-relative floats                                                                                                                                                                                                                      |
+| `thresholds`            | `expand`, `shrink`, `cooldown_s`, `sustained_intervals`, `dwell_s`, `panic_ratio`                                                                                                                                                                            |
+| `slo`                   | `ttft_s`, `tpot_s`                                                                                                                                                                                                                                           |
+| `resident.<iid>`        | `prefill`, `decode` in-flight counts                                                                                                                                                                                                                         |
+| `below_floor`           | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                                                                                                                                                                                                |
+| `attainment`            | `bucket_s`, `retained_s`, `covered_s`, `buckets`, `outcomes`, `pruned_buckets`, `pruned_outcomes`                                                                                                                                                            |
+| `demand_evidence`       | `span_s`, `arrivals`, `required_span_s`, `required_arrivals`, `max_span_s`, `closed`, `risk_kind`, `risk_age_s`, `risk_events`, `short_decode_engines`, `long_decode_engines`, `trend_ratio`, `envelope_decode_engines`, `blocked_gate`                      |
+| `control`               | `advisory`, `last_decision`, cumulative `decisions` by caller and result                                                                                                                                                                                     |
+| `control.last_decision` | Current and proposed split, demand reference, phase work, projected SLO ratios, applied decode request limit, decode profile coverage and correction, objective change, reason and result; D-to-P decisions also include the consolidation-evidence snapshot |
+| `decode_floor`          | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                                                                                                                                                                                              |
+| `flips_refused[]`       | `at`, requested `to` role, `why`                                                                                                                                                                                                                             |
 
-Scored reactive decisions include `eligibility_rule`: `source_shrink` for ordinary consolidation, `mixed_pressure` for observed prefill recovery above the decode shrink threshold, or `projected_ttft_recovery` for an arrival-triggered D-to-P evaluation. Eligible proposals also expose `confirmations` and `required_confirmations`.
+Scored reactive decisions report `eligibility_rule` as one of three values:
 
-Projected-TTFT recovery records `trigger_rid`, `projected_ttft_s`, `ttft_slo_s`, `trigger_projected_ttft_ratio`, `resident_prefill_s`, `queued_prefill_s`, `waiting_prefill`, `initial_projected_ttft_s`, `urgent_signals` and `event_to_evaluation_s`. A scored adjacent candidate also records `candidate_projected_ttft_s`, `candidate_projected_ttft_ratio`, `projected_ttft_improvement_s`, `decode_capacity_safe`, `role_floors_safe` and `source_pressure_safe`. `decision_basis` is `projected_ttft_recovery` for this path. The existing `projected_ttft_ratio` remains the demand model's candidate-split ratio.
+- `source_shrink` for ordinary consolidation
+- `mixed_pressure` when observed prefill recovery exceeds the decode shrink threshold
+- `projected_ttft_recovery` for arrival-triggered D-to-P evaluation
 
-Held or blocked decisions retain the proposed split and its objective change alongside the responsible constraint, including consolidation evidence, profiles, KV capacity, role floors, pins, cooldown, dwell or the resident guard. Decisions made before scoring, such as insufficient demand history or fleet health changes, carry the fields available at that stage.
+Eligible proposals also report `confirmations` and `required_confirmations`.
 
-`below_floor.live_prefill` counts placement-eligible prefill engines. Role changes observe both configured floors, although health and operator hold-outs can breach them. The controller moves healthy decode capacity into prefill until the floor is restored or `min_decode` prevents another move. Aggregate mode treats its opening zero-prefill pool as the baseline and leaves `below_floor.active` false until the fleet first reaches the floor.
+Projected-TTFT recovery records:
 
-`below_floor.since` uses the process monotonic clock and is `null` outside a breach. `below_floor.cumulative_s` includes the open interval when `active` is true.
+`trigger_rid`, `projected_ttft_s`, `ttft_slo_s`, `trigger_projected_ttft_ratio`, `resident_prefill_s`, `queued_prefill_s`, `waiting_prefill`, `initial_projected_ttft_s`, `urgent_signals`, `event_to_evaluation_s`
 
-The `attainment` object reports SLO outcomes for diagnostics. Completed, failed, expired and predictively refused requests add TTFT-met, TPOT-met and total counts to buckets of width `monitor_interval_s`. Pruning follows the newest recorded bucket, retains four demand windows and includes the complete boundary bucket in window queries.
+A scored adjacent candidate adds:
 
-`attainment` exposes retained and pruned counts. `covered_s` is the age of the oldest retained bucket, capped at the retention span.
+`candidate_projected_ttft_s`, `candidate_projected_ttft_ratio`, `projected_ttft_improvement_s`, `decode_capacity_safe`, `role_floors_safe`, `source_pressure_safe`
 
-A role change has this shape.
+For this path, `decision_basis` is `projected_ttft_recovery`. The existing `projected_ttft_ratio` continues to represent the demand model's ratio for the candidate split.
+
+Blocked or held decisions retain their proposed split and objective change together with the constraint that stopped the move. Possible constraints include consolidation evidence, profiles, KV capacity, role floors, pins, cooldown, dwell and the resident guard. Decisions made before scoring, including insufficient demand history or fleet-health changes, contain only the fields available at that stage.
+
+`below_floor.live_prefill` counts placement-eligible prefill engines. Role changes obey both configured floors, although health failures and operator hold-outs can push the fleet below them. The controller moves healthy decode capacity into prefill until it restores the floor or `min_decode` prevents another move.
+
+Aggregate mode treats an initial zero-prefill pool as its baseline. `below_floor.active` remains false until the fleet has reached the configured floor at least once.
+
+`below_floor.since` uses the process monotonic clock and is null outside a breach. While `active` is true, `below_floor.cumulative_s` includes the currently open interval.
+
+The `attainment` record stores diagnostic SLO outcomes. Completed, failed, expired and predictively refused requests contribute TTFT-met, TPOT-met and total counts to buckets of width `monitor_interval_s`. Pruning is anchored to the newest recorded bucket, retains four demand windows, and includes the full boundary bucket in window queries.
+
+`attainment` exposes both retained and pruned counts. `covered_s` measures the age of the oldest retained bucket, capped at the configured retention span.
+
+A role-change record has this form:
 
 ```json
 {
@@ -309,33 +331,67 @@ A role change has this shape.
 }
 ```
 
-`by` names the caller as `reactive`, `decode_floor`, or `floor_recovery`. The in-flight fields capture resident work at the label change, and `drained_s` receives its duration when that work finishes.
+`by` identifies the caller as `reactive`, `decode_floor` or `floor_recovery`. `prefill_inflight` and `decode_inflight` capture resident work when the role label changes. `drained_s` is filled with the drain duration when that work completes.
 
 Narwhal writes per-request evidence to the [request journal](Telemetry-and-Artifacts.md#request-journal).
 
 #### Demand accounting
 
-Within `demand_history.unsized`, `pending` counts bodies being read and `observations` counts retained offers that ended before sizing; the history retains authenticated offers that passed validation.
+Inside `demand_history.unsized`, `pending` counts request bodies still being read. `observations` counts retained offers that terminated before sizing. The history contains authenticated offers that passed validation.
 
-Parsed offers enter demand history with local input estimates. An admitted request's tokenizer result replaces its estimate at the original arrival time and preserves the single offer. Requests rejected before tokenization retain their local estimates. Repricing preserves bounded shape aggregation and invalidates boundary evidence when its last observation moves to another cohort.
+Parsed offers enter demand history with local input-size estimates. If the request reaches admission and tokenization completes, the tokenizer result replaces the estimate at the request's original arrival time without creating a second offer. Requests rejected before tokenization keep their local estimates.
 
-Demand history stores counts in time buckets with at most 128 exact shapes and one overflow cohort per bucket. The unsized-offer history needs only one shape. Bucket width is the smallest of one second, the control step and the minimum evidence span. Arrivals and residency retain one demand window; completed output observations retain four. Recording prunes expired buckets even if the control loop stops.
+Repricing preserves bounded shape aggregation. If the last observation for a boundary moves to another cohort, that boundary evidence becomes invalid.
 
-Excess shapes keep every count and use the largest input and requested output lengths to price work conservatively. Uncapped overflow remains incomplete demand. Output-history overflow disables learned discounts until it expires. A cohort crossing a window boundary contributes its whole count to demand, adding at most one bucket of history. Consolidation evidence counts only observations guaranteed to follow its cutoff. `demand_history` and `narwhal_demand_history_*` expose retained cells, the cell limit, counted observations and overflow observations.
+Demand history uses time buckets. Each bucket stores at most 128 exact request shapes plus one overflow cohort; unsized history requires only a single shape. Bucket width is the minimum of one second, the controller step and the minimum evidence span.
 
-Each reactive decision captures profile coefficients, offered-work demand, observed phase pressure, pending output estimates and old-role resident work before comparing splits. Frozen profiles and value-only split inputs prevent later live-state changes from altering those candidate scores. Output-length estimates and decode correction are built once and shared with both demand horizons.
+Arrival and residency data retain one demand window. Completed output observations retain four. Recording new evidence prunes expired buckets even when the control loop is stopped.
 
-Priced prefill waiters set `recovery_prefill_ratio` to the larger of observed prefill pressure and resident-plus-queued prefill seconds divided by the current prefill engine count and TTFT SLO. Observed pressure supplies the ratio at zero priced prefill waiters. Incomplete-demand decisions expose this ratio, `queued_prefill_s`, both observed phase ratios and a `decision_basis` of `prefill_pressure_recovery` or `decode_pressure_recovery`. [Role control](Configuration.md#role-control) defines the movement and confirmation gates.
+Overflow preserves every request count and uses the largest input and requested-output lengths in the cohort when pricing work. Uncapped overflow remains incomplete demand. Overflow in output history disables learned discounts until the affected data expires.
 
-Consolidation evidence keeps full-precision demand through the source-pressure and movement checks. Rounded state and journal fields are output only. Role floors, live availability, cooldown, dwell, profile coverage and physical KV limits constrain each move.
+A cohort crossing a window boundary contributes its full count, adding at most one bucket of history. Consolidation evidence includes only observations guaranteed to fall after its cutoff.
+
+`demand_history` and `narwhal_demand_history_*` expose retained cells, the cell limit, counted observations and overflow observations.
+
+Each reactive decision snapshots the inputs needed to score candidate splits: profile coefficients, offered-work demand, observed phase pressure, pending output estimates and resident work in the old role. Frozen profiles and value-only split inputs prevent later live-state changes from modifying an already computed score. Output-length estimates and decode correction are built once and reused across both demand horizons.
+
+When priced prefill waiters exist, `recovery_prefill_ratio` is the greater of:
+
+- observed prefill pressure
+- resident-plus-queued prefill seconds divided by current prefill engine count and the TTFT SLO
+
+With zero priced prefill waiters, observed pressure supplies the ratio.
+
+Incomplete-demand decisions expose `recovery_prefill_ratio`, `queued_prefill_s`, both observed phase ratios, and `decision_basis` set to `prefill_pressure_recovery` or `decode_pressure_recovery`. [Role control](Configuration.md#role-control) defines the movement and confirmation gates.
+
+Consolidation checks retain full-precision demand through source-pressure evaluation and movement gating. Rounded state and journal values are output representations only. Role floors, live availability, cooldown, dwell, profile coverage and physical KV limits constrain each move.
 
 ### `GET /narwhal/lifecycle`
 
-Returns the `narwhal.lifecycle` version 1 operator document. `router.controls_fleet` distinguishes the active lease holder from a standby or fenced process. Engine records expose `state`, `draining`, scheduler eligibility in `accepts_new`, `ready_to_stop`, resident prefill and decode counts, deadline, wave ID, old and new process starts, validation checks, and an error. The wave record reports whether router-wide readiness is withdrawn and whether every member is safe for the external supervisor to stop. Top-level `engine_restart_policy` names the configured policy. `process_starts` maps engine IDs to the last accepted process-start timestamps. The top-level `error` is empty on success and describes a rejected action on non-2xx responses.
+Returns the `narwhal.lifecycle` version 1 operator document.
+
+`router.controls_fleet` distinguishes the active lease holder from a standby or fenced router. Each engine record exposes:
+
+- `state`
+- `draining`
+- scheduler eligibility in `accepts_new`
+- `ready_to_stop`
+- resident prefill and decode counts
+- deadline
+- wave ID
+- old and new process-start timestamps
+- validation checks
+- error state
+
+The wave record reports whether router-wide readiness has been withdrawn and whether every member is safe for the external supervisor to stop.
+
+Top-level `engine_restart_policy` contains the configured restart policy. `process_starts` maps engine IDs to the last accepted process-start timestamps. The top-level `error` field is empty on success and contains the rejected action's error on non-2xx responses.
 
 ### `POST /narwhal/lifecycle/drain`
 
-Accepts one engine or the complete fleet as a wave. It excludes every target from placement before capturing process identities. A whole wave also withdraws router `/ready`. HTTP 409 rejects an unsafe shape; HTTP 503 reports identity capture failure while preserving the drain hold-out.
+Drains either one engine or the full fleet as a wave. Narwhal removes every target from placement before recording process identity. Draining the full wave also withdraws router `/ready`.
+
+HTTP `409` rejects an unsafe request shape. HTTP `503` reports failure to capture process identity while leaving the drain hold in place.
 
 ```json
 {"engines":["e0"],"deadline_s":300}
@@ -343,10 +399,18 @@ Accepts one engine or the complete fleet as a wave. It excludes every target fro
 
 ### `POST /narwhal/lifecycle/readmit`
 
-Validates health, process-bound attestation, configured model, direct generation, role-permitted KV transfer, and final health before removing the hold-out. A planned restart also requires a newer process start. Breaker recovery records accept the current process identity because an ejection can result from a transient fault. With `recovery.engine_restart_policy: whole_wave`, every action covers members with a recorded drain identity and newer process. An automatic hold requires an explicit wave drain to capture those identities before restarting. HTTP 409 leaves failed candidates blocked.
+Readmission verifies health, process-bound attestation, configured model, direct generation, role-compatible KV transfer and final health before releasing the hold.
+
+A planned restart requires a process start newer than the one captured during drain. Breaker recovery may reuse the current process identity because transient faults can eject an otherwise unchanged process.
+
+With `recovery.engine_restart_policy: whole_wave`, every lifecycle action covers members that have both a recorded drain identity and a newer process. An automatic hold does not supply those identities; operators must issue an explicit wave drain before restarting.
+
+HTTP `409` leaves candidates that fail validation blocked.
 
 ```json
 {"engines":["e0"]}
 ```
 
-[Operate Narwhal](Operate.md#restart-one-engine) defines the external-supervisor sequence and whole-wave rule.
+[Operate Narwhal](Operate.md#restart-one-engine) documents the external-supervisor sequence and whole-wave rule.
+
+:chatgpt-content-reference{index="0"}

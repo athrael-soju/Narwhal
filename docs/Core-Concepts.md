@@ -1,156 +1,175 @@
 # Core concepts
 
-Narwhal reallocates loaded, dual-capability engines between prefill and decode by changing their scheduler role labels.
+Narwhal changes the scheduler role assigned to loaded dual-capability engines, reallocating resident capacity between prefill and decode without reloading weights.
 
 ## The engine contract
 
-One Narwhal fleet serves one model. Every engine must:
+A Narwhal fleet serves a single model. Every engine must satisfy the same runtime contract:
 
-- expose the selected inference-engine dialect;
+- expose the configured inference-engine dialect;
 - produce and consume compatible KV cache;
 - transfer KV to every eligible peer;
-- provide a measured prefill and decode profile;
-- match the declared runtime contract during preflight and lifecycle readmission.
+- provide measured prefill and decode profiles;
+- pass preflight and lifecycle readmission checks against the declared runtime contract.
 
-For vLLM engines with effective `kv_both` behaviour, the attestation sidecar binds the image, NIXL connector, runtime features and process start to each engine so `narwhal-check` can verify the process before moving KV through the configured ring or mesh.
+For vLLM engines with effective `kv_both` behaviour, the attestation sidecar binds the image, NIXL connector, runtime features, and process start to the engine. `narwhal-check` verifies that process before Narwhal transfers KV through the configured ring or mesh.
 
-## The request path
+## Request path
 
-1. The router accepts an OpenAI-compatible completion request.
-2. Global admission assigns an open seat; when every seat is occupied, it queues the request in the bounded FIFO against the original deadline and returns a retryable refusal once the queue reaches its configured limit.
-3. Narwhal counts the prompt tokens and prices candidate prefill engines from their measured curves and current resident work.
-4. The selected prefill engine processes the prompt and returns a typed producer-owned KV handoff.
-5. Narwhal selects a decode engine, keeping the request local on the prefill engine or attaching its handoff to a peer.
+1. The router receives an OpenAI-compatible completion request.
+2. Global admission assigns an available seat. If all seats are occupied, the request enters the bounded FIFO with its original deadline. Once that queue reaches its configured limit, admission returns a retryable refusal.
+3. Narwhal counts prompt tokens and prices eligible prefill engines using their measured curves plus current resident work.
+4. The selected prefill engine processes the prompt and returns a typed, producer-owned KV handoff.
+5. Narwhal chooses a decode engine. Decode may remain local to the prefill engine or consume the handoff on a peer.
 6. Decode tokens stream to the client while Narwhal tracks resident work and token timing.
-7. The request journal records timing, placement, retries, transfer, admission, and outcome.
+7. The request journal records admission, placement, timing, transfer, retries, and outcome.
 
-Predictive admission returns a retryable response before dispatch when the cheapest available prefill path projects TTFT over the request budget.
+Predictive admission can reject before dispatch. If the cheapest available prefill path projects TTFT beyond the request budget, Narwhal returns a retryable response.
 
 ## Fleet layouts
 
-| Layout               | Engine roles                                             | Reallocation cost                                                  |
-| -------------------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
-| Aggregated           | Every engine serves both phases.                         | Roles stay fixed; prefill and decode contend inside each engine.   |
-| Static disaggregated | Prefill and decode use fixed pools.                      | Changing the split requires manual pool reconfiguration.           |
-| Adaptive cold-swap   | The pools move by draining and relaunching engines.      | Restart drains capacity through weight loading and checks.         |
-| Adaptive hot-swap    | Dual-role engines form logical prefill and decode pools. | The scheduler changes a label while weights remain resident.       |
+| Layout               | Engine roles                                                   | Reallocation cost                                                    |
+| -------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Aggregated           | Every engine handles prefill and decode.                       | Roles remain fixed; both phases contend inside each engine.          |
+| Static disaggregated | Separate fixed pools handle prefill and decode.                | Changing the split requires manual pool reconfiguration.             |
+| Adaptive cold-swap   | Engines move between pools by draining and relaunching.        | Capacity disappears during draining, weight loading, and validation. |
+| Adaptive hot-swap    | Dual-capability engines form logical prefill and decode pools. | The scheduler changes a role label while weights stay resident.      |
 
 ### Aggregated
 
 ![Four identical replicas, each serving prefill and decode.](assets/architectures/aggregated.svg)
 
-Aggregated placement keeps KV local by running both phases on each fixed-role engine, which makes long prefills and occupied decode batches compete for the same schedule.
+Each engine performs both phases, so KV stays local. Long prefills and occupied decode batches therefore compete for the same engine schedule.
 
 ### Static disaggregated
 
 ![Two fixed prefill engines and two fixed decode engines.](assets/architectures/static.svg)
 
-Static disaggregation sends each prompt through the fixed prefill pool and transfers its KV handoff to the fixed decode pool; the sizing workload fixes that phase ratio, so request-mix shifts require an operator to reallocate engines.
+Prompts run through the fixed prefill pool, then their KV handoffs move to the fixed decode pool. The workload used for sizing determines the phase ratio. A change in request mix requires an operator to reallocate engines.
 
 ### Adaptive cold-swap
 
 ![One engine draining and restarting in the decode pool.](assets/architectures/coldswap.svg)
 
-Cold-swap control drains one engine, relaunches it for the target role and restores its capacity after weight loading, peer registration and health checks; the traffic shift must outlast that restart interval for the new split to repay the move.
+A cold-swap drains an engine, relaunches it in the target role, reloads weights, registers peers, and completes health checks before restoring capacity. The new split only pays for itself if the traffic shift lasts longer than this restart interval.
 
 ### Adaptive hot-swap
 
 ![One engine changing role while its weights remain resident.](assets/architectures/hotswap.svg)
 
-Narwhal hot-swaps capacity by changing a dual-capability engine's scheduler role while its weights remain resident and KV paths connect every peer; cooldown, dwell, confirmations and role floors prevent brief pressure changes from moving the split.
+Hot-swap changes the scheduler role of a dual-capability engine while its weights remain resident. KV paths already connect eligible peers. Cooldown, dwell, confirmation rules, and role floors stop brief pressure changes from repeatedly moving the split.
 
 ## Reactive control
 
-At most once every `controller.reactive.step_s`, the reactive controller compares adjacent splits by their worst projected SLO ratio and can move several engines when a phase falls below its minimum pool size.
+The reactive controller evaluates at most once per `controller.reactive.step_s`. It compares adjacent fleet splits using the worst projected SLO ratio. A move can involve several engines when one phase has fallen below its configured minimum pool size.
 
-Each valid, locally sized prefill offer joins the bounded waiting set and receives a profile-backed FIFO completion projection across the live prefill pool. A projected TTFT above `slo.ttft_s` wakes one coalesced controller evaluation between scheduled passes. The controller revalidates the live queue, considers the adjacent D-to-P split, and requires a strict improvement in the triggering request's projected service. A queue that drains before evaluation clears the trigger. An isolated prompt whose own prefill time exceeds the SLO yields equal current and candidate projections, so the move is held.
+Every valid, locally sized prefill offer enters the bounded waiting set. Narwhal assigns it a FIFO completion projection derived from measured profiles and the live prefill pool.
 
-Urgent D-to-P evaluation keeps profile coverage, decode capacity, consolidation evidence and trend, role floors, health exclusions, pins, dwell, resident ownership and `flip_resident_guard`. Each wake can apply one adjacent move. Continued projected TTFT pressure can wake another guarded evaluation from the applied topology. Scheduled P-to-D control retains its cooldown and confirmation rules.
+If projected TTFT exceeds `slo.ttft_s`, Narwhal schedules one coalesced controller evaluation between regular passes. At evaluation time, the controller rechecks the live queue and prices the adjacent decode-to-prefill split. It moves capacity only when that split strictly improves projected service for the request that triggered the evaluation.
 
-The controller consolidates at source pressure up to `shrink`, or moves decode capacity to prefill under sustained prefill pressure at or above `expand`; both paths apply the profile, safety and confirmation gates before changing the split.
+A trigger disappears if the queue drains first. A single prompt whose own prefill duration already exceeds the SLO produces the same projection under the current and candidate split, so no move occurs.
 
-`/narwhal/state` exposes each decision's retained demand, overflow and priced inputs under the [demand accounting contract](HTTP-API.md#demand-accounting).
+Urgent decode-to-prefill evaluation still enforces profile coverage, decode capacity, consolidation evidence and trend, role floors, health exclusions, pins, dwell, resident ownership, and `flip_resident_guard`. One wake can apply one adjacent move. If projected TTFT remains high after the topology changes, the resulting state can trigger another guarded evaluation.
 
-Before moving a decode engine to prefill, the controller closes its arrival-evidence window and checks decode stability. The window closes after `controller.reactive.evidence_span_s` with `controller.reactive.evidence_min_arrivals` samples, or after `controller.reactive.evidence_max_span_s` under sparse traffic. Candidate pricing uses the larger short- or long-horizon demand estimate and includes resident requests plus output work still in prefill.
+Scheduled prefill-to-decode moves keep their existing cooldown and confirmation requirements.
 
-A first-token timeout or decode-recovery move restarts the consolidation evidence window, while decode expansion and emergency floor restoration can proceed under the open-window thresholds in the [role-control reference](Configuration.md#role-control).
+Source pressure up to `shrink` drives consolidation. Sustained prefill pressure at or above `expand` can move decode capacity into prefill. Both paths pass the same profile, safety, and confirmation gates before roles change.
 
-`controller.advisory: true` runs the decision path and records the proposed split, caller, reason and advisory result while preserving the current roles.
+`/narwhal/state` records the retained demand, overflow, and priced inputs used for each decision under the [demand accounting contract](HTTP-API.md#demand-accounting).
 
-Ordinary demand-driven role changes observe these guards:
+Before moving a decode engine into prefill, the controller closes its arrival-evidence window and checks decode stability. The window closes after `controller.reactive.evidence_span_s` once it has at least `controller.reactive.evidence_min_arrivals` samples. Under sparse traffic, it closes at `controller.reactive.evidence_max_span_s`.
 
-- A pinned engine keeps its configured role.
-- Moves preserve `controller.min_prefill` and `controller.min_decode` while enough healthy capacity exists.
-- `controller.thresholds.cooldown_s` limits moves toward decode.
-- `controller.thresholds.dwell_s` keeps a recently moved engine in its new role.
-- `controller.thresholds.flip_resident_guard` holds a move toward prefill until the lightest decode donor drains to at most this many resident streams.
-- Role changes update labels for new placements while resident requests retain their assignments. Lifecycle holds remove drained or recovering engines from placement.
+Candidate pricing uses the larger of the short- and long-horizon demand estimates. That demand includes resident requests and output work whose prefill has not yet completed.
+
+A first-token timeout or decode-recovery move restarts the consolidation evidence window. Decode expansion and emergency floor restoration may proceed under the open-window thresholds defined in the [role-control reference](Configuration.md#role-control).
+
+With `controller.advisory: true`, Narwhal executes the full decision path but leaves roles unchanged. It records the proposed split, caller, reason, and advisory result.
+
+Ordinary demand-driven role changes obey these guards:
+
+- pinned engines retain their configured roles;
+- moves preserve `controller.min_prefill` and `controller.min_decode` whenever enough healthy capacity remains;
+- `controller.thresholds.cooldown_s` limits moves toward decode;
+- `controller.thresholds.dwell_s` prevents a recently moved engine from immediately changing back;
+- `controller.thresholds.flip_resident_guard` blocks a move toward prefill until the lightest decode donor has at most that many resident streams;
+- role labels affect new placements only; resident requests keep their assignments;
+- lifecycle holds remove draining or recovering engines from placement.
 
 ## Decode floors and degraded fleets
 
-When live decode capacity falls below the configured floor, each monitor pass restores one eligible engine.
+If live decode capacity drops below its configured floor, each monitor pass restores one eligible engine.
 
-When a health failure removes an engine from placement, the controller can move another eligible engine to restore the breached floor while preserving the other floor. After readmission, current demand determines the recovered engine's role.
+A health failure may remove an engine from placement. The controller can then reassign another eligible engine to repair the breached floor, provided the other role floor remains intact. After the failed engine passes readmission, current demand determines which role it receives.
 
-When failures or drains empty the prefill pool, the scheduler selects an idle decode-labelled engine as the aggregate fallback. While that engine carries decode work, predictive admission returns a retryable response because the measured curves price one phase at a time. After the resident work drains, Narwhal prices the aggregate prefill placement.
+If failures or drains leave no prefill-labelled engine, the scheduler can use an idle decode-labelled engine as the aggregate fallback. Predictive admission rejects new work while that engine still owns decode requests because the measured curves price one phase at a time. Once its resident decode work drains, Narwhal can price it for aggregate prefill placement.
 
 ## Monitoring failures
 
-Each monitor pass runs controller, health, drain settlement, interval rollover, readmission, liveness, telemetry and handoff independently, recording a stage exception and incrementing its counters before continuing with the remaining stages.
+A monitor pass runs controller logic, health checks, drain settlement, interval rollover, readmission, liveness, telemetry, and handoff as independent stages. If one stage raises an exception, Narwhal records the stage error, increments its counters, and continues with the remaining stages.
 
-A pass containing any stage exception increments the consecutive failure streak. At `controller.monitor_failure_limit`, the router rejects new admissions and `/ready` returns 503 with `monitoring degraded: <stage> <class>`. Resident requests continue to completion, and a standby counts the response toward its takeover threshold.
+Any pass containing a stage exception increments the consecutive monitor-failure streak. When the streak reaches `controller.monitor_failure_limit`, the router stops accepting new admissions. `/ready` returns HTTP 503 with:
 
-During degradation, the monitor keeps running until a fully successful pass clears the streak and reopens admission; a router restart initializes fresh counters.
+`monitoring degraded: <stage> <class>`
+
+Existing requests continue to completion. A standby counts the readiness failure toward its takeover threshold.
+
+Monitoring continues during degradation. One fully successful pass clears the streak and reopens admission. Restarting the router starts with fresh counters.
 
 ## Failure and recovery
 
-Narwhal sends prefill, decode and token counting through the data pool bounded by `serving.max_connections`, while health, suspect verification and readmission use the reserved `engine.control_connections` pool; a local pool timeout preserves the engine's breaker state.
+Prefill, decode, and token counting use the data connection pool bounded by `serving.max_connections`. Health checks, suspect verification, and readmission use the reserved `engine.control_connections` pool. A timeout while acquiring a local pool connection does not change the engine's breaker state.
 
-Narwhal counts consecutive failures separately for each engine and failure class, then takes the following action when a streak reaches `recovery.eject_after`.
+Narwhal tracks consecutive failures per engine and per failure class. When a streak reaches `recovery.eject_after`, handling depends on the class:
 
-| Failure                                                                | Class              | Action                                      |
-| ---------------------------------------------------------------------- | ------------------ | ------------------------------------------- |
-| Connection error                                                       | `connection`       | Eject the engine                            |
-| Transport timeout                                                      | `timeout`          | Run a health probe                          |
-| First-token deadline, mid-stream silence or invalid stream termination | `stream`           | Pause new requests and probe prefill/decode |
-| HTTP 408 or 429                                                        | `overload`         | Run a health probe                          |
-| Other HTTP 5xx responses                                               | `inference_status` | Pause new requests and probe prefill/decode |
-| Prefill response missing a readable KV handoff                         | `kv_handoff`       | Pause new requests and probe prefill/decode |
+| Failure                                                                 | Class              | Action                                      |
+| ----------------------------------------------------------------------- | ------------------ | ------------------------------------------- |
+| Connection error                                                        | `connection`       | Eject the engine                            |
+| Transport timeout                                                       | `timeout`          | Run a health probe                          |
+| First-token deadline, mid-stream silence, or invalid stream termination | `stream`           | Pause new requests and probe prefill/decode |
+| HTTP 408 or 429                                                         | `overload`         | Run a health probe                          |
+| Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and probe prefill/decode |
+| Prefill response without a readable KV handoff                          | `kv_handoff`       | Pause new requests and probe prefill/decode |
 
-When an inference probe yields an inconclusive leg, the scheduler retains the verification hold and the monitor schedules another probe; admission sends new work to eligible peers. A successful probe clears the recorded inference failures, while a failed prefill or decode leg ejects the engine.
+An inconclusive inference-probe leg leaves the verification hold in place. The monitor schedules another probe, while admission routes new work to eligible peers.
 
-The liveness sweep increments a separate per-engine miss counter, clearing it on a health answer and ejecting the engine at `recovery.liveness_misses` consecutive silent sweeps.
+A successful inference probe clears recorded inference failures. A failed prefill or decode leg ejects the engine.
 
-Performance-drift and temporary-quarantine holds preserve the last eligible engine, while a confirmed failure can eject it and make readiness plus new completion requests return HTTP 503 as recovery probes continue.
+Liveness uses a separate per-engine miss counter. Any successful health response resets it. The engine is ejected after `recovery.liveness_misses` consecutive silent sweeps.
 
-The successful response path determines which failure classes clear:
+Performance-drift and temporary-quarantine holds will not remove the last eligible engine from service. A confirmed failure can. If that leaves the fleet unable to serve, `/ready` and new completion requests return HTTP 503 while recovery probes continue.
 
-| Successful response                        | Clears                                      |
-| ------------------------------------------ | ------------------------------------------- |
-| 4xx response other than 408 or 429         | Connection and inference-status evidence    |
-| Health 200                                 | Connection, timeout, overload and liveness  |
-| Prefill with an extracted handoff          | Connection, inference-status and KV-handoff |
-| Decode stream reaching its terminal marker | Connection, inference-status and stream     |
+Successful responses clear failure evidence according to the response type:
 
-When configured, the scheduler quarantines a failed engine for `recovery.failure_quarantine_s`. Candidate selection expires the hold at its deadline, while a successful health or inference check clears it earlier. A successful inference probe clears the separate inference hold.
+| Successful response                        | Clears                                       |
+| ------------------------------------------ | -------------------------------------------- |
+| 4xx response other than 408 or 429         | Connection and inference-status evidence     |
+| Health 200                                 | Connection, timeout, overload, and liveness  |
+| Prefill with an extracted handoff          | Connection, inference-status, and KV-handoff |
+| Decode stream reaching its terminal marker | Connection, inference-status, and stream     |
 
-A contracted engine must pass health, attestation, model, generation, role-permitted KV transfer, and final health before it returns to placement. Planned maintenance adds a newer-process requirement. An operator drain survives health answers, router resume, and standby takeover until readmission succeeds.
+When `recovery.failure_quarantine_s` is configured, a failed engine remains quarantined until that deadline unless a successful health or inference check clears the hold first. Candidate selection expires the quarantine automatically at the deadline. A successful inference probe also clears the separate inference hold.
 
-The default policy returns saturation after one prefill/decode attempt, while [bounded serving](Configuration.md#bounded-serving) can queue or retry within the original deadline and acquires fresh KV ownership for every retry.
+Before a contracted engine returns to placement, it must pass health, attestation, model, generation, role-permitted KV transfer, and final-health checks. Planned maintenance adds a newer-process requirement.
+
+Operator drains persist across health responses, router resume, and standby takeover. Only successful readmission clears them.
+
+The default serving policy reports saturation after one prefill/decode attempt. [Bounded serving](Configuration.md#bounded-serving) can queue or retry within the request's original deadline. Every retry acquires fresh KV ownership.
 
 ## Durable state
 
-During each monitor pass, the active router writes roles, ejections, lifecycle holds, inference-verification holds, consolidation risk, counters and lease ownership into a versioned handoff that `narwhal-serve --resume` applies after matching its schema and engine set to the configured fleet.
+On every monitor pass, the active router writes a versioned handoff containing roles, ejections, lifecycle holds, inference-verification holds, consolidation risk, counters, and lease ownership.
 
-Each handoff writer atomically renames a process-unique temporary file over the destination, so concurrent writes retain the final complete rename and a failed write removes its temporary file while preserving the preceding document.
+`narwhal-serve --resume` applies that handoff only after the saved schema and engine set match the configured fleet.
 
-A warm standby follows the active router's handoff and accepts traffic after acquiring the shared lease; the previous holder fences itself before local lease expiry, and load balancers select the current owner through `/ready`.
+Handoff writes use an atomic rename. Each writer creates a process-unique temporary file and renames it over the destination. Concurrent writers therefore leave one complete final document. If a write fails, Narwhal removes its temporary file and keeps the previous destination intact.
 
-The [HTTP API reference](HTTP-API.md) defines the state documents. [Operate Narwhal](Operate.md) covers lifecycle and failover procedures.
+A warm standby follows the active router's handoff. It begins serving only after acquiring the shared lease. The previous lease holder fences itself before its local lease expires. Load balancers identify the current owner through `/ready`.
+
+The [HTTP API reference](HTTP-API.md) defines the state documents. [Operate Narwhal](Operate.md) documents lifecycle and failover procedures.
 
 ## References
 
-- [Backend continuation contract](HTTP-API.md#backend-continuation-contract): producer ownership, local decode, descriptor validation and timing boundaries.
-- [Configuration](Configuration.md): placement, role guards, serving limits and engine health.
-- [Measure a fleet](Measure.md): profiles, transfer checks, deployment load and occupied-role canaries for the pinned backend.
+- [Backend continuation contract](HTTP-API.md#backend-continuation-contract): producer ownership, local decode, descriptor validation, and timing boundaries.
+- [Configuration](Configuration.md): placement, role guards, serving limits, and engine health.
+- [Measure a fleet](Measure.md): profiles, transfer checks, deployment load, and occupied-role canaries for the pinned backend.
 - [Source responsibilities](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#source-responsibilities): package ownership and import constraints.

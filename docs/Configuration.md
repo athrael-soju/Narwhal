@@ -1,118 +1,348 @@
 # Configuration
 
-Narwhal loads one JSON document for one model and one engine fleet before it opens the router. Serve another model through a separate router and fleet, then route between them at ingress. Print the annotated example with this command.
+Narwhal loads one JSON fleet document for one model and one engine fleet before starting the router. Serving another model requires a separate router and fleet, with model routing handled at ingress.
+
+Print the annotated example configuration with:
 
 ```bash
 .venv/bin/narwhal-check --print-example-config
 ```
 
-`narwhal-serve`, `narwhal-profile` and `narwhal-check` load the native fleet document passed to `--fleet`. Code that calls `create_app()` directly can set `NARWHAL_FLEET`.
+`narwhal-serve`, `narwhal-profile`, and `narwhal-check` read the native fleet document supplied through `--fleet`. Python code calling `create_app()` directly can use `NARWHAL_FLEET`.
 
-The loader accepts `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery`, and `profiles` at the top level. Every object rejects unknown keys while accepting underscore-prefixed annotations. Validation reports every cross-field error found in one pass.
+Valid top-level keys are `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery`, and `profiles`. Objects reject unknown keys except underscore-prefixed annotations. Validation collects cross-field errors and reports them in one pass.
 
-Booleans use JSON `true` or `false`, counts use JSON integers, and durations and ratios use finite JSON numbers. The parser reports each mistyped field by its public path, for example `engine.tokenize must be a boolean; serving.max_connections must be an integer; controller.monitor_interval_s must be a number`.
+Use JSON `true` and `false` for booleans, JSON integers for counts, and finite JSON numbers for durations and ratios. Type errors use public field paths, for example:
 
-Fleet configs declare `"schema": "narwhal.fleet"` and `"schema_version": 1`. Version 1 assigns client identity and content capture to ingress while Narwhal retains one global admission budget and request timings over token counts and durations. The loader checks the schema before reading fleet fields, and the [contract-version reference](Telemetry-and-Artifacts.md#contract-versions) lists the complete interface set.
+`engine.tokenize must be a boolean; serving.max_connections must be an integer; controller.monitor_interval_s must be a number`
+
+Fleet documents declare:
+
+```json
+"schema": "narwhal.fleet",
+"schema_version": 1
+```
+
+Version 1 leaves client identity and content capture at ingress. Narwhal owns one global admission budget and request timing over token counts and durations. Schema validation runs before fleet fields are read. The [contract-version reference](Telemetry-and-Artifacts.md#contract-versions) defines the full interface set.
 
 ## Environment variables
 
-Narwhal reads the process environment and does not load `.env` automatically. [Deploy a fleet](Deploy.md#load-the-supplied-environment) defines the private workstation input and export sequence; discovery writes role-specific environments for remote commands. Relative fleet and profile paths resolve from the checkout root.
+Narwhal reads the process environment directly. It does not load `.env`. [Deploy a fleet](Deploy.md#load-the-private-environment) defines the workstation input and export procedure; deployment discovery creates role-specific environments for remote commands. Relative fleet and profile paths resolve from the checkout root.
 
-- `NARWHAL_FLEET` selects the JSON file for `make observe` and Python callers of `create_app()`. The CLI commands still require `--fleet "$NARWHAL_FLEET"`.
-- `NARWHAL_ENGINE_KEY` is the example name for the shared engine Bearer token. To enable it, set `engine.engine_api_key_env` to `"NARWHAL_ENGINE_KEY"` in the fleet JSON and fill the corresponding value in `.env`. [Engine authentication](#engine-authentication) describes which requests carry it.
-- `NARWHAL_ROUTER_URL` selects the router scrape target for `make observe`. Set the router's listening address and port separately through `narwhal-serve --host` and `--port`.
-- `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` select the observability listeners. The example uses `127.0.0.1` for Grafana (port 3000) and `127.0.0.1:9090` for Prometheus.
+- `NARWHAL_FLEET` selects the fleet JSON used by `make observe` and Python callers of `create_app()`. CLI commands still require `--fleet "$NARWHAL_FLEET"`.
+- `NARWHAL_ENGINE_KEY` is the example shared Bearer token name for engine authentication. Set `engine.engine_api_key_env` to `"NARWHAL_ENGINE_KEY"` in the fleet JSON, then define the variable in `.env`. [Engine authentication](#engine-authentication) lists the requests that carry it.
+- `NARWHAL_ROUTER_URL` selects the router target scraped by `make observe`. Configure the router listener separately with `narwhal-serve --host` and `--port`.
+- `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` configure observability listeners. The example binds Grafana to `127.0.0.1` on port 3000 and Prometheus to `127.0.0.1:9090`.
 
-Model names, hardware, profiles and SLOs belong in the fleet JSON. Engine launch credentials belong to the engine launcher, and public client authentication belongs to ingress. The loader resolves engine `url` and `attestation_url` when their complete values reference environment variables.
+Fleet JSON owns model names, hardware, profiles, and SLOs. Engine launch credentials belong to the engine launcher. Public client authentication belongs to ingress. Engine `url` and `attestation_url` values are resolved when the entire value is an environment-variable reference.
 
 ### Generate deployment configuration
 
-[Deployment discovery](Deploy.md#derive-configuration-from-the-hosts) creates the host inventory, SSH trust store, fleet, launch records and source index from the supplied `.env` and remote observations. [Launch policy](Deploy.md#launch-policy-and-environment-overrides) defines defaults and environment overrides. Store the generated files with their discovery record; each deployment run produces its own copies.
+[Deployment discovery](Deploy.md#discover-the-deployed-hosts) derives the host inventory, SSH trust store, fleet, launch records, and source index from the supplied `.env` plus remote inspection. [Launch policy](Deploy.md#launch-policy) defines defaults and environment overrides.
+
+Keep every generated file with the discovery record that produced it. Each deployment run gets its own set.
 
 ### Host environment files
 
-`NARWHAL_DEPLOYMENT_REVISION` selects the full commit SHA in the management checkout. `tools/deploy_hosts.py prepare` packages that commit into `source.bundle` and verifies it with a fresh local clone; `install` transfers it to each selected host. Remote checkouts clone that bundle and compare their revision with the role file before installation. Store the bundle with the generated environment files under ignored `runs/deployment-env/`.
+`NARWHAL_DEPLOYMENT_REVISION` specifies the full commit SHA from the management checkout.
 
-From the management checkout, `python3 tools/deploy_hosts.py prepare --out <directory>` exports each role from the loaded workstation environment and generated fleet JSON. It uses `tools/prepare_host_env.py` to select fields, preserve shell literals and create mode-0600 role files. [Host installation](Deploy.md#2-install-narwhal-on-the-remote-hosts) gives the preparation, installation and role-shell commands.
+`tools/deploy_hosts.py prepare` packages that revision as `source.bundle` and verifies the bundle by cloning it locally into a fresh checkout. `install` copies the bundle to each selected host. Each remote checkout clones from the bundle and verifies its revision against the role file before installation.
 
-| Remote file | Exported values | Workstation source |
-| --- | --- | --- |
-| `.env.router` | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
-| `.env.engine-<n>` | Revision, launch and artifact fields, selected node URLs, fabric peer addresses and configured engine API credential. | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values and the configured engine API credential. |
-| `config/engine-launch.engine-<n>.json` | Selected GPU allocation, TP size, device mappings, resolved UCX selection and generated launch arguments. | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`. |
-| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, path and SHA-256 in the engine role environment. | `tools/launch_engine.py` in the management checkout at preparation time. |
-| `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with its path and SHA-256 exported in `.env.engine-<n>`. | `tools/fabric_budget.py` in the management checkout at preparation time. |
-| `config/fleet.local.json` on the router | Generated fleet document, copied before deployment edits. | The file selected by workstation `NARWHAL_FLEET`. |
+Store `source.bundle` beside the generated environment files under ignored `runs/deployment-env/`.
 
-The engine exporter requires `NARWHAL_ENGINE_IMAGE`, `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_DIR`, `NARWHAL_RUN_DIR`, `NARWHAL_MODEL_CONFIG_SHA256`, `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT`, `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_UCX_TCP_PORT_RANGE`. It sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json` and also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths identify artifacts on the engine host; artifact provisioning belongs to the engine preparation and launch steps.
+From the management checkout:
 
-For a per-node override, insert `NODE_<n>_` after `NARWHAL_`: `NARWHAL_NODE_2_ENGINE_PORT` becomes `NARWHAL_ENGINE_PORT` in `.env.engine-2`. An empty override for a required field reports that field for correction. Fleet endpoint and API-key references select their named environment variables; names containing `SSH` and access variables referenced by the host inventory are rejected. The exporter selects other values through the listed role fields. Store management login destinations, passwords, identity configuration and host keys in the workstation's private access files.
+```bash
+python3 tools/deploy_hosts.py prepare --out <directory>
+```
 
-Generated files live under ignored `runs/deployment-env/` on the workstation. Git ignores `.env.router`, `.env.engine-<n>` and `config/fleet.local.json` on remote hosts. `deploy_hosts.py shell --run <directory> --role <role>` loads the appropriate role file with shell tracing disabled. A host serving both roles keeps both files in one checkout; each shell loads its own role file.
+`prepare` exports each role from the loaded workstation environment and generated fleet JSON. `tools/prepare_host_env.py` selects the exported fields, preserves shell literals, and writes mode-0600 role files. [Host installation](Deploy.md#2-install-narwhal) contains the preparation, installation, and role-shell sequence.
+
+| Remote file                                              | Exported values                                                                                                                                                          | Workstation source                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.env.router`                                            | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                    |
+| `.env.engine-<n>`                                        | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values, and the configured engine API credential. |
+| `config/engine-launch.engine-<n>.json`                   | Selected GPU allocation, TP size, device mappings, resolved UCX selection, generated launch arguments.                                                                   | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                     |
+| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
+| `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
+| `config/fleet.local.json` on the router                  | Generated fleet document copied before deployment edits.                                                                                                                 | File selected by workstation `NARWHAL_FLEET`.                                                                                                                                                                               |
+
+Engine export requires:
+
+- `NARWHAL_ENGINE_IMAGE`
+- `NARWHAL_ENGINE_MODEL_NAME`
+- `NARWHAL_MODEL_DIR`
+- `NARWHAL_RUN_DIR`
+- `NARWHAL_MODEL_CONFIG_SHA256`
+- `NARWHAL_FABRIC_INTERFACE`
+- `NARWHAL_ENGINE_PORT`
+- `NARWHAL_ATTEST_PORT`
+- `NARWHAL_NIXL_SIDE_CHANNEL_PORT`
+- `NARWHAL_UCX_TCP_PORT_RANGE`
+
+The exporter sets:
+
+```text
+NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json
+```
+
+It also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths refer to artifacts on the engine host. Provision those artifacts during engine preparation and launch.
+
+Per-node overrides insert `NODE_<n>_` after `NARWHAL_`. For example:
+
+```text
+NARWHAL_NODE_2_ENGINE_PORT
+```
+
+becomes:
+
+```text
+NARWHAL_ENGINE_PORT
+```
+
+inside `.env.engine-2`.
+
+An empty override for a required field is reported as an error against that field. Fleet endpoint references and API-key references select variables by name. Variable names containing `SSH`, and access variables referenced by the host inventory, are rejected. Other values are selected from the explicit role fields.
+
+Keep management destinations, passwords, SSH identities, and host keys in the workstation's private access files.
+
+Generated workstation files live under ignored `runs/deployment-env/`. Remote Git ignores `.env.router`, `.env.engine-<n>`, and `config/fleet.local.json`.
+
+Load a role environment with:
+
+```bash
+deploy_hosts.py shell --run <directory> --role <role>
+```
+
+Shell tracing is disabled while the role file is loaded. A machine serving both router and engine roles keeps both files in one checkout; each role shell loads only its own file.
 
 ### Engine launch records
 
-`NARWHAL_LAUNCH_CONFIG` selects the generated private `config/engine-launch.local.json` on the management workstation. Discovery creates one entry per assigned `engine-<n>` role from detected GPUs, device paths, image package versions and environment-selected policy. Each entry's `sources` identifies its retained inspection and policy; `config/engine-launch.sources.json` indexes those references. [The example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents the schema. Change the corresponding `.env` policy and rerun discovery into fresh artifacts when changing an allocation or runtime setting.
+`NARWHAL_LAUNCH_CONFIG` selects the private generated `config/engine-launch.local.json` on the management workstation.
 
-| Field | Deployment use |
-| --- | --- |
-| `accelerator`, `gpu_ids`, `tensor_parallel_size` | Declare the product, selected GPU indices or UUIDs and TP size for one replica; compare with host inspection and fleet hardware fields. |
-| `gpu_visibility_env` | Select `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`; preparation joins `gpu_ids` into its value. |
-| `accelerator_devices` | List host device paths mapped into the container. ROCm requires `/dev/kfd` and the DRI mappings for the allocated GPUs. |
-| `network_mode` | Set `host` for the recorded network and port allocation. |
-| `transfer.transport` | Declare `ucx_tcp` or `ucx_rdma` for inspection and transport verification. |
-| `transfer.net_devices` | Select Ethernet interface names for TCP or HCA:port names for RDMA; `${NARWHAL_FABRIC_INTERFACE}` resolves from the selected engine's environment. |
-| `transfer.devices` | List transport device paths mapped into the container; RDMA requires its character devices. A TCP record uses an empty list. |
-| `sources` | Name the allocation, device and transfer definitions that supply the record. |
+Discovery creates one record for every assigned `engine-<n>` role using:
 
-`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. The delivered engine launcher combines those arguments and mappings with the runtime fields below, then records the complete container command for inspection.
+- detected GPUs,
+- device paths,
+- image package versions,
+- environment-selected launch policy.
 
-Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct the named `.env` field or remote prerequisite, regenerate the affected configuration, and prepare a fresh run so its manifest captures the corrected inputs.
+Each record contains `sources` identifying the inspection and policy inputs retained for that record. `config/engine-launch.sources.json` indexes those references.
+
+The [example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) defines the schema.
+
+To change a GPU allocation or runtime setting, change its `.env` policy input and rerun discovery into a fresh output set.
+
+| Field                                            | Deployment use                                                                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accelerator`, `gpu_ids`, `tensor_parallel_size` | Product identity, selected GPU indices or UUIDs, and TP size for one replica. Compare them with host inspection and fleet hardware fields. |
+| `gpu_visibility_env`                             | Chooses `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. Preparation joins `gpu_ids` into the exported value.                             |
+| `accelerator_devices`                            | Host device paths mapped into the container. ROCm deployments require `/dev/kfd` and DRI mappings for the allocated GPUs.                  |
+| `network_mode`                                   | Uses `host` for the recorded network and port allocation.                                                                                  |
+| `transfer.transport`                             | Declares `ucx_tcp` or `ucx_rdma` for inspection and transport checks.                                                                      |
+| `transfer.net_devices`                           | Ethernet interface names for TCP or HCA:port names for RDMA. `${NARWHAL_FABRIC_INTERFACE}` resolves from the selected engine environment.  |
+| `transfer.devices`                               | Transport device paths mapped into the container. RDMA requires its character devices. TCP uses an empty list.                             |
+| `sources`                                        | Names the allocation, device, and transfer definitions behind the record.                                                                  |
+
+`prepare` validates every assigned engine record before creating the output directory. It derives GPU visibility and `UCX_NET_DEVICES` values under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
+
+`install` copies the selected record into the engine checkout's `config/` directory. The role environment points to that file.
+
+The delivered launcher combines these recorded arguments and device mappings with the runtime fields described below, then records the complete container command.
+
+Launch records and supporting extracts remain in ignored mode-0600 `config/engine-launch.*.json` files. The public example describes the schema; real allocations and runtime evidence stay private.
+
+When preparation finds a bad `.env` input or missing remote prerequisite, correct the named input, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
 
 ### Runtime launch records
 
-Each generated engine record's `runtime` object completes the serving configuration for `launch_engine.py`. Discovery reads package pins and supported runtime environment fields from the selected image, reads dtype from the model config, and applies the [environment launch policy](Deploy.md#launch-policy-and-environment-overrides). Preparation carries that record and the launcher snapshot to the engine host. The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the structure.
+Every generated engine record contains a `runtime` object consumed by `launch_engine.py`.
 
-| Runtime field | Operator input |
-| --- | --- |
-| `expected_packages` | Exact installed distribution versions for `vllm` and `nixl` or `nixl-rocm`; include other image packages whose identity the check should verify. |
-| `model_dtype`, `kv_cache_dtype`, `block_size` | `bfloat16` or `float16`, `auto`, and the requested runtime block size; cache planning records the adjusted token block size and padded page bytes for the fabric budget. |
-| `environment` | Image-local ROCm/CUDA, UCX, NIXL and library-path settings. The launcher supplies GPU visibility, advertised addresses/ports, transport selection and engine authentication from the selected role. |
-| `extra_args` | Model-specific vLLM arguments: context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling or hybrid-cache policy. |
+Discovery reads:
 
-The launcher fixes the model mount, served name, bind family and HTTP port from the role environment; it applies the declared TP size and uses `NixlConnector` with `kv_both`, UCX and failure propagation. Discovery appends `--trust-remote-code` when the checkpoint's model or tokenizer metadata contains an `auto_map`, including when `NARWHAL_ENGINE_ARGS` supplies other options. Extra arguments are checked against the supported model options so they preserve those managed settings. The image check verifies that flag against the mounted checkpoint, then validates image identity, exact distribution package pins and connector configuration/import before model startup. It records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, bound to the launch-plan hash and image ID; the HTTP probe compares `/version` with that captured string. Pin an image whose NIXL connector supports the fleet's `kv_both` behaviour; the running transfer probes verify producer and consumer operations.
+- package pins from the selected image,
+- supported runtime environment fields from that image,
+- model dtype from the model config,
+- policy from [environment launch policy](Deploy.md#launch-policy).
 
-When `engine.engine_api_key_env` selects an engine credential, the engine exporter also supplies it as `NARWHAL_ENGINE_API_KEY`. The launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and passes its filename to Docker. Keep the launch directory, environment file and runtime captures under ignored `runs/`; record the application revision, launcher digest and container ID with the deployment.
+Preparation transfers the record and a launcher snapshot to the engine host.
+
+The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the schema.
+
+| Runtime field                                 | Operator input                                                                                                                                                                                                                    |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expected_packages`                           | Exact installed distribution versions for `vllm` and `nixl` or `nixl-rocm`; add any other image packages whose identity should be checked.                                                                                        |
+| `model_dtype`, `kv_cache_dtype`, `block_size` | `bfloat16` or `float16`, `auto`, and the requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                  |
+| `environment`                                 | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings. The launcher supplies GPU visibility, advertised addresses and ports, transport selection, and engine authentication from the role environment.                      |
+| `extra_args`                                  | Model-specific vLLM arguments covering context and batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. |
+
+The launcher takes the model mount, served name, bind family, and HTTP port from the role environment. It applies the recorded TP size and configures `NixlConnector` with `kv_both`, UCX, and failure propagation.
+
+Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`. This still happens when `NARWHAL_ENGINE_ARGS` supplies other arguments.
+
+Extra arguments are validated against supported model options so they cannot override launcher-managed settings.
+
+Before model startup, the image check:
+
+1. verifies `--trust-remote-code` against the mounted checkpoint,
+2. validates image identity,
+3. checks exact distribution package versions,
+4. validates connector configuration and import.
+
+It records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID. The HTTP probe then compares `/version` with that captured value.
+
+Use an image whose NIXL connector implements the fleet's required `kv_both` behaviour. Runtime transfer probes exercise both producer and consumer operations.
+
+When `engine.engine_api_key_env` names a credential, the engine exporter also exposes it as `NARWHAL_ENGINE_API_KEY`. The launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and gives that file to Docker.
+
+Keep launch directories, environment files, and runtime captures under ignored `runs/`. Record the application revision, launcher digest, and container ID with the deployment.
 
 ### Fabric workload budget
 
-`prepare` snapshots the management checkout's `tools/fabric_budget.py` into each engine host's prepared files and records its SHA-256 in the manifest and role environment. `install` verifies the transfer and places the snapshot under ignored `runs/deployment-tools/`; the approved application bundle retains its selected revision. Record that revision and `NARWHAL_FABRIC_BUDGET_SHA256` together with the budget. A fresh preparation directory captures a changed helper while earlier prepared runs retain their recorded content.
+During `prepare`, Narwhal snapshots `tools/fabric_budget.py` from the management checkout into the files prepared for each engine host. Its SHA-256 is recorded in both the manifest and role environment.
 
-In the representative engine-role shell for each matching cache configuration, `python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate` uses `--runtime-layout` with the `cache-layout.json` captured by `launch_engine.py measure-cache`, verifies its model and launch-record hashes, sums padded cache page bounds across TP ranks and calculates the link rate needed for the declared prompt length, peak remote-handoff rate, burst and transfer-time budget. [Transfer fabric preparation](Deploy.md#4-prepare-the-transfer-fabric) groups roles by their discovered image, model, accelerator, TP and runtime inputs, supplies an initial trial workload, and compares each directed edge with its source group's budget. Each running engine later confirms its resolved cache layout against its representative.
+`install` verifies the transferred helper before placing it under ignored `runs/deployment-tools/`. The approved application bundle retains the selected application revision.
 
-The representative's mode-0600 `runs/fabric-*/budget.json` records input and runtime-layout hashes, prompt length, the padded-page payload bound, sizing assumptions and required decimal Gbit/s. Matching source roles retain that budget's rate and hash in their own private comparison files. The layout retains each rank's per-layer page bytes, token block size and state/boundary allowances, together with the image, packages, application revision and launch-plan hash. The probe reaches cache planning after model loading and memory profiling, then shuts down its workers before serving. Explicit `--uniform-cache` selects an analytical attention/MLA estimate; `--bytes-per-token` supplies a measured uniform-cache override. Those uniform modes require `--element-bytes` and `--block-tokens`; the deployment procedure uses the runtime page record for hybrid and uniform models. TCP comparisons use the iperf3 receiver's aggregate bitrate; RDMA comparisons use the retained perftest report's average Gbit/s. The budget covers one directed host edge under the recorded workload. Running-engine KV probes and concurrent capacity tests supply the later deployment acceptance.
+Record that revision together with `NARWHAL_FABRIC_BUDGET_SHA256`. Creating a new preparation directory captures a changed helper without modifying older prepared runs.
+
+For each representative engine role and matching cache configuration:
+
+```bash
+python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
+```
+
+Use `--runtime-layout` with the `cache-layout.json` produced by `launch_engine.py measure-cache`.
+
+The calculator verifies model and launch-record hashes, sums padded cache-page bounds across TP ranks, then derives the link rate required for the configured:
+
+- prompt length,
+- peak remote-handoff rate,
+- burst,
+- transfer-time budget.
+
+[Transfer fabric preparation](Deploy.md#4-qualify-the-transfer-fabric) groups roles by discovered image, model, accelerator, TP, and runtime inputs. It runs an initial trial workload and compares each directed edge with the budget for its source group. Each running engine later verifies its resolved cache layout against its representative.
+
+The representative stores a mode-0600 `runs/fabric-*/budget.json` containing:
+
+- input and runtime-layout hashes,
+- prompt length,
+- padded-page payload bound,
+- sizing assumptions,
+- required decimal Gbit/s.
+
+Each matching source role records the budget rate and hash in its private comparison file.
+
+The layout retains per-rank, per-layer page bytes, token block size, state and boundary allowances, image identity, package versions, application revision, and launch-plan hash.
+
+The cache probe reaches cache planning after model loading and memory profiling, then terminates its workers before serving.
+
+`--uniform-cache` selects an analytical attention/MLA estimate. `--bytes-per-token` provides a measured uniform-cache override. Both uniform modes require `--element-bytes` and `--block-tokens`.
+
+The deployment path uses the runtime page record for both hybrid and uniform models.
+
+TCP comparisons use aggregate bitrate reported by the iperf3 receiver. RDMA comparisons use average Gbit/s from the retained perftest report.
+
+Each budget covers one directed host edge at the recorded workload. Running-engine KV probes and concurrent-capacity tests provide later deployment acceptance evidence.
 
 ### Host inventory and SSH access
 
-`NARWHAL_HOSTS` selects the generated physical-host inventory, defaulting to `config/hosts.local.json`. Discovery groups equal `NARWHAL_NODE_<n>_SSH` and `NARWHAL_ROUTER_SSH` values from `.env` into one host entry. Each `hosts` entry supplies a unique `id`, an `ssh_env` variable naming its management destination, an optional `password_env` variable and its `roles`. The `router` role appears once; each engine uses an `engine-<n>` role matching its numbered deployment variables. Assign colocated roles to the same host entry. The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) places `router` and `engine-1` on one host and `engine-2` on another.
+`NARWHAL_HOSTS` selects the generated physical-host inventory. Its default is `config/hosts.local.json`.
 
-Store destinations and credentials in the workstation's `.env`; the inventory holds their variable names. Destinations accept an SSH alias or `user@management-host`. Supplying `password_env` selects password authentication and requires that variable to contain a value. Omitting it selects OpenSSH key or agent authentication. Every role assigned to a host reuses that host's access entry.
+Discovery groups identical `NARWHAL_NODE_<n>_SSH` and `NARWHAL_ROUTER_SSH` values from `.env` into one host entry.
 
-`tools/deploy_hosts.py plan` validates unique host IDs, role ownership, required access variables and distinct destination entries. The helper groups deployment work by host ID. One physical machine receives one inventory entry with its combined roles; discovery groups equal SSH destinations. `check-access` opens one verified connection per host. `shell --role <role>` resolves the role through that inventory.
+Each `hosts` record contains:
 
-A fresh management checkout starts with `.env`; discovery generates the private files at mode 0600. `NARWHAL_SSH_KNOWN_HOSTS` selects checkout-local `config/ssh.known_hosts`. Discovery uses OpenSSH `accept-new` to record keys on first use and reject changed keys; an existing verified store retains its entries. Deployment commands then use strict host-key checking against that store. Password access passes the selected credential to `sshpass` through a private file descriptor. Install OpenSSH and, for password access, `sshpass` on the management workstation.
+- unique `id`,
+- `ssh_env`, naming the environment variable holding its management destination,
+- optional `password_env`,
+- assigned `roles`.
 
-For key or SSH-agent authentication, configure the workstation's private SSH configuration with the host's address, username, identity and optional `Port` or `ProxyJump`. Point the inventory's `ssh_env` variable to that alias. Verify a new or changed server key through the supplied private access source before updating the checkout-local host-key store. Record remote `hostname` output as an observed label; SSH keys establish server identity.
+The `router` role appears once. Each engine role is named `engine-<n>` and corresponds to the numbered deployment variables. Colocated roles belong to the same host entry.
 
-`prepare --out <directory>` creates one verified source bundle, role files grouped under host IDs, and a private manifest containing the revision, host assignments, destination fingerprints and file hashes. Choose a fresh output directory for a new deployment. `install --run <directory>` verifies that manifest against the current host mapping and local files, then transfers and installs once per selected host. `--role engine-1` selects the host owning that role, including its colocated roles; `--host <id>` selects a named machine. Repeating the command verifies existing content and reuses an installation whose completion marker matches the approved revision.
+The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.
 
-The helper creates each run under a unique remote `~/Narwhal-deploy/<id>/` directory with its bundle, role files, `checkout/`, installation lock and completion marker. Source and configuration mismatches stop the affected host; the helper preserves existing content and stops before the next host. Private per-host logs under the local run's `logs/` directory retain executed scripts, exit statuses and output. A role shell opened with `--run` enters that checkout, loads the role environment and activates its virtual environment.
+Keep destinations and credentials in workstation `.env`; the inventory stores variable names only.
+
+SSH destinations may be aliases or `user@management-host`.
+
+If `password_env` is present, password authentication is enabled and the named variable must be nonempty. Without `password_env`, OpenSSH key or agent authentication is used.
+
+All roles on one physical host share that host's access record.
+
+`tools/deploy_hosts.py plan` validates:
+
+- unique host IDs,
+- unique role ownership,
+- required access variables,
+- distinct destination entries.
+
+Deployment is grouped by host ID. One physical machine gets one inventory entry containing all of its roles. Discovery performs the same grouping when SSH destinations match.
+
+`check-access` establishes one verified connection per host. `shell --role <role>` resolves the owning host through the inventory.
+
+A fresh management checkout begins from `.env`; discovery writes private generated files with mode 0600.
+
+`NARWHAL_SSH_KNOWN_HOSTS` selects the checkout-local `config/ssh.known_hosts`. Discovery uses OpenSSH `accept-new`: the first connection records a key, while a changed key is rejected. Existing verified stores retain their entries.
+
+Deployment commands then use strict host-key checking against this file.
+
+For password authentication, the selected secret reaches `sshpass` through a private file descriptor. The workstation therefore needs OpenSSH and, when password access is used, `sshpass`.
+
+For key or SSH-agent authentication, put address, username, identity, and optional `Port` or `ProxyJump` configuration in the workstation's private SSH config. Point the inventory `ssh_env` at that alias.
+
+Before replacing a key for a new or changed server, verify it through the supplied private access source, then update the checkout-local known-hosts store.
+
+Treat remote `hostname` output as an observed label. Server identity comes from the SSH host key.
+
+`prepare --out <directory>` writes:
+
+- one verified source bundle,
+- role files grouped by host ID,
+- a private manifest containing revision, host assignments, destination fingerprints, and file hashes.
+
+Use a new output directory for each deployment.
+
+`install --run <directory>` checks the manifest against current host mappings and local files, then transfers and installs once per selected host.
+
+`--role engine-1` selects the host that owns `engine-1`, including any colocated roles. `--host <id>` selects one physical host directly.
+
+Repeating an installation verifies existing content and reuses it when the completion marker matches the approved revision.
+
+Each remote run lives under a unique:
+
+```text
+~/Narwhal-deploy/<id>/
+```
+
+The directory contains the bundle, role files, `checkout/`, installation lock, and completion marker.
+
+A source or configuration mismatch stops that host before the helper advances to the next one. Existing remote content is preserved.
+
+Local private logs under the run's `logs/` directory capture executed scripts, exit status, and output for each host.
+
+A role shell opened with `--run` enters the deployed checkout, loads the matching role environment, and activates its virtual environment.
 
 ### Node URLs from the environment
 
-An engine URL identifies the running vLLM HTTP API, for example `http://10.0.0.11:8000`; it can use an IP address without a DNS name. Choose an address and port reachable from the router. The attestation URL identifies the separately running sidecar, for example `http://10.0.0.11:8010/v1/attestation`. Use the actual listening ports from your engine deployment.
+An engine URL points to the running vLLM HTTP API, for example:
 
-Engine `url` and `attestation_url` fields accept a whole-value `${VARIABLE}` reference. For example, set these values in `.env`:
+```text
+http://10.0.0.11:8000
+```
+
+It may use an IP address directly. The router must be able to reach the selected address and port.
+
+The attestation sidecar has its own URL, for example:
+
+```text
+http://10.0.0.11:8010/v1/attestation
+```
+
+Use the ports actually configured by the engine deployment.
+
+Engine `url` and `attestation_url` accept environment references only when the entire JSON value is `${VARIABLE}`.
+
+Example `.env` values:
 
 ```bash
 NARWHAL_FLEET=config/fleet.json
@@ -120,7 +350,7 @@ NARWHAL_NODE_1_URL='http://node1:8000'
 NARWHAL_NODE_1_ATTESTATION_URL='http://node1:8010/v1/attestation'
 ```
 
-Use those references in the corresponding engine entry in `config/fleet.json`:
+Reference them from the engine record in `config/fleet.json`:
 
 ```json
 {
@@ -131,34 +361,46 @@ Use those references in the corresponding engine entry in `config/fleet.json`:
 }
 ```
 
-Add one entry per running engine to the fleet's `engines` array. `.env.example` shows the two-engine minimum; define a numbered address and URL set for each engine. Both `config/fleet.json` and working `config/fleet.*.json` files are ignored by Git; the shipped example and stub configs remain tracked.
+Add one record to `engines` for every running engine. `.env.example` shows the two-engine minimum. Give each engine its own numbered address and URL variables.
 
-After loading `.env`, pass `--fleet "$NARWHAL_FLEET"` to profiling, preflight and serving commands. Missing or blank referenced variables fail configuration loading with the field and variable name. References support complete URL values only, with no shell expressions, defaults or recursive expansion. Other JSON fields retain their literal values; engine credentials continue to use `engine.engine_api_key_env`.
+Both `config/fleet.json` and working `config/fleet.*.json` files are ignored by Git. The repository keeps the example and stub configurations tracked.
 
-Observability resolves the same engine URL references when generating scrape targets. Saving a loaded fleet through `FleetConfig.save()` writes resolved URLs, so keep that output in an ignored fleet file.
+After loading `.env`, invoke profiling, preflight, and serving with:
+
+```bash
+--fleet "$NARWHAL_FLEET"
+```
+
+A missing or empty referenced variable causes configuration loading to fail with the field path and variable name.
+
+References can substitute complete URL values only. Shell expressions, defaults, and recursive expansion are unsupported. All other JSON fields remain literal. Engine credentials continue to use `engine.engine_api_key_env`.
+
+Observability applies the same URL resolution when creating scrape targets.
+
+`FleetConfig.save()` writes resolved URLs. Save its output only to an ignored fleet file.
 
 ## Required fields
 
-| Field | Value | Purpose |
-| --- | --- | --- |
-| `schema` | `"narwhal.fleet"` | Fleet interface identity. |
-| `schema_version` | `1` | Fleet document version. |
-| `model` | string | Model name exposed by the router. Every engine must serve this name. |
-| `engines` | array | Engine records. At least one record is required and `iid` values must be unique. |
-| `slo.ttft_s` | positive seconds | TTFT target used by placement, admission, pool load, and control. |
-| `slo.tpot_s` | positive seconds | TPOT target used by placement, pool load, and control. |
+| Field            | Value             | Purpose                                                                |
+| ---------------- | ----------------- | ---------------------------------------------------------------------- |
+| `schema`         | `"narwhal.fleet"` | Fleet interface identity.                                              |
+| `schema_version` | `1`               | Fleet document version.                                                |
+| `model`          | string            | Model name exposed by the router. Every engine must serve this name.   |
+| `engines`        | array             | Engine records. At least one is required; `iid` values must be unique. |
+| `slo.ttft_s`     | positive seconds  | TTFT target used for placement, admission, pool load, and control.     |
+| `slo.tpot_s`     | positive seconds  | TPOT target used for placement, pool load, and control.                |
 
-Each engine record accepts these fields.
+Each engine record accepts:
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `iid` | required | Scheduler identity. Values must be unique within `engines`. |
-| `url` | required | HTTP base URL. The loader removes trailing `/` characters. |
-| `attestation_url` | `""` | Full URL of this engine's attestation sidecar. `narwhal-check` requires it when `engine_contract` is present. |
-| `role` | `"decode"` | Opening role. Accepted values are `"prefill"` and `"decode"`. |
-| `pin` | `false` | Pins the engine's configured role. |
+| Field             | Default    | Purpose and validation                                                                                           |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| `iid`             | required   | Scheduler identity. Unique within `engines`.                                                                     |
+| `url`             | required   | HTTP base URL. Trailing `/` characters are removed.                                                              |
+| `attestation_url` | `""`       | Full URL for the engine's attestation sidecar. Required by `narwhal-check` when `engine_contract` is configured. |
+| `role`            | `"decode"` | Initial role. Valid values are `"prefill"` and `"decode"`.                                                       |
+| `pin`             | `false`    | Prevents the configured role from changing.                                                                      |
 
-An engine record has this shape.
+Example:
 
 ```json
 {
@@ -170,252 +412,449 @@ An engine record has this shape.
 }
 ```
 
-An engine opens as `decode` unless its record says otherwise. Pinning fixes that role across placement, controller moves, and resume, which can reserve a prefill seat through warm-standby takeover.
+An engine starts in `decode` unless its record chooses another role. A pinned engine keeps its configured role across placement changes, controller moves, and resume. This can reserve a prefill engine during warm-standby takeover.
 
-Set the SLOs from measurements on the deployed engine shape. The router derives its Prometheus histogram buckets from these values.
+Set SLO values from measurements taken on the deployed engine shape. Narwhal derives Prometheus histogram buckets from them.
 
 ## Engine contract
 
-`recovery.engine_restart_policy` selects `individual` (default) or `whole_wave`. `whole_wave` requires a complete `engine_contract` and `recovery.liveness_every > 0`; an ejection or identity failure then holds the fleet until an operator completes the [wave procedure](Operate.md#restart-an-engine-wave).
+`recovery.engine_restart_policy` accepts:
 
-`engine_contract` declares one expected engine generation for the fleet. Preflight and lifecycle readmission compare the running engines with it. Use a complete contract for fleets serving client traffic.
+- `individual`, the default,
+- `whole_wave`.
 
-Lifecycle drain and readmission require every field in this contract. The router distinguishes a restarted process from a different engine build before exercising NIXL against a live peer; an empty contract field keeps the requested engine held out and reports `missing-contract`.
+`whole_wave` requires a complete `engine_contract` and `recovery.liveness_every > 0`.
 
-The `hardware` block records the accelerator identity and tensor-parallel shape. [Engine-host inspection](Deploy.md#3-inspect-each-engine-host) discovers the vendor and product on each remote machine. Set `accelerator` to that observed product name, and use positive values for the declared replica allocation in `accelerators_per_engine` and `tensor_parallel`. Tensor parallelism must fit within the accelerator count.
+Under `whole_wave`, an ejection or identity failure holds the fleet until an operator completes the [wave procedure](Operate.md#restart-an-engine-wave).
 
-The external launcher selects vLLM's TP size. Match `hardware.tensor_parallel` to that setting and `hardware.accelerators_per_engine` to the accelerators allocated to one replica, then verify the running shape through process-bound attestation, profiles, transfer checks and deployment load.
+`engine_contract` describes the expected engine generation. Preflight and lifecycle readmission compare running engines against it. Production fleets serving client traffic should use a complete contract.
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `vllm_version` | required | Exact value returned by every engine's `/version` route. |
-| `image_digest` | `""` | Immutable `sha256:<64 hex>` container digest reported by the engine-side attestation document. |
-| `nixl_version` | `""` | NIXL package version carried by the image. |
-| `nixl_connector_version` | `0` | Positive `NIXL_CONNECTOR_VERSION` integer from the deployed vLLM connector's metadata module; [capture it in step 6](Deploy.md#read-the-nixl-connector-protocol-version). |
-| `model_architecture` | `""` | Model implementation name relevant to KV layout. |
-| `model_dtype` | `""` | Model execution dtype. |
-| `kv_heads` | `0` | Positive model-wide value from the pinned runtime's `ModelConfig.get_total_num_kv_heads()`. |
-| `head_size` | `0` | Positive value from `ModelConfig.get_head_size()`, as consumed by NIXL's compatibility hash; [capture resolved model dimensions](Deploy.md#read-the-model-dimensions-used-by-nixl). |
-| `hidden_layers` | `0` | Positive model-wide value from `ModelConfig.get_total_num_hidden_layers()`. |
-| `attention_backend` | `""` | Runtime attention backend expected from the launch. |
-| `kv_cache_dtype` | `""` | KV cache dtype. |
-| `cross_layers_blocks` | `null` | Resolved physical cache block grouping: `KVCacheLayout.is_block_outermost` for the pinned layout API. [Capture the layout and boolean](Deploy.md#capture-cache-block-grouping) from serving or sizing evidence. |
-| `hybrid_kv_cache_manager` | `null` | Whether vLLM's hybrid KV cache manager participates in the layout. |
-| `connector` | `"NixlConnector"` | Engine-side connector name. Must be nonempty. |
-| `kv_role` | `""` | Engine-side role semantics, such as `kv_both`. |
-| `transfer_mode` | `""` | `pull` for the resolved `NixlPullConnector`; `push` for `NixlPushConnector`. [Retain the resolved class and mode](Deploy.md#capture-the-resolved-transfer-mode) from the checked image. |
-| `speculative_config` | `""` | Stable name for the speculation configuration, or `disabled`. |
-| `enforce_handshake_compat` | `true` | Effective boolean from the pinned NIXL worker's extra-config lookup; [capture the configured value and installed default](Deploy.md#capture-handshake-compatibility-enforcement). Narwhal requires `true`. |
+Lifecycle drain and readmission require every contract field. Before NIXL is exercised against a live peer, the router must be able to distinguish a restarted process from a different engine build.
+
+If any required contract field is empty, the requested engine remains held out with `missing-contract`.
+
+The `hardware` block records accelerator identity and tensor-parallel shape.
+
+[Engine-host inspection](Deploy.md#3-inspect-each-engine-host) discovers the accelerator vendor and product on each remote host. Set `accelerator` to the observed product name.
+
+`accelerators_per_engine` and `tensor_parallel` must both be positive. Tensor parallelism cannot exceed the number of accelerators assigned to the replica.
+
+The external launcher controls vLLM's TP size. Keep `hardware.tensor_parallel` equal to that value and `hardware.accelerators_per_engine` equal to the replica's allocated accelerator count.
+
+Verify the running shape through process-bound attestation, profiles, transfer tests, and deployment load.
+
+| Field                      | Default           | Purpose and validation                                                                                                                                                                                        |
+| -------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vllm_version`             | required          | Exact value returned by every engine's `/version` endpoint.                                                                                                                                                   |
+| `image_digest`             | `""`              | Immutable `sha256:<64 hex>` container digest reported by engine-side attestation.                                                                                                                             |
+| `nixl_version`             | `""`              | NIXL package version in the image.                                                                                                                                                                            |
+| `nixl_connector_version`   | `0`               | Positive `NIXL_CONNECTOR_VERSION` integer from the deployed connector metadata; [capture it in step 6](Deploy.md#capture-the-nixl-connector-protocol-version).                                                   |
+| `model_architecture`       | `""`              | Model implementation name relevant to KV layout.                                                                                                                                                              |
+| `model_dtype`              | `""`              | Model execution dtype.                                                                                                                                                                                        |
+| `kv_heads`                 | `0`               | Positive model-wide value from `ModelConfig.get_total_num_kv_heads()`.                                                                                                                                        |
+| `head_size`                | `0`               | Positive `ModelConfig.get_head_size()` result used by the NIXL compatibility hash; [capture resolved model dimensions](Deploy.md#capture-model-dimensions-used-by-compatibility-hashing).                                     |
+| `hidden_layers`            | `0`               | Positive model-wide value from `ModelConfig.get_total_num_hidden_layers()`.                                                                                                                                   |
+| `attention_backend`        | `""`              | Attention backend expected from the recorded launch.                                                                                                                                                          |
+| `kv_cache_dtype`           | `""`              | KV-cache dtype.                                                                                                                                                                                               |
+| `cross_layers_blocks`      | `null`            | Resolved physical cache-block grouping, `KVCacheLayout.is_block_outermost`, from the pinned layout API. [Capture the layout and boolean](Deploy.md#capture-physical-cache-grouping).                             |
+| `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager participates in the layout.                                                                                                                                            |
+| `connector`                | `"NixlConnector"` | Engine-side connector name. Cannot be empty.                                                                                                                                                                  |
+| `kv_role`                  | `""`              | Engine-side KV role semantics, for example `kv_both`.                                                                                                                                                         |
+| `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`; `push` for `NixlPushConnector`. [Retain the resolved class and mode](Deploy.md#capture-transfer-direction).                                                           |
+| `speculative_config`       | `""`              | Stable name for the speculative-decoding configuration, or `disabled`.                                                                                                                                        |
+| `enforce_handshake_compat` | `true`            | Effective value from the pinned NIXL worker's extra-config lookup. [Capture both the configured value and installed default](Deploy.md#capture-handshake-compatibility-enforcement). Narwhal requires `true`. |
 
 ### Attestation document
 
-Copy [`config/engine-attestation.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json), replace `contract` with the complete values from the fleet config, and map each field under `sources` to its container inspection, package record, model config, launch config or startup log. The document declares `schema: "narwhal.attestation"` and `schema_version: 1`; `narwhal-attest` requires one nonempty source entry for every populated contract field before querying the engine.
+Copy [`config/engine-attestation.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json).
 
-Run one sidecar beside each contracted engine and set its `attestation_url`. At startup, the sidecar reads `/version` and `process_start_time_seconds`, adds that engine identity to `contract` and `sources`, and hashes the response into `attestation_digest`. Both sidecar routes return HTTP 503 after either identity value changes. After an engine identity change, verify its HTTP endpoints and restart the sidecar through its configured process manager to bind the new process.
+Replace `contract` with the complete fleet contract. Under `sources`, associate each contract field with the relevant container inspection, package record, model configuration, launch configuration, or startup log.
 
-`narwhal-check` compares every attested field and the process start before opening the NIXL handshake and produce/consume probes; a mismatch stops the sequence before live KV transfer.
+The attestation file declares:
+
+```json
+"schema": "narwhal.attestation",
+"schema_version": 1
+```
+
+`narwhal-attest` requires at least one nonempty source entry for every populated contract field before it queries the engine.
+
+Run one sidecar beside every contracted engine and configure its `attestation_url`.
+
+At startup, the sidecar reads:
+
+- `/version`,
+- `process_start_time_seconds`.
+
+It adds those process-identity values to `contract` and `sources`, then hashes the response into `attestation_digest`.
+
+If either identity value later changes, both sidecar routes return HTTP 503.
+
+After an engine process changes, verify its HTTP endpoints and restart the sidecar through its configured process manager. The restarted sidecar binds itself to the new engine process.
+
+`narwhal-check` compares the attested fields and process start before opening the NIXL handshake or produce/consume probes. A mismatch stops preflight before live KV transfer.
 
 ## Role control
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `controller.advisory` | `false` | Records proposed controller splits and reasons while preserving current roles. |
-| `controller.monitor_interval_s` | `1.0` | Delay between monitor passes. Must be positive. Validation limits `recovery.health.min_samples` to `floor(recovery.health.window_s / controller.monitor_interval_s)`. Each pass contributes at most one residual per engine; slow passes can leave a window undersampled. |
-| `controller.monitor_failure_limit` | `5` | Consecutive monitoring passes with any stage failure before the router enters the degraded state and stops admitting new requests. Must be at least 1. The streak counts failures in any monitor stage, even when role control succeeds. |
-| `controller.min_prefill` | `1` | Minimum live prefill engines preserved by role changes. Must be at least 1. |
-| `controller.min_decode` | `1` | Minimum live decode engines preserved by role changes. Must be at least 1. |
-| `controller.thresholds.expand` | `1.0` | SLO-relative pool load that triggers reactive growth. Must be positive. |
-| `controller.thresholds.shrink` | `0.5` | Maximum projected source load for ordinary consolidation. The mixed-pressure D-to-P rule below can exceed it. Must be nonnegative and below `expand`. |
-| `controller.thresholds.cooldown_s` | `10.0` | Minimum time between prefill-to-decode moves. Must be nonnegative. |
-| `controller.thresholds.sustained_intervals` | `3` | Lower bound on confirmations for nonurgent, incomplete-demand and mixed-pressure proposals. Must be at least 1. |
-| `controller.thresholds.dwell_s` | `0.0` | Time a moved engine must remain in its new role. Must be nonnegative. |
-| `controller.thresholds.panic_ratio` | `0.0` | Decode-load multiple that may bypass cooldown while prefill stays below `shrink`. `0` disables it. Enabled values must be at least 1. |
-| `controller.thresholds.flip_resident_guard` | `0` | Maximum resident decode streams allowed on the decode engine chosen for a decode-to-prefill move. The move waits until residency drains to this count. `0` disables the guard. Must be nonnegative. |
-| `controller.flip_history` | `1000` | Maximum retained role-change records exposed through `/narwhal/state`. Must be at least 1. |
+| Field                                       | Default | Purpose and validation                                                                                                                                                                                                                                         |
+| ------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controller.advisory`                       | `false` | Records proposed role splits and reasons without changing current roles.                                                                                                                                                                                       |
+| `controller.monitor_interval_s`             | `1.0`   | Delay between monitor passes. Positive. `recovery.health.min_samples` cannot exceed `floor(recovery.health.window_s / controller.monitor_interval_s)`. Each pass contributes no more than one residual per engine, so delayed passes can undersample a window. |
+| `controller.monitor_failure_limit`          | `5`     | Consecutive passes with any monitoring-stage failure before the router enters degraded state and stops new admission. At least 1. Failures count even when role control itself succeeds.                                                                       |
+| `controller.min_prefill`                    | `1`     | Minimum live prefill-engine count preserved by controller moves. At least 1.                                                                                                                                                                                   |
+| `controller.min_decode`                     | `1`     | Minimum live decode-engine count preserved by controller moves. At least 1.                                                                                                                                                                                    |
+| `controller.thresholds.expand`              | `1.0`   | SLO-relative pool load that initiates reactive expansion. Positive.                                                                                                                                                                                            |
+| `controller.thresholds.shrink`              | `0.5`   | Maximum projected source load for ordinary consolidation. Mixed-pressure D-to-P moves may exceed it. Nonnegative and lower than `expand`.                                                                                                                      |
+| `controller.thresholds.cooldown_s`          | `10.0`  | Minimum time between prefill-to-decode moves. Nonnegative.                                                                                                                                                                                                     |
+| `controller.thresholds.sustained_intervals` | `3`     | Minimum confirmation count for nonurgent, incomplete-demand, and mixed-pressure proposals. At least 1.                                                                                                                                                         |
+| `controller.thresholds.dwell_s`             | `0.0`   | Minimum residence time after an engine changes role. Nonnegative.                                                                                                                                                                                              |
+| `controller.thresholds.panic_ratio`         | `0.0`   | Decode-load multiple allowed to bypass cooldown while prefill remains below `shrink`. `0` disables it; enabled values must be at least 1.                                                                                                                      |
+| `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams permitted on an engine selected for D-to-P movement. The move waits until residency falls to this value. `0` disables the guard. Nonnegative.                                                                                  |
+| `controller.flip_history`                   | `1000`  | Maximum retained role-change records exposed by `/narwhal/state`. At least 1.                                                                                                                                                                                  |
 
-Prefill load divides predicted work by the TTFT target. Decode load measures the observed token interval above the corrected idle floor as a fraction of the remaining TPOT budget. When that floor already reaches the TPOT target, decode load uses the raw interval-to-target ratio. A value of `1.0` reaches the phase target.
+Prefill load is predicted work divided by the TTFT target.
 
-`controller.min_prefill + controller.min_decode` must fit the configured fleet. The loader also accepts a single engine with both floors set to 1; that topology serves aggregate inference. Pins, drains, quarantine, and health ejections can leave fewer movable engines than either floor needs. The controller reports the breach and holds the safest reachable split.
+Decode load uses the observed token interval above the corrected idle floor, divided by the remaining TPOT budget. When the idle floor itself reaches the TPOT target, Narwhal uses the raw interval-to-target ratio.
 
-Role changes preserve `controller.min_decode`. If live decode capacity falls below that floor, the monitor bypasses the ordinary cooldown and restores one eligible engine per pass. Decode-floor recovery still observes per-engine dwell.
+A load of `1.0` means the phase target has been reached.
 
-Prefill-floor recovery bypasses cooldown and dwell. It still respects pins, engine availability, both role floors, and advisory mode. Every applied recovery records its dwell timestamp. After unavailable capacity returns, the resulting split goes through the normal adjacent-split decision. Recovery records obey the same `controller.flip_history` bound as ordinary moves.
+`controller.min_prefill + controller.min_decode` must fit the configured fleet. A single-engine topology with both floors set to 1 is accepted and serves aggregate inference.
 
-A role change takes effect for new requests immediately. Existing requests stay on their serving engine and keep their reservations until they finish or are cancelled. The controller includes that remaining work when considering further role changes.
+Pins, drains, quarantine, and health ejections can leave too few movable engines to satisfy a configured floor. The controller reports the breach and keeps the safest reachable split.
 
-Engine relaunches and operator drains make an engine unavailable. Before moving decode capacity to prefill, the controller checks that the projected fleet split and every resident decode batch fit within the measured profile domain and available KV capacity.
+All role changes preserve `controller.min_decode`.
 
-Use `controller.advisory: true` with recorded traffic before changing a production split. `/narwhal/state` and Prometheus expose the proposed prefill and decode counts, caller, reason, and result.
+When live decode capacity falls below its floor, monitoring skips the normal cooldown and restores one eligible engine per pass. Per-engine dwell still applies to decode-floor recovery.
 
-The controller compares the current split with each adjacent split. Ordinary consolidation requires projected source pressure at or below `controller.thresholds.shrink` and an improvement in the worst projected SLO ratio of at least `controller.reactive.movement_margin`.
+Prefill-floor recovery ignores cooldown and dwell. Pins, engine availability, both floors, and advisory mode still apply.
 
-When observed prefill pressure reaches `controller.thresholds.expand` and every engine has a profile, the mixed-pressure rule can move a decode engine to prefill even while projected decode pressure remains above `controller.thresholds.shrink`. The proposed split must reduce the worst projected SLO ratio by at least the movement margin, with a strict improvement even when that margin is zero.
+Every applied floor recovery records a dwell timestamp.
 
-Confirmation requires the greater of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`, including when demand is complete. Changing the proposed split, demand completeness or eligibility rule restarts confirmation; a candidate that fails the checks clears it.
+When unavailable capacity returns, the resulting split re-enters the ordinary adjacent-split decision path. Recovery records use the same `controller.flip_history` limit as other role changes.
 
-P-to-D moves require prefill pressure at or below `shrink` and observe the decode cooldown. During overload, the movement margin, confirmations, consolidation evidence and dwell limit repeated role changes. Meeting the SLOs under sustained overload still requires lower offered traffic or more capacity.
+New requests observe a role change immediately. Existing requests stay on their current engines until completion or cancellation, retaining their reservations. The controller includes this resident work in later movement decisions.
 
-Decode-to-prefill consolidation requires a closed arrival-evidence window. The window closes after `controller.reactive.evidence_span_s` with at least `controller.reactive.evidence_min_arrivals` samples, or at `controller.reactive.evidence_max_span_s` under sparse traffic.
+Engine restarts and operator drains mark engines unavailable.
 
-Decode demand must also be stable: consolidation waits while the short-horizon estimate exceeds the long-horizon estimate by more than `controller.reactive.demand_rise_tolerance`. Candidate pricing uses the larger estimate and accounts for resident and pending decode work.
+Before converting decode capacity into prefill capacity, the controller verifies that the proposed fleet split and all resident decode batches stay within the measured profile domain and available KV capacity.
 
-A first-token timeout or a prefill-to-decode recovery move restarts the consolidation evidence window. Moves toward decode and emergency floor restoration can proceed while evidence accumulates.
+Run `controller.advisory: true` against recorded traffic before applying role changes in production. `/narwhal/state` and Prometheus report the proposed prefill/decode counts, caller, reason, and result.
 
-Predictive refusals count as offered demand and attainment misses while leaving the window in place. State and metrics report the demand estimates, evidence window and any gate blocking a move.
+The controller evaluates the current split and each adjacent split.
+
+Ordinary consolidation requires:
+
+- projected source pressure at or below `controller.thresholds.shrink`,
+- improvement in the worst projected SLO ratio of at least `controller.reactive.movement_margin`.
+
+When measured prefill pressure reaches `controller.thresholds.expand` and every engine has a profile, the mixed-pressure rule may move one decode engine to prefill even when projected decode pressure remains above `shrink`.
+
+That candidate split must improve the worst projected SLO ratio by at least the movement margin. Improvement must remain strictly positive when the configured margin is zero.
+
+A proposal needs:
+
+```text
+max(
+  controller.reactive.confirmations,
+  controller.thresholds.sustained_intervals
+)
+```
+
+matching confirmations. This also applies when demand evidence is complete.
+
+Any change in proposed split, demand completeness, or eligibility rule restarts confirmation. A failed eligibility check clears the candidate.
+
+P-to-D moves require prefill pressure at or below `shrink` and obey the decode cooldown.
+
+During overload, movement margin, confirmation requirements, consolidation evidence, and dwell bound repeated role changes. Sustained overload still requires either lower offered demand or more serving capacity to meet the configured SLOs.
+
+D-to-P consolidation requires a closed arrival-evidence window.
+
+The window closes when either:
+
+- `controller.reactive.evidence_span_s` has elapsed and at least `controller.reactive.evidence_min_arrivals` samples exist,
+- `controller.reactive.evidence_max_span_s` has elapsed under sparse traffic.
+
+Decode demand must also be stable. Consolidation pauses when the short-horizon estimate exceeds the long-horizon estimate by more than `controller.reactive.demand_rise_tolerance`.
+
+Candidate pricing uses the larger demand estimate and includes resident plus pending decode work.
+
+A first-token timeout or prefill-to-decode recovery move resets the consolidation evidence window.
+
+Moves toward decode, including emergency floor restoration, may proceed while evidence is still accumulating.
+
+Predictive admission refusals contribute to offered demand and attainment misses without resetting the evidence window.
+
+State and metrics expose both demand estimates, the evidence-window state, and the gate currently preventing a move.
 
 ### Reactive fields
 
-Configure reactive control through `controller.reactive`. Repeat preflight and deployment load measurement after changing the engine build or serving policy.
+Reactive control is configured under `controller.reactive`.
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `controller.reactive.window_s` | `120.0` | Demand estimation window. Must be positive. |
-| `controller.reactive.confirmations` | `2` | Consecutive identical adjacent proposals for nonurgent, incomplete-demand and mixed-pressure moves. Must be at least 1. |
-| `controller.reactive.utilization` | `0.8` | Fraction of each engine treated as available capacity. Must be greater than 0 and at most 1. |
-| `controller.reactive.min_arrivals` | `10` | Minimum arrivals required for a decision. Must be at least 1. |
-| `controller.reactive.demand_floor` | `0.5` | Minimum demand signal accepted by the reactive controller. Must be positive. |
-| `controller.reactive.movement_margin` | `0.05` | Minimum improvement in the worst projected SLO ratio before moving an engine. Valid range is `[0, 1)`. |
-| `controller.reactive.step_s` | `5.0` | Minimum interval between scheduled adjacent role-change evaluations. A projected prefill TTFT breach can wake one guarded D-to-P evaluation between scheduled passes. Must be positive. |
-| `controller.reactive.evidence_span_s` | `60.0` | Minimum elapsed span of recent arrival evidence required before D-to-P consolidation. Also sets the short horizon of the rising-demand check. Must be positive and at most `controller.reactive.evidence_max_span_s`. |
-| `controller.reactive.evidence_max_span_s` | `120.0` | Bounded evidence duration for sparse traffic. The evidence window closes at this span even with fewer than `controller.reactive.evidence_min_arrivals` samples. Must be positive, at least `controller.reactive.evidence_span_s`, and at most `controller.reactive.window_s`. |
-| `controller.reactive.evidence_min_arrivals` | `10` | Minimum arrival sample count inside the evidence span before D-to-P consolidation. Must be at least 1. |
-| `controller.reactive.demand_rise_tolerance` | `0.25` | Tolerated rise of the short-horizon decode demand estimate over the long-horizon one. Consolidation is refused while the short estimate exceeds the long estimate by more than a factor of `1 + demand_rise_tolerance`. Must be finite and at least 0. |
-| `controller.reactive.decode_correction_min` | `0.5` | Lowest live/profile decode ratio applied to capacity estimates. Must be positive. |
-| `controller.reactive.decode_correction_max` | `2.0` | Highest live/profile decode ratio applied to capacity estimates. Must be at least the minimum. |
-| `controller.reactive.decode_correction_alpha` | `0.2` | Share of each qualifying observation window applied to the correction. Valid range is `(0, 1]`. |
-| `controller.reactive.decode_correction_min_samples` | `8` | Decode gaps required before an observation window updates the correction. Must be at least 1. |
+Repeat preflight and deployment load measurement after changing the engine build or serving policy.
 
-The controller prices demand with the mean profile of the configured engines. Decode profiles use active requests and resident KV tokens as separate inputs. Recent token intervals apply a bounded correction to the profiled estimate. Every configured engine uses one hardware and TP shape so those measurements describe the complete fleet.
+| Field                                               | Default | Purpose and validation                                                                                                                                                                                |
+| --------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controller.reactive.window_s`                      | `120.0` | Demand-estimation window. Positive.                                                                                                                                                                   |
+| `controller.reactive.confirmations`                 | `2`     | Required consecutive identical adjacent proposals for nonurgent, incomplete-demand, and mixed-pressure moves. At least 1.                                                                             |
+| `controller.reactive.utilization`                   | `0.8`   | Fraction of each engine treated as usable capacity. Greater than 0 and at most 1.                                                                                                                     |
+| `controller.reactive.min_arrivals`                  | `10`    | Minimum arrival count required for a decision. At least 1.                                                                                                                                            |
+| `controller.reactive.demand_floor`                  | `0.5`   | Minimum accepted demand signal. Positive.                                                                                                                                                             |
+| `controller.reactive.movement_margin`               | `0.05`  | Required reduction in the worst projected SLO ratio before movement. Range `[0, 1)`.                                                                                                                  |
+| `controller.reactive.step_s`                        | `5.0`   | Minimum interval between scheduled adjacent-split evaluations. A projected prefill TTFT breach may trigger one guarded D-to-P evaluation between scheduled passes. Positive.                          |
+| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for D-to-P consolidation and short horizon for the rising-demand test. Positive and no greater than `evidence_max_span_s`.                                       |
+| `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic. The window closes at this age even below `evidence_min_arrivals`. Positive, at least `evidence_span_s`, and no greater than `window_s`.               |
+| `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before D-to-P consolidation. At least 1.                                                                                                                     |
+| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand. Consolidation is blocked when short demand exceeds long demand by more than `1 + demand_rise_tolerance`. Finite and nonnegative. |
+| `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live/profile decode correction applied to capacity. Positive.                                                                                                                      |
+| `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live/profile decode correction. At least the minimum.                                                                                                                              |
+| `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction. Range `(0, 1]`.                                                                                                             |
+| `controller.reactive.decode_correction_min_samples` | `8`     | Required decode gaps before an observation window updates the correction. At least 1.                                                                                                                 |
+
+Demand pricing uses the mean profile across configured engines.
+
+Decode profiles treat active requests and resident KV tokens as separate inputs. Recent token intervals apply a bounded correction to the profile estimate.
+
+All configured engines share one hardware and TP shape, so these measurements describe the full fleet.
 
 ## Bounded serving
 
-By default Narwhal admits work straight into phase dispatch and makes one prefill/decode attempt per request. Nested `serving` fields add FIFO waiting and retries within the original deadline, dispatching each phase when its eligible role pool has capacity.
+Without bounded-serving configuration, Narwhal sends admitted work directly to phase dispatch and allows one prefill/decode attempt per request.
 
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `serving.queue_capacity` | `0` | Maximum waiting admission requests. Zero rejects saturation immediately. |
-| `serving.queue_timeout_s` | `0.0` | Maximum admission wait, also bounded by the original request deadline. Positive when queueing is enabled. |
-| `serving.prefill_concurrency` | `0` | Resident prefill requests per engine. A positive measured limit is required with queueing. |
-| `serving.decode_concurrency` | `0` | Resident decode requests per engine. A positive measured limit is required with queueing. |
-| `serving.handoff_timeout_s` | `0.0` | Conservative KV handoff age measured from the start of the prefill HTTP call. Queueing or retries require a positive limit below the verified backend lease. At zero the original request deadline remains the sole handoff-age bound. |
-| `serving.max_attempts` | `1` | Total complete prefill/decode attempts per original request, from 1 to 3. |
-| `serving.retry_base_s` | `0.1` | Initial exponential backoff ceiling; full jitter samples between zero and that ceiling. |
-| `serving.retry_cap_s` | `1.0` | Maximum backoff ceiling. Must be at least the base. |
-| `serving.retry_budget` | `10` | Initial and maximum shared retry credits. Each retry costs one credit. |
-| `serving.retry_replenish` | `0.1` | Credits earned per successful original request, from zero to one. |
-| `serving.max_request_bytes` | `4194304` | HTTP request-body byte ceiling, enforced while reading. |
-| `serving.max_response_bytes` | `16777216` | Retained bytes per non-streaming response attempt and per streaming pre-output metadata buffer. |
+Nested `serving` fields can add FIFO admission waiting and retry. Each phase is dispatched only when its eligible role pool has capacity, and all waiting or retrying remains inside the original request deadline.
 
-The router retains at most `serving.max_connections + serving.queue_capacity` completion requests while reading bodies, waiting for admission or writing responses. Reaching that limit returns 429 before body parsing and records the request as an unsized offer.
+| Field                         | Default    | Meaning                                                                                                                                                                                                                |
+| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission. `0` rejects immediately at saturation.                                                                                                                                         |
+| `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, also capped by the original request deadline. Must be positive when queueing is enabled.                                                                                                       |
+| `serving.prefill_concurrency` | `0`        | Resident prefill requests allowed per engine. Queueing requires a positive measured value.                                                                                                                             |
+| `serving.decode_concurrency`  | `0`        | Resident decode requests allowed per engine. Queueing requires a positive measured value.                                                                                                                              |
+| `serving.handoff_timeout_s`   | `0.0`      | Maximum KV-handoff age measured from the start of the prefill HTTP request. Queueing or retries require a positive value below the verified backend lease. At `0`, the request deadline is the only handoff-age limit. |
+| `serving.max_attempts`        | `1`        | Maximum complete prefill/decode attempts per original request. Range 1 to 3.                                                                                                                                           |
+| `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling. Full jitter samples from zero to that ceiling.                                                                                                                                    |
+| `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling. At least the base value.                                                                                                                                                                      |
+| `serving.retry_budget`        | `10`       | Initial and maximum pool of retry credits. Every retry spends one credit.                                                                                                                                              |
+| `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request. Range zero to one.                                                                                                                                               |
+| `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size, enforced while reading.                                                                                                                                                                |
+| `serving.max_response_bytes`  | `16777216` | Maximum retained bytes for each non-streaming response attempt and streaming pre-output metadata buffer.                                                                                                               |
 
-Active requests share one global limit. Requests waiting for admission or phase dispatch contribute to demand, and admission counts retries against the original arrival's deadline and reservation.
+While reading request bodies, waiting for admission, or writing responses, the router retains at most:
 
-Before visible output begins, Narwhal can retry transient transport failures and HTTP 408, 429, 500, 502, 503 and 504 responses. Each retry starts with fresh prefill ownership, as does recovery from an expired handoff.
+```text
+serving.max_connections + serving.queue_capacity
+```
 
-Permanent errors, local HTTP pool starvation, cancellation and failures after visible output end the request. For non-streaming responses, the router discards partial output from a failed attempt before retrying.
+completion requests.
 
-Every attempt shares the original request deadline, including time spent on tokenization, backoff and client writes.
+Hitting that ceiling returns HTTP 429 before body parsing. The rejected request is recorded as an unsized offer.
 
-Choose queue capacity, phase concurrency and deadlines from measured workload capacity and latency. The byte limits bound how much request and response data the router retains.
+All active requests share one global limit.
 
-Set `serving.handoff_timeout_s` below the producer's KV lease, then verify that the backend releases abandoned handoffs when their leases expire.
+Requests waiting for admission or phase dispatch still contribute to demand. Retries retain the deadline and reservation of the original arrival.
 
-Prefill failures and non-streaming decode failures return HTTP errors. Streaming responses commit HTTP 200 before decode starts, so a later failure appears as a terminal error event even when decode fails before producing its first token.
+Before any visible response output, Narwhal can retry:
 
-When the original deadline expires, the router sends `code: expired` and closes the stream; client backpressure closes the connection immediately. Clients should treat an error event or a stream ending ahead of its success terminator as a failed response and retry against the remaining deadline.
+- transient transport failures,
+- HTTP 408,
+- HTTP 429,
+- HTTP 500,
+- HTTP 502,
+- HTTP 503,
+- HTTP 504.
 
-Model-aware placement, resident role changes, cancellation, timeouts, engine exclusion and lifecycle recovery remain active. `recovery.failure_quarantine_s` holds failed engines out of placement while health checks catch up.
+Every retry begins with fresh prefill ownership. Recovery from an expired handoff does the same.
 
-Queues, phase concurrency, handoff expiry, retries and body limits change the deployment envelope. Repeat the workload measurement after changing any of these settings.
+A permanent error, local HTTP pool starvation, cancellation, or failure after visible output terminates the request.
+
+For non-streaming output, any partial body from a failed attempt is discarded before retry.
+
+The original request deadline includes tokenisation, queue wait, retry backoff, engine work, and client writes.
+
+Derive queue capacity, phase concurrency, and deadlines from measured workload latency and capacity. Request and response byte limits cap router-retained data.
+
+Set `serving.handoff_timeout_s` below the producer's KV lease. Verify separately that abandoned handoffs are released by the backend when that lease expires.
+
+Prefill failures and non-streaming decode failures return HTTP errors.
+
+Streaming responses commit HTTP 200 before decode begins. A later decode failure therefore appears as a terminal stream error event, including failures before the first generated token.
+
+When the request deadline expires, Narwhal emits `code: expired` and closes the stream.
+
+Client backpressure closes the connection immediately.
+
+Clients should treat either of these cases as a failed response:
+
+- an error event,
+- stream termination before the success terminator.
+
+Any retry by the client must fit within its remaining deadline.
+
+Model-aware placement, resident role changes, cancellation, timeouts, engine exclusion, and lifecycle recovery continue to operate with bounded serving enabled.
+
+`recovery.failure_quarantine_s` keeps failed engines out of placement while health checks converge.
+
+Queueing, phase-concurrency limits, handoff expiry, retries, and byte limits all affect measured deployment capacity. Repeat workload measurements after changing them.
 
 ## Placement and admission
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `serving.admission` | `"predictive"` | `predictive` prices every prefill path against the TTFT budget and keeps aggregate placement inside the single-phase domain measured by the engine curves; details follow. `open` bypasses both checks. |
-| `serving.admission_margin` | `0.0` | Fraction added to the TTFT admission budget to reduce boundary churn. Must be nonnegative. |
-| `serving.max_connections` | `512` | Global admitted-request limit and HTTP data-pool size. Must be at least 1. |
-| `engine.control_connections` | `0` | Reserved HTTP connections for health and recovery probes. `0` derives two per engine with a floor of four. Must be nonnegative. |
+| Field                        | Default        | Purpose and validation                                                                                                                                                                              |
+| ---------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serving.admission`          | `"predictive"` | `predictive` prices every prefill path against the TTFT budget and constrains aggregate placement to the single-phase region covered by engine measurements. `open` disables both admission checks. |
+| `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget to reduce boundary churn. Nonnegative.                                                                                                                  |
+| `serving.max_connections`    | `512`          | Global admitted-request limit and HTTP data-pool size. At least 1.                                                                                                                                  |
+| `engine.control_connections` | `0`            | HTTP connections reserved for health and recovery. `0` derives two per engine, with a minimum of four. Nonnegative.                                                                                 |
 
-Predictive admission returns `429` when the cheapest prefill path exceeds the TTFT budget. Engine-backlog refusals carry `Retry-After` with the projected wait. Prompt-only refusals carry the error envelope with the corrective action: shorten the prompt or raise the TTFT target.
+Predictive admission returns HTTP 429 when the least expensive prefill path exceeds the TTFT budget.
 
-Measure sustained healthy inflight work before raising `serving.max_connections`. If admitted work exceeds what engines can drain before KV handoffs expire, decode can fail. The loader refuses an admission override above `serving.max_connections` before startup because admission would outrun the dispatch pool.
+Refusals caused by engine backlog include `Retry-After` with the projected wait.
+
+A prompt that cannot fit the TTFT budget even without backlog gets an error envelope directing the caller to shorten the prompt or increase the TTFT target.
+
+Measure sustained healthy inflight load before raising `serving.max_connections`.
+
+If admitted work exceeds what engines can drain before KV handoffs expire, decode requests can fail.
+
+The loader rejects an admission override above `serving.max_connections` during startup because such a setting would permit admission beyond the dispatch pool.
 
 ### Placement
 
-Narwhal filters engines by role, availability, exclusions, and projected SLO compliance. It selects the lowest-cost eligible engine, with a deterministic instance-ID tie-break. When every candidate exceeds the SLO, it records an unserved placement and selects the least-cost fallback. Engine prefix caching operates independently of router placement.
+Placement first filters engines by:
 
-A live role change immediately updates the scheduler role used for new requests. Requests already resident on the engine keep their serving assignment until they finish or are cancelled. Lifecycle drains, quarantine, ejection, and restart holds remain enforced.
+- role,
+- availability,
+- exclusions,
+- projected SLO compliance.
+
+Among eligible engines, Narwhal selects the lowest-cost candidate. Equal-cost candidates are resolved deterministically by instance ID.
+
+If every candidate violates the SLO projection, Narwhal records an unserved placement and chooses the least-cost fallback.
+
+Engine-side prefix caching is independent of router placement.
+
+A live role change affects scheduling for new requests immediately.
+
+Resident requests remain assigned to their existing engine until they complete or are cancelled.
+
+Lifecycle drain, quarantine, ejection, and restart holds remain active during role changes.
 
 ## Engine requests and timeouts
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `profiles.path` | `"runs/profiles.json"` | Profile store loaded by the router and written by `narwhal-profile`. |
-| `serving.request_timeout_s` | `600.0` | Original completion deadline from HTTP ingress through response delivery. Must be positive. |
-| `serving.prefill_timeout_s` | `120.0` | Deadline for the prefill leg. Must be positive. |
-| `recovery.failure_quarantine_s` | `0.0` | Time an engine failure holds the engine out of placement. `0` disables quarantine. Must be nonnegative. |
-| `engine.decode_read_timeout_s` | `60.0` | Maximum silent gap between decode chunks. `0` disables the gap bound. Must be nonnegative. |
-| `engine.first_token_timeout_s` | `2.5` | Deadline for the decode leg's first token and each functional verification leg. Must be positive. |
-| `engine.tokenize` | `true` | Requests exact input length through the dialect's tokenize route. |
-| `engine.tokenize_timeout_s` | `2.0` | Deadline for exact token counting. Must be positive. |
-| `engine.chars_per_token` | `3.8` | The router applies this character ratio when the dialect's tokenize route is unreachable. Must be positive. |
-| `engine.pool_timeout_s` | `5.0` | Maximum wait for an engine HTTP connection slot on either pool. A probe that exhausts this wait leaves the engine verdict unchanged. Must be positive. |
-| `engine.connect_timeout_s` | `10.0` | Engine TCP connection deadline. Must be positive. |
-| `engine.health_timeout_s` | `5.0` | Deadline for preflight, breaker, and readmission health probes. Must be positive. |
+| Field                           | Default                | Purpose and validation                                                                                                     |
+| ------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `profiles.path`                 | `"runs/profiles.json"` | Profile store read by the router and written by `narwhal-profile`.                                                         |
+| `serving.request_timeout_s`     | `600.0`                | End-to-end completion deadline from HTTP ingress through response delivery. Positive.                                      |
+| `serving.prefill_timeout_s`     | `120.0`                | Prefill-leg deadline. Positive.                                                                                            |
+| `recovery.failure_quarantine_s` | `0.0`                  | Time a failed engine remains excluded from placement. `0` disables quarantine. Nonnegative.                                |
+| `engine.decode_read_timeout_s`  | `60.0`                 | Maximum silent interval between decode chunks. `0` disables this gap limit. Nonnegative.                                   |
+| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token and for each functional-verification leg. Positive.                                     |
+| `engine.tokenize`               | `true`                 | Requests exact input length from the dialect's tokenisation endpoint.                                                      |
+| `engine.tokenize_timeout_s`     | `2.0`                  | Exact-token-count deadline. Positive.                                                                                      |
+| `engine.chars_per_token`        | `3.8`                  | Character-to-token ratio used when the tokenisation endpoint is unavailable. Positive.                                     |
+| `engine.pool_timeout_s`         | `5.0`                  | Maximum wait for an engine HTTP connection on either pool. Probe exhaustion leaves the engine verdict unchanged. Positive. |
+| `engine.connect_timeout_s`      | `10.0`                 | TCP connect deadline for engine requests. Positive.                                                                        |
+| `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                  |
 
-Set `engine.first_token_timeout_s` above the crossed-handoff p99 measured for the fleet's context range.
+Set `engine.first_token_timeout_s` above the measured crossed-handoff p99 over the fleet's supported context range.
 
-The original `serving.request_timeout_s` deadline bounds the complete decode stream. `engine.first_token_timeout_s` limits the time from opening the decode HTTP stream to the first generated token. After that token, `engine.decode_read_timeout_s` bounds gaps between transport chunks, including partial SSE lines and metadata. A value of `0` uses the request deadline as the stream bound. Breaker verification applies `engine.first_token_timeout_s` to each complete prefill and decode probe.
+`serving.request_timeout_s` bounds the full request, including the decode stream.
 
-Retries start a complete prefill/decode attempt before visible output. [Bounded serving](#bounded-serving) defines retry eligibility and resource limits.
+`engine.first_token_timeout_s` covers the period from opening the decode HTTP stream until its first generated token.
 
-An error in `engine.chars_per_token` affects the quadratic prefill estimate. Profile the tokenizer ratio for dialects that estimate token counts from text length.
+After the first token arrives, `engine.decode_read_timeout_s` limits the gap between transport chunks. Partial SSE lines and metadata chunks reset that timer.
+
+With `engine.decode_read_timeout_s: 0`, the overall request deadline is the only stream bound.
+
+Breaker verification uses `engine.first_token_timeout_s` separately for each complete prefill and decode verification leg.
+
+Retries begin a new complete prefill/decode attempt before visible output. [Bounded serving](#bounded-serving) specifies eligible failures and resource limits.
+
+`engine.chars_per_token` feeds the quadratic prefill estimate when tokenisation falls back to text length. Profile this ratio for every dialect that can use character-based estimation.
 
 ## Engine health
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `recovery.eject_after` | `3` | Consecutive failed legs required before breaker action. Must be at least 1. |
-| `recovery.readmit_every` | `10` | Monitor intervals between probes of ejected engines. Must be at least 1. |
-| `recovery.liveness_every` | `10` | Monitor intervals between health probes and, for contracted fleets, process identity and attestation checks. `0` disables idle sweeps and is forbidden with `whole_wave` restart policy. |
-| `recovery.liveness_misses` | `2` | Consecutive missed liveness probes required for ejection. Must be at least 1. |
-| `recovery.health.window_s` | `30.0` | Duration of each residual-scoring window. Must be at least 1 second. The first observation opens the window; slow passes or skipped observations can leave it undersampled. |
-| `recovery.health.drift_band` | `2.0` | Multiple of the engine's trailing healthy residual that marks drift. Must exceed 1.0. |
-| `recovery.health.relative_band` | `1.5` | Peer-relative multiple that overrides the fleet-surge veto. `0` disables the veto. Must be nonnegative. |
-| `recovery.health.min_samples` | `3` | Observations required to score a window. Must be at least 1 and at most `floor(recovery.health.window_s / controller.monitor_interval_s)`, the configured cadence bound. An undersampled window increments `health.undersampled` in `/narwhal/state`. |
-| `recovery.health.probation_windows` | `3` | Consecutive drifting windows required for probation. Must be at least 1. |
-| `recovery.health.evict_windows` | `5` | Consecutive drifting windows required to request ejection. Must be at least 1 and at least `recovery.health.probation_windows`, since ejection counts up from probation. |
-| `recovery.health.recovery_windows` | `3` | Consecutive healthy windows required to clear probation. Must be at least 1. |
-| `recovery.health.probation_penalty_s` | `1.5` | Placement penalty applied during probation. Must be nonnegative. |
+| Field                                 | Default | Purpose and validation                                                                                                                                                                                                        |
+| ------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recovery.eject_after`                | `3`     | Consecutive failed legs before breaker action. At least 1.                                                                                                                                                                    |
+| `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines. At least 1.                                                                                                                                                              |
+| `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, process-identity and attestation checks. `0` disables idle sweeps and is invalid with `whole_wave`.                                                       |
+| `recovery.liveness_misses`            | `2`     | Consecutive failed liveness probes before ejection. At least 1.                                                                                                                                                               |
+| `recovery.health.window_s`            | `30.0`  | Residual-scoring window length. At least 1 second. The first observation starts the window; slow or skipped monitor passes can leave it undersampled.                                                                         |
+| `recovery.health.drift_band`          | `2.0`   | Multiple of the engine's trailing healthy residual used as the drift threshold. Greater than 1.0.                                                                                                                             |
+| `recovery.health.relative_band`       | `1.5`   | Peer-relative multiple that can override the fleet-surge veto. `0` disables the veto. Nonnegative.                                                                                                                            |
+| `recovery.health.min_samples`         | `3`     | Observations required before scoring a window. At least 1 and no greater than `floor(recovery.health.window_s / controller.monitor_interval_s)`. An undersampled window increments `health.undersampled` in `/narwhal/state`. |
+| `recovery.health.probation_windows`   | `3`     | Consecutive drifting windows before probation. At least 1.                                                                                                                                                                    |
+| `recovery.health.evict_windows`       | `5`     | Consecutive drifting windows before ejection is requested. At least 1 and no lower than `probation_windows`.                                                                                                                  |
+| `recovery.health.recovery_windows`    | `3`     | Consecutive healthy windows required to clear probation. At least 1.                                                                                                                                                          |
+| `recovery.health.probation_penalty_s` | `1.5`   | Placement penalty applied during probation. Nonnegative.                                                                                                                                                                      |
 
-Connection failures count directly toward `recovery.eject_after`. Transport timeouts first trigger a health probe. First-token deadlines and mid-stream silence require functional verification of the failing inference path. Inconclusive verification retains the hold and retries on the readmission cadence. Router handoff preserves the hold and its failed transfer paths.
+Connection failures count immediately toward `recovery.eject_after`.
 
-The drift tracker compares fresh decode residuals and stalled inter-token gaps with each engine's recent healthy baseline, dropping placement estimates retained after decode work finishes from the health evidence.
+Transport timeouts first cause a health probe.
 
-Local prefill work invalidates the decode-only profile for that interval. The tracker pauses decode correction and drift scoring for gaps that cross a prefill boundary, including prefills that start and finish between monitoring passes. Once pure decode observations resume, it opens a fresh scoring window and keeps the existing healthy baseline and probation state.
+First-token timeouts and mid-stream stalls require functional verification of the affected inference path.
 
-Client latency, controller pressure, request timeouts and liveness checks continue to observe mixed work throughout the pause. Use `health.prefill_paused` and `health.prefill_pauses` in `/narwhal/state` to inspect these pauses.
+If verification is inconclusive, Narwhal retains the hold and retries on the readmission cadence.
 
-The peer-relative check suppresses ejection when the whole fleet slows down. A nonempty window with too few observations closes as `undersampled`, discards its residuals and carries the engine's baseline and probation state into the next window.
+Router handoff keeps the hold and its failed transfer paths.
 
-State and `narwhal_health_windows_*_total` report scored and undersampled windows, while `last_scored_s_ago` measures the time since the last verdict. Confirmed ejection clears that engine's drift history.
+The drift tracker compares fresh decode residuals and stalled inter-token gaps against each engine's recent healthy baseline.
+
+Placement estimates left over after decode completion are excluded from health evidence.
+
+Local prefill work makes the decode-only profile invalid for that interval.
+
+The tracker therefore pauses decode correction and drift scoring for gaps that cross a prefill boundary. This includes prefills that both start and finish between monitor passes.
+
+When pure decode observations return, Narwhal opens a new scoring window while retaining the previous healthy baseline and probation state.
+
+Client latency, controller pressure, request deadlines, and liveness checks continue to observe mixed work while decode health scoring is paused.
+
+`health.prefill_paused` and `health.prefill_pauses` in `/narwhal/state` expose this condition.
+
+The peer-relative test suppresses ejection during fleet-wide slowdowns.
+
+If a nonempty health window closes without enough samples, it is marked `undersampled`. Its residuals are discarded, while the current baseline and probation state carry into the next window.
+
+`/narwhal/state` and `narwhal_health_windows_*_total` report scored and undersampled windows.
+
+`last_scored_s_ago` records elapsed time since the most recent verdict.
+
+Confirmed ejection clears the affected engine's drift history.
 
 ## Resume and shutdown
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `recovery.state_path` | `"runs/state.json"` | Atomic handoff file containing roles, ejections, lifecycle state, and counters. |
-| `recovery.resume` | `false` | Applies a matching handoff at process start. |
-| `serving.graceful_timeout_s` | `30.0` | Uvicorn drain time after `SIGTERM`. Must be nonnegative. |
+| Field                        | Default             | Purpose and validation                                                       |
+| ---------------------------- | ------------------- | ---------------------------------------------------------------------------- |
+| `recovery.state_path`        | `"runs/state.json"` | Atomic handoff file storing roles, ejections, lifecycle state, and counters. |
+| `recovery.resume`            | `false`             | Applies a compatible handoff file at process startup.                        |
+| `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative.                         |
 
-With a saved handoff, the router resumes from `recovery.state_path`; at first boot it opens the configured split. An uncontracted development fleet also opens that split when the saved engine set differs from the current fleet.
+With a saved handoff, the router resumes from `recovery.state_path`.
 
-Contracted resume and automatic takeover require handoff schema version 1, including accepted process identities for every available engine. An unknown schema or version aborts startup. If an existing handoff passes the schema check but fails to apply to a contracted fleet, the fleet stays held for a managed wave.
+Without one, startup uses the split declared in the fleet configuration.
 
-On a successful resume, the router restores saved roles, ejections and lifecycle holds, including a complete backend outage. Per-engine dwell timestamps start fresh, and the P-to-D cooldown begins when the router constructs the replacement scheduler.
+An uncontracted development fleet also falls back to the configured split when the saved engine set differs from the current one.
 
-Automatic warm-standby takeover is CLI-configured because router IDs and the shared lease path differ by host. [Operate Narwhal](Operate.md#start-production-routers) defines readiness, fencing, recovery, and partition behaviour.
+Contracted resume and automatic takeover require handoff schema version 1 and accepted process identities for every available engine.
+
+An unknown handoff schema or version aborts startup.
+
+If a handoff passes schema validation but cannot be applied to a contracted fleet, the fleet remains held for a managed wave.
+
+Successful resume restores:
+
+- roles,
+- ejections,
+- lifecycle holds,
+- complete-backend-outage state.
+
+Per-engine dwell timestamps restart from process startup.
+
+The P-to-D cooldown begins when the replacement scheduler is created.
+
+Warm-standby takeover remains a CLI concern because router IDs and shared lease paths vary by host.
+
+[Operate Narwhal](Operate.md#start-the-production-routers) defines readiness, fencing, recovery, and partition behaviour.
 
 ## Engine authentication
 
@@ -427,54 +866,70 @@ Automatic warm-standby takeover is CLI-configured because router IDs and the sha
 }
 ```
 
-Ingress terminates client credentials. Narwhal attaches the configured engine credential and a router-generated `x-request-id` unique to each attempt and phase.
+Ingress terminates public client credentials.
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `engine.engine_api_key_env` | `""` | Environment variable resolved when constructing an engine client. Engine clients attach the Bearer credential to serving, profiling, preflight, cache reset and lifecycle requests. Attestation requests use the sidecar URL through the trusted control network. Named but unset variables fail client construction. |
+For engine requests, Narwhal attaches the configured engine credential plus a router-generated `x-request-id` that is unique for every attempt and phase.
 
-`/narwhal/state` exposes `boundary` or `engine-credential` under `admission.engine_auth`. Keep that mode fixed across workload measurement and serving.
+| Field                       | Default | Purpose and validation                                                                                                                                                                                                                                                                                                  |
+| --------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.engine_api_key_env` | `""`    | Environment-variable name resolved when an engine client is created. Engine clients attach its Bearer credential to serving, profiling, preflight, cache reset, and lifecycle requests. Attestation uses the sidecar URL on the trusted control network. A named but unset variable causes client construction to fail. |
+
+`/narwhal/state` reports either `boundary` or `engine-credential` under `admission.engine_auth`.
+
+Keep that authentication mode unchanged between workload measurement and production serving.
 
 ## Request journal
 
-Narwhal writes request timings to `journal.jsonl` beside `profiles.path` unless `narwhal-serve --journal` selects another path. The [journal reference](Telemetry-and-Artifacts.md#request-journal) documents its fields.
+Narwhal writes request timings to `journal.jsonl` beside `profiles.path`.
+
+`narwhal-serve --journal` can select another location.
+
+The [journal reference](Telemetry-and-Artifacts.md#request-journal) defines the record format.
 
 ## Protocol adapters
 
-| Field | Default | Accepted values |
-| --- | --- | --- |
-| `engine.connector` | `"nixl"` | Registered KV transport. This release registers `nixl`. |
-| `engine.dialect` | `"vllm"` | Registered engine HTTP dialect. This release registers `vllm`. |
+| Field              | Default  | Accepted values                                               |
+| ------------------ | -------- | ------------------------------------------------------------- |
+| `engine.connector` | `"nixl"` | Registered KV transport. This release provides `nixl`.        |
+| `engine.dialect`   | `"vllm"` | Registered engine HTTP dialect. This release provides `vllm`. |
 
-A connector or dialect enters the registry after its preflight gates pass against the target engine build. Unknown names fail config validation.
+A connector or dialect is registered only after its preflight gates pass against the target engine build.
+
+Unknown names fail configuration validation.
 
 ## Profile validation
 
-The `profiles` section selects the profile store and the decode fit limits accepted by `narwhal-check`.
+The `profiles` section selects the profile store and the decode-fit limits enforced by `narwhal-check`.
 
-| Field | Default | Purpose and validation |
-| --- | --- | --- |
-| `profiles.max_decode_fit_mape` | `0.05` | Largest accepted in-sample decode fit error. Must be positive, finite and bounded by `controller.reactive.movement_margin`. The defaults for the fit limit and movement margin are equal. |
-| `profiles.max_decode_cv_mape` | `0.13` | Largest accepted leave-one-out cross-validation error. Must be positive and finite. Validate the profile over the context and concurrency range the deployment will serve. |
+| Field                          | Default | Purpose and validation                                                                                                                                                              |
+| ------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profiles.max_decode_fit_mape` | `0.05`  | Maximum accepted in-sample decode fit error. Positive, finite, and no greater than `controller.reactive.movement_margin`. The default fit limit equals the default movement margin. |
+| `profiles.max_decode_cv_mape`  | `0.13`  | Maximum accepted leave-one-out cross-validation error. Positive and finite. Profiles must cover the context and concurrency range used by the deployment.                           |
 
-`narwhal-check` applies both limits to every configured engine and reports the engine, measured error and accepted limit.
+`narwhal-check` applies both limits to every configured engine. Failures report the engine, measured error, and configured limit.
 
 ## Paths and CLI precedence
 
-Relative values in `profiles.path` and `recovery.state_path` resolve from the serving process's working directory. The `narwhal-serve --journal` option is CLI-only and defaults to `journal.jsonl` beside `profiles.path`.
+Relative `profiles.path` and `recovery.state_path` values resolve from the serving process's working directory.
 
-The serving CLI applies these overrides after loading the fleet config.
+`narwhal-serve --journal` exists only on the CLI and defaults to `journal.jsonl` beside `profiles.path`.
 
-| CLI option | Config value | Precedence |
-| --- | --- | --- |
-| `--max-concurrent` | `serving.max_connections` | Overrides router admission capacity. |
-| `--graceful-timeout` | `serving.graceful_timeout_s` | Overrides Uvicorn's shutdown drain time. |
-| `--resume` | `recovery.resume` | Forces resume on. A configured `true` remains enabled. |
+The serving CLI applies these overrides after loading the fleet document:
 
-`--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options are CLI-only. The [CLI reference](CLI-Reference.md) lists their defaults and validation.
+| CLI option           | Config value                 | Precedence                                           |
+| -------------------- | ---------------------------- | ---------------------------------------------------- |
+| `--max-concurrent`   | `serving.max_connections`    | Replaces router admission capacity.                  |
+| `--graceful-timeout` | `serving.graceful_timeout_s` | Replaces Uvicorn shutdown drain time.                |
+| `--resume`           | `recovery.resume`            | Forces resume on. A configured `true` stays enabled. |
+
+`--host`, `--port`, `--log-level`, `--journal`, and warm-standby options have no fleet-config equivalents.
+
+The [CLI reference](CLI-Reference.md) defines their defaults and validation.
 
 ## Config provenance
 
-Keep a copy of the exact config beside every scored run. The document contains engine URLs and may reveal site addresses. Replace those values before publishing an artifact.
+Keep the exact fleet configuration beside every scored run.
 
-The shipped annotated config uses placeholder addresses. Working configs with live addresses belong under `runs/` or a gitignored `config/fleet.*.json` path.
+Fleet documents contain engine URLs and can expose site addresses. Replace those values before publishing an artifact.
+
+The repository's annotated example uses placeholder addresses. Live configurations belong under `runs/` or a gitignored `config/fleet.*.json` path.
