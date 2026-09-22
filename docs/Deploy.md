@@ -560,7 +560,7 @@ Populate `contract` from that host's deployed image, packages, model and launch 
   --port <attestation-port>
 ```
 
-Point `attestation_url` at its `/v1/attestation` route, expose `/health` and `/v1/attestation` through the trusted control network, capture both responses, and restart the sidecar with the engine process. Validate the input and digested response against the [attestation document contract](Configuration.md#attestation-document).
+Set each fleet entry's `attestation_url` to the sidecar's `/v1/attestation` route and keep both `/health` and `/v1/attestation` reachable from the router over the trusted control network. The check below validates the response against the [attestation document contract](Configuration.md#attestation-document) and live engine identity.
 
 ### Verify the running sidecar
 
