@@ -47,6 +47,9 @@ dev = [
   "build>=1.2",
   "twine>=5",
 ]
+docs = [
+  "mkdocs-material==9.7.7",
+]
 
 [project.scripts]
 narwhal-check = "narwhal.diagnostics.check:main"
@@ -56,7 +59,7 @@ narwhal-profile = "narwhal.profiling.probe:main"
 narwhal-canary = "narwhal.diagnostics.canary:main"
 
 [project.urls]
-Documentation = "https://github.com/athrael-soju/Narwhal/wiki"
+Documentation = "https://athrael-soju.github.io/Narwhal/"
 Repository = "https://github.com/athrael-soju/Narwhal"
 Issues = "https://github.com/athrael-soju/Narwhal/issues"
 

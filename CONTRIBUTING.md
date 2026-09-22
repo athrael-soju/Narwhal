@@ -56,7 +56,7 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | `src/narwhal/` | Python package and scheduling implementation                   |
 | `tools/`       | Operator commands, CPU integration drills, and support scripts |
 | `config/`      | Shipped example and stub fleet configs                         |
-| `docs/`        | Repository documentation and wiki source                       |
+| `docs/`        | Repository documentation and GitHub Pages source               |
 | `deploy/`      | Optional deployment infrastructure                             |
 | `assets/`      | Images used by documentation                                   |
 
@@ -102,7 +102,7 @@ Site automation owns host credentials, source distribution, network configuratio
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 
-`make links` checks links and HTML targets in unfenced Markdown, heading anchors and canonical Narwhal URLs against the checkout. It also renders the selected wiki pages and assets into a temporary directory and checks links against that flattened layout.
+`make links` checks links and HTML targets in unfenced Markdown, heading anchors and canonical Narwhal URLs against the checkout. `make docs-build` builds the public site in strict mode and reports navigation, asset and rendering errors.
 
 ## Pull requests
 
@@ -114,7 +114,7 @@ Describe the problem, the resulting behaviour, and how you checked it. Link the 
 
 Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The prefix determines the release impact.
 
-Bring the branch up to date with `main` and run `make check` locally before merge. Documentation changes also require `make wiki-check`.
+Bring the branch up to date with `main` and run `make check` locally before merge. Documentation changes also require `make docs-build`.
 
 A maintainer reviews the PR and local check results, then squash-merges it using the PR title. Branch protection requires a PR and blocks force pushes; GitHub deletes each branch at squash-merge.
 
@@ -122,8 +122,6 @@ Address review comments on the same branch and rerun the relevant checks after e
 
 Update the docs when a config field, route, journal field, metric, CLI flag or operator procedure changes.
 
-## Wiki publishing
+## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request. `docs/wiki-pages.txt` selects the wiki pages. The `wiki` workflow publishes canonical `main` after a documentation or asset change.
-
-Run `tools/publish_wiki.sh --check` to validate wiki links locally. To compare the rendered pages with the current wiki, run `make wiki-check`; it validates the layout, clones the wiki and reports the diff. The wiki commands use the checkout's `origin` by default; set `WIKI_URL` to target another wiki or a local test repository.
+Edit the Markdown under `docs/` through a pull request and add each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages. Run `make docs-build` locally to produce the same site under `site/`.

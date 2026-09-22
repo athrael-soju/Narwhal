@@ -7,7 +7,7 @@ VENV_PYTHON ?= .venv/bin/python
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 
-.PHONY: setup test unit lint format types links publication versions check stub-fleet wiki wiki-check observe integration
+.PHONY: setup test unit lint format types links publication versions check docs-build stub-fleet observe integration
 .PHONY: coverage
 
 .venv/bin/python:
@@ -47,11 +47,8 @@ versions:
 # Keep this order aligned with `.github/workflows/ci.yml`.
 check: publication versions lint format types unit integration links
 
-wiki:
-	tools/publish_wiki.sh
-
-wiki-check:
-	tools/publish_wiki.sh --dry-run
+docs-build: $(BOOTSTRAP)
+	$(VENV_PYTHON) -m mkdocs build --strict --clean
 
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)

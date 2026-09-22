@@ -37,25 +37,25 @@ Predictive admission returns a retryable response before dispatch when the cheap
 
 ### Aggregated
 
-![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
+![Four identical replicas, each serving prefill and decode.](assets/architectures/aggregated.svg)
 
 Aggregated placement keeps KV local by running both phases on each fixed-role engine, which makes long prefills and occupied decode batches compete for the same schedule.
 
 ### Static disaggregated
 
-![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
+![Two fixed prefill engines and two fixed decode engines.](assets/architectures/static.svg)
 
 Static disaggregation sends each prompt through the fixed prefill pool and transfers its KV handoff to the fixed decode pool; the sizing workload fixes that phase ratio, so request-mix shifts require an operator to reallocate engines.
 
 ### Adaptive cold-swap
 
-![One engine draining and restarting in the decode pool.](../assets/architectures/coldswap.svg)
+![One engine draining and restarting in the decode pool.](assets/architectures/coldswap.svg)
 
 Cold-swap control drains one engine, relaunches it for the target role and restores its capacity after weight loading, peer registration and health checks; the traffic shift must outlast that restart interval for the new split to repay the move.
 
 ### Adaptive hot-swap
 
-![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
+![One engine changing role while its weights remain resident.](assets/architectures/hotswap.svg)
 
 Narwhal hot-swaps capacity by changing a dual-capability engine's scheduler role while its weights remain resident and KV paths connect every peer; cooldown, dwell, confirmations and role floors prevent brief pressure changes from moving the split.
 

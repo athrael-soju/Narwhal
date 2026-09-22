@@ -1,10 +1,9 @@
-<p align="center">
-  <img src="../assets/social-preview.png" alt="Narwhal logo and wordmark" width="100%">
-</p>
-
 # Narwhal documentation
 
-[Deploy a fleet](Deploy.md) starts on your management workstation with your private `.env`, derives the deployment configuration from host inspection, then takes you through remote host preparation, engine launch, KV transfer checks and a routed completion. Continue through the private-route workload trial, then inspect the running fleet through Prometheus and Grafana.
+<div class="narwhal-hero">
+  <img src="assets/social-preview.png" alt="Narwhal, adaptive disaggregated inference on a role-free fleet">
+  <p class="narwhal-hero__copy"><a href="Deploy.md">Deploy a fleet</a> from your management workstation, derive its configuration from host inspection, prepare the remote engines and validate routed inference through the private deployment path.</p>
+</div>
 
 ## Deployment and operations
 

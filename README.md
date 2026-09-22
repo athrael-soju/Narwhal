@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
+  <img src="docs/assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/Home.md">Documentation</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
   <a href="docs/Deploy.md">Deployment</a> |
   <a href="docs/HTTP-API.md">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
@@ -35,7 +35,7 @@ Narwhal provides:
 
 Each engine can execute both prefill and decode. The controller assigns roles using request demand, resident work and engine profiles, with configurable role floors, cooldowns and health checks. Role changes affect new request placement; existing requests remain tracked until completion.
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](assets/architectures/hotswap.svg)
+![Narwhal's reactive controller changes engine roles while model weights remain resident.](docs/assets/architectures/hotswap.svg)
 
 See [Core concepts](docs/Core-Concepts.md) for request flow and scheduling, and [Configuration](docs/Configuration.md) for controller settings.
 
@@ -43,7 +43,7 @@ See [Core concepts](docs/Core-Concepts.md) for request flow and scheduling, and 
 
 The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K3 workloads measured with AlPerf v0.12.0 and prefix caching enabled.
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](assets/infographic.png)
+![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](docs/assets/infographic.png)
 
 ## Deploy a fleet
 
