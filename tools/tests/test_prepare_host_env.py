@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.prepare_host_env import ENGINE_FIELDS, select_values, write_environment
+from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values, write_environment
 
 
 class HostEnvironmentTests(unittest.TestCase):

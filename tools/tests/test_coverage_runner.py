@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools.coverage_support import ha
-from tools.run_coverage import commands, verify_checkpoints
+from tools.maintenance.run_coverage import commands, verify_checkpoints
 
 
 class CoverageRunnerTests(unittest.TestCase):

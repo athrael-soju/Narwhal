@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from narwhal.engines.stream import event_choices, event_object, token_ids
 
 SEED_PROMPT = (
@@ -43,7 +43,7 @@ def digest(path: Path) -> str:
 def provenance() -> dict:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=Path(__file__).resolve().parents[2],
         text=True,
         capture_output=True,
         check=True,

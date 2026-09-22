@@ -12,7 +12,7 @@ import httpx
 
 from narwhal.config import EngineContract
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
-from tools.attestation_contract import (
+from tools.deployment.attestation_contract import (
     attention_backends,
     engine_document,
     finalize_fleet,
@@ -153,7 +153,9 @@ class AttestationContractTests(unittest.TestCase):
     def test_engine_document_uses_checked_captures_and_rejects_stale_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             run, log = self.engine_evidence(Path(folder))
-            with patch("tools.attestation_contract.live_container", return_value="b" * 64):
+            with patch(
+                "tools.deployment.attestation_contract.live_container", return_value="b" * 64
+            ):
                 document = engine_document(run, log)
                 self.assertEqual(document["contract"]["nixl_connector_version"], 9)
                 self.assertEqual(document["contract"]["attention_backend"], "ROCM_AITER_MLA")
@@ -188,8 +190,13 @@ class AttestationContractTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with (
-                    patch("tools.attestation_contract.live_container", return_value="b" * 64),
-                    patch("tools.attestation_contract.attest_main", return_value=0) as start,
+                    patch(
+                        "tools.deployment.attestation_contract.live_container",
+                        return_value="b" * 64,
+                    ),
+                    patch(
+                        "tools.deployment.attestation_contract.attest_main", return_value=0
+                    ) as start,
                     patch.dict(
                         os.environ,
                         {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"},
@@ -232,11 +239,11 @@ class AttestationContractTests(unittest.TestCase):
             ]
             with (
                 patch(
-                    "tools.attestation_contract.fetch_engine_identity",
+                    "tools.deployment.attestation_contract.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=identity,
                 ),
-                patch("tools.attestation_contract.httpx.Client") as client,
+                patch("tools.deployment.attestation_contract.httpx.Client") as client,
             ):
                 client.return_value.__enter__.return_value.get.side_effect = responses
                 with self.assertRaisesRegex(ValueError, "different contracts"):
@@ -256,11 +263,11 @@ class AttestationContractTests(unittest.TestCase):
             payload = make_attestation(document, identity)
             with (
                 patch(
-                    "tools.attestation_contract.fetch_engine_identity",
+                    "tools.deployment.attestation_contract.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=identity,
                 ),
-                patch("tools.attestation_contract.httpx.Client") as client,
+                patch("tools.deployment.attestation_contract.httpx.Client") as client,
             ):
                 client.return_value.__enter__.return_value.get.return_value = httpx.Response(
                     200, json=payload, request=httpx.Request("GET", "http://sidecar.invalid")

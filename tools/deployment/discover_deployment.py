@@ -12,11 +12,11 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.deploy_hosts import SSH, Host, load_hosts, write_private
-from tools.engine_launch import load_launches
-from tools.launch_engine import ENV_PREFIXES, MANAGED_ENV, validate_runtime
-from tools.prepare_host_env import select_values, write_environment
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.deployment.engine_launch import load_launches
+from tools.deployment.host_access import SSH, Host, load_hosts, write_private
+from tools.deployment.launch_engine import ENV_PREFIXES, MANAGED_ENV, validate_runtime
+from tools.deployment.prepare_host_env import select_values, write_environment
 
 PROBE = r'''
 import hashlib, json, re, subprocess, sys

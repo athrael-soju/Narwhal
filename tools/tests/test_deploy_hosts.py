@@ -10,18 +10,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.check_publication import private_path
-from tools.deploy_hosts import (
-    SSH,
-    Host,
+from tools.deployment.deploy_hosts import (
     forward_ports,
     install,
-    load_hosts,
     load_run,
     main,
     prepare,
 )
-from tools.prepare_host_env import ENGINE_FIELDS
+from tools.deployment.host_access import SSH, Host, load_hosts
+from tools.deployment.prepare_host_env import ENGINE_FIELDS
+from tools.maintenance.check_publication import private_path
 from tools.tests.test_engine_launch import launch_document
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -224,7 +222,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
             transport = LocalSSH(root)
             with (
                 patch.dict(os.environ, self.env),
-                patch("tools.deploy_hosts.SSH", return_value=transport),
+                patch("tools.deployment.deploy_hosts.SSH", return_value=transport),
             ):
                 self.assertEqual(
                     main(
@@ -309,7 +307,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
                 return subprocess.CompletedProcess(args, 0, b"", b"")
 
             ssh = SSH(self.env, root / "logs")
-            with patch("tools.deploy_hosts.subprocess.run", side_effect=execute):
+            with patch("tools.deployment.deploy_hosts.subprocess.run", side_effect=execute):
                 for host in self.hosts:
                     ssh.run(host, "test", "cat", payload=payload)
             self.assertEqual(seen, ["sshpass", "ssh"])
@@ -345,7 +343,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
                     self.assertEqual(kwargs["pass_fds"], ())
                 return subprocess.CompletedProcess(args, 0, b"", None)
 
-            with patch("tools.deploy_hosts.subprocess.run", side_effect=execute):
+            with patch("tools.deployment.deploy_hosts.subprocess.run", side_effect=execute):
                 for host in self.hosts:
                     ssh.run(host, "service tunnel", "", forwards=["127.0.0.1:18000:127.0.0.1:8000"])
             for path in (root / "logs").iterdir():
@@ -353,7 +351,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             with (
                 patch(
-                    "tools.deploy_hosts.subprocess.run",
+                    "tools.deployment.deploy_hosts.subprocess.run",
                     return_value=subprocess.CompletedProcess([], 255, b"", None),
                 ),
                 self.assertRaisesRegex(ValueError, "blocked at service tunnel"),
@@ -367,8 +365,8 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
 
     def test_tunnel_selects_shared_router_host_and_checks_local_ports(self):
         with (
-            patch("tools.deploy_hosts.load_hosts", return_value=self.hosts),
-            patch("tools.deploy_hosts.SSH") as ssh,
+            patch("tools.deployment.deploy_hosts.load_hosts", return_value=self.hosts),
+            patch("tools.deployment.deploy_hosts.SSH") as ssh,
             patch.dict(os.environ, self.env),
         ):
             self.assertEqual(

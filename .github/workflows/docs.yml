@@ -6,14 +6,14 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'pyproject.toml'
-      - 'tools/check_links.py'
+      - 'tools/maintenance/check_links.py'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'pyproject.toml'
-      - 'tools/check_links.py'
+      - 'tools/maintenance/check_links.py'
       - '.github/workflows/docs.yml'
   workflow_dispatch: {}
 permissions:

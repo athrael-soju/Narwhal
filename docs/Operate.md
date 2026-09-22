@@ -109,7 +109,7 @@ Choose the router and engine scopes from the [dashboard reference](https://githu
 | Retries, failures, refusals, and rejections    | Which protection path is active.                     |
 | Role changes, reversals, and blocked decisions | Whether the controller is stable.                    |
 
-Set router-down, engine-down, error-burst, unserved, ejection, and role-floor thresholds in `tools/prometheus-alerts.yml` for the deployment before enabling paging.
+Set router-down, engine-down, error-burst, unserved, ejection, and role-floor thresholds in `tools/observability/prometheus-alerts.yml` for the deployment before enabling paging.
 
 Use request journals for per-request placement and timing. Use metrics for process-level summaries, subject to counter resets and state-retention windows.
 

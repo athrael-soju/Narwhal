@@ -31,7 +31,7 @@ jobs:
           retention-days: 14
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
-        run: python tools/release.py check --release
+        run: python tools/maintenance/release.py check --release
 
   unit:
     runs-on: ubuntu-latest
@@ -72,7 +72,7 @@ jobs:
           python -m pip install dist/*.whl
           source_root="$PWD"
           cd "$(mktemp -d)"
-          python "$source_root/tools/check_installed.py" \
+          python "$source_root/tools/maintenance/check_installed.py" \
             --expected-version "$EXPECTED_VERSION" --source-root "$source_root"
 
       - name: Run unit tests and integration drills from the source distribution

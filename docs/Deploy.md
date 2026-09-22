@@ -55,10 +55,10 @@ Password authentication uses the matching `_SSH_PASSWORD` variable. Key authenti
 Run discovery from the management checkout:
 
 ```bash
-python3 tools/discover_deployment.py --out runs/discovery/first-deploy
+python3 tools/deployment/discover_deployment.py --out runs/discovery/first-deploy
 . runs/discovery/first-deploy/derived.env
-python3 tools/deploy_hosts.py plan
-python3 tools/deploy_hosts.py check-access
+python3 tools/deployment/deploy_hosts.py plan
+python3 tools/deployment/deploy_hosts.py check-access
 ```
 
 The workstation needs Python's standard library, OpenSSH and `sshpass` when password authentication is used.
@@ -159,7 +159,7 @@ Observed hostnames are labels only and may repeat between machines. Management d
 Open an engine shell by role:
 
 ```bash
-python3 tools/deploy_hosts.py shell --role engine-1
+python3 tools/deployment/deploy_hosts.py shell --role engine-1
 ```
 
 Use `--role router` for the router and the corresponding numbered role for other engines. Colocated roles resolve through the same authentication entry.
@@ -181,7 +181,7 @@ Keep `.env` and the discovery run's `derived.env` loaded in the management shell
 Create a new prepared deployment:
 
 ```bash
-python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
+python3 tools/deployment/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
 `NARWHAL_DEPLOYMENT_REVISION` must name the full approved commit in the management checkout.
@@ -199,9 +199,9 @@ Engine launch records are checked for GPU allocation, TP size and transport devi
 
 Preparation snapshots these management-checkout helpers:
 
-- `tools/fabric_budget.py`;
-- `tools/launch_engine.py`;
-- `tools/cache_capture_hook.py`.
+- `tools/deployment/fabric_budget.py`;
+- `tools/deployment/launch_engine.py`;
+- `tools/deployment/cache_capture_hook.py`.
 
 They are installed on engine hosts under `runs/deployment-tools/`.
 
@@ -229,7 +229,7 @@ A missing input or unavailable revision stops preparation before any remote chan
 Install the host carrying the first engine role:
 
 ```bash
-python3 tools/deploy_hosts.py install \
+python3 tools/deployment/deploy_hosts.py install \
   --run runs/deployment-env/first-deploy --role engine-1
 ```
 
@@ -242,7 +242,7 @@ Remote commands, exit status and output are retained under the prepared run's `l
 Once the first host passes, install the remainder:
 
 ```bash
-python3 tools/deploy_hosts.py install --run runs/deployment-env/first-deploy
+python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
 ```
 
 The helper iterates physical host IDs. Completed installations and matching transferred files are reused.
@@ -256,12 +256,12 @@ Keep the prepared run intact because its hashes and role assignments are revalid
 From management terminals with the workstation `.env` loaded:
 
 ```bash
-python3 tools/deploy_hosts.py shell \
+python3 tools/deployment/deploy_hosts.py shell \
   --run runs/deployment-env/first-deploy --role router
 ```
 
 ```bash
-python3 tools/deploy_hosts.py shell \
+python3 tools/deployment/deploy_hosts.py shell \
   --run runs/deployment-env/first-deploy --role engine-1
 ```
 
@@ -1081,7 +1081,7 @@ The installed definition is in the image's [NIXL metadata module](https://github
 Against the running container, capture the protocol constant together with the checked plan, image ID and container ID:
 
 ```bash
-.venv/bin/python tools/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
+.venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
 The engine attestation generator reads the capture, and the router finalisation command checks every engine's resulting contract.
@@ -1353,7 +1353,7 @@ The peer handshake and KV-transfer checks in step 8 exercise this policy between
 Generate the role-specific private document from the checked plan, live cache capture, pinned runtime inspections and serving startup log. The command rejects mismatched plan hashes, missing evidence, incomplete fields and an existing destination:
 
 ```bash
-.venv/bin/python tools/attestation_contract.py generate \
+.venv/bin/python tools/deployment/attestation_contract.py generate \
   --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
 export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["role"])' "$ENGINE_RUN/launch.json")"
 export ATTEST_DOCUMENT="runs/engine-attestation.${ENGINE_ROLE}.json"
@@ -1370,7 +1370,7 @@ These identify the process being attested.
 Start the sidecar from the engine-role shell. The helper reads the engine endpoint from the checked plan and the sidecar bind address and port from the role environment's `NARWHAL_NODE_<n>_ATTESTATION_URL`:
 
 ```bash
-.venv/bin/python tools/attestation_contract.py serve --run "$ENGINE_RUN"
+.venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
 Discovery placed that attestation URL in the generated router fleet. Verify that `/health` and `/v1/attestation` are reachable from the router over the trusted control network.
@@ -1431,7 +1431,7 @@ Run this check for every engine and store its capture directory in the deploymen
 After all sidecars pass, run this once in the router role shell. It reads each live engine and sidecar, verifies the process identity and complete contract, requires the same contract across the fleet, retains the initial generated fleet under `runs/`, and fills `engine_contract` in `config/fleet.local.json`:
 
 ```bash
-.venv/bin/python tools/attestation_contract.py finalize-fleet --fleet config/fleet.local.json
+.venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet config/fleet.local.json
 ```
 
 A differing contract identifies a specific engine launch or capture input to correct before profiling. Restart the affected engine and its sidecar from a checked plan, then rerun finalisation.
@@ -1600,7 +1600,7 @@ Prometheus scrapes the router locally and resolves engine targets from the fleet
 From a management-checkout terminal with `.env` loaded:
 
 ```bash
-python3 tools/deploy_hosts.py tunnel --role router \
+python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
 ```
 

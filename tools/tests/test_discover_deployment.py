@@ -11,11 +11,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.deploy_hosts import SSH, load_hosts, prepare
-from tools.discover_deployment import PROBE, build_records, derive_hosts, discover
-from tools.engine_launch import load_launches
-from tools.launch_engine import build
-from tools.prepare_host_env import select_values
+from tools.deployment.deploy_hosts import prepare
+from tools.deployment.discover_deployment import PROBE, build_records, derive_hosts, discover
+from tools.deployment.engine_launch import load_launches
+from tools.deployment.host_access import SSH, load_hosts
+from tools.deployment.launch_engine import build
+from tools.deployment.prepare_host_env import select_values
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -95,7 +96,7 @@ class DiscoveryTests(unittest.TestCase):
             out = root / "discovery"
             self.assertFalse((root / "config").exists())
             with (
-                patch("tools.discover_deployment.SSH", FakeInspectionSSH),
+                patch("tools.deployment.discover_deployment.SSH", FakeInspectionSSH),
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, out)
@@ -125,7 +126,7 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(file.stat().st_mode & 0o777, 0o600)
                 self.assertNotIn("private-test-password", file.read_text())
             old = Path(env["NARWHAL_FLEET"]).read_bytes()
-            with patch("tools.discover_deployment.SSH") as ssh:
+            with patch("tools.deployment.discover_deployment.SSH") as ssh:
                 with self.assertRaisesRegex(ValueError, "Archive previous"):
                     discover(env, root / "another-discovery")
                 ssh.assert_not_called()

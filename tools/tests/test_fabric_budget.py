@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.fabric_budget import cache_shape, calculate, main, received_gbps
+from tools.deployment.fabric_budget import cache_shape, calculate, main, received_gbps
 
 
 class FabricBudgetTests(unittest.TestCase):

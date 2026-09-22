@@ -80,7 +80,7 @@ From the management checkout, with the workstation `.env` from step 1 loaded, fo
 The [step 10 tunnel](Deploy.md#open-the-ssh-forwards) already contains these forwards. Reuse it if it is running. Otherwise, open a dashboard-only tunnel:
 
 ```bash
-python3 tools/deploy_hosts.py tunnel --role router \
+python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:9090
 ```
 
@@ -101,7 +101,7 @@ For GPU telemetry, run the deployment's selected AMD or NVIDIA exporter to disco
 
 ## Alert rules
 
-Prometheus loads `tools/prometheus-alerts.yml`. Evaluated and firing alerts are available through the `ALERTS` series.
+Prometheus loads `tools/observability/prometheus-alerts.yml`. Evaluated and firing alerts are available through the `ALERTS` series.
 
 Production monitoring uses the same rules file and routes `severity="page"` and `severity="warn"` through the deployment's alert manager.
 

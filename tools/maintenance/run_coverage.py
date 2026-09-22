@@ -11,7 +11,7 @@ from pathlib import Path
 
 import coverage
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SUPPORT = ROOT / "tools/coverage_support"
 
 

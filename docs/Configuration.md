@@ -46,26 +46,26 @@ Keep every generated file with the discovery record that produced it. Each deplo
 
 `NARWHAL_DEPLOYMENT_REVISION` specifies the full commit SHA from the management checkout.
 
-`tools/deploy_hosts.py prepare` packages that revision as `source.bundle` and verifies the bundle by cloning it locally into a fresh checkout. `install` copies the bundle to each selected host. Each remote checkout clones from the bundle and verifies its revision against the role file before installation.
+`tools/deployment/deploy_hosts.py prepare` packages that revision as `source.bundle` and verifies the bundle by cloning it locally into a fresh checkout. `install` copies the bundle to each selected host. Each remote checkout clones from the bundle and verifies its revision against the role file before installation.
 
 Store `source.bundle` beside the generated environment files under ignored `runs/deployment-env/`.
 
 From the management checkout:
 
 ```bash
-python3 tools/deploy_hosts.py prepare --out <directory>
+python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 ```
 
-`prepare` exports each role from the loaded workstation environment and generated fleet JSON. `tools/prepare_host_env.py` selects the exported fields, preserves shell literals, and writes mode-0600 role files. [Host installation](Deploy.md#2-install-narwhal) contains the preparation, installation, and role-shell sequence.
+`prepare` exports each role from the loaded workstation environment and generated fleet JSON. `tools/deployment/prepare_host_env.py` selects the exported fields, preserves shell literals, and writes mode-0600 role files. [Host installation](Deploy.md#2-install-narwhal) contains the preparation, installation, and role-shell sequence.
 
 | Remote file                                              | Exported values                                                                                                                                                          | Workstation source                                                                                                                                                                                                          |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.env.router`                                            | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                    |
 | `.env.engine-<n>`                                        | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values, and the configured engine API credential. |
 | `config/engine-launch.engine-<n>.json`                   | Selected GPU allocation, TP size, device mappings, resolved UCX selection, generated launch arguments.                                                                   | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                     |
-| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
-| `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
-| `runs/deployment-tools/cache_capture_hook.py` on engine hosts | Serving cache capture snapshot, with path and SHA-256 recorded in `.env.engine-<n>`. | `tools/cache_capture_hook.py` from the management checkout at preparation time. |
+| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/deployment/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
+| `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/deployment/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
+| `runs/deployment-tools/cache_capture_hook.py` on engine hosts | Serving cache capture snapshot, with path and SHA-256 recorded in `.env.engine-<n>`. | `tools/deployment/cache_capture_hook.py` from the management checkout at preparation time. |
 | `config/fleet.local.json` on the router                  | Generated fleet document copied before deployment edits.                                                                                                                 | File selected by workstation `NARWHAL_FLEET`.                                                                                                                                                                               |
 
 Engine export requires:
@@ -202,7 +202,7 @@ Keep launch directories, environment files, and runtime captures under ignored `
 
 ### Fabric workload budget
 
-During `prepare`, Narwhal snapshots `tools/fabric_budget.py` from the management checkout into the files prepared for each engine host. Its SHA-256 is recorded in both the manifest and role environment.
+During `prepare`, Narwhal snapshots `tools/deployment/fabric_budget.py` from the management checkout into the files prepared for each engine host. Its SHA-256 is recorded in both the manifest and role environment.
 
 `install` verifies the transferred helper before placing it under ignored `runs/deployment-tools/`. The approved application bundle retains the selected application revision.
 
@@ -274,7 +274,7 @@ If `password_env` is present, password authentication is enabled and the named v
 
 All roles on one physical host share that host's access record.
 
-`tools/deploy_hosts.py plan` validates:
+`tools/deployment/deploy_hosts.py plan` validates:
 
 - unique host IDs,
 - unique role ownership,

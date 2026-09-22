@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deploy_hosts import prepare_bundle
+from tools.deployment.deploy_hosts import prepare_bundle
 
 
 class SourceBundleTests(unittest.TestCase):

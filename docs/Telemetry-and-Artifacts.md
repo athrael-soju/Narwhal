@@ -178,7 +178,7 @@ Verification probes use `verify_health` or `verify_inference`.
 
 When a probe resolves, Narwhal either clears the relevant failure streaks or ejects the engine. Ejection state is reported through `narwhal_ejected`.
 
-`tools/prometheus-alerts.yml` contains the shipped alert expressions. `tools/grafana-narwhal.json` contains the dashboard definition. [Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents panel scope and metric boundaries.
+`tools/observability/prometheus-alerts.yml` contains the shipped alert expressions. `tools/observability/grafana-narwhal.json` contains the dashboard definition. [Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents panel scope and metric boundaries.
 
 ## Contract versions
 

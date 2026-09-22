@@ -13,8 +13,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools.fabric_budget import main, runtime_payload
-from tools.launch_engine import (
+from tools.deployment.fabric_budget import main, runtime_payload
+from tools.deployment.launch_engine import (
     cache_groups,
     capture_cache,
     digest,
@@ -57,7 +57,7 @@ class CacheSizingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             _, env = test_launch_engine.EngineLauncherTests().inputs(root)
-            from tools.launch_engine import prepare
+            from tools.deployment.launch_engine import prepare
 
             prepare(root / "plan", env)
             path = root / "plan/launch.json"
@@ -75,7 +75,7 @@ class CacheSizingTests(unittest.TestCase):
                 with (
                     self.subTest(use_mla=use_mla),
                     patch(
-                        "tools.launch_engine.runtime_config",
+                        "tools.deployment.launch_engine.runtime_config",
                         return_value=SimpleNamespace(model_config=model),
                     ),
                 ):
@@ -90,7 +90,7 @@ class CacheSizingTests(unittest.TestCase):
                 model.get_head_size.assert_called_once_with()
 
     def test_dimension_inspection_checks_plan_and_preserves_existing_capture(self):
-        from tools.launch_engine import load, prepare
+        from tools.deployment.launch_engine import load, prepare
 
         for stale in (False, True):
             with self.subTest(stale=stale), tempfile.TemporaryDirectory() as folder:
@@ -107,7 +107,7 @@ class CacheSizingTests(unittest.TestCase):
                     "contract": {"head_size": 576, "kv_heads": 8, "hidden_layers": 48},
                 }
                 with patch(
-                    "tools.launch_engine.docker",
+                    "tools.deployment.launch_engine.docker",
                     return_value="runtime log\nNARWHAL_MODEL_DIMENSIONS=" + json.dumps(value),
                 ) as docker:
                     if stale:
@@ -290,7 +290,7 @@ class CacheSizingTests(unittest.TestCase):
             with (
                 patch.dict(sys.modules, modules),
                 patch(
-                    "tools.launch_engine.digest",
+                    "tools.deployment.launch_engine.digest",
                     side_effect=lambda path: (
                         plan["model_config_sha256"]
                         if str(path) == "/model/config.json"
@@ -306,7 +306,7 @@ class CacheSizingTests(unittest.TestCase):
             self.assertEqual(result["plan_sha256"], digest(plan_path))
 
     def test_failed_probe_retains_id_and_success_requires_exit_and_matching_plan(self):
-        from tools.launch_engine import load, prepare
+        from tools.deployment.launch_engine import load, prepare
 
         for failed in (False, True):
             with self.subTest(failed=failed), tempfile.TemporaryDirectory() as folder:
@@ -327,7 +327,9 @@ class CacheSizingTests(unittest.TestCase):
                     json.dumps({"Running": False, "ExitCode": int(failed)}),
                     "removed",
                 ]
-                with patch("tools.launch_engine.docker", side_effect=responses) as docker:
+                with patch(
+                    "tools.deployment.launch_engine.docker", side_effect=responses
+                ) as docker:
                     if failed:
                         with self.assertRaisesRegex(ValueError, "cache probe failed"):
                             measure_cache(run, plan)
@@ -377,7 +379,7 @@ class CacheSizingTests(unittest.TestCase):
                 if str(path) == "/model/config.json"
                 else plan["launcher_sha256"]
             )
-            hook_path = Path(__file__).resolve().parents[1] / "cache_capture_hook.py"
+            hook_path = Path(__file__).resolve().parents[1] / "deployment/cache_capture_hook.py"
             with (
                 patch.dict(
                     sys.modules,
@@ -408,7 +410,7 @@ class CacheSizingTests(unittest.TestCase):
             self.assertIsNot(Core._initialize_kv_caches, original)
 
     def test_live_cache_copy_checks_running_process_and_plan_hashes(self):
-        from tools.launch_engine import load, prepare
+        from tools.deployment.launch_engine import load, prepare
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -439,7 +441,7 @@ class CacheSizingTests(unittest.TestCase):
                 Path(command[-1]).write_text(json.dumps(value))
                 return ""
 
-            with patch("tools.launch_engine.docker", side_effect=fake_docker) as mocked:
+            with patch("tools.deployment.launch_engine.docker", side_effect=fake_docker) as mocked:
                 capture_cache(run, plan)
             self.assertEqual(mocked.call_count, 2)
             self.assertEqual((run / "cache-layout.json").stat().st_mode & 0o777, 0o600)

@@ -128,7 +128,7 @@ mkdir -p runs
 
 TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 
-.venv/bin/python tools/load_trial.py prepare \
+.venv/bin/python tools/measurement/load_trial.py prepare \
   --base "$NARWHAL_TRIAL_URL" \
   --input-tokens 8192 --output-tokens 128 --seed 1729 \
   --out "$TRIAL_DIR/workload"
@@ -151,7 +151,7 @@ Each run manifest records the workload digest, helper digest, workstation hostna
 Run 0.5 request/s:
 
 ```bash
-.venv/bin/python tools/load_trial.py run \
+.venv/bin/python tools/measurement/load_trial.py run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 0.5 --requests 200 \
@@ -171,7 +171,7 @@ Inspect the saved records before changing the rate.
 After the router has drained, run 1 request/s:
 
 ```bash
-.venv/bin/python tools/load_trial.py run \
+.venv/bin/python tools/measurement/load_trial.py run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 1 --requests 200 \

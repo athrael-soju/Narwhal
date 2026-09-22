@@ -162,7 +162,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(decision[field], value)
 
     async def test_dashboard_and_alerts_use_router_metric_names(self):
-        dashboard_path = ROOT / "tools/grafana-narwhal.json"
+        dashboard_path = ROOT / "tools/observability/grafana-narwhal.json"
         dashboard = json.loads(dashboard_path.read_text())
         self.assertEqual(dashboard["metadata"]["name"], "narwhal-router")
         layout = dashboard["spec"]["layout"]
@@ -178,8 +178,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("gpu-telemetry", dashboard_path.read_text())
         response = await self.client.get("/metrics")
         required = {
-            "tools/grafana-narwhal.json": ("narwhal_failed_total", "narwhal_served_total"),
-            "tools/prometheus-alerts.yml": (
+            "tools/observability/grafana-narwhal.json": (
+                "narwhal_failed_total",
+                "narwhal_served_total",
+            ),
+            "tools/observability/prometheus-alerts.yml": (
                 "narwhal_failed_total",
                 "narwhal_pool_instances",
                 "narwhal_unserved_total",
@@ -195,7 +198,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(name, response.text)
 
     async def test_dashboard_scopes_latency_quantiles_to_the_selected_router(self):
-        dashboard = json.loads((ROOT / "tools/grafana-narwhal.json").read_text())
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
         elements = dashboard["spec"]["elements"]
         panels = {
             elements[name]["spec"]["title"]: elements[name]["spec"]

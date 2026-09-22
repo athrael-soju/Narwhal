@@ -43,7 +43,7 @@ jobs:
       - id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python tools/release.py candidate
+        run: python tools/maintenance/release.py candidate
 
   build:
     needs: inspect
@@ -61,7 +61,7 @@ jobs:
           cache: pip
       - run: pip install -e '.[dev]' -c constraints-dev.txt
       - run: make check VENV_PYTHON=python
-      - run: python tools/release.py check --release
+      - run: python tools/maintenance/release.py check --release
       - run: python -m build
       - run: twine check dist/*
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -130,7 +130,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NARWHAL_RELEASES_ENABLED: ${{ vars.NARWHAL_RELEASES_ENABLED }}
-        run: python tools/release.py publish
+        run: python tools/maintenance/release.py publish
 
   release-pr:
     needs: [inspect, publish]

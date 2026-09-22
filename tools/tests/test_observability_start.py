@@ -417,7 +417,7 @@ class ReadinessTests(unittest.TestCase):
             observe.verify_dashboard_contract(document)
 
     def test_shipped_dashboard_defaults_to_the_discovered_router(self) -> None:
-        dashboard = json.loads((observe.BASE.parent / "grafana-narwhal.json").read_text())
+        dashboard = json.loads((observe.BASE / "grafana-narwhal.json").read_text())
         variables = dashboard["spec"]["variables"]
         router = next(
             variable["spec"] for variable in variables if variable["spec"]["name"] == "router"

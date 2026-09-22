@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from narwhal.config import EngineContract, FleetConfig
 from narwhal.engines.attestation import (
     AttestationDocument,

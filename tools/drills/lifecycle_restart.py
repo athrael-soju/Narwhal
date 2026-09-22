@@ -80,7 +80,7 @@ def _stop(process: subprocess.Popen[bytes] | None) -> None:
 def _stub_command(iid: str, port: int) -> list[str]:
     return [
         sys.executable,
-        "tools/stub_fleet.py",
+        "tools/drills/stub_fleet.py",
         "--single-iid",
         iid,
         "--base-port",

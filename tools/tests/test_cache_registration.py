@@ -11,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
-from tools.launch_engine import digest, load, prepare, registration_layout
+from tools.deployment.launch_engine import digest, load, prepare, registration_layout
 from tools.tests import test_launch_engine
 
 
@@ -57,7 +57,7 @@ class CacheRegistrationTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.launch_engine.docker", side_effect=docker) as called:
+                with patch("tools.deployment.launch_engine.docker", side_effect=docker) as called:
                     registration_layout(run, plan, log, False)
                     with self.assertRaisesRegex(ValueError, "capture exists"):
                         registration_layout(run, plan, log, False)
@@ -80,7 +80,7 @@ class CacheRegistrationTests(unittest.TestCase):
                 run, plan = self.inputs(root)
                 log = root / "startup.log"
                 log.write_text(content)
-                with patch("tools.launch_engine.docker") as docker:
+                with patch("tools.deployment.launch_engine.docker") as docker:
                     with self.assertRaisesRegex(ValueError, "one resolved"):
                         registration_layout(run, plan, log, False)
                     docker.assert_not_called()
@@ -106,7 +106,7 @@ class CacheRegistrationTests(unittest.TestCase):
                 source = root / "cache-layout.json"
                 source.write_text(json.dumps(record))
                 with patch(
-                    "tools.launch_engine.docker",
+                    "tools.deployment.launch_engine.docker",
                     return_value='NARWHAL_CACHE_REGISTRATION={"cross_layers_blocks":false,"kv_cache_layout":"LBNHC"}',
                 ) as docker:
                     if failure:

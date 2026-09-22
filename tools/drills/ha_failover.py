@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         stub = _start(
             [
                 sys.executable,
-                "tools/stub_fleet.py",
+                "tools/drills/stub_fleet.py",
                 "--base-port",
                 str(engine_port),
                 "--instances",

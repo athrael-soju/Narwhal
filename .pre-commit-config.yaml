@@ -11,13 +11,13 @@ repos:
     hooks:
       - id: publication
         name: tracked files are suitable for publication
-        entry: python3 tools/check_publication.py
+        entry: python3 tools/maintenance/check_publication.py
         language: system
         pass_filenames: false
         always_run: true
       - id: markdown-links
         name: markdown paths and heading anchors resolve
-        entry: python3 tools/check_links.py
+        entry: python3 tools/maintenance/check_links.py
         language: system
         pass_filenames: false
         files: \.md$

@@ -12,12 +12,12 @@ BASE = Path(__file__).resolve().parent
 MOUNTS = BASE.parents[1] / "runs" / "observability" / "mounts"
 FILES = {
     "prometheus.yml": "prometheus/prometheus.yml",
-    "../prometheus-alerts.yml": "prometheus/prometheus-alerts.yml",
+    "prometheus-alerts.yml": "prometheus/prometheus-alerts.yml",
     "grafana/provisioning/dashboards/narwhal.yml": "grafana-provisioning/dashboards/narwhal.yml",
     "grafana/provisioning/datasources/prometheus.yml": (
         "grafana-provisioning/datasources/prometheus.yml"
     ),
-    "../grafana-narwhal.json": "grafana-dashboards/narwhal.json",
+    "grafana-narwhal.json": "grafana-dashboards/narwhal.json",
 }
 
 

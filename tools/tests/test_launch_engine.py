@@ -12,8 +12,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-from tools.engine_launch import selected_launch
-from tools.launch_engine import (
+from tools.deployment.engine_launch import selected_launch
+from tools.deployment.launch_engine import (
     build,
     check,
     digest,
@@ -59,8 +59,10 @@ class EngineLauncherTests(unittest.TestCase):
             "NARWHAL_MODEL_DIR": str(model),
             "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(b"{}").hexdigest(),
             "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
-            "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "tools/cache_capture_hook.py"),
-            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(ROOT / "tools/cache_capture_hook.py"),
+            "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "tools/deployment/cache_capture_hook.py"),
+            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(
+                ROOT / "tools/deployment/cache_capture_hook.py"
+            ),
             "NARWHAL_ENGINE_PORT": "8000",
             "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600",
             "NARWHAL_UCX_TCP_PORT_RANGE": "39000-39999",
@@ -111,7 +113,7 @@ class EngineLauncherTests(unittest.TestCase):
             )
             run = root / "launch"
             prepare(run, env)
-            with patch("tools.launch_engine.docker") as mocked:
+            with patch("tools.deployment.launch_engine.docker") as mocked:
                 with self.assertRaisesRegex(ValueError, "requires --trust-remote-code"):
                     check(run, load(run))
                 mocked.assert_not_called()
@@ -135,7 +137,7 @@ class EngineLauncherTests(unittest.TestCase):
             env["NARWHAL_MODEL_CONFIG_SHA256"] = digest(root / "model/config.json")
             run = root / "launch"
             prepare(run, env)
-            with patch("tools.launch_engine.docker") as mocked:
+            with patch("tools.deployment.launch_engine.docker") as mocked:
                 with self.assertRaisesRegex(ValueError, "requires VLLM_SSM_CONV_STATE_LAYOUT=DS"):
                     check(run, load(run))
                 mocked.assert_not_called()
@@ -203,7 +205,7 @@ class EngineLauncherTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.launch_engine.docker", side_effect=execute) as docker:
+                with patch("tools.deployment.launch_engine.docker", side_effect=execute) as docker:
                     if passed:
                         handshake_policy(run, plan)
                         capture = run / "handshake-policy.json"
@@ -231,22 +233,24 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env)
             self.assertEqual((run / "container.env").stat().st_mode & 0o777, 0o600)
             plan = load(run)
-            with patch("tools.launch_engine.docker") as mocked:
+            with patch("tools.deployment.launch_engine.docker") as mocked:
                 with self.assertRaises(FileNotFoundError):
                     start(run, plan)
                 mocked.assert_not_called()
             with patch(
-                "tools.launch_engine.docker",
+                "tools.deployment.launch_engine.docker",
                 side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ) as mocked:
                 check(run, plan)
                 self.assertIn("--rm", mocked.call_args_list[1].args[0])
-            with patch("tools.launch_engine.docker", side_effect=["c" * 64, "started"]) as mocked:
+            with patch(
+                "tools.deployment.launch_engine.docker", side_effect=["c" * 64, "started"]
+            ) as mocked:
                 start(run, load(run))
                 self.assertEqual(mocked.call_args_list[0].args[0][0], "create")
                 self.assertEqual(mocked.call_args_list[1].args[0], ["start", "c" * 64])
             self.assertEqual((run / "container.id").read_text().strip(), "c" * 64)
-            with patch("tools.launch_engine.docker") as mocked:
+            with patch("tools.deployment.launch_engine.docker") as mocked:
                 with self.assertRaisesRegex(ValueError, "already has a container"):
                     start(run, load(run))
                 mocked.assert_not_called()
@@ -263,7 +267,7 @@ class EngineLauncherTests(unittest.TestCase):
             plan = load(run)
             with (
                 patch(
-                    "tools.launch_engine.docker",
+                    "tools.deployment.launch_engine.docker",
                     return_value=json.dumps([{"Id": "sha256:" + "d" * 64}]),
                 ),
                 self.assertRaisesRegex(ValueError, "image identity"),
@@ -271,13 +275,13 @@ class EngineLauncherTests(unittest.TestCase):
                 check(run, plan)
             self.assertFalse((run / "checked.json").exists())
             with patch(
-                "tools.launch_engine.docker",
+                "tools.deployment.launch_engine.docker",
                 side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ):
                 check(run, plan)
             plan["args"].append("--enforce-eager")
             (run / "launch.json").write_text(json.dumps(plan))
-            with patch("tools.launch_engine.docker") as mocked:
+            with patch("tools.deployment.launch_engine.docker") as mocked:
                 with self.assertRaisesRegex(ValueError, "plan changed"):
                     start(run, plan)
                 mocked.assert_not_called()
@@ -334,7 +338,7 @@ class EngineLauncherTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.launch_engine.docker", side_effect=execute_check):
+                with patch("tools.deployment.launch_engine.docker", side_effect=execute_check):
                     if missing_dependency:
                         with self.assertRaises(ModuleNotFoundError):
                             check(run, plan)
@@ -376,7 +380,7 @@ class EngineLauncherTests(unittest.TestCase):
                     exec(command[index + 1], {})
 
             with (
-                patch("tools.launch_engine.docker", side_effect=execute_check),
+                patch("tools.deployment.launch_engine.docker", side_effect=execute_check),
                 self.assertRaisesRegex(AssertionError, "image package versions differ"),
             ):
                 check(run, plan)

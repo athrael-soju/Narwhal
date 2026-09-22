@@ -30,7 +30,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 ## Dashboard maintenance
 
-`make observe` stages `tools/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
+`make observe` stages `tools/observability/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
 
 ```bash
 make observe
@@ -41,4 +41,4 @@ Validate changed queries against traffic, idle engines, failed scrapes, router r
 
 ## Alert rules
 
-Prometheus loads `tools/prometheus-alerts.yml` and publishes firing rules through `ALERTS`, which drives the dashboard's **Fleet events** table. Production monitoring loads the same rule file and routes page and warning severities through the deployment's existing alert manager. Preserve the `job` and `iid` labels when relabelling targets because engine reachability and scoped alert rows depend on them.
+Prometheus loads `tools/observability/prometheus-alerts.yml` and publishes firing rules through `ALERTS`, which drives the dashboard's **Fleet events** table. Production monitoring loads the same rule file and routes page and warning severities through the deployment's existing alert manager. Preserve the `job` and `iid` labels when relabelling targets because engine reachability and scoped alert rows depend on them.

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tools.release import (
+from tools.maintenance.release import (
     INITIAL_RELEASE_BRANCH,
     RELEASE_BRANCH,
     REPOSITORY,
@@ -21,7 +21,7 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_published_release_is_found_in_release_list(self):
         published = {"tag_name": "v0.1.0", "draft": False, "assets": []}
         with mock.patch(
-            "tools.release.command",
+            "tools.maintenance.release.command",
             return_value='[[{"tag_name": "v0.1.0", "draft": false, "assets": []}]]',
         ):
             self.assertEqual(release_by_tag("v0.1.0"), published)
@@ -37,15 +37,17 @@ class ReleaseMetadataTests(unittest.TestCase):
             return ""
 
         with (
-            mock.patch("tools.release.command", side_effect=git),
-            mock.patch("tools.release.api", return_value=[]),
-            mock.patch("tools.release.version", return_value="0.1.0"),
-            mock.patch("tools.release.validate", return_value="0.1.0"),
+            mock.patch("tools.maintenance.release.command", side_effect=git),
+            mock.patch("tools.maintenance.release.api", return_value=[]),
+            mock.patch("tools.maintenance.release.version", return_value="0.1.0"),
+            mock.patch("tools.maintenance.release.validate", return_value="0.1.0"),
         ):
             self.assertEqual(candidate(Path(".")), ("0.1.0", None))
 
     def test_repository_api_uses_endpoint_without_trailing_slash(self):
-        with mock.patch("tools.release.command", return_value='{"private": false}') as command:
+        with mock.patch(
+            "tools.maintenance.release.command", return_value='{"private": false}'
+        ) as command:
             self.assertEqual(api(""), {"private": False})
         command.assert_called_once_with("gh", "api", f"repos/{REPOSITORY}")
 
