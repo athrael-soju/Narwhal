@@ -207,9 +207,9 @@ The external launcher selects vLLM's TP size. Match `hardware.tensor_parallel` t
 | `nixl_connector_version` | `0` | Positive `NIXL_CONNECTOR_VERSION` integer from the deployed vLLM connector's metadata module; [capture it in step 6](Deploy.md#read-the-nixl-connector-protocol-version). |
 | `model_architecture` | `""` | Model implementation name relevant to KV layout. |
 | `model_dtype` | `""` | Model execution dtype. |
-| `kv_heads` | `0` | Number of KV heads. Zero means undeclared. |
-| `head_size` | `0` | KV head size. Zero means undeclared. |
-| `hidden_layers` | `0` | Hidden-layer count. Zero means undeclared. |
+| `kv_heads` | `0` | Positive model-wide value from the pinned runtime's `ModelConfig.get_total_num_kv_heads()`. |
+| `head_size` | `0` | Positive value from `ModelConfig.get_head_size()`, as consumed by NIXL's compatibility hash; [capture resolved model dimensions](Deploy.md#read-the-model-dimensions-used-by-nixl). |
+| `hidden_layers` | `0` | Positive model-wide value from `ModelConfig.get_total_num_hidden_layers()`. |
 | `attention_backend` | `""` | Runtime attention backend expected from the launch. |
 | `kv_cache_dtype` | `""` | KV cache dtype. |
 | `cross_layers_blocks` | `null` | Whether NIXL registers cross-layer KV blocks. |

@@ -12,7 +12,14 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools.fabric_budget import main, runtime_payload
-from tools.launch_engine import cache_groups, digest, measure_cache, runtime_cache_probe
+from tools.launch_engine import (
+    cache_groups,
+    digest,
+    measure_cache,
+    model_dimensions,
+    runtime_cache_probe,
+    runtime_model_dimensions,
+)
 from tools.tests import test_launch_engine
 
 
@@ -43,6 +50,77 @@ def layout():
 
 
 class CacheSizingTests(unittest.TestCase):
+    def test_model_contract_uses_runtime_getters_for_mla_dimensions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = test_launch_engine.EngineLauncherTests().inputs(root)
+            from tools.launch_engine import prepare
+
+            prepare(root / "plan", env)
+            path = root / "plan/launch.json"
+            for head_size, use_mla in ((576, True), (192, False)):
+                model = SimpleNamespace(
+                    get_head_size=Mock(return_value=head_size),
+                    get_total_num_kv_heads=Mock(return_value=8),
+                    get_total_num_hidden_layers=Mock(return_value=48),
+                    use_mla=use_mla,
+                    hf_text_config=SimpleNamespace(
+                        qk_nope_head_dim=128, qk_rope_head_dim=64, v_head_dim=128, kv_lora_rank=512
+                    ),
+                )
+                with (
+                    self.subTest(use_mla=use_mla),
+                    patch(
+                        "tools.launch_engine.runtime_config",
+                        return_value=SimpleNamespace(model_config=model),
+                    ),
+                ):
+                    value = runtime_model_dimensions(path)
+                self.assertEqual(
+                    value["contract"], {"head_size": head_size, "kv_heads": 8, "hidden_layers": 48}
+                )
+                self.assertEqual(value["sources"]["head_size"], "ModelConfig.get_head_size()")
+                self.assertEqual(value["use_mla"], use_mla)
+                self.assertEqual(value["plan_sha256"], digest(path))
+                model.get_head_size.assert_called_once_with()
+
+    def test_dimension_inspection_checks_plan_and_preserves_existing_capture(self):
+        from tools.launch_engine import load, prepare
+
+        for stale in (False, True):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = test_launch_engine.EngineLauncherTests().inputs(root)
+                run = root / "plan"
+                prepare(run, env)
+                plan = load(run)
+                (run / "checked.json").write_text(
+                    json.dumps({"plan_sha256": digest(run / "launch.json")})
+                )
+                value = {
+                    "plan_sha256": "0" * 64 if stale else digest(run / "launch.json"),
+                    "contract": {"head_size": 576, "kv_heads": 8, "hidden_layers": 48},
+                }
+                with patch(
+                    "tools.launch_engine.docker",
+                    return_value="runtime log\nNARWHAL_MODEL_DIMENSIONS=" + json.dumps(value),
+                ) as docker:
+                    if stale:
+                        with self.assertRaisesRegex(ValueError, "must match this plan"):
+                            model_dimensions(run, plan)
+                        self.assertFalse((run / "model-dimensions.json").exists())
+                    else:
+                        model_dimensions(run, plan)
+                        capture = run / "model-dimensions.json"
+                        self.assertEqual(json.loads(capture.read_text()), value)
+                        self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
+                        with self.assertRaisesRegex(ValueError, "dimensions exist"):
+                            model_dimensions(run, plan)
+                    self.assertEqual(docker.call_count, 1)
+                    command = docker.call_args.args[0]
+                    self.assertIn("_model-dimensions", command)
+                    self.assertIn("--rm", command)
+
     def test_hybrid_pages_round_each_rank_and_include_padded_state_boundary(self):
         # 1024 tokens: two attention pages and three padded state pages per rank.
         self.assertEqual(runtime_payload(layout(), 2, 1024), 2 * (2 + 3) * 1536)

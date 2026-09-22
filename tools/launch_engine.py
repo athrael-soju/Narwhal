@@ -349,14 +349,11 @@ def cache_groups(groups: list) -> list[dict]:
     return result
 
 
-def runtime_cache_probe(plan_path: Path) -> None:
-    """Run inside the pinned image until vLLM resolves each worker's cache allocation."""
+def runtime_config(plan: dict):
+    """Resolve the serving arguments inside the image before creating model workers."""
     from vllm.engine.arg_utils import EngineArgs
     from vllm.utils.argparse_utils import FlexibleArgumentParser
-    from vllm.v1.engine.core import EngineCore
-    from vllm.v1.executor.abstract import Executor
 
-    plan = json.loads(plan_path.read_text())
     if digest(Path("/model/config.json")) != plan["model_config_sha256"]:
         raise ValueError("model config changed since launch preparation")
     # EngineArgs owns the model options; HTTP listener options belong to the API server.
@@ -365,7 +362,78 @@ def runtime_cache_probe(plan_path: Path) -> None:
         index = arguments.index(option)
         del arguments[index : index + 2]
     parser = EngineArgs.add_cli_args(FlexibleArgumentParser())
-    config = EngineArgs.from_cli_args(parser.parse_args(arguments)).create_engine_config()
+    return EngineArgs.from_cli_args(parser.parse_args(arguments)).create_engine_config()
+
+
+def runtime_model_dimensions(plan_path: Path) -> dict:
+    """Capture the model getters consumed by the NIXL compatibility hash."""
+    plan = json.loads(plan_path.read_text())
+    model = runtime_config(plan).model_config
+    methods = {
+        "head_size": "get_head_size",
+        "kv_heads": "get_total_num_kv_heads",
+        "hidden_layers": "get_total_num_hidden_layers",
+    }
+    values = {field: getattr(model, method)() for field, method in methods.items()}
+    if any(type(value) is not int or value < 1 for value in values.values()):
+        raise ValueError("model contract getters must return positive integers")
+    return {
+        "contract": values,
+        "sources": {field: f"ModelConfig.{method}()" for field, method in methods.items()},
+        "use_mla": model.use_mla,
+        "model_config_sha256": plan["model_config_sha256"],
+        "plan_sha256": digest(plan_path),
+        "image": plan["image"],
+        "revision": plan["revision"],
+    }
+
+
+def model_dimensions(run: Path, plan: dict) -> None:
+    require_checked(run, plan)
+    if digest(Path(__file__)) != plan["launcher_sha256"]:
+        raise ValueError("launcher changed; prepare and check a fresh launch plan")
+    destination = run / "model-dimensions.json"
+    if destination.exists():
+        raise ValueError("model dimensions exist; retain the capture and use a fresh plan")
+    output = docker(
+        [
+            "run",
+            "--rm",
+            *plan["common"],
+            "--mount",
+            f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-inspect.py,readonly",
+            "--mount",
+            f"type=bind,src={run / 'launch.json'},dst=/narwhal-launch.json,readonly",
+            "--entrypoint",
+            "python3",
+            plan["image"],
+            "/narwhal-inspect.py",
+            "_model-dimensions",
+            "--plan",
+            "/narwhal-launch.json",
+        ],
+        run,
+        "model-dimensions.log",
+    )
+    prefix = "NARWHAL_MODEL_DIMENSIONS="
+    records = [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if len(records) != 1 or records[0]["plan_sha256"] != digest(run / "launch.json"):
+        raise ValueError(
+            "model dimension capture must match this plan; inspect model-dimensions.log"
+        )
+    write_private(destination, json.dumps(records[0], indent=2) + "\n")
+    print("Model contract dimensions captured in model-dimensions.json.")
+
+
+def runtime_cache_probe(plan_path: Path) -> None:
+    """Run inside the pinned image until vLLM resolves each worker's cache allocation."""
+    from vllm.v1.engine.core import EngineCore
+    from vllm.v1.executor.abstract import Executor
+
+    plan = json.loads(plan_path.read_text())
+    config = runtime_config(plan)
     workers = []
     captured = []
 
@@ -488,7 +556,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("_cache-probe", help=argparse.SUPPRESS).add_argument(
         "--plan", type=Path, required=True
     )
-    for command in ("check", "measure-cache", "start"):
+    sub.add_parser("_model-dimensions", help=argparse.SUPPRESS).add_argument(
+        "--plan", type=Path, required=True
+    )
+    for command in ("check", "measure-cache", "model-dimensions", "start"):
         sub.add_parser(command).add_argument("--run", type=Path, required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
@@ -497,12 +568,17 @@ def main(argv: list[str] | None = None) -> int:
             prepare(args.out, dict(os.environ))
         elif args.command == "_cache-probe":
             runtime_cache_probe(args.plan)
+        elif args.command == "_model-dimensions":
+            print("NARWHAL_MODEL_DIMENSIONS=" + json.dumps(runtime_model_dimensions(args.plan)))
         else:
             run = args.run.resolve()
             plan = load(run)
-            {"check": check, "measure-cache": measure_cache, "start": start}[args.command](
-                run, plan
-            )
+            {
+                "check": check,
+                "measure-cache": measure_cache,
+                "model-dimensions": model_dimensions,
+                "start": start,
+            }[args.command](run, plan)
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         if isinstance(error, FileExistsError):
             parser.exit(1, "Launch directory exists; choose a fresh output path.\n")
