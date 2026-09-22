@@ -14,6 +14,8 @@ The management workstation needs Git, Bash, Python 3.11 or newer and the supplie
 
 Narwhal serves one model and compatible KV layout across engines running vLLM with NIXL and effective `kv_both` behaviour. Every eligible producer must transfer KV to every eligible consumer, and one active controller owns the fleet.
 
+Run independent host work concurrently. After installation, open one role shell per physical engine host and perform step 3 and the step 4 cache probe in parallel; roles sharing a host or GPU allocation run serially. Wait for every cache layout before qualifying the fabric, measure one directed fabric edge at a time, then validate the first engine's shared launch path before launching and attesting the remaining engines concurrently. Fleet-wide gates advance after every participating host has produced its required evidence.
+
 Create a private deployment record before the first command. At each gate, record the host, full source revision, starting state, commands actually run, exit status and artifact locations. Report the first blocked gate before recovery; after reporting, clean only the processes and files created by that test. The [gate reference](#deployment-gates-and-recovery) maps each step to its inputs and recovery.
 
 ## 1. Open the management shells
@@ -222,7 +224,7 @@ For ROCm, `/dev/kfd` and the selected DRI devices provide container GPU access; 
 
 ## 4. Prepare the transfer fabric
 
-Run this step in the installed engine-role shells after every host passes step 3. First collect the pinned runtime's cache page sizes with a single-host sizing process, then qualify directed host links for the declared handoff workload. The sizing process loads and profiles the model on that host's assigned GPUs, captures the cache allocation specs and exits before serving or peer transfer. Step 8 exercises NIXL handoffs between running engines, and step 10 measures shared-link contention under concurrent deployment traffic.
+Run this step in the installed engine-role shells after every host passes step 3. Open one shell per physical engine host and collect the pinned runtime's cache page sizes concurrently; each sizing process uses that host's assigned GPUs, captures the cache allocation specs and exits before serving or peer transfer. Serialize roles whose GPU allocations overlap. Wait for every `cache-layout.json`, then qualify one directed host link at a time for the declared handoff workload so another test does not consume the measured source, destination or fabric capacity. Step 8 exercises NIXL handoffs between running engines, and step 10 measures shared-link contention under concurrent deployment traffic.
 
 ### Capture the runtime cache layout
 
@@ -442,11 +444,11 @@ print("Engine health, version, model, process identity and completion passed.")
 PY_ENGINE
 ```
 
-For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. A checked record predating `vllm_api_version` requires the updated launcher and a fresh checked launch plan. An API-version mismatch requires checking the endpoint owner against the recorded image and container ID. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine passes, apply the same prepare, check, start and probe sequence in each remaining engine-role shell with its own `ENGINE_RUN`. Record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
+For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. A checked record predating `vllm_api_version` requires the updated launcher and a fresh checked launch plan. An API-version mismatch requires checking the endpoint owner against the recorded image and container ID. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine validates the shared launcher and image path, run the same prepare, check, start and probe sequence concurrently in one role shell per remaining physical host, using a distinct `ENGINE_RUN` for every engine. Serialize colocated roles with overlapping GPU allocations. Wait for every HTTP probe, then record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
 
 ## 6. Attest each engine process
 
-On each engine host, create the attestation document under ignored `runs/`, preserving any document from an earlier deployment.
+After every engine passes its HTTP probe, create and verify the attestation documents concurrently in one role shell per physical host under ignored `runs/`, preserving any document from an earlier deployment. Serialize colocated roles only when their inspection containers or device allocations conflict.
 
 ```bash
 mkdir -p runs
