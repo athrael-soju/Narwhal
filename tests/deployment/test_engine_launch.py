@@ -59,7 +59,3 @@ class EngineLaunchTests(unittest.TestCase):
             document["engines"]["engine-1"]["transfer"]["net_devices"],
             "${NARWHAL_FABRIC_INTERFACE}",
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

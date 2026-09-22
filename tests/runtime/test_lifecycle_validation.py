@@ -385,7 +385,3 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             self.identities.reset_mock()
             self.assertEqual(await lifecycle.check_process_identities(self.router), [])
             self.identities.assert_not_awaited()
-
-
-if __name__ == "__main__":
-    unittest.main()

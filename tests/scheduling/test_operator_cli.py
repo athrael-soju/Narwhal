@@ -30,7 +30,3 @@ class OperatorCliTests(unittest.TestCase):
                 ):
                     probe.main(["--fleet", str(ROOT / "config/fleet.stub.json"), *options])
             run.assert_not_awaited()
-
-
-if __name__ == "__main__":
-    unittest.main()

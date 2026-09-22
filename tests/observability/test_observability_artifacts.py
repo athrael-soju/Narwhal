@@ -73,7 +73,3 @@ class MonitoringArtifactTests(unittest.TestCase):
                 artifacts.stage_artifacts(TargetContract("127.0.0.1:8000", ()), root)
             self.assertEqual(external.stat().st_mode & 0o777, 0o700)
             self.assertEqual(list(external.iterdir()), [])
-
-
-if __name__ == "__main__":
-    unittest.main()

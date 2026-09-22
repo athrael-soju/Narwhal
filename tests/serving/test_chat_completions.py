@@ -382,7 +382,3 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("non-streaming", response.json()["error"]["message"])
         self.assertEqual(self.router.served, 0)
         self.assertEqual(self.router.failed, 4)
-
-
-if __name__ == "__main__":
-    unittest.main()

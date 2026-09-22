@@ -132,7 +132,3 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.client, "_probe_prefill", return_value=ProbeLeg()):
             result = await self.client.probe_inference(self.url, deadline_s=0.4)
         self.assertIsNone(result.decode.failed)
-
-
-if __name__ == "__main__":
-    unittest.main()

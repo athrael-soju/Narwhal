@@ -32,8 +32,27 @@ def role_files(host: Host) -> list[str]:
     if any(role.startswith("engine-") for role in host.roles):
         files.extend(("fabric_budget.py", "launch_engine.py", "cache_capture_hook.py"))
     if "router" in host.roles:
-        files.append("fleet.local.json")
+        files.extend(("fleet.local.json", "profiling-limits.json"))
     return files
+
+
+def profiling_limits(launches: dict[str, dict], fleet: dict) -> dict:
+    """Carry serving sequence limits into the router's measured sweep inputs."""
+    limits = {}
+    for role, record in launches.items():
+        args = record.get("runtime", {}).get("extra_args", [])
+        values = []
+        for index, arg in enumerate(args):
+            if arg == "--max-num-seqs" and index + 1 < len(args):
+                values.append(args[index + 1])
+            elif isinstance(arg, str) and arg.startswith("--max-num-seqs="):
+                values.append(arg.partition("=")[2])
+        if len(values) != 1 or not str(values[0]).isdigit() or int(values[0]) < 1:
+            raise ValueError(f"{role}: runtime.extra_args needs one positive --max-num-seqs")
+        limits[f"n{role.removeprefix('engine-')}"] = int(values[0])
+    if set(limits) != {engine["iid"] for engine in fleet["engines"]}:
+        raise ValueError("Engine launch roles must match the fleet IDs for profiling")
+    return {"schema": "narwhal.profiling-limits", "schema_version": 1, "engines": limits}
 
 
 def digest(path: Path) -> str:
@@ -108,6 +127,7 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
         raise ValueError(
             "Role environment references a management credential; correct the fleet references"
         )
+    limits = profiling_limits(launches, fleet)
     output.mkdir(mode=0o700, parents=True)
     revision = env["NARWHAL_DEPLOYMENT_REVISION"]
     prepare_bundle(source.resolve(), revision, output / "source.bundle")
@@ -127,6 +147,10 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
             write_private(directory / "cache_capture_hook.py", capture_tool)
         if "router" in host.roles:
             write_private(directory / "fleet.local.json", fleet_path.read_bytes())
+            write_private(
+                directory / "profiling-limits.json",
+                json.dumps(limits, indent=2).encode() + b"\n",
+            )
     paths = ["source.bundle", *[f"{h.id}/{name}" for h in hosts for name in role_files(h)]]
     manifest = {
         **snapshot(hosts, env),
@@ -191,6 +215,8 @@ def install_script(host: Host, manifest: dict) -> str:
             target = f"runs/deployment/{name}"
         elif name == "fleet.local.json":
             target = "runs/deployment/fleet.json"
+        elif name == "profiling-limits.json":
+            target = "runs/deployment/profiling-limits.json"
         if name in ("fabric_budget.py", "launch_engine.py", "cache_capture_hook.py"):
             target = f"runs/deployment-tools/{name}"
         if name == "fleet.local.json":

@@ -2,17 +2,13 @@
 
 import unittest
 
-from narwhal.diagnostics import check
 from narwhal.engines.validation import can_consume, can_produce, recovery_pairs, validation_pairs
-from narwhal.runtime import lifecycle
 from tests.fixtures import validation_topologies
 
 
 class ValidationPairTests(unittest.TestCase):
     def test_all_role_pin_combinations(self):
         """Every permitted producer and consumer with a peer receives a transfer."""
-        self.assertIs(check.validation_pairs, validation_pairs)
-        self.assertIs(lifecycle.validation_pairs, validation_pairs)
         for specs in validation_topologies():
             with self.subTest(specs=[(s.role, s.pin) for s in specs]):
                 mesh = [

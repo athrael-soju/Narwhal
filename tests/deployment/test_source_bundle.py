@@ -46,7 +46,3 @@ class SourceBundleTests(unittest.TestCase):
                 self.assertFalse((checkout / ".env.router").exists())
                 self.assertFalse((checkout / ".env").exists())
                 self.assertFalse(any(transfer.glob("source.*/*")))
-
-
-if __name__ == "__main__":
-    unittest.main()

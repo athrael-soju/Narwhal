@@ -309,7 +309,3 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         path = re.search(r"http-check send meth GET uri (\S+)", config)[1]
         response = await self.client.get(path)
         self.assertEqual(response.status_code, 200, response.text)
-
-
-if __name__ == "__main__":
-    unittest.main()

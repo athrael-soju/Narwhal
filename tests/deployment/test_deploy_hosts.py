@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.deployment.fixtures import launch_document
+from tests.deployment.fixtures import launch_document, runtime
 from tools.deployment.deploy_hosts import (
     forward_ports,
     install,
@@ -98,11 +98,21 @@ class HostDeploymentTests(unittest.TestCase):
     def prepare_run(self, root):
         fleet = root / "fleet.json"
         fleet.write_text(
-            json.dumps({"engines": [{"url": "http://one.invalid"}, {"url": "http://two.invalid"}]})
+            json.dumps(
+                {
+                    "engines": [
+                        {"iid": "n1", "url": "http://one.invalid"},
+                        {"iid": "n2", "url": "http://two.invalid"},
+                    ]
+                }
+            )
         )
         self.env["NARWHAL_FLEET"] = str(fleet)
         launch = root / "launch.json"
         document = launch_document()
+        serving = runtime()
+        serving["extra_args"].extend(("--max-num-seqs", "8"))
+        document["engines"]["engine-1"]["runtime"] = serving
         document["engines"]["engine-2"] = document["engines"]["engine-1"]
         launch.write_text(json.dumps(document))
         self.env["NARWHAL_LAUNCH_CONFIG"] = str(launch)
@@ -151,6 +161,8 @@ class HostDeploymentTests(unittest.TestCase):
             self.assertTrue((checkout / "runs/deployment/.env.engine-1").is_file())
             effective_fleet = checkout / "runs/deployment/fleet.json"
             self.assertTrue(effective_fleet.is_file())
+            limits = json.loads((checkout / "runs/deployment/profiling-limits.json").read_text())
+            self.assertEqual(limits["engines"], {"n1": 8, "n2": 8})
             record = json.loads((checkout / "config/engine-launch.engine-1.json").read_text())
             self.assertEqual(record["tensor_parallel_size"], 2)
             engine_env = checkout / "runs/deployment/.env.engine-1"
@@ -415,7 +427,3 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
         ):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 forward_ports(value)
-
-
-if __name__ == "__main__":
-    unittest.main()

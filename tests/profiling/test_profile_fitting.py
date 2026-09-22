@@ -116,7 +116,3 @@ class ProfileFittingTests(unittest.TestCase):
         self.assertIsNone(decode_cross_validation_mape(samples[:3]))
         self.assertEqual(len(fit_decode_plane(samples)), 3)
         self.assertIsNone(decode_cross_validation_mape(samples))
-
-
-if __name__ == "__main__":
-    unittest.main()

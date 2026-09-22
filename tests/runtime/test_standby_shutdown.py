@@ -126,7 +126,3 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
                 before = self.cfg.state_path.read_bytes()
                 app.state.router.served = 8
         self.assertEqual(self.cfg.state_path.read_bytes(), before)
-
-
-if __name__ == "__main__":
-    unittest.main()

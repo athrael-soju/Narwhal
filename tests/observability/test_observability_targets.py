@@ -104,7 +104,3 @@ class TargetGenerationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "appears more than once"):
             make_targets.build_targets(fleet, "http://router:8000")
-
-
-if __name__ == "__main__":
-    unittest.main()

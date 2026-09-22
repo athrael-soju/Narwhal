@@ -24,16 +24,16 @@ class ContractTests(unittest.TestCase):
 
     def test_all_current_contracts_round_trip_and_reject_other_versions(self):
         """Schema validation rejects booleans, old revisions and future revisions."""
-        self.assertNotIn("launcher_fleet", CONTRACTS)
-        self.assertNotIn("payload", CONTRACTS)
-        self.assertEqual({contract.current for contract in CONTRACTS.values()}, {1})
         for name in CONTRACTS:
             doc = versioned(name, {"value": 1})
             self.assertEqual(validate_document(doc, name), current(name))
-            for value in (True, -1, 0, current(name) + 1):
+            invalid = (True, -1, 0, current(name) + 1)
+            if current(name) > 1:
+                invalid += (current(name) - 1,)
+            for value in invalid:
                 with self.subTest(name=name, value=value), self.assertRaises(ContractVersionError):
                     validate_document({**doc, "schema_version": value}, name)
-        self.assertIsInstance(manifest(), dict)
+        self.assertEqual(set(manifest()["contracts"]), set(CONTRACTS))
 
     def test_writer_owns_schema_fields(self):
         """Supplying schema or schema_version to the writer raises ValueError."""

@@ -151,6 +151,38 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "no valid max_model_len"):
                 await probe.engine_context_limit(client, "http://e", "stub", probe.VllmDialect())
 
+    def test_generated_sequence_limits_bound_decode_cohorts_before_measurement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "profiling-limits.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "narwhal.profiling-limits",
+                        "schema_version": 1,
+                        "engines": {"e0": 8},
+                    }
+                )
+            )
+            limits = probe.load_sequence_limits(path, {"e0"})
+            self.assertEqual(
+                probe.bounded_sweep(probe.Sweep(), 16384, limits["e0"]).decode_concurrency,
+                (1, 4, 8),
+            )
+            for invalid in ({"e0": 0}, {"other": 8}, {"e0": True}):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "schema": "narwhal.profiling-limits",
+                                "schema_version": 1,
+                                "engines": invalid,
+                            }
+                        )
+                    )
+                    probe.load_sequence_limits(path, {"e0"})
+        with self.assertRaisesRegex(ValueError, "fewer than two"):
+            probe.bounded_sweep(probe.Sweep(), 16384, 1)
+
     async def measure(self, frames, *, cohort=1, tokens=3):
         """Run one real decode probe and expose its final resident counters."""
         stream = MeasuredStream(frames)
@@ -253,11 +285,22 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "new.json"
+            limits_path = Path(folder) / "profiling-limits.json"
+            limits_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "narwhal.profiling-limits",
+                        "schema_version": 1,
+                        "engines": {engine.iid: 8 for engine in cfg.engines},
+                    }
+                )
+            )
             client = httpx.AsyncClient(
                 transport=httpx.MockTransport(lambda request: httpx.Response(200))
             )
 
-            async def measured(client, iid, *args, evidence, **kwargs):
+            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+                self.assertEqual(sweep.decode_concurrency, (1, 4, 8))
                 evidence["prefill"] = [[10, 0.1]]
                 return profile(iid)
 
@@ -267,11 +310,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(probe, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(await probe.run(cfg, {"e0"}), 0)
+                self.assertEqual(await probe.run(cfg, {"e0"}, limits_path=limits_path), 0)
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), 1)
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
+            self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
             self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 12288)
 
     def test_kv_capacity_uses_the_smallest_reported_rank(self):

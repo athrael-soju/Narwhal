@@ -302,7 +302,3 @@ class AccountingTests(unittest.TestCase):
                 trial.load_workload(path)
             with self.assertRaises(FileExistsError):
                 trial.private_json(path, WORKLOAD)
-
-
-if __name__ == "__main__":
-    unittest.main()

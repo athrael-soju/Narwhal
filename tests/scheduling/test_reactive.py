@@ -692,7 +692,3 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
             [row["decode_iid"] for row in terminal if row["rid"] == first.lifecycle.rid], ["e1"]
         )
         self.assertEqual(len(dispatches), 12)
-
-
-if __name__ == "__main__":
-    unittest.main()

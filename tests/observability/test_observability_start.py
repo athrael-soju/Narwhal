@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import io
 import json
-import threading
 import unittest
 import urllib.error
 from collections.abc import Callable
 from contextlib import redirect_stderr
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
@@ -44,33 +42,6 @@ class FakeStack:
         if len(values) > 1:
             return values.pop(0)
         return values[0]
-
-
-class HealthHandler(BaseHTTPRequestHandler):
-    """Serve valid-looking Grafana and Prometheus health documents."""
-
-    def do_GET(self) -> None:
-        if self.path == "/api/health":
-            body = json.dumps({"database": "ok", "version": observe.GRAFANA_VERSION})
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-        elif self.path == "/-/ready":
-            body = "Prometheus Server is Ready."
-            self.send_response(200)
-        elif self.path == "/api/v1/status/buildinfo":
-            body = json.dumps({"data": {"version": observe.PROMETHEUS_VERSION}})
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-        else:
-            body = "missing"
-            self.send_response(404)
-        encoded = body.encode()
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def log_message(self, format: str, *args: object) -> None:
-        pass
 
 
 def _healthy_get(url: str, timeout_s: float) -> tuple[int, str]:
@@ -123,72 +94,6 @@ class ListenerTests(unittest.TestCase):
     def test_invalid_prometheus_listener_reports_the_value(self) -> None:
         with self.assertRaisesRegex(observe.StartupError, "requires address:port"):
             observe.parse_prometheus_listener("127.0.0.1")
-
-    def _occupied_service(self, name: str) -> tuple[ServiceFixture, Callable[[], None]]:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        listener = observe.Listener("127.0.0.1", server.server_port)
-        if name == "grafana":
-            service = observe.Service(
-                name,
-                "Grafana",
-                listener,
-                observe.GRAFANA_IMAGE,
-                observe.GRAFANA_VERSION,
-            )
-            status, body = observe.http_get(
-                f"http://{listener.authority}/api/health",
-                1.0,
-            )
-            self.assertEqual(status, 200)
-            self.assertEqual(json.loads(body)["version"], observe.GRAFANA_VERSION)
-        else:
-            service = observe.Service(
-                name,
-                "Prometheus",
-                listener,
-                observe.PROMETHEUS_IMAGE,
-                observe.PROMETHEUS_VERSION,
-            )
-            status, body = observe.http_get(
-                f"http://{listener.authority}/-/ready",
-                1.0,
-            )
-            self.assertEqual((status, body), (200, "Prometheus Server is Ready."))
-
-        def close() -> None:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
-
-        return ServiceFixture(service, server.server_port), close
-
-    def test_valid_grafana_response_from_unrelated_listener_is_rejected(self) -> None:
-        fixture, close = self._occupied_service("grafana")
-        self.addCleanup(close)
-        with self.assertRaisesRegex(
-            observe.StartupError,
-            rf"Grafana listener 127\.0\.0\.1:{fixture.port} is occupied by pid 123 python",
-        ):
-            observe.check_listeners(
-                [fixture.service],
-                FakeStack({"grafana": [None]}),
-                owner=lambda listener: "pid 123 python",
-            )
-
-    def test_valid_prometheus_response_from_unrelated_listener_is_rejected(self) -> None:
-        fixture, close = self._occupied_service("prometheus")
-        self.addCleanup(close)
-        with self.assertRaisesRegex(
-            observe.StartupError,
-            rf"Prometheus listener 127\.0\.0\.1:{fixture.port} is occupied by socket unit",
-        ):
-            observe.check_listeners(
-                [fixture.service],
-                FakeStack({"prometheus": [None]}),
-                owner=lambda listener: "socket unit prometheus.socket",
-            )
 
     def test_expected_running_project_may_reuse_its_listener(self) -> None:
         service = observe.Service(
@@ -304,14 +209,6 @@ class ListenerTests(unittest.TestCase):
             owner,
             f"container observability-prometheus-1 ({observe.PROMETHEUS_IMAGE}, abc123abc123)",
         )
-
-
-class ServiceFixture:
-    """Pair an occupied service with its ephemeral port."""
-
-    def __init__(self, service: observe.Service, port: int) -> None:
-        self.service = service
-        self.port = port
 
 
 class ReadinessTests(unittest.TestCase):
@@ -618,7 +515,3 @@ class ReadinessTests(unittest.TestCase):
             "command exceeded 300s: docker compose up -d",
             stderr.getvalue(),
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

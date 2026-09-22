@@ -434,8 +434,8 @@ class Sweep:
     decode_input_lens: tuple[int, ...] = DECODE_INPUT_LENS
 
 
-def bounded_sweep(sweep: Sweep, max_model_len: int) -> Sweep:
-    """Keep candidate points whose requested input and output fit the live limit."""
+def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
+    """Keep candidate lengths and cohorts within the serving engine's limits."""
     prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
     decode = tuple(n for n in sweep.decode_input_lens if n + sweep.decode_tokens < max_model_len)
     if len(set(prefill)) < 3 or len(set(decode)) < 2:
@@ -443,7 +443,39 @@ def bounded_sweep(sweep: Sweep, max_model_len: int) -> Sweep:
             f"max_model_len {max_model_len} leaves too few sweep points; choose shorter "
             "--prefill-lens and --decode-input-lens"
         )
-    return replace(sweep, prefill_lens=prefill, decode_input_lens=decode)
+    concurrency = sweep.decode_concurrency
+    if max_num_seqs is not None:
+        concurrency = tuple(n for n in concurrency if n <= max_num_seqs)
+        if max_num_seqs < max(sweep.decode_concurrency) and max_num_seqs not in concurrency:
+            concurrency += (max_num_seqs,)
+        if len(set(concurrency)) < 2:
+            raise ValueError(
+                f"max_num_seqs {max_num_seqs} leaves fewer than two decode concurrency "
+                "points; adjust the engine launch policy before profiling"
+            )
+    return replace(
+        sweep, prefill_lens=prefill, decode_input_lens=decode, decode_concurrency=concurrency
+    )
+
+
+def load_sequence_limits(path: Path, engine_ids: set[str]) -> dict[str, int]:
+    """Read the generated limits bound to the fleet's serving roles."""
+    document = json.loads(path.read_text())
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != "narwhal.profiling-limits"
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("engines"), dict)
+    ):
+        raise ValueError(f"invalid profiling limits: {path}")
+    limits = document["engines"]
+    if set(limits) != engine_ids or any(
+        type(value) is not int or value < 1 for value in limits.values()
+    ):
+        raise ValueError(
+            f"profiling limits must name every fleet engine with a positive limit: {path}"
+        )
+    return limits
 
 
 async def run(
@@ -452,6 +484,7 @@ async def run(
     sweep: Sweep | None = None,
     *,
     overwrite: bool = False,
+    limits_path: Path | None = None,
 ) -> int:
     """Profile selected healthy engines and write the store."""
     store = ProfileStore(cfg.profiles_path, load=False)
@@ -469,6 +502,11 @@ async def run(
     if not targets:
         print("no matching instances", file=sys.stderr)
         return 2
+    limits = (
+        load_sequence_limits(limits_path, {engine.iid for engine in cfg.engines})
+        if limits_path is not None
+        else {}
+    )
 
     print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
     dialect = lookup_dialect(cfg.dialect)
@@ -497,16 +535,20 @@ async def run(
                     "that reports max_model_len before profiling"
                 )
             max_model_len = await engine_context_limit(client, spec.url, cfg.model, dialect)
-            engine_sweep = bounded_sweep(sweep or Sweep(), max_model_len)
+            max_num_seqs = limits.get(spec.iid)
+            engine_sweep = bounded_sweep(sweep or Sweep(), max_model_len, max_num_seqs)
             print(
                 f"  {spec.iid}: max_model_len {max_model_len}; "
                 f"prefill up to {max(engine_sweep.prefill_lens)}, "
-                f"decode input up to {max(engine_sweep.decode_input_lens)}"
+                f"decode input up to {max(engine_sweep.decode_input_lens)}, "
+                f"decode concurrency up to {max(engine_sweep.decode_concurrency)}"
             )
             engine_evidence: dict[str, object] = {
                 "max_model_len": max_model_len,
                 "sweep": asdict(engine_sweep),
             }
+            if max_num_seqs is not None:
+                engine_evidence["max_num_seqs"] = max_num_seqs
             profile = await profile_instance(
                 client,
                 spec.iid,
@@ -557,6 +599,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
+    ap.add_argument(
+        "--limits",
+        type=Path,
+        help="generated per-engine profiling limits from deployment preparation",
+    )
     ap.add_argument(
         "--overwrite", action="store_true", help="replace the profile store and sample sidecar"
     )
@@ -617,7 +664,15 @@ def main(argv: list[str] | None = None) -> int:
             "--prefill-repeats at least 1"
         )
     try:
-        return asyncio.run(run(cfg, set(args.only) or None, sweep, overwrite=args.overwrite))
+        return asyncio.run(
+            run(
+                cfg,
+                set(args.only) or None,
+                sweep,
+                overwrite=args.overwrite,
+                limits_path=args.limits,
+            )
+        )
     except (OSError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

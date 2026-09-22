@@ -107,6 +107,8 @@ Keep management destinations, passwords, SSH identities, and host keys in the wo
 
 Prepared workstation files live under ignored `runs/deployment-env/`. Remote role environments and the effective fleet live under ignored `runs/deployment/`.
 
+Deployment preparation writes `profiling-limits.json` beside the router's effective fleet. Each engine limit comes from its generated launch record's `--max-num-seqs` argument, and `narwhal-profile --limits runs/deployment/profiling-limits.json` binds decode cohorts to those launch settings.
+
 Load a role environment with:
 
 ```bash

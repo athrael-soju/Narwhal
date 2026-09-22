@@ -105,7 +105,3 @@ class HostEnvironmentTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_environment(path, {"ENGINE_TOKEN": "replacement"})
             self.assertIn("next line", path.read_text())
-
-
-if __name__ == "__main__":
-    unittest.main()
