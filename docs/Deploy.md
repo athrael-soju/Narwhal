@@ -52,6 +52,19 @@ Identical destination values place multiple roles on the same physical host and 
 
 Password authentication uses the matching `_SSH_PASSWORD` variable. Key authentication uses the configured identity or SSH agent.
 
+### Pin the model checkpoint
+
+`NARWHAL_ENGINE_MODEL_NAME` names the served model, while `NARWHAL_MODEL_DIR` names its checkpoint directory on each engine host. For the Kimi K3 deployment, use the [Moonshot AI Kimi K3 model repository](https://huggingface.co/moonshotai/Kimi-K3) as the checkpoint source. Choose a full Hugging Face commit SHA and retain the repository ID, revision and engine-host path in the private deployment record. Stage that complete revision at `NARWHAL_MODEL_DIR` on every engine host before discovery; a provisioned checkpoint at that path serves the same purpose when its files match the chosen revision.
+
+The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) can stage the snapshot on an engine host when the checkpoint needs to be downloaded:
+
+```bash
+hf download moonshotai/Kimi-K3 --revision '<full-model-commit>' --local-dir '<absolute-model-dir>'
+hf cache verify moonshotai/Kimi-K3 --revision '<full-model-commit>' --local-dir '<absolute-model-dir>' --fail-on-missing-files
+```
+
+Use the same revision and complete weight shards, configuration and tokenizer files across replicas. Discovery hashes `config.json`; the private revision record identifies the full checkpoint used by the fleet.
+
 ### Discover the deployed hosts
 
 Run discovery from the management checkout:
