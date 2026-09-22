@@ -340,7 +340,7 @@ Run the image check in that engine shell:
 python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 ```
 
-The check inspects the local immutable image identity, starts a temporary container to compare package versions and resolves the configured connector through the image's `KVConnectorFactory`, then records the plan hash in `checked.json`. The factory imports the class registered by that vLLM build; `image-check.log` retains its module and class name alongside the package versions and command output. The temporary container exits after these imports. Resolve package and library failures against the supplied image and runtime record. A launcher correction requires a fresh step 2 preparation to deliver the updated helper and its digest, followed by a fresh launch plan; retain the earlier image-check log and fabric samples with their original manifest.
+The check inspects the local immutable image identity, starts a temporary container to compare package versions and resolves the configured connector through the image's `KVConnectorFactory`, then records the plan hash in `checked.json`. The factory imports the class registered by that vLLM build. The check also reads `vllm.version.__version__`, which supplies the engine's `/version` response, and records it as `vllm_api_version` in `checked.json`. `image-check.log` retains the connector, exact package versions, API version and command output. The temporary container exits after these imports. Resolve package and library failures against the supplied image and runtime record. A launcher correction requires a fresh step 2 preparation to deliver the updated helper and its digest, followed by a fresh launch plan; retain the earlier image-check log and fabric samples with their original manifest.
 
 Inspect the planned listeners with `ss -ltnp`, then start the checked plan:
 
@@ -354,16 +354,21 @@ docker logs --follow "$ENGINE_CONTAINER"
 
 ### Verify the engine HTTP API
 
-After HTTP startup, run these probes in the same engine-role shell. They use the supplied engine endpoint and configured engine credential, and save responses under the launch directory:
+After HTTP startup, run these probes in the same engine-role shell. They use the supplied endpoint and engine credential, compare `/version` with the value captured from the checked image and save responses under the launch directory. Distribution metadata can carry a build suffix while the API exposes its own version string; the image check verifies the full distribution pin and the HTTP probe verifies the exact captured API version:
 
 ```bash
 python3 - <<'PY_ENGINE'
+import hashlib
 import json
 import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 run = Path(os.environ["ENGINE_RUN"])
-plan = json.loads((run / "launch.json").read_text())
+plan_data = (run / "launch.json").read_bytes()
+plan = json.loads(plan_data)
+checked = json.loads((run / "checked.json").read_text())
+assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
+expected_version = checked["vllm_api_version"]
 headers = {"Content-Type": "application/json"}
 if os.environ.get("NARWHAL_ENGINE_API_KEY"):
     headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
@@ -377,7 +382,9 @@ def probe(path, filename, body=None):
     return content
 probe("/health", "health.txt")
 version = json.loads(probe("/version", "version.json"))
-assert version["version"] == plan["expected_packages"]["vllm"]
+assert version["version"] == expected_version, (
+    f"/version returned {version['version']!r}; checked image expects {expected_version!r}"
+)
 models = json.loads(probe("/v1/models", "models.json"))
 assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
 metrics = probe("/metrics", "metrics.txt").decode()
@@ -391,7 +398,7 @@ print("Engine health, version, model, process identity and completion passed.")
 PY_ENGINE
 ```
 
-For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine passes, apply the same prepare, check, start and probe sequence in each remaining engine-role shell with its own `ENGINE_RUN`. Record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
+For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. A checked record predating `vllm_api_version` requires the updated launcher and a fresh checked launch plan. An API-version mismatch requires checking the endpoint owner against the recorded image and container ID. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine passes, apply the same prepare, check, start and probe sequence in each remaining engine-role shell with its own `ENGINE_RUN`. Record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
 
 ## 6. Attest each engine process
 

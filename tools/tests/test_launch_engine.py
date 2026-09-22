@@ -1,7 +1,9 @@
 """Exercise complete serving plans and launch guards with synthetic inputs and Docker mocks."""
 
+import contextlib
 import hashlib
 import importlib
+import io
 import json
 import sys
 import tempfile
@@ -13,6 +15,8 @@ from unittest.mock import Mock, patch
 from tools.engine_launch import selected_launch
 from tools.launch_engine import build, check, load, prepare, start, validate_runtime
 from tools.tests.test_engine_launch import launch_document
+
+IMAGE_CHECK_OUTPUT = 'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
 
 
 def runtime():
@@ -94,7 +98,7 @@ class EngineLauncherTests(unittest.TestCase):
                 mocked.assert_not_called()
             with patch(
                 "tools.launch_engine.docker",
-                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), "packages matched"],
+                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ) as mocked:
                 check(run, plan)
                 self.assertIn("--rm", mocked.call_args_list[1].args[0])
@@ -129,7 +133,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertFalse((run / "checked.json").exists())
             with patch(
                 "tools.launch_engine.docker",
-                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), "ok"],
+                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ):
                 check(run, plan)
             plan["args"].append("--enforce-eager")
@@ -147,11 +151,14 @@ class EngineLauncherTests(unittest.TestCase):
         config_module.KVTransferConfig = Mock()
         factory_module = ModuleType("vllm.distributed.kv_transfer.kv_connector.factory")
         factory_module.KVConnectorFactory = Mock()
+        version_module = ModuleType("vllm.version")
+        version_module.__version__ = "0.29.0"
         resolver = factory_module.KVConnectorFactory.get_connector_class
         modules = {
             module_name: connector_module,
             config_module.__name__: config_module,
             factory_module.__name__: factory_module,
+            version_module.__name__: version_module,
         }
         for missing_dependency in (False, True):
             with (
@@ -163,6 +170,8 @@ class EngineLauncherTests(unittest.TestCase):
                 run = root / "launch"
                 prepare(run, env)
                 plan = load(run)
+                plan["expected_packages"]["vllm"] = "0.29.0+rocm100"
+                (run / "launch.json").write_text(json.dumps(plan))
                 resolver.reset_mock()
                 resolver.side_effect = (
                     ModuleNotFoundError("connector dependency unavailable")
@@ -178,9 +187,10 @@ class EngineLauncherTests(unittest.TestCase):
                         patch.dict(sys.modules, modules),
                         patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
                         patch("importlib.metadata.version", plan["expected_packages"].__getitem__),
+                        contextlib.redirect_stdout(io.StringIO()) as output,
                     ):
                         exec(command[index + 1], {})
-                    return ""
+                    return output.getvalue()
 
                 with patch("tools.launch_engine.docker", side_effect=execute_check):
                     if missing_dependency:
@@ -188,6 +198,39 @@ class EngineLauncherTests(unittest.TestCase):
                             check(run, plan)
                     else:
                         check(run, plan)
+                        marker = json.loads((run / "checked.json").read_text())
+                        self.assertEqual(marker["vllm_api_version"], "0.29.0")
+                        self.assertEqual(plan["expected_packages"]["vllm"], "0.29.0+rocm100")
                 self.assertEqual((run / "checked.json").exists(), not missing_dependency)
                 config_module.KVTransferConfig.assert_called_with(**plan["connector"])
                 resolver.assert_called_once_with(config_module.KVTransferConfig.return_value)
+
+    def test_image_check_rejects_distribution_build_suffix_mismatch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = self.inputs(root)
+            run = root / "launch"
+            prepare(run, env)
+            plan = load(run)
+            plan["expected_packages"]["vllm"] = "0.29.0+rocm100"
+
+            def execute_check(command, directory, log):
+                if command[0] == "image":
+                    return json.dumps([{"Id": plan["image"]}])
+                index = command.index("-c")
+                with (
+                    patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
+                    patch(
+                        "importlib.metadata.version",
+                        {"vllm": "0.29.0+other", "nixl": "1.0.0"}.__getitem__,
+                    ),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    exec(command[index + 1], {})
+
+            with (
+                patch("tools.launch_engine.docker", side_effect=execute_check),
+                self.assertRaisesRegex(AssertionError, "image package versions differ"),
+            ):
+                check(run, plan)
+            self.assertFalse((run / "checked.json").exists())

@@ -263,11 +263,13 @@ print(json.dumps(observed))
 assert observed == expected, 'image package versions differ'
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
+from vllm.version import __version__ as api_version
 config = KVTransferConfig(**json.loads(__import__('sys').argv[2]))
 connector = KVConnectorFactory.get_connector_class(config)
 print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__}))
+print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
-    docker(
+    output = docker(
         [
             "run",
             "--rm",
@@ -283,8 +285,23 @@ print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__})
         run,
         "image-check.log",
     )
+    prefix = "NARWHAL_IMAGE_RUNTIME="
+    records = [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if len(records) != 1:
+        raise ValueError("image check requires one runtime version record; inspect image-check.log")
+    api_version = records[0].get("vllm_api_version")
+    if not isinstance(api_version, str) or not api_version.strip():
+        raise ValueError("image check returned an invalid API version; inspect image-check.log")
     marker = run / "checked.json"
-    value = json.dumps({"plan_sha256": digest(run / "launch.json"), "image_id": inspection["Id"]})
+    value = json.dumps(
+        {
+            "plan_sha256": digest(run / "launch.json"),
+            "image_id": inspection["Id"],
+            "vllm_api_version": api_version,
+        }
+    )
     if marker.exists():
         if marker.read_text() != value:
             raise ValueError("image check changed; prepare a fresh launch directory")
