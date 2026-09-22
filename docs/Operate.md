@@ -111,6 +111,8 @@ Use request journals for per-request timing and placement, and metrics for proce
 
 ## Restart one engine
 
+During first deployment, [check attestation across one engine restart](Deploy.md#check-attestation-across-one-engine-restart) to capture sidecar rejection and recovery on an idle engine. The procedure below adds router draining and readmission once the router is serving the fleet.
+
 With `recovery.engine_restart_policy: individual`, drain the engine from new placement before the supervisor touches its process.
 
 ```bash
@@ -121,7 +123,25 @@ curl -fsS -X POST http://router:8000/narwhal/lifecycle/drain \
 
 Poll `/narwhal/lifecycle` until `engines.e0.ready_to_stop` is `true`; when the drain deadline expires, the engine stays excluded with its resident work preserved.
 
-Restart the engine and attestation sidecar through the external supervisor, then request readmission.
+For the [Docker and Supervisor setup](Deploy.md#supervise-the-engine-and-sidecar), open the drained engine's role shell and select its existing `ENGINE_RUN`. Stop the supervised sidecar and restart the same engine container:
+
+```bash
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+export SUPERVISOR_RUN="$(cat "$ENGINE_RUN/supervisor-location.txt")"
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" stop attestation
+docker stop "$ENGINE_CONTAINER"
+docker start "$ENGINE_CONTAINER"
+docker logs --follow "$ENGINE_CONTAINER"
+```
+
+After model loading and HTTP startup, end the log follower with Ctrl-C and verify the engine through the [engine HTTP checks](Deploy.md#verify-the-engine-http-api), retaining fresh response files for this restart. Start its sidecar and verify `/health` and `/v1/attestation` against the new process identity:
+
+```bash
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" start attestation
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" status attestation
+```
+
+With engine and attestation checks passing, request readmission from the router management shell.
 
 ```bash
 curl -fsS -X POST http://router:8000/narwhal/lifecycle/readmit \

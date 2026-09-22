@@ -563,6 +563,330 @@ Populate `contract` from that host's deployed image, packages, model and launch 
 
 Point `attestation_url` at its `/v1/attestation` route, expose `/health` and `/v1/attestation` through the trusted control network, capture both responses, and restart the sidecar with the engine process. Validate the input and digested response against the [attestation document contract](Configuration.md#attestation-document).
 
+### Check attestation across one engine restart
+
+Complete the normal attestation checks on every engine, then reserve one idle engine for this check before profiling or starting the router. Define the capture function below, configure [engine and sidecar supervision](#supervise-the-engine-and-sidecar), and run the [supervised restart check](#verify-supervised-restart-and-recovery). The foreground sequence in this subsection provides an optional diagnostic for a manually managed sidecar. Either restart sequence reloads the selected engine's model once; the other engines retain their running processes. Router drain and readmission are exercised later through [Restart one engine](Operate.md#restart-one-engine).
+
+In a second shell for the selected engine role, set `ENGINE_RUN` to its existing checked launch directory. Set `ATTEST_BASE` to its attestation URL with the `/v1/attestation` suffix removed and `ATTEST_DOCUMENT` to the completed document used by its sidecar. Read those values from the private fleet config and sidecar launch command. Create a fresh private capture directory:
+
+```bash
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+export ATTEST_BASE="http://<control-address>:<attestation-port>"
+export ATTEST_DOCUMENT="runs/engine-attestation.production.json"
+umask 077
+export RESTART_RUN="$(mktemp -d "$ENGINE_RUN/attestation-restart-XXXXXX")"
+hostname > "$RESTART_RUN/host.txt"
+git rev-parse HEAD > "$RESTART_RUN/revision.txt"
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-before.json"
+```
+
+Define this probe in that shell. Each invocation saves both sidecar responses before checking status codes. With a running engine it also fetches the live identity; successful attestation must match the supplied contract, response digest and current process. The `changed` phase requires a newer process start and the sidecar's explicit identity-change rejection.
+
+```bash
+attestation_probe() {
+  .venv/bin/python - "$1" <<'PY_ATTEST_RESTART'
+import asyncio
+import json
+import os
+import sys
+from dataclasses import asdict
+from pathlib import Path
+
+import httpx
+from narwhal.engines.attestation import (
+    AttestationDocument, fetch_engine_identity, verify_attestation,
+)
+
+phase = sys.argv[1]
+expected = {"before": 200, "down": 503, "changed": 503, "rebound": 200, "sidecar-restarted": 200}[phase]
+out = Path(os.environ["RESTART_RUN"]) / phase
+out.mkdir(mode=0o700)
+base = os.environ["ATTEST_BASE"].rstrip("/")
+responses = {}
+with httpx.Client(timeout=15) as client:
+    for name, route in (("health", "/health"), ("attestation", "/v1/attestation")):
+        response = client.get(base + route)
+        (out / f"{name}.json").write_text(response.text)
+        (out / f"{name}.status").write_text(str(response.status_code) + "\n")
+        responses[name] = response
+for response in responses.values():
+    if response.status_code != expected:
+        raise SystemExit(f"{phase}: expected HTTP {expected}, got {response.status_code}")
+if phase == "down":
+    for response in responses.values():
+        if not response.json().get("detail", "").startswith("engine identity unreadable:"):
+            raise SystemExit("Inspect the captured 503 response for the engine access failure")
+else:
+    plan = json.loads((Path(os.environ["ENGINE_RUN"]) / "launch.json").read_text())
+    identity = asyncio.run(fetch_engine_identity(plan["endpoint"]))
+    (out / "identity.json").write_text(json.dumps(asdict(identity), indent=2) + "\n")
+    if phase == "sidecar-restarted":
+        old = json.loads((out.parent / "before/identity.json").read_text())
+        if asdict(identity) != old:
+            raise SystemExit("Expected the engine identity to stay fixed during sidecar restart")
+    if phase in ("changed", "rebound"):
+        old = json.loads((out.parent / "before/identity.json").read_text())
+        if identity.process_start_time_seconds <= old["process_start_time_seconds"]:
+            raise SystemExit("Expected a newer engine process start")
+        if identity.vllm_version != old["vllm_version"]:
+            raise SystemExit("Expected the same pinned runtime across this restart")
+    if expected == 200:
+        document = AttestationDocument.load(os.environ["ATTEST_DOCUMENT"])
+        failures = verify_attestation(responses["attestation"].json(), document.contract, identity)
+        if failures:
+            raise SystemExit("; ".join(failures))
+    else:
+        for response in responses.values():
+            if response.json().get("detail") != "engine process changed; restart the attestation sidecar":
+                raise SystemExit("Expected explicit rejection of the changed engine process")
+print(f"{phase}: both sidecar endpoints returned {expected}; checks passed")
+PY_ATTEST_RESTART
+}
+attestation_probe before
+```
+
+For the optional foreground diagnostic, continue here after `before` passes. Stop only the selected engine container, leaving its sidecar running. Capture the `down` phase, which requires HTTP 503 from both sidecar endpoints while the engine identity is unreachable:
+
+```bash
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-before.log" 2>&1
+docker stop "$ENGINE_CONTAINER" > "$RESTART_RUN/stop.txt"
+attestation_probe down
+```
+
+After `down` passes, start the same checked container and follow its log through model loading and HTTP startup. Ctrl-C ends the log follower. Run `changed` only after the engine's `/health` returns 200; the existing sidecar must still return 503 because its bound process start predates the running engine:
+
+```bash
+docker start "$ENGINE_CONTAINER" > "$RESTART_RUN/start.txt"
+docker logs --follow "$ENGINE_CONTAINER"
+attestation_probe changed
+```
+
+After `changed` passes, stop the selected sidecar with Ctrl-C in its original foreground shell and repeat its exact `narwhal-attest` command from [Populate the contract and start the sidecar](#populate-the-contract-and-start-the-sidecar). Wait for its HTTP listener, then run the final probe in the capture shell:
+
+```bash
+attestation_probe rebound
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-after.log" 2>&1
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-after.json"
+```
+
+Retain all four phase directories with the starting state, commands actually executed and exit statuses in the private deployment record. A connection refusal from the sidecar requires restoring its listener before testing identity rejection; HTTP 503 from the running old sidecar is the expected rejection. Engine startup failure requires inspecting the retained container log before recovery. An unexpected 200 during `changed` requires checking whether another process already restarted the sidecar. Preserve failed captures and use a fresh capture directory for a repeat.
+
+This foreground procedure verifies process binding and recovery after an operator restarts the sidecar. Continue with [Supervise the engine and sidecar](#supervise-the-engine-and-sidecar) to configure the process managers and exercise their commands. Retain the foreground captures as the record of that completed check.
+
+### Supervise the engine and sidecar
+
+Docker supervises the checked engine container with its [`unless-stopped` restart policy](https://docs.docker.com/engine/containers/start-containers-automatically/). [Supervisor 4.3.0](https://supervisord.org/configuration.html) manages the host's `narwhal-attest` process through a private Unix socket. These commands create the configuration from the existing engine plan and completed attestation document; the operator uses the same engine-role shell, `ENGINE_RUN`, `ENGINE_CONTAINER`, `ATTEST_DOCUMENT` and `ATTEST_BASE` as the preceding check.
+
+Install Supervisor in a separate environment and prepare a private state directory. Keeping the state directory under the deployment account's home gives the Unix socket a short path and retains configuration across login sessions. The engine launch directory records its location.
+
+```bash
+umask 077
+mkdir -p "$HOME/.local/state/narwhal"
+export SUPERVISOR_RUN="$(mktemp -d "$HOME/.local/state/narwhal/attest-XXXXXX")"
+python3 -m venv "$SUPERVISOR_RUN/venv"
+"$SUPERVISOR_RUN/venv/bin/python" -m pip install 'supervisor==4.3.0'
+.venv/bin/python - <<'PY_SUPERVISOR_CONFIG'
+import hashlib
+import json
+import os
+import re
+import shlex
+from pathlib import Path
+from urllib.parse import urlsplit
+
+os.umask(0o077)
+run = Path(os.environ["SUPERVISOR_RUN"]).resolve()
+engine = Path(os.environ["ENGINE_RUN"]).resolve()
+if (engine / "supervisor-location.txt").exists():
+    raise SystemExit("Reuse the supervisor recorded in supervisor-location.txt")
+document = Path(os.environ["ATTEST_DOCUMENT"]).resolve(strict=True)
+launch = (engine / "launch.json").read_bytes()
+plan = json.loads(launch)
+checked = json.loads((engine / "checked.json").read_text())
+plan_hash = hashlib.sha256(launch).hexdigest()
+if checked["plan_sha256"] != plan_hash:
+    raise SystemExit("Use the plan matching the retained image check")
+container = (engine / "container.id").read_text().strip()
+if not re.fullmatch(r"[0-9a-f]{64}", container) or container != os.environ["ENGINE_CONTAINER"]:
+    raise SystemExit("Use the container ID recorded by this checked launch")
+base = urlsplit(os.environ["ATTEST_BASE"])
+if (base.scheme != "http" or not base.hostname or not base.port or base.username
+        or base.password or base.path not in ("", "/") or base.query or base.fragment):
+    raise SystemExit("ATTEST_BASE requires the sidecar HTTP address and explicit port")
+socket = run / "control.sock"
+if len(os.fsencode(socket)) >= 104:
+    raise SystemExit("Choose a shorter private SUPERVISOR_RUN path for the Unix socket")
+executable = Path.cwd() / ".venv/bin/narwhal-attest"
+if not executable.is_file():
+    raise SystemExit("Run from the installed engine checkout")
+command = shlex.join([
+    str(executable), "--document", str(document), "--engine-base", plan["endpoint"],
+    "--host", base.hostname, "--port", str(base.port),
+])
+def ini(value):
+    value = str(value)
+    if any(char in value for char in "\r\n;#"):
+        raise SystemExit("Supervisor configuration values require single lines without ; or #")
+    return value.replace("%", "%%")
+config = f"""[unix_http_server]
+file={ini(socket)}
+chmod=0600
+[supervisord]
+logfile={ini(run / 'supervisord.log')}
+logfile_maxbytes=10MB
+logfile_backups=5
+pidfile={ini(run / 'supervisord.pid')}
+childlogdir={ini(run)}
+umask=077
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
+[supervisorctl]
+serverurl=unix://{ini(socket)}
+[program:attestation]
+command={ini(command)}
+directory={ini(Path.cwd())}
+autostart=false
+autorestart=true
+startsecs=2
+startretries=3
+stopsignal=TERM
+stopwaitsecs=15
+stopasgroup=true
+killasgroup=true
+redirect_stderr=true
+stdout_logfile={ini(run / 'attestation.log')}
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+"""
+record = {
+    "engine_run": str(engine), "container_id": container, "plan_sha256": plan_hash,
+    "document": str(document), "document_sha256": hashlib.sha256(document.read_bytes()).hexdigest(),
+    "supervisor_version": "4.3.0", "supervisor_run": str(run),
+}
+with (run / "supervisord.conf").open("x") as output:
+    output.write(config)
+with (run / "binding.json").open("x") as output:
+    json.dump(record, output, indent=2)
+    output.write("\n")
+with (engine / "supervisor-location.txt").open("x") as output:
+    output.write(str(run) + "\n")
+print("Prepared supervisord.conf and binding.json; start the supervisor next")
+PY_SUPERVISOR_CONFIG
+```
+
+An existing `supervisor-location.txt` identifies this engine's prepared supervisor. Restore `SUPERVISOR_RUN` from that file when reopening a shell and reuse the retained configuration. A preparation failure requires correcting the named input and inspecting the files already written before preparing another directory. Preserve earlier configurations and captures.
+
+Use the retained successful step 5 HTTP checks and confirm the engine's `/health` still returns 200. Save its current restart policy, then enable Docker recovery and start the sidecar supervisor daemon:
+
+```bash
+docker inspect --format '{{json .HostConfig.RestartPolicy}}' "$ENGINE_CONTAINER" \
+  > "$SUPERVISOR_RUN/docker-policy-before.json"
+docker update --restart unless-stopped "$ENGINE_CONTAINER" \
+  > "$SUPERVISOR_RUN/docker-update.txt"
+docker inspect --format '{{json .HostConfig.RestartPolicy}}' "$ENGINE_CONTAINER" \
+  > "$SUPERVISOR_RUN/docker-policy-after.json"
+"$SUPERVISOR_RUN/venv/bin/supervisord" -c "$SUPERVISOR_RUN/supervisord.conf"
+```
+
+The daemon starts with its `attestation` program stopped. Stop this engine's existing foreground sidecar with Ctrl-C in its original shell, then start the supervised sidecar:
+
+```bash
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" start attestation
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" status attestation
+```
+
+`RUNNING` confirms process supervision. Wait for `attestation.log` to report its HTTP listener, then capture the supervised sidecar's live response on each engine:
+
+```bash
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" tail attestation
+export RESTART_RUN="$(mktemp -d "$ENGINE_RUN/supervised-attestation-XXXXXX")"
+attestation_probe before
+```
+
+A port conflict requires locating and stopping the previous sidecar owned by this deployment. A `BACKOFF` or `FATAL` state requires inspecting `attestation.log` and restoring the engine identity endpoints or correcting the contract before issuing `start attestation` again.
+
+Move each remaining sidecar under its own prepared Supervisor instance using that engine's role shell and paths. This changes sidecar ownership while the engine containers keep their loaded models. Use a retained four-phase pass to complete the sidecar supervision check below, or reserve one idle engine for the full supervised restart sequence when establishing process-change rejection for the first time.
+
+### Verify supervised restart and recovery
+
+In the selected engine-role shell, restore the `attestation_probe` function from [Check attestation across one engine restart](#check-attestation-across-one-engine-restart). Create a fresh capture directory, record the supervisor's process identity and verify the baseline:
+
+```bash
+export SUPERVISOR_RUN="$(cat "$ENGINE_RUN/supervisor-location.txt")"
+export RESTART_RUN="$(mktemp -d "$ENGINE_RUN/supervised-restart-XXXXXX")"
+hostname > "$RESTART_RUN/host.txt"
+git rev-parse HEAD > "$RESTART_RUN/revision.txt"
+cp "$SUPERVISOR_RUN/binding.json" "$SUPERVISOR_RUN/supervisord.conf" "$RESTART_RUN/"
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" pid attestation \
+  > "$RESTART_RUN/sidecar-pid-before.txt"
+attestation_probe before
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-before.log" 2>&1
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-before.json"
+```
+
+#### Complete supervision after a retained four-phase pass
+
+An existing `before`, `down`, `changed` and `rebound` pass establishes process-change rejection for the tested engine plan, image, attestation document and sidecar code. When those inputs match the current deployment, reference that capture directory in the new private deployment record and restart only the supervised sidecar:
+
+```bash
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" restart attestation \
+  > "$RESTART_RUN/sidecar-restart.txt"
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" tail attestation
+```
+
+After the log records its HTTP listener, verify the response against the same running engine identity and capture the new sidecar PID:
+
+```bash
+attestation_probe sidecar-restarted
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" pid attestation \
+  > "$RESTART_RUN/sidecar-pid-after.txt"
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-after.json"
+cp "$SUPERVISOR_RUN/supervisord.log" "$SUPERVISOR_RUN/attestation.log" "$RESTART_RUN/"
+test "$(cat "$RESTART_RUN/sidecar-pid-before.txt")" != "$(cat "$RESTART_RUN/sidecar-pid-after.txt")"
+test "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$ENGINE_CONTAINER")" = unless-stopped
+```
+
+The retained four-phase capture establishes engine identity rejection; this capture establishes Supervisor-controlled sidecar replacement and a valid binding to the running engine. Record both capture paths and their scope, then continue to [Profile the idle engines](#7-profile-the-idle-engines). The engine keeps its loaded model throughout this continuation.
+
+#### Exercise engine identity change through the supervised setup
+
+Use this sequence when establishing the four-phase pass for the current deployment inputs. After the baseline passes, use Docker's stop command for the engine. Its `unless-stopped` policy respects this deliberate stop, allowing the running sidecar to report the inaccessible engine identity. Start the same container after `down` passes:
+
+```bash
+docker stop "$ENGINE_CONTAINER" > "$RESTART_RUN/stop.txt"
+attestation_probe down
+docker start "$ENGINE_CONTAINER" > "$RESTART_RUN/start.txt"
+docker logs --follow "$ENGINE_CONTAINER"
+```
+
+Follow the log through model loading and HTTP startup, then end the log follower with Ctrl-C. Once the engine's `/health` returns 200, capture rejection of its newer identity before requesting a sidecar restart through Supervisor:
+
+```bash
+attestation_probe changed
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" restart attestation \
+  > "$RESTART_RUN/sidecar-restart.txt"
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" tail attestation
+```
+
+After the log records the new sidecar's HTTP listener, capture its binding and the final supervisor state:
+
+```bash
+attestation_probe rebound
+"$SUPERVISOR_RUN/venv/bin/supervisorctl" -c "$SUPERVISOR_RUN/supervisord.conf" pid attestation \
+  > "$RESTART_RUN/sidecar-pid-after.txt"
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-after.log" 2>&1
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-after.json"
+cp "$SUPERVISOR_RUN/supervisord.log" "$SUPERVISOR_RUN/attestation.log" "$RESTART_RUN/"
+test "$(cat "$RESTART_RUN/sidecar-pid-before.txt")" != "$(cat "$RESTART_RUN/sidecar-pid-after.txt")"
+test "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$ENGINE_CONTAINER")" = unless-stopped
+```
+
+Pass this gate when the four probes succeed, the sidecar PID changes and the retained Docker inspection reports `RestartPolicy.Name` as `unless-stopped`. Retain host, revision, starting state and executed commands with these captures. Report the first failing command before recovery and preserve the supervised services that belong to the ongoing deployment. Test cleanup applies to the test's own artifacts after reporting.
+
+During ordinary operation, Docker restarts an engine that exits unexpectedly, and Supervisor restarts a sidecar process that exits. A sidecar whose live engine identity changes stays running and returns 503; after checking the recovered engine's HTTP endpoints, the operator runs the same `supervisorctl ... restart attestation` command to bind the new identity.
+
+For a planned stop, stop the sidecar with `supervisorctl ... stop attestation`, then stop its engine with `docker stop`; start the engine, verify its HTTP endpoints, and run `supervisorctl ... start attestation` to resume. A host reboot requires starting the Supervisor daemon with the retained configuration and then its `attestation` program after Docker and the engine are ready. Record host boot automation separately when configuring it.
+
 ## 7. Profile the idle engines
 
 On the router host, run the profiler with its private engine endpoints and credentials loaded while the real engines are reserved and idle. Warm the model and disable prefix caching under the [measurement conditions](Measure.md#1-calibrate-slos) before collecting the sweep.
@@ -667,6 +991,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
 | [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, resolved model dimension getters and physical cache layout, resolved connector transfer mode and handshake policy, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, `transfer-mode.json` and `handshake-policy.json`, model inspection's `model-dimensions.json`, `cache-registration.json` and logs, checked images and container ID; engine `runs/engine-attestation.production.json` and private inventory. |
+| [Attestation restart and supervision](#supervise-the-engine-and-sidecar) | One reserved idle engine, its checked container and sidecar command, completed contract, baseline identity, Docker and Supervisor 4.3.0. | Sidecar connection failure: restore its listener. Engine startup failure: inspect the retained container log. Sidecar `BACKOFF` or `FATAL`: repair the identity endpoint or contract, then start the managed program. Unexpected success after identity change: check sidecar restart activity. Preserve captures before repeating. | Engine launch directory's `supervisor-location.txt`, `attestation-restart-*/` and `supervised-restart-*/`; private Supervisor configuration, binding record and rotating logs under the deployment account's state directory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |

@@ -8,10 +8,90 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import httpx
+
+from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 
 
 class DeploymentHTTPProbeTests(unittest.TestCase):
+    def test_restart_capture_checks_each_phase_and_rejects_stale_success(self):
+        root = Path(__file__).resolve().parents[2]
+        guide = (root / "docs/Deploy.md").read_text()
+        script = guide.split("<<'PY_ATTEST_RESTART'\n", 1)[1].split("\nPY_ATTEST_RESTART", 1)[0]
+        document_path = root / "config/engine-attestation.example.json"
+        document = AttestationDocument.load(document_path)
+        old = EngineIdentity(document.contract.vllm_version, 100.0)
+        new = EngineIdentity(document.contract.vllm_version, 200.0)
+        cases = (
+            ("before", 200, old, None, True),
+            ("down", 503, None, "engine identity unreadable: connection refused", True),
+            ("changed", 503, new, "engine process changed; restart the attestation sidecar", True),
+            ("rebound", 200, new, None, True),
+            ("sidecar-restarted", 200, old, None, True),
+            ("sidecar-restarted", 200, new, None, False),
+            ("changed", 200, new, None, False),
+            ("changed", 503, old, "engine process changed; restart the attestation sidecar", False),
+            ("changed", 503, new, "engine identity unreadable: connection refused", False),
+            ("rebound", 200, old, None, False),
+        )
+        for phase, status, identity, detail, passes in cases:
+            with (
+                self.subTest(phase=phase, identity=identity, status=status, detail=detail),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                run = Path(folder)
+                captures = run / "capture"
+                captures.mkdir()
+                if phase != "before":
+                    (captures / "before").mkdir()
+                    (captures / "before/identity.json").write_text(
+                        json.dumps(
+                            {
+                                "vllm_version": old.vllm_version,
+                                "process_start_time_seconds": 100,
+                            }
+                        )
+                    )
+                (run / "launch.json").write_text(
+                    json.dumps({"endpoint": "http://engine.invalid:8000"})
+                )
+                payload = make_attestation(document, identity or old)
+                responses = [
+                    httpx.Response(status, json={"detail": detail} if detail else body)
+                    for body in ({"status": "ok"}, payload)
+                ]
+                with (
+                    patch.dict(
+                        "os.environ",
+                        {
+                            "ENGINE_RUN": folder,
+                            "RESTART_RUN": str(captures),
+                            "ATTEST_BASE": "http://sidecar.invalid:8010",
+                            "ATTEST_DOCUMENT": str(document_path),
+                        },
+                    ),
+                    patch("sys.argv", ["-", phase]),
+                    patch("httpx.Client") as client,
+                    patch(
+                        "narwhal.engines.attestation.fetch_engine_identity",
+                        new_callable=AsyncMock,
+                        return_value=identity,
+                    ) as fetch,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    client.return_value.__enter__.return_value.get.side_effect = responses
+                    if passes:
+                        exec(compile(script, "docs/Deploy.md:PY_ATTEST_RESTART", "exec"), {})
+                    else:
+                        with self.assertRaises(SystemExit):
+                            exec(compile(script, "docs/Deploy.md:PY_ATTEST_RESTART", "exec"), {})
+                    if phase == "down":
+                        fetch.assert_not_called()
+                self.assertEqual((captures / phase / "health.status").read_text(), f"{status}\n")
+                self.assertTrue((captures / phase / "attestation.json").is_file())
+
     def test_transfer_mode_capture_uses_resolved_class_and_preserves_evidence(self):
         guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
         script = guide.split("<<'PY_TRANSFER_MODE'\n", 1)[1].split("\nPY_TRANSFER_MODE", 1)[0]
