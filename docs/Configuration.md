@@ -204,7 +204,7 @@ The external launcher selects vLLM's TP size. Match `hardware.tensor_parallel` t
 | `vllm_version` | required | Exact value returned by every engine's `/version` route. |
 | `image_digest` | `""` | Immutable `sha256:<64 hex>` container digest reported by the engine-side attestation document. |
 | `nixl_version` | `""` | NIXL package version carried by the image. |
-| `nixl_connector_version` | `0` | vLLM NIXL wire-protocol version. Zero means undeclared. |
+| `nixl_connector_version` | `0` | Positive `NIXL_CONNECTOR_VERSION` integer from the deployed vLLM connector's metadata module; [capture it in step 6](Deploy.md#read-the-nixl-connector-protocol-version). |
 | `model_architecture` | `""` | Model implementation name relevant to KV layout. |
 | `model_dtype` | `""` | Model execution dtype. |
 | `kv_heads` | `0` | Number of KV heads. Zero means undeclared. |

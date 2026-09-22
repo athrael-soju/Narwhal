@@ -22,10 +22,10 @@
     "enforce_handshake_compat": true
   },
   "sources": {
-    "vllm_version": "replace with package metadata from the immutable engine image",
+    "vllm_version": "replace with the retained /version response checked against the immutable engine image",
     "image_digest": "replace with the deployment image digest",
     "nixl_version": "replace with package metadata from the immutable engine image",
-    "nixl_connector_version": "replace with the engine launch configuration",
+    "nixl_connector_version": "replace with the retained nixl-connector-version.json path and installed metadata.NIXL_CONNECTOR_VERSION source",
     "model_architecture": "replace with the model configuration",
     "model_dtype": "replace with the engine launch configuration",
     "kv_heads": "replace with the model configuration",

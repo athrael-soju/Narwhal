@@ -409,6 +409,44 @@ mkdir -p runs
 (set -o noclobber; cat config/engine-attestation.example.json > runs/engine-attestation.production.json)
 ```
 
+### Read the NIXL connector protocol version
+
+`nixl_connector_version` is the integer `NIXL_CONNECTOR_VERSION` defined by the installed vLLM connector. vLLM includes this constant in its peer compatibility hash. The pinned NIXL package version belongs in `nixl_version`; the connector protocol integer comes from the image's [NIXL metadata module](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py).
+
+In the engine-role shell, use the step 5 launch directory and recorded container ID to capture the installed constant and module hash. This command starts a Python inspection process inside the running container and preserves the serving process:
+
+```bash
+umask 077
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+(set -o noclobber
+  docker exec -i "$ENGINE_CONTAINER" python3 - > "$ENGINE_RUN/nixl-connector-version.json" <<'PY_NIXL_VERSION'
+import contextlib
+import hashlib
+import importlib
+import json
+import sys
+from pathlib import Path
+with contextlib.redirect_stdout(sys.stderr):
+    module = importlib.import_module("vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata")
+version = module.NIXL_CONNECTOR_VERSION
+if type(version) is not int or version < 1:
+    raise SystemExit("Installed NIXL_CONNECTOR_VERSION must be a positive integer")
+source = Path(module.__file__)
+print(json.dumps({
+    "nixl_connector_version": version,
+    "module": module.__name__,
+    "constant": "NIXL_CONNECTOR_VERSION",
+    "module_file": str(source),
+    "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+}, indent=2))
+PY_NIXL_VERSION
+)
+```
+
+Copy the captured integer into `contract.nixl_connector_version` in this engine's attestation document and the router's `engine_contract.nixl_connector_version`. Set `sources.nixl_connector_version` to the retained capture's path and its module/constant reference; the launch directory's checked image ID and container ID bind that record to the deployed build. Collect it for every engine and compare the integers before declaring the fleet contract. An import or missing-constant error requires checking the installed connector module against the pinned build; retain the error and identify that build's compatibility-hash source before filling the field. A stopped or removed container requires restoring its checked serving plan before process-bound attestation.
+
+### Populate the contract and start the sidecar
+
 Populate `contract` from that host's deployed image, packages, model and launch configuration, and match those values to the router fleet config's `engine_contract`. Confirm the engine's `/health`, `/version` and `process_start_time_seconds` metric identify the running process, then launch the sidecar in that engine-host shell, replacing the placeholders with its engine HTTP URL, control-network bind address and attestation port from the private inventory.
 
 ```bash
@@ -524,7 +562,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
-| [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |
+| [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, contract and sidecar bind address. | Connector import/constant failure: inspect the pinned build's compatibility-hash source. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, checked image and container ID; engine `runs/engine-attestation.production.json` and private inventory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |
