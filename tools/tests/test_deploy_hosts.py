@@ -156,6 +156,43 @@ class HostDeploymentTests(unittest.TestCase):
             self.assertTrue(all(host == "node-1" for host, _ in transport.calls[calls:]))
             self.assertEqual(existing.read_text(), "existing operator configuration")
 
+    def test_engine_shell_runs_the_prepared_tool_outside_the_application_bundle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run, manifest = self.prepare_run(root)
+            transport = LocalSSH(root)
+            install(self.hosts[:1], manifest, run, transport)
+            checkout = root / "node-1" / manifest["remote_dir"] / "checkout"
+            tool = checkout / "runs/deployment-tools/fabric_budget.py"
+            self.assertEqual(tool.read_bytes(), (run / "node-1/fabric_budget.py").read_bytes())
+            self.assertEqual(tool.stat().st_mode & 0o777, 0o600)
+            bundled_tool = subprocess.run(
+                ["git", "cat-file", "-e", "HEAD:runs/deployment-tools/fabric_budget.py"],
+                cwd=checkout,
+                capture_output=True,
+            )
+            self.assertNotEqual(bundled_tool.returncode, 0)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """set -eu
+. ./.env.engine-1
+test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
+python3 "$NARWHAL_FABRIC_BUDGET_TOOL" --help
+""",
+                ],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("calculate", result.stdout)
+            self.assertEqual(transport.uploads.count(("node-1", "fabric_budget.py")), 1)
+            (run / "node-1/fabric_budget.py").write_text("changed after preparation")
+            with self.assertRaisesRegex(ValueError, "Prepared input changed"):
+                load_run(run, self.hosts, self.env)
+
     def test_prepared_inputs_and_host_assignments_are_bound_to_the_run(self):
         with tempfile.TemporaryDirectory() as folder:
             run, _ = self.prepare_run(Path(folder))
