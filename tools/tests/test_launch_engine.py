@@ -25,7 +25,11 @@ from tools.launch_engine import (
 )
 from tools.tests.test_engine_launch import launch_document
 
-IMAGE_CHECK_OUTPUT = 'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
+ROOT = Path(__file__).resolve().parents[2]
+
+IMAGE_CHECK_OUTPUT = (
+    'NARWHAL_TOKENIZER_READY=1\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
+)
 
 
 def runtime():
@@ -55,6 +59,8 @@ class EngineLauncherTests(unittest.TestCase):
             "NARWHAL_MODEL_DIR": str(model),
             "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(b"{}").hexdigest(),
             "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
+            "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "tools/cache_capture_hook.py"),
+            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(ROOT / "tools/cache_capture_hook.py"),
             "NARWHAL_ENGINE_PORT": "8000",
             "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600",
             "NARWHAL_UCX_TCP_PORT_RANGE": "39000-39999",
@@ -107,6 +113,30 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env)
             with patch("tools.launch_engine.docker") as mocked:
                 with self.assertRaisesRegex(ValueError, "requires --trust-remote-code"):
+                    check(run, load(run))
+                mocked.assert_not_called()
+
+    def test_image_check_rejects_convolutional_layout_before_model_load(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = self.inputs(root)
+            (root / "model/config.json").write_text(
+                json.dumps(
+                    {
+                        "text_config": {
+                            "linear_attn_config": {
+                                "kda_layers": [1, 2],
+                                "short_conv_kernel_size": 4,
+                            }
+                        }
+                    }
+                )
+            )
+            env["NARWHAL_MODEL_CONFIG_SHA256"] = digest(root / "model/config.json")
+            run = root / "launch"
+            prepare(run, env)
+            with patch("tools.launch_engine.docker") as mocked:
+                with self.assertRaisesRegex(ValueError, "requires VLLM_SSM_CONV_STATE_LAYOUT=DS"):
                     check(run, load(run))
                 mocked.assert_not_called()
 
@@ -262,12 +292,15 @@ class EngineLauncherTests(unittest.TestCase):
         factory_module.KVConnectorFactory = Mock()
         version_module = ModuleType("vllm.version")
         version_module.__version__ = "0.29.0"
+        transformers_module = ModuleType("transformers")
+        transformers_module.AutoTokenizer = Mock()
         resolver = factory_module.KVConnectorFactory.get_connector_class
         modules = {
             module_name: connector_module,
             config_module.__name__: config_module,
             factory_module.__name__: factory_module,
             version_module.__name__: version_module,
+            transformers_module.__name__: transformers_module,
         }
         for missing_dependency in (False, True):
             with (
@@ -313,6 +346,11 @@ class EngineLauncherTests(unittest.TestCase):
                 self.assertEqual((run / "checked.json").exists(), not missing_dependency)
                 config_module.KVTransferConfig.assert_called_with(**plan["connector"])
                 resolver.assert_called_once_with(config_module.KVTransferConfig.return_value)
+                if not missing_dependency:
+                    transformers_module.AutoTokenizer.from_pretrained.assert_called_once_with(
+                        "/model", trust_remote_code=False, local_files_only=True
+                    )
+                    transformers_module.AutoTokenizer.from_pretrained.reset_mock()
 
     def test_image_check_rejects_distribution_build_suffix_mismatch(self):
         with tempfile.TemporaryDirectory() as folder:

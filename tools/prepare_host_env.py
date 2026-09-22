@@ -65,6 +65,7 @@ def select_values(
         if node is None or node < 1:
             raise ValueError("engine export requires a positive --node number")
         values["NARWHAL_ENGINE_LAUNCHER"] = "runs/deployment-tools/launch_engine.py"
+        values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
         for field in (*ENGINE_FIELDS, *ENGINE_OPTIONAL):

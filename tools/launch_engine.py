@@ -115,6 +115,25 @@ def requires_remote_code(model_dir: Path) -> bool:
     return False
 
 
+def requires_ds_conv_state_layout(model_dir: Path) -> bool:
+    """Detect checkpoint metadata that uses convolutional SSM transfer state."""
+    model = json.loads((model_dir / "config.json").read_text())
+    text_model = model.get("text_config", model)
+    linear = text_model.get("linear_attn_config", {})
+    if (
+        isinstance(linear, dict)
+        and linear.get("kda_layers")
+        and linear.get("short_conv_kernel_size")
+    ):
+        return True
+    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
+        return True
+    return any(
+        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
+        for layer in text_model.get("layer_types", [])
+    )
+
+
 def write_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
@@ -156,6 +175,9 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         values["VLLM_API_KEY"] = env["NARWHAL_ENGINE_API_KEY"]
     if any(any(c in value for c in "\r\n\0") for value in values.values()):
         raise ValueError("container environment values must fit one line")
+    values["PYTHONPATH"] = "/narwhal-hooks" + (
+        ":" + values["PYTHONPATH"] if values.get("PYTHONPATH") else ""
+    )
     model_dir = str(Path(env["NARWHAL_MODEL_DIR"]).resolve())
     if "," in model_dir or "," in str(output):
         raise ValueError("container bind-mount paths must use comma-free names")
@@ -172,6 +194,8 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         f"type=bind,src={model_dir},dst=/model,readonly",
         "--mount",
         f"type=bind,src={output / 'cache'},dst=/root/.cache",
+        "--mount",
+        f"type=bind,src={output / 'hook'},dst=/narwhal-hooks,readonly",
     ]
     for device in record["accelerator_devices"] + record["transfer"]["devices"]:
         common.extend(["--device", device])
@@ -229,8 +253,15 @@ def prepare(output: Path, env: dict[str, str]) -> None:
     plan, values = build(record, env, output.resolve())
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
+    hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
+    hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
+    if digest(hook_source) != hook_sha:
+        raise ValueError("cache capture hook differs from its delivered hash")
     output.mkdir(mode=0o700, parents=True)
     (output / "cache").mkdir(mode=0o700)
+    (output / "hook").mkdir(mode=0o700)
+    write_private(output / "hook/sitecustomize.py", hook_source.read_text())
+    write_private(output / "hook/launch_engine.py", Path(__file__).read_text())
     write_private(
         output / "container.env", "".join(f"{k}={v}\n" for k, v in sorted(values.items()))
     )
@@ -238,9 +269,14 @@ def prepare(output: Path, env: dict[str, str]) -> None:
         env_sha256=digest(output / "container.env"),
         launch_sha256=digest(source),
         launcher_sha256=digest(Path(__file__)),
+        cache_capture_sha256=hook_sha,
         model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
+    write_private(output / "hook/launch.json", (output / "launch.json").read_text())
+    for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):
+        (output / "hook" / name).chmod(0o644)
+    (output / "hook").chmod(0o755)
     print(f"Prepared {record['role']}; review launch.json and run the image check.")
 
 
@@ -266,6 +302,12 @@ def load(run: Path) -> dict:
 def check(run: Path, plan: dict) -> None:
     if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
+    ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
+    if (
+        ds_required
+        and "VLLM_SSM_CONV_STATE_LAYOUT=DS" not in (run / "container.env").read_text().splitlines()
+    ):
+        raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
     inspection = json.loads(docker(["image", "inspect", plan["image"]], run, "image-check.log"))[0]
     expected = plan["image"]
     if expected.startswith("sha256:"):
@@ -282,9 +324,18 @@ assert observed == expected, 'image package versions differ'
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
 from vllm.version import __version__ as api_version
+from transformers import AutoTokenizer
 config = KVTransferConfig(**json.loads(__import__('sys').argv[2]))
 connector = KVConnectorFactory.get_connector_class(config)
+if json.loads(__import__('sys').argv[4]):
+    from vllm.model_executor.layers.mamba.mamba_utils import get_conv_state_layout
+    assert get_conv_state_layout() == 'DS', 'NIXL convolutional state requires DS layout'
+tokenizer = AutoTokenizer.from_pretrained(
+    '/model', trust_remote_code=json.loads(__import__('sys').argv[3]), local_files_only=True
+)
+assert tokenizer is not None, 'checkpoint tokenizer did not initialise'
 print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__}))
+print('NARWHAL_TOKENIZER_READY=1')
 print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
     output = docker(
@@ -299,6 +350,8 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             script,
             json.dumps(plan["expected_packages"]),
             json.dumps(plan["connector"]),
+            json.dumps("--trust-remote-code" in plan["args"]),
+            json.dumps(ds_required),
         ],
         run,
         "image-check.log",
@@ -309,6 +362,8 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     ]
     if len(records) != 1:
         raise ValueError("image check requires one runtime version record; inspect image-check.log")
+    if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
+        raise ValueError("image check requires one tokenizer confirmation; inspect image-check.log")
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
         raise ValueError("image check returned an invalid API version; inspect image-check.log")
@@ -325,7 +380,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             raise ValueError("image check changed; prepare a fresh launch directory")
     else:
         write_private(marker, value)
-    print("Image identity, package pins and connector import passed.")
+    print("Image identity, package pins, connector import and tokenizer passed.")
 
 
 def require_checked(run: Path, plan: dict) -> None:
@@ -713,6 +768,12 @@ def measure_cache(run: Path, plan: dict) -> None:
 
 def start(run: Path, plan: dict) -> None:
     require_checked(run, plan)
+    if digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]:
+        raise ValueError("cache capture hook changed; prepare a fresh launch plan")
+    if digest(run / "hook/launch_engine.py") != plan["launcher_sha256"]:
+        raise ValueError("cache capture launcher changed; prepare a fresh launch plan")
+    if digest(run / "hook/launch.json") != digest(run / "launch.json"):
+        raise ValueError("cache capture plan changed; prepare a fresh launch plan")
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
     cid = docker(
@@ -721,6 +782,12 @@ def start(run: Path, plan: dict) -> None:
             "--name",
             plan["name"],
             *plan["common"],
+            "--env",
+            "NARWHAL_CAPTURE_CACHE=1",
+            "--env",
+            "NARWHAL_CACHE_PLAN=/narwhal-hooks/launch.json",
+            "--env",
+            "NARWHAL_CACHE_OUTPUT=/tmp/narwhal-cache-layout.json",
             "--entrypoint",
             "python3",
             plan["image"],
@@ -736,6 +803,45 @@ def start(run: Path, plan: dict) -> None:
     print("Container started; follow its logs and verify the HTTP endpoints.")
 
 
+def capture_cache(run: Path, plan: dict) -> None:
+    """Retain the cache pages emitted by this live serving process."""
+    require_checked(run, plan)
+    destination = run / "cache-layout.json"
+    pending = run / "cache-layout.pending.json"
+    if destination.exists() or pending.exists():
+        raise ValueError("cache layout capture exists; retain it and use a fresh plan")
+    cid = (run / "container.id").read_text().strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", cid):
+        raise ValueError("container.id must contain the recorded serving container")
+    state = json.loads(
+        docker(["inspect", "--format", "{{json .State}}", cid], run, "cache-capture.log")
+    )
+    if not state["Running"]:
+        raise ValueError("serving container exited; inspect its launch log before cache capture")
+    docker(["cp", f"{cid}:/tmp/narwhal-cache-layout.json", str(pending)], run, "cache-capture.log")
+    pending.chmod(0o600)
+    record = json.loads(pending.read_text())
+    expected = {
+        "image": plan["image"],
+        "expected_packages": plan["expected_packages"],
+        "revision": plan["revision"],
+        "model_config_sha256": plan["model_config_sha256"],
+        "launch_config_sha256": plan["launch_sha256"],
+        "plan_sha256": digest(run / "launch.json"),
+        "launcher_sha256": plan["launcher_sha256"],
+        "cache_capture_sha256": plan["cache_capture_sha256"],
+    }
+    if any(record.get(key) != value for key, value in expected.items()):
+        raise ValueError("live cache capture differs from the checked serving plan")
+    tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
+    ranks = record["ranks"]
+    if sorted(rank["rank"] for rank in ranks) != list(range(tp)):
+        raise ValueError("live cache capture requires every TP rank exactly once")
+    write_private(destination, pending.read_text())
+    pending.unlink()
+    print("Live serving cache pages captured in cache-layout.json; container remains running.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -746,7 +852,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("_model-dimensions", help=argparse.SUPPRESS).add_argument(
         "--plan", type=Path, required=True
     )
-    for command in ("check", "measure-cache", "model-dimensions", "handshake-policy", "start"):
+    for command in (
+        "check",
+        "measure-cache",
+        "model-dimensions",
+        "handshake-policy",
+        "start",
+        "capture-cache",
+    ):
         sub.add_parser(command).add_argument("--run", type=Path, required=True)
     registration = sub.add_parser("cache-registration")
     registration.add_argument("--run", type=Path, required=True)
@@ -776,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "check": check,
                 "measure-cache": measure_cache,
+                "capture-cache": capture_cache,
                 "model-dimensions": model_dimensions,
                 "handshake-policy": handshake_policy,
                 "start": start,

@@ -65,6 +65,7 @@ python3 tools/deploy_hosts.py prepare --out <directory>
 | `config/engine-launch.engine-<n>.json`                   | Selected GPU allocation, TP size, device mappings, resolved UCX selection, generated launch arguments.                                                                   | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                     |
 | `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
 | `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
+| `runs/deployment-tools/cache_capture_hook.py` on engine hosts | Serving cache capture snapshot, with path and SHA-256 recorded in `.env.engine-<n>`. | `tools/cache_capture_hook.py` from the management checkout at preparation time. |
 | `config/fleet.local.json` on the router                  | Generated fleet document copied before deployment edits.                                                                                                                 | File selected by workstation `NARWHAL_FLEET`.                                                                                                                                                                               |
 
 Engine export requires:
@@ -178,7 +179,7 @@ The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/en
 
 The launcher takes the model mount, served name, bind family, and HTTP port from the role environment. It applies the recorded TP size and configures `NixlConnector` with `kv_both`, UCX, and failure propagation.
 
-Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`. This still happens when `NARWHAL_ENGINE_ARGS` supplies other arguments.
+Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`. It sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` when model metadata identifies convolutional SSM transfer state. These derived settings apply when `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` supplies other values.
 
 Extra arguments are validated against supported model options so they cannot override launcher-managed settings.
 
@@ -187,7 +188,9 @@ Before model startup, the image check:
 1. verifies `--trust-remote-code` against the mounted checkpoint,
 2. validates image identity,
 3. checks exact distribution package versions,
-4. validates connector configuration and import.
+4. validates connector configuration and import,
+5. constructs the checkpoint tokenizer,
+6. checks the pinned image's convolutional state layout for SSM models.
 
 It records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID. The HTTP probe then compares `/version` with that captured value.
 
@@ -211,7 +214,7 @@ For each representative engine role and matching cache configuration:
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
 ```
 
-Use `--runtime-layout` with the `cache-layout.json` produced by `launch_engine.py measure-cache`.
+Use `--runtime-layout` with the `cache-layout.json` captured from the running cache representative by `launch_engine.py capture-cache`.
 
 The calculator verifies model and launch-record hashes, sums padded cache-page bounds across TP ranks, then derives the link rate required for the configured:
 
@@ -220,7 +223,7 @@ The calculator verifies model and launch-record hashes, sums padded cache-page b
 - burst,
 - transfer-time budget.
 
-[Transfer fabric preparation](Deploy.md#4-qualify-the-transfer-fabric) groups roles by discovered image, model, accelerator, TP, and runtime inputs. It runs an initial trial workload and compares each directed edge with the budget for its source group. Each running engine later verifies its resolved cache layout against its representative.
+[Transfer fabric preparation](Deploy.md#4-qualify-the-transfer-fabric) groups roles by discovered image, model, accelerator, TP, and runtime inputs. It retains a serving representative per group, derives the initial trial budget from that process's cache pages, and compares each directed edge with its source budget. Each running engine later verifies its resolved cache layout against its representative.
 
 The representative stores a mode-0600 `runs/fabric-*/budget.json` containing:
 
@@ -234,13 +237,15 @@ Each matching source role records the budget rate and hash in its private compar
 
 The layout retains per-rank, per-layer page bytes, token block size, state and boundary allowances, image identity, package versions, application revision, and launch-plan hash.
 
-The cache probe reaches cache planning after model loading and memory profiling, then terminates its workers before serving.
+The serving capture records cache pages after model loading and memory profiling while the representative continues through HTTP startup. The model load and its cache geometry serve the later attestation and workload trial.
 
 `--uniform-cache` selects an analytical attention/MLA estimate. `--bytes-per-token` provides a measured uniform-cache override. Both uniform modes require `--element-bytes` and `--block-tokens`.
 
 The deployment path uses the runtime page record for both hybrid and uniform models.
 
 TCP comparisons use aggregate bitrate reported by the iperf3 receiver. RDMA comparisons use average Gbit/s from the retained perftest report.
+
+`fabric_budget.py link` records each directed pair's roles, addresses, interfaces, routes, transport, utility version and test parameters. `record-edge` binds the sample and source budget to that fingerprint. `reuse-edge` compares the retained bandwidth sample with a corrected budget when the current fingerprint matches and writes a new private comparison.
 
 Each budget covers one directed host edge at the recorded workload. Running-engine KV probes and concurrent-capacity tests provide later deployment acceptance evidence.
 

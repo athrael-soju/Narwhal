@@ -164,6 +164,28 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 build_records(hosts, env, observations, root)
 
+    def test_convolutional_transfer_layout_is_derived_before_installation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            hosts = derive_hosts(env)
+            observations = {f"engine-{i}": observation() for i in (1, 2)}
+            observations["engine-1"]["requires_ds_conv_state_layout"] = True
+            _, launches, _, _ = build_records(hosts, env, observations, root)
+            self.assertEqual(
+                launches["engines"]["engine-1"]["runtime"]["environment"][
+                    "VLLM_SSM_CONV_STATE_LAYOUT"
+                ],
+                "DS",
+            )
+            self.assertNotIn(
+                "VLLM_SSM_CONV_STATE_LAYOUT",
+                launches["engines"]["engine-2"]["runtime"]["environment"],
+            )
+            env["NARWHAL_ENGINE_ENV"] = '{"VLLM_SSM_CONV_STATE_LAYOUT":"SD"}'
+            with self.assertRaisesRegex(ValueError, "requires VLLM_SSM_CONV_STATE_LAYOUT=DS"):
+                build_records(hosts, env, observations, root)
+
     def test_colocated_engines_require_disjoint_allocations(self):
         env = environment(Path("/synthetic"))
         env["NARWHAL_NODE_2_SSH"] = env["NARWHAL_NODE_1_SSH"]
@@ -214,7 +236,8 @@ class DiscoveryTests(unittest.TestCase):
         }
         model = (
             b'{"torch_dtype":"bfloat16","max_position_embeddings":32768,'
-            b'"auto_map":{"AutoConfig":"configuration_custom.CustomConfig"}}'
+            b'"auto_map":{"AutoConfig":"configuration_custom.CustomConfig"},'
+            b'"text_config":{"linear_attn_config":{"kda_layers":[1,2],"short_conv_kernel_size":4}}}'
         )
         image = [
             {
@@ -271,6 +294,7 @@ class DiscoveryTests(unittest.TestCase):
             exec(compile(PROBE, "remote discovery probe", "exec"), {})
         result = json.loads(output.getvalue())
         self.assertTrue(result["requires_trust_remote_code"])
+        self.assertTrue(result["requires_ds_conv_state_layout"])
         self.assertEqual(result["image_environment"], {"VLLM_ROCM_USE_AITER": "1"})
         self.assertEqual(
             [g["device"] for g in result["gpus"]],

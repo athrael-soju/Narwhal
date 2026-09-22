@@ -11,6 +11,145 @@ from tools.fabric_budget import cache_shape, calculate, main, received_gbps
 
 
 class FabricBudgetTests(unittest.TestCase):
+    def test_retained_edge_is_reused_only_for_matching_link_and_sample(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            link = {
+                "source_role": "engine-1",
+                "destination_role": "engine-2",
+                "source_address": "192.0.2.1",
+                "destination_address": "192.0.2.2",
+                "source_interface": "eth1",
+                "destination_interface": "eth1",
+                "source_route": "192.0.2.2 from 192.0.2.1 dev eth1",
+                "destination_route": "192.0.2.1 from 192.0.2.2 dev eth1",
+                "transport": "ucx_tcp",
+                "tool_version": "iperf 3.16",
+                "test_parameters": {"parallel": 8, "omit_s": 3, "duration_s": 10, "port": 5201},
+            }
+            sample = {
+                "start": {"test_start": {"protocol": "TCP"}},
+                "end": {"sum_received": {"bits_per_second": 12e9, "seconds": 10}},
+            }
+            paths = {
+                name: root / name
+                for name in (
+                    "link.json",
+                    "sample.json",
+                    "budget.json",
+                    "evidence.json",
+                    "revised.json",
+                    "comparison.json",
+                )
+            }
+            paths["link.json"].write_text(json.dumps(link))
+            paths["sample.json"].write_text(json.dumps(sample))
+            paths["budget.json"].write_text(json.dumps({"required_gbps": 10}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "record-edge",
+                            "--link",
+                            str(paths["link.json"]),
+                            "--budget",
+                            str(paths["budget.json"]),
+                            "--sample",
+                            str(paths["sample.json"]),
+                            "--out",
+                            str(paths["evidence.json"]),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(paths["evidence.json"].stat().st_mode & 0o777, 0o600)
+            paths["revised.json"].write_text(json.dumps({"required_gbps": 11}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "reuse-edge",
+                            "--link",
+                            str(paths["link.json"]),
+                            "--evidence",
+                            str(paths["evidence.json"]),
+                            "--sample",
+                            str(paths["sample.json"]),
+                            "--budget",
+                            str(paths["revised.json"]),
+                            "--out",
+                            str(paths["comparison.json"]),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(json.loads(paths["comparison.json"].read_text())["required_gbps"], 11)
+            link["destination_route"] = "192.0.2.1 from 192.0.2.2 dev eth2"
+            paths["link.json"].write_text(json.dumps(link))
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(
+                    [
+                        "reuse-edge",
+                        "--link",
+                        str(paths["link.json"]),
+                        "--evidence",
+                        str(paths["evidence.json"]),
+                        "--sample",
+                        str(paths["sample.json"]),
+                        "--budget",
+                        str(paths["revised.json"]),
+                        "--out",
+                        str(root / "changed.json"),
+                    ]
+                )
+            self.assertFalse((root / "changed.json").exists())
+
+    def test_link_command_records_route_files_and_measurement_inputs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source-route.txt"
+            destination = root / "destination-route.txt"
+            output = root / "link.json"
+            source.write_text("192.0.2.2 from 192.0.2.1 dev eth1\n")
+            destination.write_text("192.0.2.1 from 192.0.2.2 dev eth1\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "link",
+                            "--source-role",
+                            "engine-1",
+                            "--destination-role",
+                            "engine-2",
+                            "--source-address",
+                            "192.0.2.1",
+                            "--destination-address",
+                            "192.0.2.2",
+                            "--source-interface",
+                            "eth1",
+                            "--destination-interface",
+                            "eth1",
+                            "--source-route",
+                            str(source),
+                            "--destination-route",
+                            str(destination),
+                            "--transport",
+                            "ucx_tcp",
+                            "--tool-version",
+                            "iperf 3.16",
+                            "--test-parameters",
+                            '{"parallel":8,"duration_s":10}',
+                            "--out",
+                            str(output),
+                        ]
+                    ),
+                    0,
+                )
+            record = json.loads(output.read_text())
+            self.assertEqual(record["source_route"], source.read_text().strip())
+            self.assertEqual(record["destination_route"], destination.read_text().strip())
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
     def test_gqa_shards_and_mqa_replicas_count_all_rank_bytes(self):
         model = {
             "num_hidden_layers": 32,

@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 
@@ -138,6 +139,133 @@ def received_gbps(sample: dict) -> float:
     return positive(float(received["bits_per_second"]), "received bitrate") / 1e9
 
 
+LINK_FIELDS = {
+    "source_role",
+    "destination_role",
+    "source_address",
+    "destination_address",
+    "source_interface",
+    "destination_interface",
+    "source_route",
+    "destination_route",
+    "transport",
+    "tool_version",
+    "test_parameters",
+}
+
+
+def link_fingerprint(link: dict) -> str:
+    """Bind one directed measurement to its route and test conditions."""
+    if set(link) != LINK_FIELDS:
+        raise ValueError("link record requires role, address, interface, route and test fields")
+    for name in LINK_FIELDS - {"test_parameters"}:
+        if not isinstance(link[name], str) or not link[name].strip():
+            raise ValueError(f"link record requires {name}")
+    if (
+        not re.fullmatch(r"engine-[1-9][0-9]*", link["source_role"])
+        or not re.fullmatch(r"engine-[1-9][0-9]*", link["destination_role"])
+        or link["source_role"] == link["destination_role"]
+    ):
+        raise ValueError("link record requires two distinct engine roles")
+    if link["transport"] not in ("ucx_tcp", "ucx_rdma"):
+        raise ValueError("link record requires ucx_tcp or ucx_rdma")
+    parameters = link["test_parameters"]
+    if not isinstance(parameters, dict) or not parameters:
+        raise ValueError("link record requires test parameters")
+    if any(
+        not isinstance(key, str) or not key or value is None for key, value in parameters.items()
+    ):
+        raise ValueError("link test parameters require named values")
+    return hashlib.sha256(
+        json.dumps(link, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def create_link(args: argparse.Namespace) -> None:
+    link = {
+        "source_role": args.source_role,
+        "destination_role": args.destination_role,
+        "source_address": args.source_address,
+        "destination_address": args.destination_address,
+        "source_interface": args.source_interface,
+        "destination_interface": args.destination_interface,
+        "source_route": args.source_route.read_text().strip(),
+        "destination_route": args.destination_route.read_text().strip(),
+        "transport": args.transport,
+        "tool_version": args.tool_version,
+        "test_parameters": json.loads(args.test_parameters),
+    }
+    link_fingerprint(link)
+    write_private(args.out, link)
+
+
+def record_edge(
+    link_path: Path, budget_path: Path, sample_path: Path, out: Path, gbps: float | None
+) -> bool:
+    link = json.loads(link_path.read_text())
+    fingerprint = link_fingerprint(link)
+    if (link["transport"] == "ucx_tcp") != (gbps is None):
+        raise ValueError("TCP uses the iperf JSON rate; RDMA requires --gbps")
+    sample_data = sample_path.read_bytes()
+    measured = (
+        received_gbps(json.loads(sample_data))
+        if link["transport"] == "ucx_tcp"
+        else positive(gbps, "measured_gbps")
+    )
+    budget_data = budget_path.read_bytes()
+    required = positive(float(json.loads(budget_data)["required_gbps"]), "required_gbps")
+    passed = measured >= required
+    write_private(
+        out,
+        {
+            "schema": "narwhal.fabric-edge-evidence",
+            "schema_version": 1,
+            "link_sha256": fingerprint,
+            "sample_sha256": hashlib.sha256(sample_data).hexdigest(),
+            "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
+            "measured_gbps": measured,
+            "required_gbps": required,
+            "passed": passed,
+        },
+    )
+    return passed
+
+
+def reuse_edge(
+    link_path: Path, evidence_path: Path, sample_path: Path, budget_path: Path, out: Path
+) -> bool:
+    fingerprint = link_fingerprint(json.loads(link_path.read_text()))
+    evidence = json.loads(evidence_path.read_text())
+    if (
+        evidence.get("schema") != "narwhal.fabric-edge-evidence"
+        or evidence.get("schema_version") != 1
+    ):
+        raise ValueError("unsupported fabric edge evidence")
+    if evidence["link_sha256"] != fingerprint:
+        raise ValueError("link inputs changed; collect a fresh directed sample")
+    if evidence["sample_sha256"] != hashlib.sha256(sample_path.read_bytes()).hexdigest():
+        raise ValueError("retained sample differs from the recorded evidence")
+    measured = positive(float(evidence["measured_gbps"]), "measured_gbps")
+    budget_data = budget_path.read_bytes()
+    required = positive(float(json.loads(budget_data)["required_gbps"]), "required_gbps")
+    passed = measured >= required
+    write_private(
+        out,
+        {
+            "schema": "narwhal.fabric-edge-comparison",
+            "schema_version": 1,
+            "link_sha256": fingerprint,
+            "sample_sha256": evidence["sample_sha256"],
+            "source_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
+            "measured_gbps": measured,
+            "required_gbps": required,
+            "passed": passed,
+        },
+    )
+    return passed
+
+
 def write_private(path: Path, value: dict) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
@@ -153,7 +281,11 @@ def main(argv: list[str] | None = None) -> int:
     budget.add_argument("--launch-config", type=Path, required=True)
     budget.add_argument("--element-bytes", type=int, choices=(1, 2, 4))
     sizing = budget.add_mutually_exclusive_group(required=True)
-    sizing.add_argument("--runtime-layout", type=Path, help="cache-layout.json from measure-cache")
+    sizing.add_argument(
+        "--runtime-layout",
+        type=Path,
+        help="cache-layout.json from a serving capture or measure-cache",
+    )
     sizing.add_argument(
         "--uniform-cache", action="store_true", help="explicit uniform analytical estimate"
     )
@@ -172,6 +304,36 @@ def main(argv: list[str] | None = None) -> int:
     measurement = compare.add_mutually_exclusive_group(required=True)
     measurement.add_argument("--iperf", type=Path)
     measurement.add_argument("--gbps", type=float, help="RDMA average from the retained report")
+    link = commands.add_parser("link", help="record current directed link and measurement inputs")
+    for field in (
+        "source-role",
+        "destination-role",
+        "source-address",
+        "destination-address",
+        "source-interface",
+        "destination-interface",
+        "tool-version",
+        "test-parameters",
+    ):
+        link.add_argument("--" + field, required=True)
+    link.add_argument("--source-route", type=Path, required=True)
+    link.add_argument("--destination-route", type=Path, required=True)
+    link.add_argument("--transport", choices=("ucx_tcp", "ucx_rdma"), required=True)
+    link.add_argument("--out", type=Path, required=True)
+    record = commands.add_parser("record-edge", help="bind a directed sample to link conditions")
+    record.add_argument("--link", type=Path, required=True)
+    record.add_argument("--budget", type=Path, required=True)
+    record.add_argument("--sample", type=Path, required=True)
+    record.add_argument("--gbps", type=float)
+    record.add_argument("--out", type=Path, required=True)
+    reuse = commands.add_parser(
+        "reuse-edge", help="check retained evidence against current link inputs"
+    )
+    reuse.add_argument("--link", type=Path, required=True)
+    reuse.add_argument("--evidence", type=Path, required=True)
+    reuse.add_argument("--sample", type=Path, required=True)
+    reuse.add_argument("--budget", type=Path, required=True)
+    reuse.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "calculate":
@@ -224,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             write_private(args.out, result)
             print(f"Required per directed edge: {result['required_gbps']:.6f} Gbit/s")
-        else:
+        elif args.command == "compare":
             required = positive(
                 float(json.loads(args.budget.read_text())["required_gbps"]), "required_gbps"
             )
@@ -237,6 +399,24 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 json.dumps({"measured_gbps": measured, "required_gbps": required, "passed": passed})
             )
+            return 0 if passed else 1
+        elif args.command == "link":
+            create_link(args)
+            print(
+                json.dumps(
+                    {
+                        "link": str(args.out),
+                        "sha256": link_fingerprint(json.loads(args.out.read_text())),
+                    }
+                )
+            )
+        elif args.command == "record-edge":
+            passed = record_edge(args.link, args.budget, args.sample, args.out, args.gbps)
+            print(json.dumps({"evidence": str(args.out), "passed": passed}))
+            return 0 if passed else 1
+        else:
+            passed = reuse_edge(args.link, args.evidence, args.sample, args.budget, args.out)
+            print(json.dumps({"comparison": str(args.out), "passed": passed}))
             return 0 if passed else 1
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         if isinstance(error, FileExistsError):

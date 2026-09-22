@@ -135,6 +135,15 @@ for entry in image.get("Config", {}).get("Env", []) or []:
         ):
             environment[name] = value
 text_model = model.get("text_config", model)
+linear = text_model.get("linear_attn_config", {})
+requires_ds_conv_state_layout = (
+    isinstance(linear, dict)
+    and bool(linear.get("kda_layers"))
+    and bool(linear.get("short_conv_kernel_size"))
+) or bool(text_model.get("mamba_d_conv") or text_model.get("mamba_d_state")) or any(
+    isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
+    for layer in text_model.get("layer_types", [])
+)
 print(
     json.dumps(
         {
@@ -142,6 +151,7 @@ print(
             "image_id": image["Id"],
             "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
             "requires_trust_remote_code": requires_trust_remote_code,
+            "requires_ds_conv_state_layout": requires_ds_conv_state_layout,
             "model_dtype": text_model.get(
                 "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
             ),
@@ -252,6 +262,15 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             if not isinstance(overrides, dict):
                 raise ValueError(f"{role}: ENGINE_ENV must be a JSON object")
             environment.update(overrides)
+            if observed.get("requires_ds_conv_state_layout"):
+                if (
+                    "VLLM_SSM_CONV_STATE_LAYOUT" in overrides
+                    and overrides["VLLM_SSM_CONV_STATE_LAYOUT"] != "DS"
+                ):
+                    raise ValueError(
+                        f"{role}: convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS"
+                    )
+                environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
             runtime = {
                 "expected_packages": observed["packages"],
                 "model_dtype": dtype,

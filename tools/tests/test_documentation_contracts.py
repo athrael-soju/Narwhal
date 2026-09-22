@@ -39,7 +39,7 @@ class DocumentationContractTests(unittest.TestCase):
         for line in (ROOT / "docs/Configuration.md").read_text().splitlines():
             if line.startswith("## "):
                 section = line
-            match = re.match(r"\| `([^`]+)` \| `([^`]+)` \|", line)
+            match = re.match(r"\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|", line)
             if match is None:
                 continue
             field, raw = match.groups()

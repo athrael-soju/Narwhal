@@ -4,6 +4,8 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import runpy
 import sys
 import tempfile
 import unittest
@@ -14,6 +16,7 @@ from unittest.mock import Mock, patch
 from tools.fabric_budget import main, runtime_payload
 from tools.launch_engine import (
     cache_groups,
+    capture_cache,
     digest,
     measure_cache,
     model_dimensions,
@@ -332,3 +335,112 @@ class CacheSizingTests(unittest.TestCase):
                         self.assertEqual(docker.call_args.args[0], ["rm", "c" * 64])
                 self.assertEqual((run / "cache-probe.id").read_text().strip(), "c" * 64)
                 self.assertEqual((run / "cache-layout.json").exists(), not failed)
+
+    def test_live_hook_records_pages_and_continues_serving_initialization(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            plan_path = root / "launch.json"
+            output = root / "cache-layout.json"
+            plan = {
+                "image": "sha256:" + "a" * 64,
+                "expected_packages": {"vllm": "0.29.0"},
+                "revision": "b" * 40,
+                "model_config_sha256": "c" * 64,
+                "launch_sha256": "d" * 64,
+                "launcher_sha256": "e" * 64,
+                "cache_capture_sha256": "f" * 64,
+            }
+            plan_path.write_text(json.dumps(plan))
+            initialized = Mock(return_value="model-ready")
+
+            class Core:
+                def __init__(self):
+                    self.model_executor = SimpleNamespace(initialize_from_config=initialized)
+
+                def _initialize_kv_caches(self, config):
+                    return self.model_executor.initialize_from_config(
+                        [
+                            SimpleNamespace(kv_cache_groups=allocation(), kv_cache_layout="LBNHC")
+                            for _ in range(2)
+                        ]
+                    )
+
+            original = Core._initialize_kv_caches
+            core_module = ModuleType("vllm.v1.engine.core")
+            core_module.EngineCore = Core
+            launcher_module = ModuleType("launch_engine")
+            launcher_module.cache_groups = cache_groups
+            launcher_module.digest = lambda path: (
+                plan["model_config_sha256"]
+                if str(path) == "/model/config.json"
+                else plan["launcher_sha256"]
+            )
+            hook_path = Path(__file__).resolve().parents[1] / "cache_capture_hook.py"
+            with (
+                patch.dict(
+                    sys.modules,
+                    {"vllm.v1.engine.core": core_module, "launch_engine": launcher_module},
+                ),
+                patch.dict(
+                    os.environ,
+                    {
+                        "NARWHAL_CAPTURE_CACHE": "1",
+                        "NARWHAL_CACHE_PLAN": str(plan_path),
+                        "NARWHAL_CACHE_OUTPUT": str(output),
+                    },
+                ),
+            ):
+                runpy.run_path(str(hook_path))
+                core = Core()
+                self.assertEqual(
+                    core._initialize_kv_caches(
+                        SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
+                    ),
+                    "model-ready",
+                )
+            initialized.assert_called_once()
+            self.assertIs(core.model_executor.initialize_from_config, initialized)
+            record = json.loads(output.read_text())
+            self.assertEqual(runtime_payload(record, 2, 1024), 15360)
+            self.assertEqual(record["plan_sha256"], digest(plan_path))
+            self.assertIsNot(Core._initialize_kv_caches, original)
+
+    def test_live_cache_copy_checks_running_process_and_plan_hashes(self):
+        from tools.launch_engine import load, prepare
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = test_launch_engine.EngineLauncherTests().inputs(root)
+            run = root / "launch"
+            prepare(run, env)
+            plan = load(run)
+            (run / "checked.json").write_text(
+                json.dumps({"plan_sha256": digest(run / "launch.json")})
+            )
+            (run / "container.id").write_text("c" * 64 + "\n")
+            value = layout()
+            value.update(
+                image=plan["image"],
+                expected_packages=plan["expected_packages"],
+                revision=plan["revision"],
+                model_config_sha256=plan["model_config_sha256"],
+                launch_config_sha256=plan["launch_sha256"],
+                plan_sha256=digest(run / "launch.json"),
+                launcher_sha256=plan["launcher_sha256"],
+                cache_capture_sha256=plan["cache_capture_sha256"],
+            )
+
+            def fake_docker(command, directory, log):
+                if command[0] == "inspect":
+                    return json.dumps({"Running": True})
+                self.assertEqual(command[0], "cp")
+                Path(command[-1]).write_text(json.dumps(value))
+                return ""
+
+            with patch("tools.launch_engine.docker", side_effect=fake_docker) as mocked:
+                capture_cache(run, plan)
+            self.assertEqual(mocked.call_count, 2)
+            self.assertEqual((run / "cache-layout.json").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                runtime_payload(json.loads((run / "cache-layout.json").read_text()), 2, 1024), 15360
+            )
