@@ -57,9 +57,11 @@ wiki-check:
 observe: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m tools.observability.start
 
-# Run six engine-protocol stubs in the foreground on ports 8101 through 8106.
+# Run six engine-protocol stubs in the foreground, with a matching local fleet.
+STUB_BASE_PORT ?= 8101
+STUB_FLEET ?= runs/stub/$(STUB_BASE_PORT)/fleet.json
 stub-fleet: $(BOOTSTRAP)
-	$(VENV_PYTHON) tools/stub_fleet.py --base-port 8101 --instances 6 --model stub
+	$(VENV_PYTHON) tools/stub_fleet.py --base-port $(STUB_BASE_PORT) --instances 6 --model stub --write-fleet "$(STUB_FLEET)"
 
 # Real router processes with CPU engine stubs; no fleet access.
 integration: $(BOOTSTRAP)

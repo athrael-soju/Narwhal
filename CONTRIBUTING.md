@@ -33,6 +33,8 @@ CI is started manually and runs `make check` on GitHub-hosted runners. It also r
 
 The CI jobs use the repository's CPU fixtures and a standard read-only GitHub token. For a narrower test pass, `make test` runs the unit tests and three CPU integration drills.
 
+The optional [developer CPU walkthrough](tools/CPU-Walkthrough.md) runs the local stub request path interactively and records fixture output.
+
 ### Coverage and test scope
 
 Run `make coverage` to measure lines and branches across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts. CI retains these artifacts for 14 days.
@@ -98,7 +100,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 
 Store local profiles, journals and run outputs under `runs/`, and use `config/fleet.json` or the ignored `config/fleet.*.json` pattern for working fleet configs. Keep live engine addresses and site paths in those ignored files or reference node URLs from the ignored `.env` through the documented endpoint syntax.
 
-Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/03-Deploy.md#7-check-the-fabric) defines the engine-facing fabric contract that automation must establish.
+Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/Deploy.md#4-prepare-the-transfer-fabric) defines the engine-facing fabric contract that automation must establish.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 

@@ -13,7 +13,9 @@ import argparse
 import asyncio
 import json
 import multiprocessing
+import socket
 import time
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -179,12 +181,54 @@ def _serve_one(iid: str, model: str, port: int, version: str = STUB_VERSION) -> 
     uvicorn.run(build(iid, model, version), host="127.0.0.1", port=port, log_level="warning")
 
 
+def _check_ports_available(base_port: int, instances: int) -> None:
+    if base_port < 1 or base_port + instances - 1 > 65535:
+        raise SystemExit("stub port range must be within 1-65535")
+    for port in range(base_port, base_port + instances):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", port))
+                listener.listen(1)
+            except OSError as exc:
+                raise SystemExit(
+                    f"127.0.0.1:{port} is unavailable ({exc}); choose a free stub base port"
+                ) from exc
+
+
+def _write_fleet(path: Path, base_port: int, instances: int, model: str) -> None:
+    template = Path(__file__).resolve().parents[1] / "config/fleet.stub.json"
+    if path.resolve() == template.resolve():
+        raise SystemExit("refusing to overwrite config/fleet.stub.json")
+    fleet = json.loads(template.read_text())
+    if len(fleet["engines"]) != instances:
+        raise SystemExit(
+            f"stub fleet template has {len(fleet['engines'])} engines, not {instances}"
+        )
+    fleet["model"] = model
+    for index, engine in enumerate(fleet["engines"]):
+        url = f"http://127.0.0.1:{base_port + index}"
+        engine["url"] = url
+        engine["attestation_url"] = f"{url}/v1/attestation"
+    fleet["profiles"]["path"] = str(path.parent / "profiles.json")
+    contents = json.dumps(fleet, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x") as output:
+            output.write(contents)
+    except FileExistsError as exc:
+        if path.read_text() != contents:
+            raise SystemExit(f"{path} already exists with different contents") from exc
+    print(f"stub fleet config: {path}", flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run a stub vLLM fleet for a dry run")
     ap.add_argument("--base-port", type=int, default=8101)
     ap.add_argument("--instances", type=int, default=6)
     ap.add_argument("--model", default="stub")
     ap.add_argument("--version", default=STUB_VERSION)
+    ap.add_argument("--write-fleet", type=Path, help="write a matching ignored fleet config")
     ap.add_argument(
         "--single-iid",
         default="",
@@ -199,9 +243,16 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if args.instances < 1:
+        raise SystemExit("--instances must be positive")
     if args.single_iid:
+        if args.write_fleet:
+            raise SystemExit("--write-fleet requires the full stub fleet")
         _serve_one(args.single_iid, args.model, args.base_port, args.version)
         return 0
+    _check_ports_available(args.base_port, args.instances)
+    if args.write_fleet:
+        _write_fleet(args.write_fleet, args.base_port, args.instances, args.model)
 
     # Give each stub a process. Six engines on one event loop stretch the
     # modeled 12 ms token interval to 160 ms and invalidate the SLO checks.
