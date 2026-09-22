@@ -77,7 +77,8 @@ def live_container(run: Path, checked: dict) -> str:
     return cid
 
 
-NIXL_CAPTURE = """import contextlib, hashlib, importlib, json, sys
+NIXL_CAPTURE_TAG = "NARWHAL_NIXL_CAPTURE_V1:"
+NIXL_CAPTURE = f"""import contextlib, hashlib, importlib, json, sys
 from pathlib import Path
 with contextlib.redirect_stdout(sys.stderr):
     module = importlib.import_module("vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata")
@@ -85,10 +86,28 @@ version = module.NIXL_CONNECTOR_VERSION
 if type(version) is not int or version < 1:
     raise ValueError("NIXL_CONNECTOR_VERSION must be a positive integer")
 source = Path(module.__file__)
-print(json.dumps({"nixl_connector_version": version, "module": module.__name__,
-                  "constant": "NIXL_CONNECTOR_VERSION", "module_file": str(source),
-                  "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}))
+record = {{"nixl_connector_version": version, "module": module.__name__,
+          "constant": "NIXL_CONNECTOR_VERSION", "module_file": str(source),
+          "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}}
+print("\\n" + {NIXL_CAPTURE_TAG!r} + json.dumps(record), flush=True)
 """
+
+
+def parse_nixl_capture(output: str) -> dict:
+    captures = [
+        line.removeprefix(NIXL_CAPTURE_TAG)
+        for line in output.splitlines()
+        if line.startswith(NIXL_CAPTURE_TAG)
+    ]
+    if len(captures) != 1:
+        raise ValueError(f"Expected one tagged NIXL capture, received {len(captures)}")
+    try:
+        record = json.loads(captures[0])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Tagged NIXL capture contains invalid JSON") from exc
+    if not isinstance(record, dict):
+        raise ValueError("Tagged NIXL capture must contain a JSON object")
+    return record
 
 
 def capture_nixl(run: Path) -> Path:
@@ -100,7 +119,7 @@ def capture_nixl(run: Path) -> Path:
         text=True,
         check=True,
     )
-    record = json.loads(result.stdout)
+    record = parse_nixl_capture(result.stdout)
     if (
         type(record.get("nixl_connector_version")) is not int
         or record["nixl_connector_version"] < 1

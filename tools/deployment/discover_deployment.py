@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import shlex
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.deployment.engine_launch import load_launches
@@ -172,6 +174,75 @@ def value(env: dict[str, str], node: int, field: str, default: str = "") -> str:
     return env.get(f"NARWHAL_NODE_{node}_{field}", env.get(f"NARWHAL_{field}", default))
 
 
+def fabric_address(env: dict[str, str], node: int, interfaces: list[dict]) -> str:
+    """Select the interface address used by NIXL and directed fabric measurements."""
+    name = f"NARWHAL_NODE_{node}_IP"
+    candidates = set()
+    for interface in interfaces:
+        for entry in interface.get("addr_info", []):
+            raw = entry.get("local", "")
+            try:
+                address = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if entry.get("scope") == "global" and not (
+                address.is_loopback or address.is_link_local or address.is_multicast
+            ):
+                candidates.add(str(address))
+    override = env.get(name, "")
+    if override:
+        try:
+            selected = str(ipaddress.ip_address(override))
+        except ValueError as error:
+            raise ValueError(f"{name} must contain an IP address") from error
+        if selected not in candidates:
+            raise ValueError(f"{name} must match an address on the selected fabric interface")
+        return selected
+    if len(candidates) != 1:
+        raise ValueError(f"{name} needs an explicit selection from the fabric interface addresses")
+    return candidates.pop()
+
+
+def service_url(env: dict[str, str], node: int, field: str) -> str:
+    """Resolve a node service URL from its explicit override or fabric address and port."""
+    name = f"NARWHAL_NODE_{node}_{field}"
+    supplied = env.get(name, "")
+    suffix = "/v1/attestation" if field == "ATTESTATION_URL" else ""
+    if supplied:
+        parsed = urlsplit(supplied)
+        try:
+            valid_port = parsed.port is not None
+        except ValueError:
+            valid_port = False
+        if (
+            parsed.scheme != "http"
+            or not parsed.hostname
+            or not valid_port
+            or parsed.path != suffix
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(f"{name} must be an HTTP service URL with its declared port")
+        return supplied
+    address_name = f"NARWHAL_NODE_{node}_IP"
+    address = env.get(address_name, "")
+    try:
+        version = ipaddress.ip_address(address).version
+    except ValueError as error:
+        raise ValueError(
+            f"{address_name} must contain the service and fabric IP address"
+        ) from error
+    port_field = "ATTEST_PORT" if field == "ATTESTATION_URL" else "ENGINE_PORT"
+    port_name = f"NARWHAL_NODE_{node}_{port_field}"
+    port_value = value(env, node, port_field)
+    if not port_value.isdecimal() or not 1 <= int(port_value) <= 65535:
+        raise ValueError(f"{port_name} or NARWHAL_{port_field} must contain a TCP port")
+    host = f"[{address}]" if version == 6 else address
+    return f"http://{host}:{port_value}{suffix}"
+
+
 def derive_hosts(env: dict[str, str]) -> list[Host]:
     """Group equal management destinations before any SSH connection."""
     nodes = sorted(
@@ -182,9 +253,12 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
     if not nodes:
         raise ValueError("Set NARWHAL_NODE_<n>_SSH for each engine")
     groups: dict[str, Host] = {}
+    router_name = (
+        "NARWHAL_ROUTER_SSH" if env.get("NARWHAL_ROUTER_SSH") else f"NARWHAL_NODE_{nodes[0]}_SSH"
+    )
     for role, name in [
         *((f"engine-{n}", f"NARWHAL_NODE_{n}_SSH") for n in nodes),
-        ("router", "NARWHAL_ROUTER_SSH"),
+        ("router", router_name),
     ]:
         destination = env.get(name, "")
         if not destination or destination.startswith("-") or any(c.isspace() for c in destination):
@@ -211,6 +285,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
         for role in roles:
             node = int(role.split("-")[1])
             observed = observations[role]
+            derived[f"NARWHAL_NODE_{node}_IP"] = fabric_address(env, node, observed["interfaces"])
             digest = value(env, node, "MODEL_CONFIG_SHA256")
             if digest and digest != observed["model_sha256"]:
                 raise ValueError(f"{role}: model-config hash differs from the environment pin")
@@ -311,9 +386,9 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             ):
                 derived[f"NARWHAL_NODE_{node}_{field}"] = content
             for field in ("URL", "ATTESTATION_URL"):
-                name = f"NARWHAL_NODE_{node}_{field}"
-                if not env.get(name):
-                    raise ValueError(f"Set {name} in .env")
+                derived[f"NARWHAL_NODE_{node}_{field}"] = service_url(
+                    {**env, **derived}, node, field
+                )
             engines.append(
                 {
                     "iid": f"n{node}",

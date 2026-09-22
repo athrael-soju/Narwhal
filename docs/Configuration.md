@@ -61,7 +61,7 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 | Remote file                                              | Exported values                                                                                                                                                          | Workstation source                                                                                                                                                                                                          |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.env.router`                                            | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                    |
-| `.env.engine-<n>`                                        | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values, and the configured engine API credential. |
+| `.env.engine-<n>`                                        | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, derived node service URLs and fabric addresses, and the configured engine API credential. |
 | `config/engine-launch.engine-<n>.json`                   | Selected GPU allocation, TP size, device mappings, resolved UCX selection, generated launch arguments.                                                                   | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                     |
 | `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/deployment/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
 | `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/deployment/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
@@ -86,8 +86,6 @@ The exporter sets:
 ```text
 NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json
 ```
-
-It also exports supplied `NARWHAL_ATTEST_DOCUMENT_SOURCE` and `NARWHAL_ATTEST_DOCUMENT_SHA256` values. These paths refer to artifacts on the engine host. Provision those artifacts during engine preparation and launch.
 
 Per-node overrides insert `NODE_<n>_` after `NARWHAL_`. For example:
 
@@ -347,15 +345,9 @@ Use the ports actually configured by the engine deployment.
 
 Engine `url` and `attestation_url` accept environment references only when the entire JSON value is `${VARIABLE}`.
 
-Example `.env` values:
+For the generated deployment, supply `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT` and `NARWHAL_ATTEST_PORT` in `.env`. Discovery reads the selected interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `derived.env`. It builds the engine and attestation URLs from that address, with IPv6 host brackets where required. Set `NARWHAL_NODE_<n>_IP` when the interface has multiple global addresses, or set either full URL when its service uses a different reachable address. A port change also needs the matching per-node port override.
 
-```bash
-NARWHAL_FLEET=config/fleet.json
-NARWHAL_NODE_1_URL='http://node1:8000'
-NARWHAL_NODE_1_ATTESTATION_URL='http://node1:8010/v1/attestation'
-```
-
-Reference them from the engine record in `config/fleet.json`:
+The generated fleet record refers to those derived values:
 
 ```json
 {
@@ -366,7 +358,7 @@ Reference them from the engine record in `config/fleet.json`:
 }
 ```
 
-Add one record to `engines` for every running engine. `.env.example` shows the two-engine minimum. Give each engine its own numbered address and URL variables.
+Discovery adds one record per engine. `.env.example` shows the two-engine minimum and the shared fabric interface.
 
 Both `config/fleet.json` and working `config/fleet.*.json` files are ignored by Git. The repository keeps the example and stub configurations tracked.
 

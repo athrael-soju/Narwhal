@@ -12,7 +12,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.deployment.deploy_hosts import prepare
-from tools.deployment.discover_deployment import PROBE, build_records, derive_hosts, discover
+from tools.deployment.discover_deployment import (
+    PROBE,
+    build_records,
+    derive_hosts,
+    discover,
+    fabric_address,
+    service_url,
+)
 from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, load_hosts
 from tools.deployment.launch_engine import build
@@ -21,7 +28,7 @@ from tools.deployment.prepare_host_env import select_values
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def observation(runtime="rocm"):
+def observation(runtime="rocm", address="10.0.0.1"):
     return {
         "hostname": "synthetic-host",
         "image_id": "sha256:" + "a" * 64,
@@ -36,7 +43,7 @@ def observation(runtime="rocm"):
         ],
         "common_devices": ["/dev/kfd"],
         "image_environment": {"VLLM_ROCM_USE_AITER": "1"},
-        "interfaces": [{"ifname": "fabric0"}],
+        "interfaces": [{"ifname": "fabric0", "addr_info": [{"local": address, "scope": "global"}]}],
     }
 
 
@@ -55,7 +62,6 @@ def environment(root):
         "NARWHAL_ATTEST_PORT": "8010",
         "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5557",
         "NARWHAL_UCX_TCP_PORT_RANGE": "20000-21000",
-        "NARWHAL_ROUTER_SSH": "test@host1.invalid",
         "NARWHAL_DEPLOYMENT_REVISION": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
@@ -65,9 +71,6 @@ def environment(root):
             {
                 f"NARWHAL_NODE_{node}_SSH": f"test@host{node}.invalid",
                 f"NARWHAL_NODE_{node}_SSH_PASSWORD": "private-test-password",
-                f"NARWHAL_NODE_{node}_IP": f"10.0.0.{node}",
-                f"NARWHAL_NODE_{node}_URL": f"http://10.0.0.{node}:8000",
-                f"NARWHAL_NODE_{node}_ATTESTATION_URL": f"http://10.0.0.{node}:8010/v1/attestation",
             }
         )
     return env
@@ -82,7 +85,7 @@ class FakeInspectionSSH:
     def run(self, host, gate, script, payload=None):
         self.calls.append((host.id, gate))
         if payload:
-            return json.dumps(observation())
+            return json.dumps(observation(address="10.0.0." + host.id.split("-")[-1]))
         with self.trust.open("a") as f:
             f.write(f"{host.id} ssh-ed25519 synthetic-public-key\n")
         return "synthetic-host"
@@ -103,6 +106,13 @@ class DiscoveryTests(unittest.TestCase):
             for line in (out / "derived.env").read_text().splitlines():
                 name, quoted = line.removeprefix("export ").split("=", 1)
                 env[name] = shlex.split(quoted)[0]
+            self.assertEqual(env["NARWHAL_NODE_1_IP"], "10.0.0.1")
+            self.assertEqual(env["NARWHAL_NODE_2_IP"], "10.0.0.2")
+            self.assertEqual(env["NARWHAL_NODE_1_URL"], "http://10.0.0.1:8000")
+            self.assertEqual(
+                env["NARWHAL_NODE_2_ATTESTATION_URL"],
+                "http://10.0.0.2:8010/v1/attestation",
+            )
             hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
             self.assertEqual(len(hosts), 2)
             self.assertEqual(hosts[0].roles, ("engine-1", "router"))
@@ -132,6 +142,43 @@ class DiscoveryTests(unittest.TestCase):
                 ssh.assert_not_called()
             self.assertEqual(Path(env["NARWHAL_FLEET"]).read_bytes(), old)
 
+    def test_router_management_destination_defaults_to_first_engine(self):
+        env = environment(Path("/synthetic"))
+        hosts = derive_hosts(env)
+        self.assertEqual(hosts[0].roles, ("engine-1", "router"))
+        env["NARWHAL_ROUTER_SSH"] = "test@router.invalid"
+        hosts = derive_hosts(env)
+        self.assertEqual(len(hosts), 3)
+        self.assertEqual(hosts[-1].roles, ("router",))
+        self.assertEqual(hosts[-1].ssh_env, "NARWHAL_ROUTER_SSH")
+
+    def test_fabric_address_requires_unique_interface_address_or_checked_override(self):
+        env = environment(Path("/synthetic"))
+        interfaces = observation()["interfaces"]
+        self.assertEqual(fabric_address(env, 1, interfaces), "10.0.0.1")
+        interfaces[0]["addr_info"].append({"local": "10.0.0.9", "scope": "global"})
+        with self.assertRaisesRegex(ValueError, "explicit selection"):
+            fabric_address(env, 1, interfaces)
+        env["NARWHAL_NODE_1_IP"] = "10.0.0.9"
+        self.assertEqual(fabric_address(env, 1, interfaces), "10.0.0.9")
+        env["NARWHAL_NODE_1_IP"] = "10.0.0.8"
+        with self.assertRaisesRegex(ValueError, "selected fabric interface"):
+            fabric_address(env, 1, interfaces)
+
+    def test_service_urls_use_discovered_ipv6_and_accept_explicit_override(self):
+        env = environment(Path("/synthetic"))
+        env["NARWHAL_NODE_1_IP"] = "fd00::1"
+        self.assertEqual(service_url(env, 1, "URL"), "http://[fd00::1]:8000")
+        self.assertEqual(
+            service_url(env, 1, "ATTESTATION_URL"),
+            "http://[fd00::1]:8010/v1/attestation",
+        )
+        env["NARWHAL_NODE_1_URL"] = "http://engine.example.invalid:8000"
+        self.assertEqual(service_url(env, 1, "URL"), env["NARWHAL_NODE_1_URL"])
+        env["NARWHAL_NODE_1_ATTESTATION_URL"] = "http://engine.example.invalid:8010/wrong"
+        with self.assertRaisesRegex(ValueError, "HTTP service URL"):
+            service_url(env, 1, "ATTESTATION_URL")
+
     def test_policy_overrides_and_image_hash_checks(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -143,7 +190,7 @@ class DiscoveryTests(unittest.TestCase):
                 NARWHAL_ENGINE_ENV='{"VLLM_ROCM_USE_AITER": "0"}',
             )
             hosts = derive_hosts(env)
-            observations = {f"engine-{i}": observation() for i in (1, 2)}
+            observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
             observations["engine-1"]["requires_trust_remote_code"] = True
             fleet, launches, _, _ = build_records(hosts, env, observations, root)
             self.assertEqual(fleet["hardware"]["accelerators_per_engine"], 2)
@@ -170,7 +217,7 @@ class DiscoveryTests(unittest.TestCase):
             root = Path(folder)
             env = environment(root)
             hosts = derive_hosts(env)
-            observations = {f"engine-{i}": observation() for i in (1, 2)}
+            observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
             observations["engine-1"]["requires_ds_conv_state_layout"] = True
             _, launches, _, _ = build_records(hosts, env, observations, root)
             self.assertEqual(
@@ -191,7 +238,7 @@ class DiscoveryTests(unittest.TestCase):
         env = environment(Path("/synthetic"))
         env["NARWHAL_NODE_2_SSH"] = env["NARWHAL_NODE_1_SSH"]
         hosts = derive_hosts(env)
-        observations = {f"engine-{i}": observation() for i in (1, 2)}
+        observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
         with self.assertRaisesRegex(ValueError, "GPU_IDS"):
             build_records(hosts, env, observations, Path("/synthetic"))
         env.update(NARWHAL_NODE_1_GPU_IDS="0,1", NARWHAL_NODE_2_GPU_IDS="1,2")
@@ -201,7 +248,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_mixed_hardware_and_management_environment_are_rejected(self):
         env = environment(Path("/synthetic"))
         hosts = derive_hosts(env)
-        observations = {f"engine-{i}": observation() for i in (1, 2)}
+        observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
         changed = copy.deepcopy(observations)
         for gpu in changed["engine-2"]["gpus"]:
             gpu["name"] = "different GPU"

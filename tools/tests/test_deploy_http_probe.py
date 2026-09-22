@@ -146,7 +146,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 self.assertEqual(log.read_bytes(), original)
 
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
-        from tools.deployment.attestation_contract import NIXL_CAPTURE
+        from tools.deployment.attestation_contract import NIXL_CAPTURE, NIXL_CAPTURE_TAG
 
         for version in (17, 0, "1.4.1", True):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
@@ -176,7 +176,8 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                             )
                 load.assert_called_once_with(module.__name__)
                 if version == 17:
-                    record = json.loads(output.getvalue())
+                    self.assertTrue(output.getvalue().startswith("\n" + NIXL_CAPTURE_TAG))
+                    record = json.loads(output.getvalue().split(NIXL_CAPTURE_TAG, 1)[1])
                     self.assertEqual(record["nixl_connector_version"], 17)
                     self.assertEqual(
                         record["module_sha256"], hashlib.sha256(source.read_bytes()).hexdigest()

@@ -22,7 +22,6 @@ ENGINE_FIELDS = (
     "NIXL_SIDE_CHANNEL_PORT",
     "UCX_TCP_PORT_RANGE",
 )
-ENGINE_OPTIONAL = ("ATTEST_DOCUMENT_SOURCE", "ATTEST_DOCUMENT_SHA256")
 ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
 
 
@@ -68,7 +67,7 @@ def select_values(
         values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
-        for field in (*ENGINE_FIELDS, *ENGINE_OPTIONAL):
+        for field in ENGINE_FIELDS:
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
             include(name, override if override in env else name, required=field in ENGINE_FIELDS)

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ from narwhal.config import EngineContract
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from tools.deployment.attestation_contract import (
     attention_backends,
+    capture_nixl,
     engine_document,
     finalize_fleet,
     generate,
@@ -149,6 +151,48 @@ class AttestationContractTests(unittest.TestCase):
             attention_backends("Overriding with TRITON_MLA out of potential backends: []"),
             "TRITON_MLA",
         )
+
+    def test_nixl_capture_ignores_vllm_stdout_logs_and_rejects_ambiguous_output(self):
+        from tools.deployment.attestation_contract import NIXL_CAPTURE_TAG
+
+        with tempfile.TemporaryDirectory() as folder:
+            run, _ = self.engine_evidence(Path(folder))
+            (run / "nixl-connector-version.json").unlink()
+            capture = {
+                "nixl_connector_version": 9,
+                "module": "vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata",
+                "constant": "NIXL_CONNECTOR_VERSION",
+                "module_file": "/vllm/nixl/metadata.py",
+                "module_sha256": "f" * 64,
+            }
+            tagged = NIXL_CAPTURE_TAG + json.dumps(capture)
+            result = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=f"INFO: vLLM startup\n{tagged}\nINFO: native shutdown\n",
+            )
+            with (
+                patch(
+                    "tools.deployment.attestation_contract.live_container", return_value="b" * 64
+                ),
+                patch("tools.deployment.attestation_contract.subprocess.run", return_value=result),
+            ):
+                output = capture_nixl(run)
+                record = json.loads(output.read_text())
+                self.assertEqual(record["nixl_connector_version"], 9)
+                self.assertEqual(record["module_sha256"], "f" * 64)
+                self.assertEqual(record["container_id"], "b" * 64)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                output.unlink()
+                for stdout in (
+                    "INFO: vLLM startup\n",
+                    f"{tagged}\n{tagged}\n",
+                    NIXL_CAPTURE_TAG + "{bad}",
+                ):
+                    result.stdout = stdout
+                    with self.assertRaisesRegex(ValueError, "NIXL capture"):
+                        capture_nixl(run)
+                    self.assertFalse(output.exists())
 
     def test_engine_document_uses_checked_captures_and_rejects_stale_plan(self):
         with tempfile.TemporaryDirectory() as folder:

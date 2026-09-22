@@ -6,7 +6,7 @@ Run deployment from the management workstation. Generate host-specific configura
 
 | Host                                           | Work                                                                                                                                                               | Required inputs                                                                                                                                                                                                                   |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Management workstation and initial load client | Generate private configuration, manage remote access, open role shells, create the deployment package, send trial traffic through SSH, retain deployment evidence. | Private `.env` with management destinations and credentials, approved source revision, model and image selection, model paths, fabric interface, run directory and service endpoints. Step 1 derives the remaining configuration. |
+| Management workstation and initial load client | Generate private configuration, manage remote access, open role shells, create the deployment package, send trial traffic through SSH, retain deployment evidence. | Private `.env` with management destinations and credentials, approved source revision, model and image selection, model paths, fabric interface, run directory and service ports. Step 1 derives the remaining configuration. |
 | Router and observability host                  | Install Narwhal, maintain the fleet configuration, profile and check engines, run the router, Prometheus and Grafana.                                              | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO settings, Docker Engine and Compose plugin.                                                                                       |
 | Engine hosts                                   | Inspect accelerators and artifacts, qualify fabric paths, run vLLM and attestation sidecars.                                                                       | Accelerator allocation, TP shape, engine image, checkpoint, launch policy, fabric addresses and ports.                                                                                                                            |
 
@@ -35,7 +35,7 @@ Record a blocked gate before changing the failed state. Cleanup should touch onl
 
 Use a fresh management checkout and the supplied `.env`. [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) documents its fields.
 
-The environment identifies management destinations and credentials, approved source revision, engine image, model paths, fabric interface, run directory and service endpoints. Keep credentials on the workstation. Disable shell tracing before loading them:
+The environment identifies management destinations and credentials, approved source revision, engine image, model paths, fabric interface, run directory and service ports. Keep credentials on the workstation. Disable shell tracing before loading them:
 
 ```bash
 set +x
@@ -44,7 +44,9 @@ set -a
 set +a
 ```
 
-Define `NARWHAL_NODE_<n>_SSH` for every engine and `NARWHAL_ROUTER_SSH` for the router.
+Define `NARWHAL_NODE_<n>_SSH` for every engine. Discovery assigns the router to the first engine host by default; set `NARWHAL_ROUTER_SSH` when the router uses a separate management destination.
+
+Discovery reads each node's unique global address on `NARWHAL_FABRIC_INTERFACE`, then builds its engine and attestation URLs from that address and the service ports. Set `NARWHAL_NODE_<n>_IP` when the selected interface has multiple global addresses. Set `NARWHAL_NODE_<n>_URL` or `NARWHAL_NODE_<n>_ATTESTATION_URL` when a service uses a different reachable address; set the matching per-node port override when its port differs.
 
 Identical destination values place multiple roles on the same physical host and reuse the same credential. A destination may be an OpenSSH alias carrying its username, port, identity and jump route, or a direct `user@host` destination.
 
@@ -82,7 +84,7 @@ For every engine, discovery reads:
 - model configuration and hash;
 - tokenizer metadata;
 - convolutional state fields in the model configuration;
-- selected network interface;
+- selected network interface and its global address;
 - immutable container image identity.
 
 A temporary container reads package metadata from the image and then exits. Discovery derives the model dtype and image runtime environment from that inspection.
@@ -98,7 +100,7 @@ It writes the following files with mode `0600`:
 | `config/engine-launch.local.json`         | Combines accelerator allocation, model/image metadata, network devices and launch policy.                                          |
 | `config/engine-launch.sources.json`       | Maps engine roles to the inspection and policy records used to build their launch configuration.                                   |
 | `config/fleet.json`                       | Defines the model, measured hardware and TP shape, engine URL references, opening roles, initial latency targets and profile path. |
-| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths plus per-engine image and hash values used by later preparation.                             |
+| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths, fabric addresses, engine and attestation URLs, plus per-engine image and hash values used by later preparation.                             |
 
 Path variables in `.env` may select alternate locations for generated JSON and host-key files.
 
@@ -846,7 +848,7 @@ ip route get "$SOURCE_IP" from "$DEST_IP"
 
 Use `ip -4 route get` or `ip -6 route get` when address family must be explicit.
 
-Each result must choose `NARWHAL_FABRIC_INTERFACE` and the supplied source address for that host.
+Each result must choose `NARWHAL_FABRIC_INTERFACE` and the discovered source address for that host.
 
 Copy the destination's exact one-line route output into `$EDGE_PREFIX.destination-route.txt` on the source through the management shells using `printf '%s\n' '<destination route output>' > "$EDGE_PREFIX.destination-route.txt"`. The source route file and this reverse route file bind the sample to both paths. Correct route, source address or interface errors before measuring bandwidth.
 
