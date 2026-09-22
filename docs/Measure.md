@@ -33,9 +33,9 @@ narwhal-profile \
   --decode-concurrency <comma-separated-stream-counts>
 ```
 
-Use at least three prefill lengths, including the longest inputs expected in production.
+Use at least three prefill lengths, including the longest inputs expected in production. The profiler reads each engine's live `max_model_len` from `/tokenize`, keeps candidate lengths that leave room for the output token, and checks the exact tokenised prompt before the completion request. Inspect the effective sweep retained for each engine against its checked serving plan.
 
-For decode, cover both context length and concurrency. The profiler requires at least two input lengths and two concurrency values. Production calibration should use at least three concurrency values, including one stream and the intended operating range. The default decode input sweep stops at 8,192 tokens, so longer-context deployments must extend it explicitly.
+For decode, cover both context length and concurrency. The profiler requires at least two input lengths and two concurrency values. Production calibration should use at least three concurrency values, including one stream and the intended operating range. It bounds decode input candidates against the same live context limit plus the requested output tokens. Extend the sweep explicitly for longer-context deployments or select shorter points when the bound leaves too few cells.
 
 Decode probes request exact output token IDs with one token per SSE event. The profiler verifies stream completion, per-event token identity, token cardinality, and interval count. Any failed check aborts the probe.
 

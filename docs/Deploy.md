@@ -1466,9 +1466,12 @@ From the router host:
 ```bash
 .venv/bin/narwhal-profile \
   --fleet runs/deployment/fleet.json \
+  --prefill-lens 256,512,1024,2048,4096,8192,12288 \
   --decode-input-lens 512,4096,8192 \
   --decode-concurrency 1,4,16,48
 ```
+
+The profiler reads `max_model_len` from each live engine's `/tokenize` response, selects candidate lengths that leave room for one prefill output token or 64 decode output tokens, then checks the exact tokenised prompt before sending each completion. The explicit lists hold the same measurement points across reruns; compare the printed effective sweep with `--max-model-len` in each checked serving plan. A shorter context can leave too few points for either fit; supply shorter input-length lists when the profiler names that gate.
 
 Use the private engine URLs and credentials from the router environment.
 

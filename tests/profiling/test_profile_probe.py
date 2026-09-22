@@ -97,6 +97,60 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         with self.assertRaisesRegex(RuntimeError, "exact token usage"):
                             await probe.probe_prefill(client, "http://e", "stub", lens=(4,))
 
+    async def test_live_context_bounds_prefill_before_completion(self):
+        """Live tokenizer limits select a safe sweep and reject an oversized exact count."""
+        sent = []
+
+        def respond(request):
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": 1, "max_model_len": 16384})
+            body = json.loads(request.content)
+            prompt_tokens = len(body["prompt"])
+            sent.append(prompt_tokens)
+            if prompt_tokens + body["max_tokens"] > 16384:
+                return httpx.Response(400, text="maximum context length is 16384 tokens")
+            return httpx.Response(
+                200,
+                json={
+                    "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1},
+                    "choices": [{"finish_reason": "length"}],
+                },
+            )
+
+        async def prompt(client, url, model, target, dialect, chars_per_token):
+            return "x" * target, target
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            with patch.object(probe, "make_prompt", side_effect=prompt):
+                limit = await probe.engine_context_limit(
+                    client, "http://e", "stub", probe.VllmDialect()
+                )
+                sweep = probe.bounded_sweep(probe.Sweep(), limit)
+                with redirect_stdout(io.StringIO()):
+                    samples = await probe.probe_prefill(
+                        client,
+                        "http://e",
+                        "stub",
+                        sweep.prefill_lens,
+                        repeats=1,
+                        max_model_len=limit,
+                    )
+                self.assertEqual(len(samples), len(sweep.prefill_lens))
+                self.assertEqual(max(sent), 12288)
+                with self.assertRaisesRegex(ValueError, "exceeds.*max_model_len"):
+                    await probe.probe_prefill(
+                        client, "http://e", "stub", lens=(16384,), repeats=1, max_model_len=limit
+                    )
+                self.assertEqual(max(sent), 12288)
+        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4096)
+
+    async def test_tokenizer_must_report_live_context_limit(self):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"count": 1}))
+        ) as client:
+            with self.assertRaisesRegex(RuntimeError, "no valid max_model_len"):
+                await probe.engine_context_limit(client, "http://e", "stub", probe.VllmDialect())
+
     async def measure(self, frames, *, cohort=1, tokens=3):
         """Run one real decode probe and expose its final resident counters."""
         stream = MeasuredStream(frames)
@@ -209,6 +263,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(probe.httpx, "AsyncClient", return_value=client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(probe, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
@@ -216,6 +271,8 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), 1)
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
+            self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
+            self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 12288)
 
     def test_kv_capacity_uses_the_smallest_reported_rank(self):
         """The physical bound follows the smallest rank capacity."""

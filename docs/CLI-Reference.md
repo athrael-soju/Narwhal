@@ -55,13 +55,13 @@ Existing destinations require `--overwrite`. Symlink destinations are rejected. 
 | `--fleet PATH`              | required                                  | Fleet config JSON                                                                                                                                                       |
 | `--only IID`                | all engines                               | Repeatable engine selector                                                                                                                                              |
 | `--overwrite`               | false                                     | Starts a new profile/sample pair. Existing destinations are replaced when the first engine completes. With `--only`, the new store contains only the selected profiles. |
-| `--prefill-lens LIST`       | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated prompt lengths. Requires at least three distinct values.                                                                                                |
+| `--prefill-lens LIST`       | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated candidate lengths. The profiler keeps points within each engine's live `max_model_len` and requires at least three distinct usable values.                                                                                                |
 | `--decode-input-lens LIST`  | `512,4096,8192`                           | Comma-separated prompt lengths for the decode sweep. Requires at least two distinct values.                                                                             |
 | `--decode-concurrency LIST` | `1,4,16,48`                               | Comma-separated stream counts. Requires at least two distinct values.                                                                                                   |
 | `--decode-tokens N`         | `64`                                      | Tokens per decode stream. Minimum 3. Larger cohorts may require more tokens to overlap.                                                                                 |
 | `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length. Minimum 1.                                                                                                                              |
 
-The run aborts if every `--only` value is absent from the configured engines, an engine fails `/health`, or exact tokenization fails for a dialect that advertises a tokenization route. A successful run ends with `wrote N profile(s) to PATH`.
+The run aborts if every `--only` value is absent from the configured engines, an engine fails `/health`, `/tokenize` omits a valid `max_model_len`, or the live limit leaves too few sweep points. Actual tokenised input plus requested output must fit before each completion. A successful run ends with `wrote N profile(s) to PATH`.
 
 ## `narwhal-check`
 

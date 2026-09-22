@@ -10,7 +10,7 @@ import re
 import statistics
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -29,7 +29,7 @@ from .fitting import (
 from .model import Profile
 from .store import ProfileStore
 
-# Include long-context points; operators must extend this to their workload's range.
+# Candidate lengths are bounded by each live engine's reported context limit.
 PREFILL_LENS = (256, 512, 1024, 2048, 4096, 8192, 12288, 16384)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
@@ -54,10 +54,10 @@ async def kv_capacity(client: httpx.AsyncClient, url: str) -> int | None:
     return parse_kv_capacity(response.text)
 
 
-async def _tokenize(
+async def _tokenize_response(
     client: httpx.AsyncClient, url: str, model: str, prompt: str, dialect: EngineDialect
-) -> int:
-    """Return the engine's exact token count for `prompt`.
+) -> dict:
+    """Read the engine's tokenization response for `prompt`.
 
     Profiling fails on a bad response because token count defines both fits' x axes.
     """
@@ -78,12 +78,33 @@ async def _tokenize(
         body = r.json()
     except ValueError as exc:
         raise RuntimeError(f"tokenize probe returned no count on {url}: {r.text[:200]}") from exc
+    if not isinstance(body, dict):
+        raise RuntimeError(f"tokenize probe returned an invalid response on {url}")
+    return body
+
+
+async def _tokenize(
+    client: httpx.AsyncClient, url: str, model: str, prompt: str, dialect: EngineDialect
+) -> int:
+    """Return the engine's exact token count for `prompt`."""
+    body = await _tokenize_response(client, url, model, prompt, dialect)
     count = dialect.tokenize_response(body)
     if count is None:
-        raise RuntimeError(f"tokenize probe returned no count on {url}: {r.text[:200]}")
+        raise RuntimeError(f"tokenize probe returned no count on {url}")
     if count < 1:
         raise RuntimeError(f"tokenize probe counted {count} tokens on {url}")
     return count
+
+
+async def engine_context_limit(
+    client: httpx.AsyncClient, url: str, model: str, dialect: EngineDialect
+) -> int:
+    """Read the live serving limit from the same tokenizer used for prompt sizing."""
+    body = await _tokenize_response(client, url, model, "benchmark ", dialect)
+    limit = body.get("max_model_len")
+    if type(limit) is not int or limit < 1:
+        raise RuntimeError(f"tokenize probe returned no valid max_model_len on {url}")
+    return limit
 
 
 async def make_prompt(
@@ -120,12 +141,18 @@ async def probe_prefill(
     repeats: int = PREFILL_REPEATS,
     dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
+    max_model_len: int | None = None,
 ) -> list[tuple[float, float]]:
     """Measure one-token request latency across the input-length sweep."""
     dialect = dialect or VllmDialect()
     samples: list[tuple[float, float]] = []
     for target in lens:
         prompt, n = await make_prompt(client, url, model, target, dialect, chars_per_token)
+        if max_model_len is not None and n + 1 > max_model_len:
+            raise ValueError(
+                f"prefill input {n} plus one output token exceeds {url} max_model_len "
+                f"{max_model_len}; choose shorter --prefill-lens"
+            )
         for _ in range(repeats):
             body = {
                 "model": model,
@@ -282,12 +309,18 @@ async def probe_decode(
     input_lens: tuple[int, ...] = DECODE_INPUT_LENS,
     *,
     evidence: list[dict[str, object]] | None = None,
+    max_model_len: int | None = None,
 ) -> list[tuple[float, float, float]]:
     """Measure decode gaps across input-length and concurrency combinations."""
     dialect = dialect or VllmDialect()
     samples: list[tuple[float, float, float]] = []
     for target in input_lens:
         prompt, input_len = await make_prompt(client, url, model, target, dialect, chars_per_token)
+        if max_model_len is not None and input_len + tokens > max_model_len:
+            raise ValueError(
+                f"decode input {input_len} plus {tokens} output tokens exceeds {url} "
+                f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
+            )
         for c in concurrency:
             state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": c}
             observed: list[tuple[float, float, float]] = []
@@ -337,13 +370,21 @@ async def profile_instance(
     chars_per_token: float = 3.8,
     *,
     evidence: dict[str, object] | None = None,
+    max_model_len: int | None = None,
 ) -> Profile:
     """Run both sweeps and fit one engine profile."""
     s = sweep or Sweep()
     dialect = dialect or VllmDialect()
     print(f"  {iid}")
     prefill = await probe_prefill(
-        client, url, model, s.prefill_lens, s.prefill_repeats, dialect, chars_per_token
+        client,
+        url,
+        model,
+        s.prefill_lens,
+        s.prefill_repeats,
+        dialect,
+        chars_per_token,
+        max_model_len,
     )
     decode_intervals: list[dict[str, object]] = []
     decode = await probe_decode(
@@ -356,6 +397,7 @@ async def profile_instance(
         chars_per_token,
         s.decode_input_lens,
         evidence=decode_intervals,
+        max_model_len=max_model_len,
     )
     if evidence is not None:
         evidence.update(prefill=prefill, decode=decode, decode_intervals=decode_intervals)
@@ -390,6 +432,18 @@ class Sweep:
     decode_tokens: int = DECODE_TOKENS
     prefill_repeats: int = PREFILL_REPEATS
     decode_input_lens: tuple[int, ...] = DECODE_INPUT_LENS
+
+
+def bounded_sweep(sweep: Sweep, max_model_len: int) -> Sweep:
+    """Keep candidate points whose requested input and output fit the live limit."""
+    prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
+    decode = tuple(n for n in sweep.decode_input_lens if n + sweep.decode_tokens < max_model_len)
+    if len(set(prefill)) < 3 or len(set(decode)) < 2:
+        raise ValueError(
+            f"max_model_len {max_model_len} leaves too few sweep points; choose shorter "
+            "--prefill-lens and --decode-input-lens"
+        )
+    return replace(sweep, prefill_lens=prefill, decode_input_lens=decode)
 
 
 async def run(
@@ -438,21 +492,31 @@ async def run(
                 print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
                 return 1
             if dialect.tokenize_path is None:
-                print(
-                    f"  {spec.iid}: the {dialect.name} dialect has no exact-count route; "
-                    f"sizing prompts at {cfg.chars_per_token} chars/token, both fits are "
-                    "character-estimated"
+                raise ValueError(
+                    f"{spec.iid}: the {dialect.name} dialect needs a tokenization route "
+                    "that reports max_model_len before profiling"
                 )
-            engine_evidence: dict[str, object] = {}
+            max_model_len = await engine_context_limit(client, spec.url, cfg.model, dialect)
+            engine_sweep = bounded_sweep(sweep or Sweep(), max_model_len)
+            print(
+                f"  {spec.iid}: max_model_len {max_model_len}; "
+                f"prefill up to {max(engine_sweep.prefill_lens)}, "
+                f"decode input up to {max(engine_sweep.decode_input_lens)}"
+            )
+            engine_evidence: dict[str, object] = {
+                "max_model_len": max_model_len,
+                "sweep": asdict(engine_sweep),
+            }
             profile = await profile_instance(
                 client,
                 spec.iid,
                 spec.url,
                 cfg.model,
-                sweep,
+                engine_sweep,
                 dialect,
                 cfg.chars_per_token,
                 evidence=engine_evidence,
+                max_model_len=max_model_len,
             )
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence
@@ -554,7 +618,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     try:
         return asyncio.run(run(cfg, set(args.only) or None, sweep, overwrite=args.overwrite))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
