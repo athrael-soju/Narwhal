@@ -36,6 +36,19 @@ image = json.loads(command(["docker", "image", "inspect", inputs["image"]]))[0]
 model_path = Path(inputs["model_dir"]) / "config.json"
 model_bytes = model_path.read_bytes()
 model = json.loads(model_bytes)
+tokenizer_path = Path(inputs["model_dir"]) / "tokenizer_config.json"
+tokenizer = json.loads(tokenizer_path.read_text()) if tokenizer_path.is_file() else {}
+
+
+def has_custom_code(value):
+    if isinstance(value, dict):
+        return bool(value.get("auto_map")) or any(has_custom_code(item) for item in value.values())
+    if isinstance(value, list):
+        return any(has_custom_code(item) for item in value)
+    return False
+
+
+requires_trust_remote_code = has_custom_code(model) or has_custom_code(tokenizer)
 packages_code = """
 import json
 from importlib.metadata import distributions
@@ -128,6 +141,7 @@ print(
             "hostname": command(["hostname"]).strip(),
             "image_id": image["Id"],
             "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
+            "requires_trust_remote_code": requires_trust_remote_code,
             "model_dtype": text_model.get(
                 "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
             ),
@@ -229,6 +243,10 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                     ),
                 )
             )
+            if not isinstance(args, list):
+                raise ValueError(f"{role}: ENGINE_ARGS must be a JSON array")
+            if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
+                args.append("--trust-remote-code")
             environment = dict(observed["image_environment"])
             overrides = json.loads(value(env, node, "ENGINE_ENV", "{}"))
             if not isinstance(overrides, dict):

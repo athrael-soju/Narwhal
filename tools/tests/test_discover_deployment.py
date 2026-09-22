@@ -143,6 +143,7 @@ class DiscoveryTests(unittest.TestCase):
             )
             hosts = derive_hosts(env)
             observations = {f"engine-{i}": observation() for i in (1, 2)}
+            observations["engine-1"]["requires_trust_remote_code"] = True
             fleet, launches, _, _ = build_records(hosts, env, observations, root)
             self.assertEqual(fleet["hardware"]["accelerators_per_engine"], 2)
             one = launches["engines"]["engine-1"]
@@ -151,7 +152,14 @@ class DiscoveryTests(unittest.TestCase):
                 ["/dev/kfd", "/dev/dri/renderD130", "/dev/dri/renderD131"],
             )
             self.assertEqual(one["runtime"]["environment"]["VLLM_ROCM_USE_AITER"], "0")
-            self.assertEqual(one["runtime"]["extra_args"], ["--max-model-len", "8192"])
+            self.assertEqual(
+                one["runtime"]["extra_args"],
+                ["--max-model-len", "8192", "--trust-remote-code"],
+            )
+            self.assertEqual(
+                launches["engines"]["engine-2"]["runtime"]["extra_args"],
+                ["--max-model-len", "8192"],
+            )
             env["NARWHAL_MODEL_CONFIG_SHA256"] = "c" * 64
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 build_records(hosts, env, observations, root)
@@ -204,7 +212,10 @@ class DiscoveryTests(unittest.TestCase):
             "environment_prefixes": ["VLLM_", "NIXL_"],
             "managed_environment": ["VLLM_API_KEY"],
         }
-        model = b'{"torch_dtype":"bfloat16","max_position_embeddings":32768}'
+        model = (
+            b'{"torch_dtype":"bfloat16","max_position_embeddings":32768,'
+            b'"auto_map":{"AutoConfig":"configuration_custom.CustomConfig"}}'
+        )
         image = [
             {
                 "Id": inputs["image"],
@@ -259,6 +270,7 @@ class DiscoveryTests(unittest.TestCase):
         ):
             exec(compile(PROBE, "remote discovery probe", "exec"), {})
         result = json.loads(output.getvalue())
+        self.assertTrue(result["requires_trust_remote_code"])
         self.assertEqual(result["image_environment"], {"VLLM_ROCM_USE_AITER": "1"})
         self.assertEqual(
             [g["device"] for g in result["gpus"]],

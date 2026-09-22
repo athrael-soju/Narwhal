@@ -96,6 +96,20 @@ class EngineLauncherTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_runtime(spec)
 
+    def test_image_check_rejects_missing_custom_code_flag_before_container_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = self.inputs(root)
+            (root / "model/tokenizer_config.json").write_text(
+                json.dumps({"auto_map": {"AutoTokenizer": "tokenization_custom.CustomTokenizer"}})
+            )
+            run = root / "launch"
+            prepare(run, env)
+            with patch("tools.launch_engine.docker") as mocked:
+                with self.assertRaisesRegex(ValueError, "requires --trust-remote-code"):
+                    check(run, load(run))
+                mocked.assert_not_called()
+
     def test_handshake_policy_captures_installed_default_and_rejects_disabled_values(self):
         for explicit, default, passed in (
             (None, True, True),

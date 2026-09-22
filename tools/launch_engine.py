@@ -100,6 +100,21 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def requires_remote_code(model_dir: Path) -> bool:
+    def has_auto_map(value: object) -> bool:
+        if isinstance(value, dict):
+            return bool(value.get("auto_map")) or any(has_auto_map(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_auto_map(item) for item in value)
+        return False
+
+    for name in ("config.json", "tokenizer_config.json"):
+        path = model_dir / name
+        if path.is_file() and has_auto_map(json.loads(path.read_text())):
+            return True
+    return False
+
+
 def write_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
@@ -197,6 +212,7 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
     return {
         "role": role,
         "image": image,
+        "model_dir": model_dir,
         "name": f"narwhal-{role}-{uuid.uuid4().hex[:12]}",
         "common": common,
         "args": args,
@@ -248,6 +264,8 @@ def load(run: Path) -> dict:
 
 
 def check(run: Path, plan: dict) -> None:
+    if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
+        raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     inspection = json.loads(docker(["image", "inspect", plan["image"]], run, "image-check.log"))[0]
     expected = plan["image"]
     if expected.startswith("sha256:"):
