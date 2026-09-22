@@ -1,11 +1,14 @@
 """Exercise complete serving plans and launch guards with synthetic inputs and Docker mocks."""
 
 import hashlib
+import importlib
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import ModuleType
+from unittest.mock import Mock, patch
 
 from tools.engine_launch import selected_launch
 from tools.launch_engine import build, check, load, prepare, start, validate_runtime
@@ -135,3 +138,56 @@ class EngineLauncherTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "plan changed"):
                     start(run, plan)
                 mocked.assert_not_called()
+
+    def test_image_check_executes_registered_connector_import_and_propagates_failure(self):
+        module_name = "vllm.distributed.kv_transfer.kv_connector.v1.nixl"
+        connector_module = ModuleType(module_name)
+        connector_module.NixlConnector = type("NixlConnector", (), {"__module__": module_name})
+        config_module = ModuleType("vllm.config")
+        config_module.KVTransferConfig = Mock()
+        factory_module = ModuleType("vllm.distributed.kv_transfer.kv_connector.factory")
+        factory_module.KVConnectorFactory = Mock()
+        resolver = factory_module.KVConnectorFactory.get_connector_class
+        modules = {
+            module_name: connector_module,
+            config_module.__name__: config_module,
+            factory_module.__name__: factory_module,
+        }
+        for missing_dependency in (False, True):
+            with (
+                self.subTest(missing_dependency=missing_dependency),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                root = Path(folder)
+                _, env = self.inputs(root)
+                run = root / "launch"
+                prepare(run, env)
+                plan = load(run)
+                resolver.reset_mock()
+                resolver.side_effect = (
+                    ModuleNotFoundError("connector dependency unavailable")
+                    if missing_dependency
+                    else lambda config: importlib.import_module(module_name).NixlConnector
+                )
+
+                def execute_check(command, directory, log, plan=plan):
+                    if command[0] == "image":
+                        return json.dumps([{"Id": plan["image"]}])
+                    index = command.index("-c")
+                    with (
+                        patch.dict(sys.modules, modules),
+                        patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
+                        patch("importlib.metadata.version", plan["expected_packages"].__getitem__),
+                    ):
+                        exec(command[index + 1], {})
+                    return ""
+
+                with patch("tools.launch_engine.docker", side_effect=execute_check):
+                    if missing_dependency:
+                        with self.assertRaises(ModuleNotFoundError):
+                            check(run, plan)
+                    else:
+                        check(run, plan)
+                self.assertEqual((run / "checked.json").exists(), not missing_dependency)
+                config_module.KVTransferConfig.assert_called_with(**plan["connector"])
+                resolver.assert_called_once_with(config_module.KVTransferConfig.return_value)

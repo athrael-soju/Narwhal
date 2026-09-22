@@ -325,7 +325,7 @@ Run the image check in that engine shell:
 python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 ```
 
-The check inspects the local immutable image identity, starts a temporary container to compare package versions and import the NIXL connector, then records the plan hash in `checked.json`. Its commands and output go to `image-check.log`. This container imports the runtime without loading model weights and exits after the check. Resolve the named package, library or connector error against the supplied image and runtime record before starting the engine.
+The check inspects the local immutable image identity, starts a temporary container to compare package versions and resolves the configured connector through the image's `KVConnectorFactory`, then records the plan hash in `checked.json`. The factory imports the class registered by that vLLM build; `image-check.log` retains its module and class name alongside the package versions and command output. The temporary container exits after these imports. Resolve package and library failures against the supplied image and runtime record. A launcher correction requires a fresh step 2 preparation to deliver the updated helper and its digest, followed by a fresh launch plan; retain the earlier image-check log and fabric samples with their original manifest.
 
 Inspect the planned listeners with `ss -ltnp`, then start the checked plan:
 

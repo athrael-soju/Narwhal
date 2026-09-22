@@ -255,14 +255,16 @@ def check(run: Path, plan: dict) -> None:
         matches = expected in inspection.get("RepoDigests", [])
     if not matches:
         raise ValueError("local image identity differs from the launch plan")
-    script = """import importlib, importlib.metadata as m, json
+    script = """import importlib.metadata as m, json
 expected = json.loads(__import__('sys').argv[1])
 observed = {name: m.version(name) for name in expected}
 print(json.dumps(observed))
 assert observed == expected, 'image package versions differ'
 from vllm.config import KVTransferConfig
-KVTransferConfig(**json.loads(__import__('sys').argv[2]))
-importlib.import_module('vllm.distributed.kv_transfer.kv_connector.v1.nixl_connector')
+from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
+config = KVTransferConfig(**json.loads(__import__('sys').argv[2]))
+connector = KVConnectorFactory.get_connector_class(config)
+print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__}))
 """
     docker(
         [
