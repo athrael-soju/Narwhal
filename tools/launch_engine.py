@@ -222,6 +222,7 @@ def prepare(output: Path, env: dict[str, str]) -> None:
         env_sha256=digest(output / "container.env"),
         launch_sha256=digest(source),
         launcher_sha256=digest(Path(__file__)),
+        model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     print(f"Prepared {record['role']}; review launch.json and run the image check.")
@@ -292,10 +293,154 @@ print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__})
     print("Image identity, package pins and connector import passed.")
 
 
-def start(run: Path, plan: dict) -> None:
+def require_checked(run: Path, plan: dict) -> None:
     checked = json.loads((run / "checked.json").read_text())
     if checked["plan_sha256"] != digest(run / "launch.json"):
         raise ValueError("launch plan changed after its image check")
+
+
+def cache_groups(groups: list) -> list[dict]:
+    """Retain padded per-layer pages, including state and boundary block allowances."""
+    result = []
+    for group in groups:
+        spec = group.kv_cache_spec
+        layers = getattr(spec, "kv_cache_specs", None)
+        layers = layers if layers is not None else dict.fromkeys(group.layer_names, spec)
+        for name, layer in layers.items():
+            kind = type(layer).__name__
+            extra = 0
+            if kind == "MambaSpec":
+                # Bound an aligned state's previous/current pages and checkpoint slots.
+                extra = (
+                    1
+                    + layer.num_speculative_blocks
+                    + getattr(layer, "num_prefill_checkpoint_blocks", 0)
+                )
+            elif kind in ("SlidingWindowSpec", "ChunkedLocalAttentionSpec"):
+                extra = 1
+            elif kind not in ("FullAttentionSpec", "MLAAttentionSpec", "AttentionSpec"):
+                raise ValueError(f"Cache sizing requires a page bound for {kind}")
+            result.append(
+                {
+                    "layer": name,
+                    "kind": kind,
+                    "block_tokens": layer.block_size,
+                    "page_bytes": layer.page_size_bytes,
+                    "extra_blocks": extra,
+                }
+            )
+    return result
+
+
+def runtime_cache_probe(plan_path: Path) -> None:
+    """Run inside the pinned image until vLLM resolves each worker's cache allocation."""
+    from vllm.engine.arg_utils import EngineArgs
+    from vllm.utils.argparse_utils import FlexibleArgumentParser
+    from vllm.v1.engine.core import EngineCore
+    from vllm.v1.executor.abstract import Executor
+
+    plan = json.loads(plan_path.read_text())
+    if digest(Path("/model/config.json")) != plan["model_config_sha256"]:
+        raise ValueError("model config changed since launch preparation")
+    # EngineArgs owns the model options; HTTP listener options belong to the API server.
+    arguments = list(plan["args"][2:])
+    for option in ("--host", "--port"):
+        index = arguments.index(option)
+        del arguments[index : index + 2]
+    parser = EngineArgs.add_cli_args(FlexibleArgumentParser())
+    config = EngineArgs.from_cli_args(parser.parse_args(arguments)).create_engine_config()
+    workers = []
+    captured = []
+
+    class SizingComplete(Exception):
+        pass
+
+    class ProbeExecutor(Executor.get_class(config)):
+        def __init__(self, vllm_config):
+            workers.append(self)
+            super().__init__(vllm_config)
+
+        def initialize_from_config(self, configs):
+            for rank, allocation in enumerate(configs):
+                captured.append({"rank": rank, "layers": cache_groups(allocation.kv_cache_groups)})
+            # EngineCore has loaded/profiled the model and resolved padding at this point.
+            raise SizingComplete
+
+    try:
+        EngineCore(config, executor_class=ProbeExecutor, log_stats=False)
+        raise ValueError("runtime cache allocation hook was skipped")
+    except SizingComplete:
+        pass
+    finally:
+        for worker in workers:
+            worker.shutdown()
+    if len(captured) != config.parallel_config.tensor_parallel_size:
+        raise ValueError("cache sizing requires one allocation record per TP rank")
+    value = {
+        "schema_version": 1,
+        "sizing": "runtime_padded_page_upper_bound",
+        "image": plan["image"],
+        "expected_packages": plan["expected_packages"],
+        "revision": plan["revision"],
+        "model_config_sha256": plan["model_config_sha256"],
+        "launch_config_sha256": plan["launch_sha256"],
+        "plan_sha256": digest(plan_path),
+        "launcher_sha256": plan["launcher_sha256"],
+        "ranks": captured,
+    }
+    write_private(
+        plan_path.parent / "cache-layout.pending.json", json.dumps(value, indent=2) + "\n"
+    )
+
+
+def measure_cache(run: Path, plan: dict) -> None:
+    require_checked(run, plan)
+    if digest(Path(__file__)) != plan["launcher_sha256"]:
+        raise ValueError("launcher changed; prepare and check a fresh launch plan")
+    if any(
+        (run / name).exists() for name in ("container.id", "cache-probe.id", "cache-layout.json")
+    ):
+        raise ValueError("launch directory has a container or sizing record; use a fresh plan")
+    cid = docker(
+        [
+            "create",
+            "--name",
+            plan["name"] + "-cache-probe",
+            *plan["common"],
+            "--mount",
+            f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-probe.py,readonly",
+            "--mount",
+            f"type=bind,src={run},dst=/narwhal-probe",
+            "--entrypoint",
+            "python3",
+            plan["image"],
+            "/narwhal-probe.py",
+            "_cache-probe",
+            "--plan",
+            "/narwhal-probe/launch.json",
+        ],
+        run,
+        "cache-probe.log",
+    )
+    if not re.fullmatch(r"[0-9a-f]{64}", cid):
+        raise ValueError("Docker returned an invalid probe ID; inspect cache-probe.log")
+    write_private(run / "cache-probe.id", cid + "\n")
+    docker(["start", "--attach", cid], run, "cache-probe.log")
+    state = json.loads(
+        docker(["inspect", "--format", "{{json .State}}", cid], run, "cache-probe.log")
+    )
+    if state["Running"] or state["ExitCode"] != 0:
+        raise ValueError("cache probe failed; inspect cache-probe.log and the recorded container")
+    value = json.loads((run / "cache-layout.pending.json").read_text())
+    if value["plan_sha256"] != digest(run / "launch.json"):
+        raise ValueError("cache probe output differs from the launch plan")
+    docker(["rm", cid], run, "cache-probe.log")
+    write_private(run / "cache-layout.json", json.dumps(value, indent=2) + "\n")
+    print("Runtime cache pages captured in cache-layout.json; sizing container removed.")
+
+
+def start(run: Path, plan: dict) -> None:
+    require_checked(run, plan)
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
     cid = docker(
@@ -323,17 +468,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("prepare").add_argument("--out", type=Path, required=True)
-    for command in ("check", "start"):
+    sub.add_parser("_cache-probe", help=argparse.SUPPRESS).add_argument(
+        "--plan", type=Path, required=True
+    )
+    for command in ("check", "measure-cache", "start"):
         sub.add_parser(command).add_argument("--run", type=Path, required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
         if args.command == "prepare":
             prepare(args.out, dict(os.environ))
+        elif args.command == "_cache-probe":
+            runtime_cache_probe(args.plan)
         else:
             run = args.run.resolve()
             plan = load(run)
-            (check if args.command == "check" else start)(run, plan)
+            {"check": check, "measure-cache": measure_cache, "start": start}[args.command](
+                run, plan
+            )
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         if isinstance(error, FileExistsError):
             parser.exit(1, "Launch directory exists; choose a fresh output path.\n")

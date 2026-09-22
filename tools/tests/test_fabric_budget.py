@@ -88,6 +88,7 @@ class FabricBudgetTests(unittest.TestCase):
             launch.write_text(json.dumps({"tensor_parallel_size": 2}))
             args = [
                 "calculate",
+                "--uniform-cache",
                 "--model-config",
                 str(model),
                 "--launch-config",

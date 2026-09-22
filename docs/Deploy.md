@@ -178,32 +178,47 @@ For ROCm, `/dev/kfd` and the selected DRI devices provide container GPU access; 
 
 ## 4. Prepare the transfer fabric
 
-Run this step in the installed engine-role shells. It qualifies directed host links for a declared KV workload using host-memory transfers. Step 8 exercises the running engines' NIXL handoffs, and step 10 measures shared-link contention under concurrent deployment traffic.
+Run this step in the installed engine-role shells after every host passes step 3. First collect the pinned runtime's cache page sizes with a single-host sizing process, then qualify directed host links for the declared handoff workload. The sizing process loads and profiles the model on that host's assigned GPUs, captures the cache allocation specs and exits before serving or peer transfer. Step 8 exercises NIXL handoffs between running engines, and step 10 measures shared-link contention under concurrent deployment traffic.
 
-### Calculate the link budget
+### Capture the runtime cache layout
 
-For initial bring-up, use this workload: one remote handoff per second, 1,024 prompt tokens per handoff, a burst of one handoff, a one-second transfer budget and 25% bandwidth headroom. Size an uncompressed two-byte cache with 128-token blocks. These values define this guide's initial trial; retain them with the deployment and recalculate for the intended workload and runtime cache layout before capacity acceptance. Apply the total remote-handoff rate to each candidate edge so the budget covers traffic concentrated on that edge.
-
-Step 2 supplies the calculator from the management checkout as a deployment tool alongside the approved application bundle. Its exported path and SHA-256 identify the exact helper used with that application revision. On each engine host, verify the helper and calculate the required rate from its model config and selected TP allocation:
+Step 2 supplies the launcher and budget calculator as hashed snapshots beside the approved application bundle. In each engine-role shell, verify both helpers and prepare a private sizing plan from that host's launch record:
 
 ```bash
 umask 077
 mkdir -p runs
 export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
+export CACHE_RUN="$FABRIC_RUN/cache-probe"
+test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256" &&
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256" &&
+python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$CACHE_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$CACHE_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" measure-cache --run "$CACHE_RUN"
+```
+
+`measure-cache` uses the checked image, model, runtime arguments, environment, device allocation and TP size. It invokes vLLM's engine core through cache planning, collects the final per-layer specs for every TP rank, then shuts down the model workers and removes its sizing container. The command waits through model loading and memory profiling; a second shell can follow `docker logs -f "$(cat "$CACHE_RUN/cache-probe.id")"`. The completed `cache-layout.json` records actual token block sizes, padded page bytes, state/boundary allowances and the hashes of the model config, launch record and plan. `cache-probe.log` retains the runtime output, and `cache-probe.id` identifies the container owned by this attempt.
+
+The probe uses the pinned vLLM V1 cache-planning API. A package/import failure belongs to the image check; a model-load, device, memory-profile or unsupported-cache-spec failure belongs to the sizing probe. Retain its log, inspect the recorded container, correct the named input and prepare a fresh sizing plan. Capture `docker logs` before stopping and removing a failed sizing container by its recorded ID. A missing helper, path variable or digest mismatch requires a fresh step 2 preparation from the updated management checkout. Preserve earlier manifests, sizing logs and fabric samples.
+
+### Calculate the link budget
+
+For initial bring-up, use one remote handoff per second, 1,024 prompt tokens per handoff, a burst of one handoff, a one-second transfer budget and 25% bandwidth headroom. Apply the total handoff rate to each candidate edge so the budget covers traffic concentrated on that edge. Calculate with the runtime layout collected above:
+
+```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
   --model-config "$NARWHAL_MODEL_DIR/config.json" \
   --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-  --element-bytes 2 --prompt-tokens 1024 --block-tokens 128 \
-  --handoffs-per-s 1 --burst 1 --transfer-budget-s 1 --headroom 1.25 \
+  --runtime-layout "$CACHE_RUN/cache-layout.json" \
+  --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
+  --transfer-budget-s 1 --headroom 1.25 \
   --out "$FABRIC_RUN/budget.json"
 ```
 
-For a missing helper, missing path variable or hash mismatch, use the updated management checkout to repeat step 2 with a fresh preparation directory, then open its installed engine-role shell with the matching `--run` path. Preserve the earlier manifest and logs as the record of that attempt.
+For each layer on each TP rank, the helper counts `ceil(prompt_tokens / block_tokens) + extra_blocks` padded pages, then sums their bytes across the replica. Full attention and MLA use the full prompt's pages; Mamba includes a boundary state and speculative/checkpoint slots; windowed attention includes a boundary page. This bounds a handoff by the complete padded cache for that prompt, including state pages that a connector may transfer more selectively. vLLM's [cache specs](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_interface.py) and [cache grouping](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/core/kv_cache_utils.py) supply the page geometry. The calculation uses those runtime sizes, including adjustments to the requested block size and Mamba padding.
 
-The command prints the required decimal Gbit/s and writes the workload, model and launch-record hashes, replica-wide bytes per token and rounded handoff payload to a mode-0600 file. Record `FABRIC_RUN` in the private deployment record. The calculation is `payload_bytes = ceil(prompt_tokens / block_tokens) * block_tokens * bytes_per_token_all_ranks`, followed by `required_Gbit/s = 8 * payload_bytes * max(peak_handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`.
+The rate is `8 * payload_bytes * max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`. The command prints decimal Gbit/s and writes a mode-0600 budget with the workload, payload bound, source hashes and image identity. Record `FABRIC_RUN` and `CACHE_RUN` in the private deployment record. Each source engine's budget applies to its outgoing edges; retain the declared workload for the later transfer and capacity gates.
 
-For standard attention, the helper counts K and V across layers and TP ranks, including KV-head replication when TP exceeds the KV-head count. For MLA, it counts the latent and positional cache once per layer per TP rank. The [vLLM rank-local KV-head calculation](https://github.com/vllm-project/vllm/blob/main/vllm/config/model.py) and [cache layout definitions](https://github.com/vllm-project/vllm/blob/main/vllm/v1/kv_cache_interface.py) describe these layouts. The budget estimates payload traffic; runtime padding, connector overhead and actual GPU transfers are measured at the later transfer and capacity gates. A hybrid, windowed or packed cache requires `--bytes-per-token` from the pinned runtime's total cache bytes across ranks divided by its cached token count; retain that measurement with the budget.
+Retained throughput samples can be compared with a corrected budget while host assignments, routes, interfaces, transport settings and measurement conditions still match their recorded inputs. Repeat each step 4 comparison using the new budget and the original sample file, and retain the new comparison output alongside the earlier result. A runtime-layout correction changes the budget; a changed link or transport configuration requires a new throughput sample. Complete the comparisons for every directed edge before starting serving engines in step 5.
 
 ### Select and check a directed edge
 
@@ -315,7 +330,7 @@ python3 -m json.tool "$ENGINE_RUN/launch.json"
 
 Review `launch.json`: it records the immutable image, complete serving arguments, mounts, device mappings, endpoint, application revision and input hashes. `container.env` contains the explicit runtime and transport values and, when configured, the engine API key; keep this file private. The launcher supplies `NixlConnector`, `kv_role=kv_both`, the UCX backend and `kv_load_failure_policy=fail`. It derives the advertised side-channel address and port from the selected engine's role environment, selects TCP or RDMA through `UCX_TLS`, and disables prefix caching for the profiling procedure. [Runtime launch records](Configuration.md#runtime-launch-records) defines the fields and the [vLLM NIXL guide](https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/) describes the connector settings.
 
-Match the record's dtype and block size with the retained fabric budget. The supplied two-byte model dtype with `kv_cache_dtype=auto` uses the budget's two-byte cache sizing. Recalculate step 4's budget when changing the cache layout or workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
+Match the launch record and model-config hashes with the retained step 4 runtime layout and budget. The requested block size can be adjusted by vLLM during cache planning; the runtime layout records the resulting pages. Repeat cache sizing and budget calculation after changing the image, model, dtype, cache policy, TP allocation or model arguments; recalculate the budget after changing the workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
 
 ### Check the image and start the engine
 
@@ -500,7 +515,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Management access](#1-open-the-management-shells) | Physical host IDs, assigned roles, access variable names and verified server keys. | Missing access input: fill the named environment field. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, `config/hosts.local.json`, `config/ssh.known_hosts` and `runs/access-<id>/`. |
 | [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
-| [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, cache dimensions and TP, prompt length, handoff rate, burst and transfer-time budget. | Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/budget.json`, directed samples and private edge matrix. |
+| [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
 | [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
