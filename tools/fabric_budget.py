@@ -29,13 +29,13 @@ def cache_shape(model: dict, tp: int, element_bytes: int) -> tuple[str, int]:
     if type(tp) is not int or tp < 1 or element_bytes not in (1, 2, 4):
         raise ValueError("TP must be positive; cache elements must use 1, 2 or 4 bytes")
     if model.get("layer_types") and set(model["layer_types"]) != {"full_attention"}:
-        raise ValueError("hybrid/windowed cache needs an explicit measured --bytes-per-token")
+        raise ValueError("hybrid/windowed cache needs measured pages from --runtime-layout")
     if model.get("sliding_window") or model.get("mamba_d_state"):
-        raise ValueError("hybrid/windowed cache needs an explicit measured --bytes-per-token")
+        raise ValueError("hybrid/windowed cache needs measured pages from --runtime-layout")
     layers = integer(model, "num_hidden_layers")
     if model.get("kv_lora_rank"):
         if element_bytes != 2:
-            raise ValueError("packed MLA cache needs an explicit measured --bytes-per-token")
+            raise ValueError("packed MLA cache needs measured pages from --runtime-layout")
         width = integer(model, "kv_lora_rank") + integer(model, "qk_rope_head_dim")
         return "mla", layers * width * element_bytes * tp
     heads = integer(model, "num_attention_heads")
@@ -71,18 +71,29 @@ def calculate(
     ):
         if type(value) is not int or value < 1:
             raise ValueError(f"{name} must be a positive integer")
-    positive(handoffs_per_s, "handoffs_per_s")
-    positive(transfer_budget_s, "transfer_budget_s")
-    if positive(headroom, "headroom") < 1:
-        raise ValueError("headroom must be at least 1")
     padded_tokens = ((prompt_tokens + block_tokens - 1) // block_tokens) * block_tokens
     payload = bytes_per_token * padded_tokens
-    required = 8 * payload * max(handoffs_per_s, burst / transfer_budget_s) * headroom / 1e9
     return {
+        **workload_budget(payload, handoffs_per_s, burst, transfer_budget_s, headroom),
         "bytes_per_token_all_ranks": bytes_per_token,
         "prompt_tokens": prompt_tokens,
         "block_tokens": block_tokens,
         "padded_tokens": padded_tokens,
+    }
+
+
+def workload_budget(
+    payload: int, handoffs_per_s: float, burst: int, transfer_budget_s: float, headroom: float
+) -> dict:
+    integer({"payload": payload}, "payload")
+    integer({"burst": burst}, "burst")
+    positive(handoffs_per_s, "handoffs_per_s")
+    positive(transfer_budget_s, "transfer_budget_s")
+    if positive(headroom, "headroom") < 1:
+        raise ValueError("headroom must be at least 1")
+    required = 8 * payload * max(handoffs_per_s, burst / transfer_budget_s) * headroom / 1e9
+    positive(required, "required_gbps")
+    return {
         "payload_bytes_per_handoff": payload,
         "peak_handoffs_per_s": handoffs_per_s,
         "burst_handoffs": burst,
@@ -91,6 +102,30 @@ def calculate(
         "required_gbps": required,
         "scope": "one directed host edge; all TP ranks; declared workload",
     }
+
+
+def runtime_payload(layout: dict, tp: int, prompt_tokens: int) -> int:
+    """Bound a complete prompt's padded cache pages, summing every recorded TP rank."""
+    integer({"prompt_tokens": prompt_tokens}, "prompt_tokens")
+    integer({"tp": tp}, "tp")
+    if layout["schema_version"] != 1 or layout["sizing"] != "runtime_padded_page_upper_bound":
+        raise ValueError("unsupported runtime cache sizing record")
+    ranks = layout["ranks"]
+    if len(ranks) != tp or sorted(rank["rank"] for rank in ranks) != list(range(tp)):
+        raise ValueError("runtime cache sizing requires every TP rank exactly once")
+    payload = 0
+    for rank in ranks:
+        layers = rank["layers"]
+        if not layers or len({layer["layer"] for layer in layers}) != len(layers):
+            raise ValueError("runtime cache sizing requires distinct layers on every rank")
+        for layer in layers:
+            page = integer(layer, "page_bytes")
+            block = integer(layer, "block_tokens")
+            extra = layer["extra_blocks"]
+            if type(extra) is not int or extra < 0:
+                raise ValueError("runtime cache extra_blocks must be a nonnegative integer")
+            payload += (((prompt_tokens + block - 1) // block) + extra) * page
+    return payload
 
 
 def received_gbps(sample: dict) -> float:
@@ -116,10 +151,17 @@ def main(argv: list[str] | None = None) -> int:
     budget = commands.add_parser("calculate", help="write a private workload budget")
     budget.add_argument("--model-config", type=Path, required=True)
     budget.add_argument("--launch-config", type=Path, required=True)
-    budget.add_argument("--element-bytes", type=int, choices=(1, 2, 4), required=True)
-    budget.add_argument("--bytes-per-token", type=int, help="measured total across TP ranks")
+    budget.add_argument("--element-bytes", type=int, choices=(1, 2, 4))
+    sizing = budget.add_mutually_exclusive_group(required=True)
+    sizing.add_argument("--runtime-layout", type=Path, help="cache-layout.json from measure-cache")
+    sizing.add_argument(
+        "--uniform-cache", action="store_true", help="explicit uniform analytical estimate"
+    )
+    sizing.add_argument(
+        "--bytes-per-token", type=int, help="measured total across TP ranks for a uniform layout"
+    )
     budget.add_argument("--prompt-tokens", type=int, required=True)
-    budget.add_argument("--block-tokens", type=int, required=True)
+    budget.add_argument("--block-tokens", type=int)
     budget.add_argument("--handoffs-per-s", type=float, required=True)
     budget.add_argument("--burst", type=int, required=True)
     budget.add_argument("--transfer-budget-s", type=float, required=True)
@@ -137,25 +179,48 @@ def main(argv: list[str] | None = None) -> int:
             launch_data = args.launch_config.read_bytes()
             launch = json.loads(launch_data)
             tp = launch["tensor_parallel_size"]
-            if args.bytes_per_token is None:
-                layout, size = cache_shape(json.loads(model_data), tp, args.element_bytes)
+            hashes = {
+                "model_config_sha256": hashlib.sha256(model_data).hexdigest(),
+                "launch_config_sha256": hashlib.sha256(launch_data).hexdigest(),
+            }
+            if args.runtime_layout:
+                if args.block_tokens is not None or args.element_bytes is not None:
+                    raise ValueError("runtime sizing supplies its own page sizes and token blocks")
+                runtime_data = args.runtime_layout.read_bytes()
+                runtime = json.loads(runtime_data)
+                if any(runtime[key] != value for key, value in hashes.items()):
+                    raise ValueError("runtime cache sizing differs from the model or launch record")
+                payload = runtime_payload(runtime, tp, args.prompt_tokens)
+                result = workload_budget(
+                    payload, args.handoffs_per_s, args.burst, args.transfer_budget_s, args.headroom
+                )
+                result.update(
+                    layout=runtime["sizing"],
+                    prompt_tokens=args.prompt_tokens,
+                    runtime_layout_sha256=hashlib.sha256(runtime_data).hexdigest(),
+                    image=runtime["image"],
+                    plan_sha256=runtime["plan_sha256"],
+                )
             else:
-                layout, size = "measured", args.bytes_per_token
-            result = calculate(
-                size,
-                args.prompt_tokens,
-                args.block_tokens,
-                args.handoffs_per_s,
-                args.burst,
-                args.transfer_budget_s,
-                args.headroom,
-            )
+                if args.element_bytes is None or args.block_tokens is None:
+                    raise ValueError("uniform sizing requires --element-bytes and --block-tokens")
+                if args.bytes_per_token is None:
+                    layout, size = cache_shape(json.loads(model_data), tp, args.element_bytes)
+                else:
+                    layout, size = "measured_uniform", args.bytes_per_token
+                result = calculate(
+                    size,
+                    args.prompt_tokens,
+                    args.block_tokens,
+                    args.handoffs_per_s,
+                    args.burst,
+                    args.transfer_budget_s,
+                    args.headroom,
+                )
+                result.update(layout=layout, element_bytes=args.element_bytes)
             result.update(
-                layout=layout,
                 tensor_parallel_size=tp,
-                element_bytes=args.element_bytes,
-                model_config_sha256=hashlib.sha256(model_data).hexdigest(),
-                launch_config_sha256=hashlib.sha256(launch_data).hexdigest(),
+                **hashes,
             )
             write_private(args.out, result)
             print(f"Required per directed edge: {result['required_gbps']:.6f} Gbit/s")

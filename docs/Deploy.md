@@ -52,7 +52,7 @@ With `.env` loaded, prepare a new deployment directory. The supplied `NARWHAL_DE
 python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
-The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and delivers it to each engine host at `runs/deployment-tools/fabric_budget.py`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The manifest records hashes for the source bundle, helper snapshot and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
+The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and `tools/launch_engine.py` and delivers both to each engine host under `runs/deployment-tools/`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The engine launcher uses the corresponding `NARWHAL_ENGINE_LAUNCHER` path and `NARWHAL_ENGINE_LAUNCHER_SHA256` digest. The manifest records hashes for the source bundle, helper snapshots and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
 
 Choose a fresh `--out` path for a new deployment; subsequent commands reuse that path through `--run`. The mode-0600 manifest records the approved revision, host assignments, input hashes and a unique remote directory under `~/Narwhal-deploy/`. Record its path in the private deployment record. A missing field or unavailable revision stops preparation on the workstation; correct the named input or recover the approved source, then prepare a fresh directory.
 
@@ -178,32 +178,47 @@ For ROCm, `/dev/kfd` and the selected DRI devices provide container GPU access; 
 
 ## 4. Prepare the transfer fabric
 
-Run this step in the installed engine-role shells. It qualifies directed host links for a declared KV workload using host-memory transfers. Step 8 exercises the running engines' NIXL handoffs, and step 10 measures shared-link contention under concurrent deployment traffic.
+Run this step in the installed engine-role shells after every host passes step 3. First collect the pinned runtime's cache page sizes with a single-host sizing process, then qualify directed host links for the declared handoff workload. The sizing process loads and profiles the model on that host's assigned GPUs, captures the cache allocation specs and exits before serving or peer transfer. Step 8 exercises NIXL handoffs between running engines, and step 10 measures shared-link contention under concurrent deployment traffic.
 
-### Calculate the link budget
+### Capture the runtime cache layout
 
-For initial bring-up, use this workload: one remote handoff per second, 1,024 prompt tokens per handoff, a burst of one handoff, a one-second transfer budget and 25% bandwidth headroom. Size an uncompressed two-byte cache with 128-token blocks. These values define this guide's initial trial; retain them with the deployment and recalculate for the intended workload and runtime cache layout before capacity acceptance. Apply the total remote-handoff rate to each candidate edge so the budget covers traffic concentrated on that edge.
-
-Step 2 supplies the calculator from the management checkout as a deployment tool alongside the approved application bundle. Its exported path and SHA-256 identify the exact helper used with that application revision. On each engine host, verify the helper and calculate the required rate from its model config and selected TP allocation:
+Step 2 supplies the launcher and budget calculator as hashed snapshots beside the approved application bundle. In each engine-role shell, verify both helpers and prepare a private sizing plan from that host's launch record:
 
 ```bash
 umask 077
 mkdir -p runs
 export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
+export CACHE_RUN="$FABRIC_RUN/cache-probe"
+test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256" &&
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256" &&
+python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$CACHE_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$CACHE_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" measure-cache --run "$CACHE_RUN"
+```
+
+`measure-cache` uses the checked image, model, runtime arguments, environment, device allocation and TP size. It invokes vLLM's engine core through cache planning, collects the final per-layer specs for every TP rank, then shuts down the model workers and removes its sizing container. The command waits through model loading and memory profiling; a second shell can follow `docker logs -f "$(cat "$CACHE_RUN/cache-probe.id")"`. The completed `cache-layout.json` records actual token block sizes, padded page bytes, state/boundary allowances and the hashes of the model config, launch record and plan. `cache-probe.log` retains the runtime output, and `cache-probe.id` identifies the container owned by this attempt.
+
+The probe uses the pinned vLLM V1 cache-planning API. A package/import failure belongs to the image check; a model-load, device, memory-profile or unsupported-cache-spec failure belongs to the sizing probe. Retain its log, inspect the recorded container, correct the named input and prepare a fresh sizing plan. Capture `docker logs` before stopping and removing a failed sizing container by its recorded ID. A missing helper, path variable or digest mismatch requires a fresh step 2 preparation from the updated management checkout. Preserve earlier manifests, sizing logs and fabric samples.
+
+### Calculate the link budget
+
+For initial bring-up, use one remote handoff per second, 1,024 prompt tokens per handoff, a burst of one handoff, a one-second transfer budget and 25% bandwidth headroom. Apply the total handoff rate to each candidate edge so the budget covers traffic concentrated on that edge. Calculate with the runtime layout collected above:
+
+```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
   --model-config "$NARWHAL_MODEL_DIR/config.json" \
   --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-  --element-bytes 2 --prompt-tokens 1024 --block-tokens 128 \
-  --handoffs-per-s 1 --burst 1 --transfer-budget-s 1 --headroom 1.25 \
+  --runtime-layout "$CACHE_RUN/cache-layout.json" \
+  --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
+  --transfer-budget-s 1 --headroom 1.25 \
   --out "$FABRIC_RUN/budget.json"
 ```
 
-For a missing helper, missing path variable or hash mismatch, use the updated management checkout to repeat step 2 with a fresh preparation directory, then open its installed engine-role shell with the matching `--run` path. Preserve the earlier manifest and logs as the record of that attempt.
+For each layer on each TP rank, the helper counts `ceil(prompt_tokens / block_tokens) + extra_blocks` padded pages, then sums their bytes across the replica. Full attention and MLA use the full prompt's pages; Mamba includes a boundary state and speculative/checkpoint slots; windowed attention includes a boundary page. This bounds a handoff by the complete padded cache for that prompt, including state pages that a connector may transfer more selectively. vLLM's [cache specs](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_interface.py) and [cache grouping](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/core/kv_cache_utils.py) supply the page geometry. The calculation uses those runtime sizes, including adjustments to the requested block size and Mamba padding.
 
-The command prints the required decimal Gbit/s and writes the workload, model and launch-record hashes, replica-wide bytes per token and rounded handoff payload to a mode-0600 file. Record `FABRIC_RUN` in the private deployment record. The calculation is `payload_bytes = ceil(prompt_tokens / block_tokens) * block_tokens * bytes_per_token_all_ranks`, followed by `required_Gbit/s = 8 * payload_bytes * max(peak_handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`.
+The rate is `8 * payload_bytes * max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`. The command prints decimal Gbit/s and writes a mode-0600 budget with the workload, payload bound, source hashes and image identity. Record `FABRIC_RUN` and `CACHE_RUN` in the private deployment record. Each source engine's budget applies to its outgoing edges; retain the declared workload for the later transfer and capacity gates.
 
-For standard attention, the helper counts K and V across layers and TP ranks, including KV-head replication when TP exceeds the KV-head count. For MLA, it counts the latent and positional cache once per layer per TP rank. The [vLLM rank-local KV-head calculation](https://github.com/vllm-project/vllm/blob/main/vllm/config/model.py) and [cache layout definitions](https://github.com/vllm-project/vllm/blob/main/vllm/v1/kv_cache_interface.py) describe these layouts. The budget estimates payload traffic; runtime padding, connector overhead and actual GPU transfers are measured at the later transfer and capacity gates. A hybrid, windowed or packed cache requires `--bytes-per-token` from the pinned runtime's total cache bytes across ranks divided by its cached token count; retain that measurement with the budget.
+Retained throughput samples can be compared with a corrected budget while host assignments, routes, interfaces, transport settings and measurement conditions still match their recorded inputs. Repeat each step 4 comparison using the new budget and the original sample file, and retain the new comparison output alongside the earlier result. A runtime-layout correction changes the budget; a changed link or transport configuration requires a new throughput sample. Complete the comparisons for every directed edge before starting serving engines in step 5.
 
 ### Select and check a directed edge
 
@@ -296,9 +311,94 @@ A connection failure requires the named listener, route, firewall, HCA or GID ch
 
 ## 5. Configure the fleet and launch engines
 
-On the router host, edit the transferred `config/fleet.local.json` using the supplied inventory. Set the model, engine IDs, opening roles, engine and attestation URLs, SLOs and a fresh profile path under `runs/`, then add the complete production `engine_contract` defined by the [configuration reference](Configuration.md#engine-contract). [Node URL references](Configuration.md#node-urls-from-the-environment) resolve endpoints from `.env.router`; `engine.engine_api_key_env` selects the exported engine credential. The exported `NARWHAL_FLEET=config/fleet.local.json` selects this file for observability. Keep this ignored config with its profile and deployment load evidence in private storage, and replace site addresses before sharing an extract.
+Complete the host inspection and directed fabric matrix before starting the first engine. On the router host, edit the transferred `config/fleet.local.json` to set model, engine IDs, opening roles, engine and attestation URLs, SLOs and a fresh profile path. [Node URL references](Configuration.md#node-urls-from-the-environment) resolve endpoints from `.env.router`. Step 6 fills the runtime `engine_contract` from the image check, running engine and attestation sources before profiling or router startup.
 
-On the engine hosts, apply the selected record's `environment`, `vllm_args`, `accelerator_devices`, `transfer.devices` and `network_mode` through the engine launcher, alongside the supplied image, model mounts and vLLM/NIXL configuration with effective `kv_both` behaviour. The record supplies allocation and device arguments; the runtime launcher supplies the complete serving command and connector settings. Match the cache dtype and block size to step 4's budget, or recalculate that budget for the selected runtime layout. Use the fabric configuration from step 4 and confirm each engine serves the declared model and HTTP port before starting its sidecar. An engine startup failure requires its process logs and the image, device, model or fabric check implicated by the error. Preserve existing processes and resolve listener ownership before starting replacements.
+### Prepare the first engine command
+
+The supplied per-engine record's `runtime` object names pinned package versions, library environment, model dtype, cache dtype, block size and model-specific arguments. Step 2 delivers `launch_engine.py` beside the fabric calculator and exports `NARWHAL_ENGINE_LAUNCHER` and `NARWHAL_ENGINE_LAUNCHER_SHA256` in each engine-role environment. The launcher builds a Docker command invoking `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`, mounts `NARWHAL_MODEL_DIR` read-only at `/model`, exposes the declared devices, and applies the selected TP allocation.
+
+In the installed engine-1 shell, verify the launcher and prepare a fresh private launch directory:
+
+```bash
+umask 077
+mkdir -p runs
+export ENGINE_RUN="runs/engine-launch-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256" &&
+python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
+python3 -m json.tool "$ENGINE_RUN/launch.json"
+```
+
+Review `launch.json`: it records the immutable image, complete serving arguments, mounts, device mappings, endpoint, application revision and input hashes. `container.env` contains the explicit runtime and transport values and, when configured, the engine API key; keep this file private. The launcher supplies `NixlConnector`, `kv_role=kv_both`, the UCX backend and `kv_load_failure_policy=fail`. It derives the advertised side-channel address and port from the selected engine's role environment, selects TCP or RDMA through `UCX_TLS`, and disables prefix caching for the profiling procedure. [Runtime launch records](Configuration.md#runtime-launch-records) defines the fields and the [vLLM NIXL guide](https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/) describes the connector settings.
+
+Match the launch record and model-config hashes with the retained step 4 runtime layout and budget. The requested block size can be adjusted by vLLM during cache planning; the runtime layout records the resulting pages. Repeat cache sizing and budget calculation after changing the image, model, dtype, cache policy, TP allocation or model arguments; recalculate the budget after changing the workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
+
+### Check the image and start the engine
+
+Run the image check in that engine shell:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
+```
+
+The check inspects the local immutable image identity, starts a temporary container to compare package versions and resolves the configured connector through the image's `KVConnectorFactory`, then records the plan hash in `checked.json`. The factory imports the class registered by that vLLM build. The check also reads `vllm.version.__version__`, which supplies the engine's `/version` response, and records it as `vllm_api_version` in `checked.json`. `image-check.log` retains the connector, exact package versions, API version and command output. The temporary container exits after these imports. Resolve package and library failures against the supplied image and runtime record. A launcher correction requires a fresh step 2 preparation to deliver the updated helper and its digest, followed by a fresh launch plan; retain the earlier image-check log and fabric samples with their original manifest.
+
+Inspect the planned listeners with `ss -ltnp`, then start the checked plan:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" start --run "$ENGINE_RUN"
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+docker logs --follow "$ENGINE_CONTAINER"
+```
+
+`start` creates a uniquely named container, records its ID before starting it and retains Docker output in `launch.log`. It verifies the saved environment and checked plan before creating the container. Follow the engine log through model loading and HTTP startup; Ctrl-C ends the log follower while the engine container continues running. An existing `container.id` directs recovery to that recorded container. Inspect `docker inspect "$ENGINE_CONTAINER"` and `docker logs "$ENGINE_CONTAINER"` for a startup exit, then correct the implicated device, model, memory, library or transport input and prepare a fresh launch plan.
+
+### Verify the engine HTTP API
+
+After HTTP startup, run these probes in the same engine-role shell. They use the supplied endpoint and engine credential, compare `/version` with the value captured from the checked image and save responses under the launch directory. Distribution metadata can carry a build suffix while the API exposes its own version string; the image check verifies the full distribution pin and the HTTP probe verifies the exact captured API version:
+
+```bash
+python3 - <<'PY_ENGINE'
+import hashlib
+import json
+import os
+from pathlib import Path
+from urllib.request import Request, urlopen
+run = Path(os.environ["ENGINE_RUN"])
+plan_data = (run / "launch.json").read_bytes()
+plan = json.loads(plan_data)
+checked = json.loads((run / "checked.json").read_text())
+assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
+expected_version = checked["vllm_api_version"]
+headers = {"Content-Type": "application/json"}
+if os.environ.get("NARWHAL_ENGINE_API_KEY"):
+    headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
+def probe(path, filename, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    request = Request(plan["endpoint"].rstrip("/") + path, data=data, headers=headers)
+    with urlopen(request, timeout=60) as response:
+        content = response.read()
+    with (run / filename).open("xb") as output:
+        output.write(content)
+    return content
+probe("/health", "health.txt")
+version = json.loads(probe("/version", "version.json"))
+assert version["version"] == expected_version, (
+    f"/version returned {version['version']!r}; checked image expects {expected_version!r}"
+)
+models = json.loads(probe("/v1/models", "models.json"))
+assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
+metrics = probe("/metrics", "metrics.txt").decode()
+assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
+completion = json.loads(probe("/v1/completions", "completion.json", {
+    "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
+    "max_tokens": 32, "temperature": 0,
+}))
+assert completion["choices"][0]["text"]
+print("Engine health, version, model, process identity and completion passed.")
+PY_ENGINE
+```
+
+For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. A checked record predating `vllm_api_version` requires the updated launcher and a fresh checked launch plan. An API-version mismatch requires checking the endpoint owner against the recorded image and container ID. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine passes, apply the same prepare, check, start and probe sequence in each remaining engine-role shell with its own `ENGINE_RUN`. Record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
 
 ## 6. Attest each engine process
 
@@ -308,6 +408,148 @@ On each engine host, create the attestation document under ignored `runs/`, pres
 mkdir -p runs
 (set -o noclobber; cat config/engine-attestation.example.json > runs/engine-attestation.production.json)
 ```
+
+### Read the NIXL connector protocol version
+
+`nixl_connector_version` is the integer `NIXL_CONNECTOR_VERSION` defined by the installed vLLM connector. vLLM includes this constant in its peer compatibility hash. The pinned NIXL package version belongs in `nixl_version`; the connector protocol integer comes from the image's [NIXL metadata module](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py).
+
+In the engine-role shell, use the step 5 launch directory and recorded container ID to capture the installed constant and module hash. This command starts a Python inspection process inside the running container and preserves the serving process:
+
+```bash
+umask 077
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+(set -o noclobber
+  docker exec -i "$ENGINE_CONTAINER" python3 - > "$ENGINE_RUN/nixl-connector-version.json" <<'PY_NIXL_VERSION'
+import contextlib
+import hashlib
+import importlib
+import json
+import sys
+from pathlib import Path
+with contextlib.redirect_stdout(sys.stderr):
+    module = importlib.import_module("vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata")
+version = module.NIXL_CONNECTOR_VERSION
+if type(version) is not int or version < 1:
+    raise SystemExit("Installed NIXL_CONNECTOR_VERSION must be a positive integer")
+source = Path(module.__file__)
+print(json.dumps({
+    "nixl_connector_version": version,
+    "module": module.__name__,
+    "constant": "NIXL_CONNECTOR_VERSION",
+    "module_file": str(source),
+    "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+}, indent=2))
+PY_NIXL_VERSION
+)
+```
+
+Copy the captured integer into `contract.nixl_connector_version` in this engine's attestation document and the router's `engine_contract.nixl_connector_version`. Set `sources.nixl_connector_version` to the retained capture's path and its module/constant reference; the launch directory's checked image ID and container ID bind that record to the deployed build. Collect it for every engine and compare the integers before declaring the fleet contract. An import or missing-constant error requires checking the installed connector module against the pinned build; retain the error and identify that build's compatibility-hash source before filling the field. A stopped or removed container requires restoring its checked serving plan before process-bound attestation.
+
+### Read the model dimensions used by NIXL
+
+Populate `head_size`, `kv_heads` and `hidden_layers` from the pinned runtime's `ModelConfig.get_head_size()`, `get_total_num_kv_heads()` and `get_total_num_hidden_layers()`. NIXL's [compatibility hash](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py) calls these getters. For DeepSeek-style MLA with MLA enabled, the [head-size resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/transformers_utils/model_arch_config_convertor.py) uses `kv_lora_rank + qk_rope_head_dim`. The captured getter values determine the contract for the installed build and selected runtime settings.
+
+Run a configuration inspection in the engine-role shell with the updated step 2 launcher. A fresh inspection plan uses the supplied model and launch record, verifies the image and reads its resolved configuration; the temporary container exits after collecting metadata. This command works while the serving container is running or stopped and reads configuration before model-worker creation:
+
+```bash
+umask 077
+export MODEL_INSPECT_RUN="$(mktemp -d runs/model-inspection-XXXXXX)/plan"
+python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$MODEL_INSPECT_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$MODEL_INSPECT_RUN"
+python3 "$NARWHAL_ENGINE_LAUNCHER" model-dimensions --run "$MODEL_INSPECT_RUN"
+cat "$MODEL_INSPECT_RUN/model-dimensions.json"
+```
+
+Copy the three integers from the capture's `contract` object into the engine attestation and router fleet contract. Set their `sources` entries to the capture path and corresponding getter names. Retain its `use_mla` setting, model-config hash, image, application revision and plan hash with the deployment; compare the inspection inputs with the serving plan before applying the values. The values describe the model as consumed by the compatibility hash; the runtime page capture from step 4 supplies the fabric payload bound. Repeat the inspection for each engine's image and launch inputs. A configuration import, hash or getter failure requires checking that runtime's model metadata and argument support; retain `model-dimensions.log` and correct that input before continuing. Existing captures retain their contents, so a corrected inspection uses a fresh plan.
+
+### Capture cache block grouping
+
+Set `cross_layers_blocks` from the resolved physical KV cache layout. With vLLM's [layout enum](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_layout.py), `is_block_outermost` identifies layouts that group layer pages inside each physical block: `BLHNC`, `BLNHC` and `BHLNC` yield `true`; `LBHNC`, `LBNHC` and `LHBNC` yield `false`. The [NIXL registration code](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py) consumes views with those physical strides. Preserve the resolved layout name with the boolean so the contract records the allocation's block grouping.
+
+Use the retained startup log from the serving plan. vLLM's [layout resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/attention/backends/utils.py) records `Using <layout> KV cache layout.` after selecting a layout supported by the runtime backends. Set `ENGINE_STARTUP_LOG` to that log's path in the engine-role shell, then inspect the enum from the checked image:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
+  --run "$MODEL_INSPECT_RUN" --startup-log "$ENGINE_STARTUP_LOG"
+cat "$MODEL_INSPECT_RUN/cache-registration.json"
+```
+
+The inspection requires one distinct resolved layout name, imports the enum in a temporary image container, and writes `cache-registration.json` with the boolean, layout, enum source hash, input-log hash, checked plan hash and image identity. It reads metadata while the serving engine continues running or stays stopped. Copy `cross_layers_blocks` into the attestation and router contracts, and set `sources.cross_layers_blocks` to this capture's path and recorded enum property. Compare the source log's serving-plan inputs with the checked inspection plan before applying the value.
+
+The updated step 4 sizing probe also captures `kv_cache_layout` for each TP rank. When the retained serving log provides an incomplete layout record, use that sizing capture with the same command, replacing `--startup-log "$ENGINE_STARTUP_LOG"` with `--runtime-layout "$CACHE_RUN/cache-layout.json"`. The helper checks the image, model-config hash, launch-record hash, rank coverage and agreement on the layout. If both retained sources lack a resolved layout, repeat `measure-cache` with the updated helper and a fresh sizing plan, then inspect its capture. Retain the earlier fabric samples and budgets with their original records. An unknown layout or unavailable enum requires inspection of the pinned build's layout API before setting the boolean. Preserve failed inspection logs and use a fresh inspection plan for corrected input.
+
+### Capture the resolved transfer mode
+
+The resolved `NixlPullConnector` class selects `transfer_mode = "pull"`; `NixlPushConnector` selects `"push"`. In the pinned vLLM API, [NixlConnector aliases NixlPullConnector](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py). `kv_both` declares that the engine can produce and consume KV; the resolved connector class determines the pull or push protocol. Keep `connector` equal to the configured launch name and record the resolved class as the transfer-mode source.
+
+The step 5 image check records the factory-resolved class in `image-check.log`. In the engine-role shell, use the serving plan's `ENGINE_RUN` to derive the mode from that retained record and bind it to the checked image and plan:
+
+```bash
+python3 - <<'PY_TRANSFER_MODE'
+import hashlib
+import json
+import os
+from pathlib import Path
+os.umask(0o077)
+run = Path(os.environ["ENGINE_RUN"])
+plan_data = (run / "launch.json").read_bytes()
+plan = json.loads(plan_data)
+checked = json.loads((run / "checked.json").read_text())
+plan_hash = hashlib.sha256(plan_data).hexdigest()
+if checked["plan_sha256"] != plan_hash:
+    raise SystemExit("Use the image check belonging to this launch plan")
+log = run / "image-check.log"
+log_data = log.read_bytes()
+resolved = set()
+for line in log_data.decode().splitlines():
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(item, dict) and isinstance(item.get("connector"), str):
+        resolved.add(item["connector"])
+if len(resolved) != 1:
+    raise SystemExit("Retain one factory-resolved connector class from this image check")
+connector = resolved.pop()
+modes = {"NixlPullConnector": "pull", "NixlPushConnector": "push"}
+mode = modes.get(connector.rsplit(".", 1)[-1])
+if mode is None:
+    raise SystemExit("Inspect the pinned connector implementation for its transfer protocol")
+record = {
+    "transfer_mode": mode,
+    "configured_connector": plan["connector"]["kv_connector"],
+    "kv_role": plan["connector"]["kv_role"],
+    "resolved_connector": connector,
+    "image_id": checked["image_id"],
+    "plan_sha256": plan_hash,
+    "source": str(log),
+    "source_sha256": hashlib.sha256(log_data).hexdigest(),
+}
+with (run / "transfer-mode.json").open("x") as output:
+    json.dump(record, output, indent=2)
+    output.write("\n")
+print(f"Captured transfer_mode={mode} from {connector}")
+PY_TRANSFER_MODE
+```
+
+Copy the captured string into `contract.transfer_mode` in the attestation and `engine_contract.transfer_mode` in the router fleet config. Set `sources.transfer_mode` to the capture path and resolved class name, and confirm that class agrees with the retained serving startup log. The command reads existing files and preserves the engine's process state. An incomplete or conflicting image-check record requires resolving the connector with the pinned image check before filling the field; an unfamiliar class requires its implementation's explicit protocol definition. Preserve existing captures and use a fresh capture filename when repeating this derivation after repairing an input.
+
+### Capture handshake compatibility enforcement
+
+The pinned NIXL worker resolves `enforce_handshake_compat` through `kv_transfer_config.get_from_extra_config("enforce_handshake_compat", True)` and assigns it to `self.enforce_compat_hash`. That boolean controls rejection of a peer compatibility-hash mismatch in the [worker handshake](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py). New launcher plans explicitly set the extra-config field to `true`; an existing plan that omits it uses the installed worker's default.
+
+In the engine-role shell, use the updated launcher with the checked serving plan to capture the effective setting:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
+cat "$ENGINE_RUN/handshake-policy.json"
+```
+
+The inspection compares the serving command's `--kv-transfer-config` with the recorded connector object, reads the worker initializer from the pinned image, extracts its default and resolves the setting through `KVTransferConfig.get_from_extra_config`. It requires boolean `true` and writes `handshake-policy.json` with the effective value, whether the plan supplies the setting explicitly, the installed default, source text and hash, connector configuration, checked plan hash and image. The temporary Python container reads metadata and exits before model-worker creation, so the existing serving process and checked plan retain their state.
+
+Copy the captured boolean into `contract.enforce_handshake_compat` and the router fleet contract. Set `sources.enforce_handshake_compat` to the capture path and `NixlBaseConnectorWorker.__init__: self.enforce_compat_hash`. A false or non-boolean setting requires correcting the launch configuration, checking a fresh plan and restarting that engine through its deployment procedure. A changed worker implementation requires inspecting its compatibility-check assignment before deriving the field. Retain `handshake-policy.log` on failure and preserve earlier captures. This capture establishes the configured policy; the later peer handshake and KV-transfer gate exercises that policy between engines.
+
+### Populate the contract and start the sidecar
 
 Populate `contract` from that host's deployed image, packages, model and launch configuration, and match those values to the router fleet config's `engine_contract`. Confirm the engine's `/health`, `/version` and `process_start_time_seconds` metric identify the running process, then launch the sidecar in that engine-host shell, replacing the placeholders with its engine HTTP URL, control-network bind address and attestation port from the private inventory.
 
@@ -320,6 +562,110 @@ Populate `contract` from that host's deployed image, packages, model and launch 
 ```
 
 Point `attestation_url` at its `/v1/attestation` route, expose `/health` and `/v1/attestation` through the trusted control network, capture both responses, and restart the sidecar with the engine process. Validate the input and digested response against the [attestation document contract](Configuration.md#attestation-document).
+
+### Check attestation across one engine restart
+
+Complete the normal attestation checks on every engine, then reserve one idle engine for this check before profiling or starting the router. Keep its sidecar running across an engine stop/start so the test can observe rejection of the old process identity. This procedure reloads that engine's model once; the other engines retain their running processes. Router drain and readmission are exercised later through [Restart one engine](Operate.md#restart-one-engine).
+
+In a second shell for the selected engine role, set `ENGINE_RUN` to its existing checked launch directory. Set `ATTEST_BASE` to its attestation URL with the `/v1/attestation` suffix removed and `ATTEST_DOCUMENT` to the completed document used by its sidecar. Read those values from the private fleet config and sidecar launch command. Create a fresh private capture directory:
+
+```bash
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+export ATTEST_BASE="http://<control-address>:<attestation-port>"
+export ATTEST_DOCUMENT="runs/engine-attestation.production.json"
+umask 077
+export RESTART_RUN="$(mktemp -d "$ENGINE_RUN/attestation-restart-XXXXXX")"
+hostname > "$RESTART_RUN/host.txt"
+git rev-parse HEAD > "$RESTART_RUN/revision.txt"
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-before.json"
+```
+
+Define this probe in that shell. Each invocation saves both sidecar responses before checking status codes. With a running engine it also fetches the live identity; successful attestation must match the supplied contract, response digest and current process. The `changed` phase requires a newer process start and the sidecar's explicit identity-change rejection.
+
+```bash
+attestation_probe() {
+  .venv/bin/python - "$1" <<'PY_ATTEST_RESTART'
+import asyncio
+import json
+import os
+import sys
+from dataclasses import asdict
+from pathlib import Path
+
+import httpx
+from narwhal.engines.attestation import (
+    AttestationDocument, fetch_engine_identity, verify_attestation,
+)
+
+phase = sys.argv[1]
+expected = {"before": 200, "down": 503, "changed": 503, "rebound": 200}[phase]
+out = Path(os.environ["RESTART_RUN"]) / phase
+out.mkdir(mode=0o700)
+base = os.environ["ATTEST_BASE"].rstrip("/")
+responses = {}
+with httpx.Client(timeout=15) as client:
+    for name, route in (("health", "/health"), ("attestation", "/v1/attestation")):
+        response = client.get(base + route)
+        (out / f"{name}.json").write_text(response.text)
+        (out / f"{name}.status").write_text(str(response.status_code) + "\n")
+        responses[name] = response
+for response in responses.values():
+    if response.status_code != expected:
+        raise SystemExit(f"{phase}: expected HTTP {expected}, got {response.status_code}")
+if phase == "down":
+    for response in responses.values():
+        if not response.json().get("detail", "").startswith("engine identity unreadable:"):
+            raise SystemExit("Inspect the captured 503 response for the engine access failure")
+else:
+    plan = json.loads((Path(os.environ["ENGINE_RUN"]) / "launch.json").read_text())
+    identity = asyncio.run(fetch_engine_identity(plan["endpoint"]))
+    (out / "identity.json").write_text(json.dumps(asdict(identity), indent=2) + "\n")
+    if phase in ("changed", "rebound"):
+        old = json.loads((out.parent / "before/identity.json").read_text())
+        if identity.process_start_time_seconds <= old["process_start_time_seconds"]:
+            raise SystemExit("Expected a newer engine process start")
+        if identity.vllm_version != old["vllm_version"]:
+            raise SystemExit("Expected the same pinned runtime across this restart")
+    if expected == 200:
+        document = AttestationDocument.load(os.environ["ATTEST_DOCUMENT"])
+        failures = verify_attestation(responses["attestation"].json(), document.contract, identity)
+        if failures:
+            raise SystemExit("; ".join(failures))
+    else:
+        for response in responses.values():
+            if response.json().get("detail") != "engine process changed; restart the attestation sidecar":
+                raise SystemExit("Expected explicit rejection of the changed engine process")
+print(f"{phase}: both sidecar endpoints returned {expected}; checks passed")
+PY_ATTEST_RESTART
+}
+attestation_probe before
+```
+
+After `before` passes, stop only the selected engine container, leaving its sidecar running. Capture the `down` phase, which requires HTTP 503 from both sidecar endpoints while the engine identity is unreachable:
+
+```bash
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-before.log" 2>&1
+docker stop "$ENGINE_CONTAINER" > "$RESTART_RUN/stop.txt"
+attestation_probe down
+```
+
+After `down` passes, start the same checked container and follow its log through model loading and HTTP startup. Ctrl-C ends the log follower. Run `changed` only after the engine's `/health` returns 200; the existing sidecar must still return 503 because its bound process start predates the running engine:
+
+```bash
+docker start "$ENGINE_CONTAINER" > "$RESTART_RUN/start.txt"
+docker logs --follow "$ENGINE_CONTAINER"
+attestation_probe changed
+```
+
+After `changed` passes, stop the selected sidecar with Ctrl-C in its original foreground shell and repeat its exact `narwhal-attest` command from [Populate the contract and start the sidecar](#populate-the-contract-and-start-the-sidecar). Wait for its HTTP listener, then run the final probe in the capture shell:
+
+```bash
+attestation_probe rebound
+docker logs "$ENGINE_CONTAINER" > "$RESTART_RUN/engine-after.log" 2>&1
+docker inspect "$ENGINE_CONTAINER" > "$RESTART_RUN/container-after.json"
+```
+
+Retain all four phase directories with the starting state, commands actually executed and exit statuses in the private deployment record. A connection refusal from the sidecar requires restoring its listener before testing identity rejection; HTTP 503 from the running old sidecar is the expected rejection. Engine startup failure requires inspecting the retained container log before recovery. An unexpected 200 during `changed` requires checking whether another process already restarted the sidecar. Preserve failed captures and use a fresh capture directory for a repeat.
 
 ## 7. Profile the idle engines
 
@@ -422,9 +768,10 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Management access](#1-open-the-management-shells) | Physical host IDs, assigned roles, access variable names and verified server keys. | Missing access input: fill the named environment field. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, `config/hosts.local.json`, `config/ssh.known_hosts` and `runs/access-<id>/`. |
 | [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
-| [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, cache dimensions and TP, prompt length, handoff rate, burst and transfer-time budget. | Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/budget.json`, directed samples and private edge matrix. |
-| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment, engine launch record and private engine launcher. |
-| [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |
+| [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
+| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
+| [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, resolved model dimension getters and physical cache layout, resolved connector transfer mode and handshake policy, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, `transfer-mode.json` and `handshake-policy.json`, model inspection's `model-dimensions.json`, `cache-registration.json` and logs, checked images and container ID; engine `runs/engine-attestation.production.json` and private inventory. |
+| [Attestation restart](#check-attestation-across-one-engine-restart) | One reserved idle engine, its checked container and sidecar command, completed contract and baseline process identity. | Sidecar connection failure: restore its listener. Engine startup failure: inspect the retained container log. Unexpected success after identity change: check sidecar restart activity. Preserve captures before repeating. | Engine launch directory's `attestation-restart-*/` responses, identities and logs; private deployment command record. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |
