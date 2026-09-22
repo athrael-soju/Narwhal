@@ -246,6 +246,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
             self.assertEqual(transport.uploads.count(("node-1", "source.bundle")), 1)
 
     def test_private_host_inventory_is_excluded_from_publication(self):
+        self.assertTrue(private_path("config/ssh.known_hosts"))
         self.assertTrue(private_path("config/hosts.local.json"))
         self.assertFalse(private_path("config/hosts.example.json"))
         self.assertTrue(private_path("config/engine-launch.local.json"))

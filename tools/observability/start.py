@@ -103,8 +103,15 @@ HttpGet = Callable[[str, float], tuple[int, str]]
 class ComposeStack:
     """Run Docker Compose against the repository's pinned project file."""
 
-    def __init__(self, runner: Runner = subprocess.run) -> None:
+    def __init__(
+        self, runner: Runner = subprocess.run, env: Mapping[str, str] | None = None
+    ) -> None:
         self._runner = runner
+        self._compose_env = dict(os.environ if env is None else env)
+        listener = parse_prometheus_listener(
+            self._compose_env.get("NARWHAL_PROMETHEUS_LISTEN_ADDRESS", "127.0.0.1:9090")
+        )
+        self._compose_env["NARWHAL_PROMETHEUS_URL"] = f"http://{listener.authority}"
         self._prefix = [
             "docker",
             "compose",
@@ -125,6 +132,7 @@ class ComposeStack:
             text=True,
             capture_output=True,
             timeout=timeout_s,
+            env=self._compose_env,
         )
 
     def up(self) -> None:
@@ -757,7 +765,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--router-url or NARWHAL_ROUTER_URL is required")
     try:
         contract = load_contract(args.fleet, args.router_url)
-        start(os.environ, ComposeStack(), contract, timeout_s=args.ready_timeout)
+        start(os.environ, ComposeStack(env=os.environ), contract, timeout_s=args.ready_timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         print(f"observability startup failed: {detail}", file=sys.stderr)

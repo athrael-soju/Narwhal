@@ -496,10 +496,39 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn(f"image: {observe.PROMETHEUS_IMAGE}", compose)
         self.assertIn(f"image: {observe.GRAFANA_IMAGE}", compose)
         self.assertIn(
-            'NARWHAL_PROMETHEUS_URL: "http://${NARWHAL_PROMETHEUS_LISTEN_ADDRESS',
+            'NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL',
             compose,
         )
         self.assertIn("url: $NARWHAL_PROMETHEUS_URL", datasource)
+
+    def test_wildcard_prometheus_bind_uses_loopback_for_grafana(self) -> None:
+        for bind, expected in (
+            ("0.0.0.0:9090", "http://127.0.0.1:9090"),
+            ("[::]:9090", "http://[::1]:9090"),
+        ):
+            with self.subTest(bind=bind):
+                calls: list[dict[str, str]] = []
+
+                def runner(
+                    command: list[str], *, calls: list[dict[str, str]] = calls, **kwargs: object
+                ) -> CompletedProcess[str]:
+                    passed_env = kwargs.get("env")
+                    assert isinstance(passed_env, dict)
+                    calls.append(passed_env)
+                    return CompletedProcess(command, 0, "", "")
+
+                env = {"NARWHAL_PROMETHEUS_LISTEN_ADDRESS": bind}
+                observe.ComposeStack(runner, env).up()
+                self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_URL"], expected)
+                self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_LISTEN_ADDRESS"], bind)
+
+                def get(url: str, timeout_s: float, *, expected: str = expected) -> tuple[int, str]:
+                    if url.endswith("/api/datasources/name/Prometheus"):
+                        return 200, json.dumps({"type": "prometheus", "url": expected})
+                    return _healthy_get(url, timeout_s)
+
+                stack = FakeStack({"prometheus": [self.prometheus], "grafana": [self.grafana]})
+                observe.wait_ready(observe.configured_services(env), stack, get=get)
 
     def test_container_change_rejects_an_unrelated_response(self) -> None:
         replacement = _container("x" * 64, observe.GRAFANA_IMAGE)

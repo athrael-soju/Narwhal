@@ -69,7 +69,7 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-Grafana derives its `Prometheus` datasource URL from the selected Prometheus listener, so the two services remain within the same isolated deployment.
+Grafana derives its `Prometheus` datasource URL from the selected Prometheus listener. A wildcard bind resolves to loopback for the datasource and readiness checks; the listener retains the configured wildcard address.
 
 The Prometheus query should return one router series plus one series for each configured engine. A value of `1` means the scrape succeeded; `0` means it failed. Prometheus `/targets` shows discovery state and the scrape error for each endpoint.
 
