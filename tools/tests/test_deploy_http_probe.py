@@ -12,6 +12,70 @@ from unittest.mock import patch
 
 
 class DeploymentHTTPProbeTests(unittest.TestCase):
+    def test_transfer_mode_capture_uses_resolved_class_and_preserves_evidence(self):
+        guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
+        script = guide.split("<<'PY_TRANSFER_MODE'\n", 1)[1].split("\nPY_TRANSFER_MODE", 1)[0]
+        cases = (
+            (["NixlPullConnector"], "pull"),
+            (["NixlPushConnector"], "push"),
+            (["NixlConnector"], None),
+            (["NixlPullConnector", "NixlPushConnector"], None),
+            ([], None),
+        )
+        for names, mode in cases:
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as folder:
+                run = Path(folder)
+                data = json.dumps(
+                    {"connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"}}
+                ).encode()
+                (run / "launch.json").write_bytes(data)
+                checked = {
+                    "plan_sha256": hashlib.sha256(data).hexdigest(),
+                    "image_id": "sha256:" + "a" * 64,
+                }
+                (run / "checked.json").write_text(json.dumps(checked))
+                log = run / "image-check.log"
+                log.write_text(
+                    "startup diagnostic\n"
+                    + "\n".join(
+                        json.dumps(
+                            {
+                                "connector": "vllm.distributed.kv_transfer.kv_connector."
+                                "v1.nixl.connector." + name
+                            }
+                        )
+                        for name in names
+                    )
+                )
+                original = log.read_bytes()
+                with (
+                    patch.dict("os.environ", {"ENGINE_RUN": folder}),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    if mode is None:
+                        with self.assertRaises(SystemExit):
+                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                        self.assertFalse((run / "transfer-mode.json").exists())
+                    else:
+                        exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                        output = run / "transfer-mode.json"
+                        record = json.loads(output.read_text())
+                        self.assertEqual(record["transfer_mode"], mode)
+                        self.assertEqual(record["kv_role"], "kv_both")
+                        self.assertEqual(
+                            record["source_sha256"], hashlib.sha256(original).hexdigest()
+                        )
+                        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                        retained = output.read_bytes()
+                        with self.assertRaises(FileExistsError):
+                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                        self.assertEqual(output.read_bytes(), retained)
+                        checked["plan_sha256"] = "0" * 64
+                        (run / "checked.json").write_text(json.dumps(checked))
+                        with self.assertRaisesRegex(SystemExit, "belonging to this launch plan"):
+                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                self.assertEqual(log.read_bytes(), original)
+
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
         guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
         script = guide.split("<<'PY_NIXL_VERSION'\n", 1)[1].split("\nPY_NIXL_VERSION", 1)[0]

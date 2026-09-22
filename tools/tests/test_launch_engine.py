@@ -13,7 +13,16 @@ from types import ModuleType
 from unittest.mock import Mock, patch
 
 from tools.engine_launch import selected_launch
-from tools.launch_engine import build, check, load, prepare, start, validate_runtime
+from tools.launch_engine import (
+    build,
+    check,
+    digest,
+    handshake_policy,
+    load,
+    prepare,
+    start,
+    validate_runtime,
+)
 from tools.tests.test_engine_launch import launch_document
 
 IMAGE_CHECK_OUTPUT = 'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
@@ -65,6 +74,9 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertIn("vllm.entrypoints.openai.api_server", plan["args"])
             self.assertEqual(plan["connector"]["kv_role"], "kv_both")
             self.assertEqual(plan["connector"]["kv_connector_extra_config"]["backends"], ["UCX"])
+            self.assertIs(
+                plan["connector"]["kv_connector_extra_config"]["enforce_handshake_compat"], True
+            )
             self.assertEqual(values["VLLM_NIXL_SIDE_CHANNEL_HOST"], env["NARWHAL_NODE_1_IP"])
             self.assertEqual(values["UCX_TLS"], "tcp,sm,self,rocm")
             self.assertEqual(values["ROCR_VISIBLE_DEVICES"], "0,1")
@@ -83,6 +95,89 @@ class EngineLauncherTests(unittest.TestCase):
         spec["environment"]["VLLM_NIXL_SKIP_COMPATIBILITY_CHECK"] = "1"
         with self.assertRaises(ValueError):
             validate_runtime(spec)
+
+    def test_handshake_policy_captures_installed_default_and_rejects_disabled_values(self):
+        for explicit, default, passed in (
+            (None, True, True),
+            (True, True, True),
+            (False, True, False),
+            ("true", True, False),
+            (None, False, False),
+        ):
+            with (
+                self.subTest(explicit=explicit, default=default),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                root = Path(folder)
+                _, env = self.inputs(root)
+                run = root / "launch"
+                prepare(run, env)
+                plan = load(run)
+                extra = plan["connector"]["kv_connector_extra_config"]
+                if explicit is None:
+                    extra.pop("enforce_handshake_compat")
+                else:
+                    extra["enforce_handshake_compat"] = explicit
+                index = plan["args"].index("--kv-transfer-config") + 1
+                plan["args"][index] = json.dumps(plan["connector"])
+                (run / "launch.json").write_text(json.dumps(plan))
+                (run / "checked.json").write_text(
+                    json.dumps({"plan_sha256": digest(run / "launch.json")})
+                )
+                config_module = ModuleType("vllm.config")
+
+                class Config:
+                    def __init__(self, **values):
+                        self.kv_connector_extra_config = values.get("kv_connector_extra_config", {})
+
+                    def get_from_extra_config(self, key, default):
+                        return self.kv_connector_extra_config.get(key, default)
+
+                config_module.KVTransferConfig = Config
+                worker_module = ModuleType(
+                    "vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker"
+                )
+                worker_module.NixlBaseConnectorWorker = type("Worker", (), {})
+                source = (
+                    "def __init__(self):\n    self.enforce_compat_hash = "
+                    "self.kv_transfer_config.get_from_extra_config("
+                    f"'enforce_handshake_compat', {default!r})\n"
+                )
+                modules = {
+                    config_module.__name__: config_module,
+                    worker_module.__name__: worker_module,
+                }
+
+                def execute(command, directory, log, modules=modules, source=source):
+                    index = command.index("-c")
+                    with (
+                        patch.dict(sys.modules, modules),
+                        patch.object(sys, "argv", ["-c", command[index + 2]]),
+                        patch("inspect.getsource", return_value=source),
+                        contextlib.redirect_stdout(io.StringIO()) as output,
+                    ):
+                        exec(command[index + 1], {})
+                    return output.getvalue()
+
+                with patch("tools.launch_engine.docker", side_effect=execute) as docker:
+                    if passed:
+                        handshake_policy(run, plan)
+                        capture = run / "handshake-policy.json"
+                        record = json.loads(capture.read_text())
+                        self.assertIs(record["enforce_handshake_compat"], True)
+                        self.assertEqual(record["configured"], explicit is not None)
+                        self.assertIs(record["installed_default"], default)
+                        self.assertEqual(
+                            record["source_sha256"], hashlib.sha256(source.encode()).hexdigest()
+                        )
+                        self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
+                        with self.assertRaisesRegex(ValueError, "capture exists"):
+                            handshake_policy(run, plan)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "boolean true"):
+                            handshake_policy(run, plan)
+                        self.assertFalse((run / "handshake-policy.json").exists())
+                    self.assertEqual(docker.call_count, 1)
 
     def test_start_requires_matching_image_check_and_retains_container_id(self):
         with tempfile.TemporaryDirectory() as folder:

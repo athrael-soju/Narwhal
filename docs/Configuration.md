@@ -212,13 +212,13 @@ The external launcher selects vLLM's TP size. Match `hardware.tensor_parallel` t
 | `hidden_layers` | `0` | Positive model-wide value from `ModelConfig.get_total_num_hidden_layers()`. |
 | `attention_backend` | `""` | Runtime attention backend expected from the launch. |
 | `kv_cache_dtype` | `""` | KV cache dtype. |
-| `cross_layers_blocks` | `null` | Whether NIXL registers cross-layer KV blocks. |
+| `cross_layers_blocks` | `null` | Resolved physical cache block grouping: `KVCacheLayout.is_block_outermost` for the pinned layout API. [Capture the layout and boolean](Deploy.md#capture-cache-block-grouping) from serving or sizing evidence. |
 | `hybrid_kv_cache_manager` | `null` | Whether vLLM's hybrid KV cache manager participates in the layout. |
 | `connector` | `"NixlConnector"` | Engine-side connector name. Must be nonempty. |
 | `kv_role` | `""` | Engine-side role semantics, such as `kv_both`. |
-| `transfer_mode` | `""` | Pull or push transfer mode. |
+| `transfer_mode` | `""` | `pull` for the resolved `NixlPullConnector`; `push` for `NixlPushConnector`. [Retain the resolved class and mode](Deploy.md#capture-the-resolved-transfer-mode) from the checked image. |
 | `speculative_config` | `""` | Stable name for the speculation configuration, or `disabled`. |
-| `enforce_handshake_compat` | `true` | Declares that vLLM's NIXL compatibility hash is enabled. `false` is rejected. |
+| `enforce_handshake_compat` | `true` | Effective boolean from the pinned NIXL worker's extra-config lookup; [capture the configured value and installed default](Deploy.md#capture-handshake-compatibility-enforcement). Narwhal requires `true`. |
 
 ### Attestation document
 

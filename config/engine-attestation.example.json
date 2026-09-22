@@ -33,12 +33,12 @@
     "hidden_layers": "replace with the retained model-dimensions.json path and ModelConfig.get_total_num_hidden_layers() source",
     "attention_backend": "replace with the engine startup log",
     "kv_cache_dtype": "replace with the engine launch configuration",
-    "cross_layers_blocks": "replace with the engine startup log",
+    "cross_layers_blocks": "replace with the retained cache-registration.json path and resolved KVCacheLayout.is_block_outermost source",
     "hybrid_kv_cache_manager": "replace with the engine startup log",
     "connector": "replace with the engine launch configuration",
     "kv_role": "replace with the engine launch configuration",
-    "transfer_mode": "replace with the engine launch configuration",
+    "transfer_mode": "replace with the retained transfer-mode.json path and factory-resolved connector class",
     "speculative_config": "replace with the engine launch configuration",
-    "enforce_handshake_compat": "replace with the engine startup log"
+    "enforce_handshake_compat": "replace with the retained handshake-policy.json path and installed worker self.enforce_compat_hash source"
   }
 }

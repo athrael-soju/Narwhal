@@ -462,6 +462,93 @@ cat "$MODEL_INSPECT_RUN/model-dimensions.json"
 
 Copy the three integers from the capture's `contract` object into the engine attestation and router fleet contract. Set their `sources` entries to the capture path and corresponding getter names. Retain its `use_mla` setting, model-config hash, image, application revision and plan hash with the deployment; compare the inspection inputs with the serving plan before applying the values. The values describe the model as consumed by the compatibility hash; the runtime page capture from step 4 supplies the fabric payload bound. Repeat the inspection for each engine's image and launch inputs. A configuration import, hash or getter failure requires checking that runtime's model metadata and argument support; retain `model-dimensions.log` and correct that input before continuing. Existing captures retain their contents, so a corrected inspection uses a fresh plan.
 
+### Capture cache block grouping
+
+Set `cross_layers_blocks` from the resolved physical KV cache layout. With vLLM's [layout enum](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_layout.py), `is_block_outermost` identifies layouts that group layer pages inside each physical block: `BLHNC`, `BLNHC` and `BHLNC` yield `true`; `LBHNC`, `LBNHC` and `LHBNC` yield `false`. The [NIXL registration code](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py) consumes views with those physical strides. Preserve the resolved layout name with the boolean so the contract records the allocation's block grouping.
+
+Use the retained startup log from the serving plan. vLLM's [layout resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/attention/backends/utils.py) records `Using <layout> KV cache layout.` after selecting a layout supported by the runtime backends. Set `ENGINE_STARTUP_LOG` to that log's path in the engine-role shell, then inspect the enum from the checked image:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
+  --run "$MODEL_INSPECT_RUN" --startup-log "$ENGINE_STARTUP_LOG"
+cat "$MODEL_INSPECT_RUN/cache-registration.json"
+```
+
+The inspection requires one distinct resolved layout name, imports the enum in a temporary image container, and writes `cache-registration.json` with the boolean, layout, enum source hash, input-log hash, checked plan hash and image identity. It reads metadata while the serving engine continues running or stays stopped. Copy `cross_layers_blocks` into the attestation and router contracts, and set `sources.cross_layers_blocks` to this capture's path and recorded enum property. Compare the source log's serving-plan inputs with the checked inspection plan before applying the value.
+
+The updated step 4 sizing probe also captures `kv_cache_layout` for each TP rank. When the retained serving log provides an incomplete layout record, use that sizing capture with the same command, replacing `--startup-log "$ENGINE_STARTUP_LOG"` with `--runtime-layout "$CACHE_RUN/cache-layout.json"`. The helper checks the image, model-config hash, launch-record hash, rank coverage and agreement on the layout. If both retained sources lack a resolved layout, repeat `measure-cache` with the updated helper and a fresh sizing plan, then inspect its capture. Retain the earlier fabric samples and budgets with their original records. An unknown layout or unavailable enum requires inspection of the pinned build's layout API before setting the boolean. Preserve failed inspection logs and use a fresh inspection plan for corrected input.
+
+### Capture the resolved transfer mode
+
+The resolved `NixlPullConnector` class selects `transfer_mode = "pull"`; `NixlPushConnector` selects `"push"`. In the pinned vLLM API, [NixlConnector aliases NixlPullConnector](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py). `kv_both` declares that the engine can produce and consume KV; the resolved connector class determines the pull or push protocol. Keep `connector` equal to the configured launch name and record the resolved class as the transfer-mode source.
+
+The step 5 image check records the factory-resolved class in `image-check.log`. In the engine-role shell, use the serving plan's `ENGINE_RUN` to derive the mode from that retained record and bind it to the checked image and plan:
+
+```bash
+python3 - <<'PY_TRANSFER_MODE'
+import hashlib
+import json
+import os
+from pathlib import Path
+os.umask(0o077)
+run = Path(os.environ["ENGINE_RUN"])
+plan_data = (run / "launch.json").read_bytes()
+plan = json.loads(plan_data)
+checked = json.loads((run / "checked.json").read_text())
+plan_hash = hashlib.sha256(plan_data).hexdigest()
+if checked["plan_sha256"] != plan_hash:
+    raise SystemExit("Use the image check belonging to this launch plan")
+log = run / "image-check.log"
+log_data = log.read_bytes()
+resolved = set()
+for line in log_data.decode().splitlines():
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(item, dict) and isinstance(item.get("connector"), str):
+        resolved.add(item["connector"])
+if len(resolved) != 1:
+    raise SystemExit("Retain one factory-resolved connector class from this image check")
+connector = resolved.pop()
+modes = {"NixlPullConnector": "pull", "NixlPushConnector": "push"}
+mode = modes.get(connector.rsplit(".", 1)[-1])
+if mode is None:
+    raise SystemExit("Inspect the pinned connector implementation for its transfer protocol")
+record = {
+    "transfer_mode": mode,
+    "configured_connector": plan["connector"]["kv_connector"],
+    "kv_role": plan["connector"]["kv_role"],
+    "resolved_connector": connector,
+    "image_id": checked["image_id"],
+    "plan_sha256": plan_hash,
+    "source": str(log),
+    "source_sha256": hashlib.sha256(log_data).hexdigest(),
+}
+with (run / "transfer-mode.json").open("x") as output:
+    json.dump(record, output, indent=2)
+    output.write("\n")
+print(f"Captured transfer_mode={mode} from {connector}")
+PY_TRANSFER_MODE
+```
+
+Copy the captured string into `contract.transfer_mode` in the attestation and `engine_contract.transfer_mode` in the router fleet config. Set `sources.transfer_mode` to the capture path and resolved class name, and confirm that class agrees with the retained serving startup log. The command reads existing files and preserves the engine's process state. An incomplete or conflicting image-check record requires resolving the connector with the pinned image check before filling the field; an unfamiliar class requires its implementation's explicit protocol definition. Preserve existing captures and use a fresh capture filename when repeating this derivation after repairing an input.
+
+### Capture handshake compatibility enforcement
+
+The pinned NIXL worker resolves `enforce_handshake_compat` through `kv_transfer_config.get_from_extra_config("enforce_handshake_compat", True)` and assigns it to `self.enforce_compat_hash`. That boolean controls rejection of a peer compatibility-hash mismatch in the [worker handshake](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py). New launcher plans explicitly set the extra-config field to `true`; an existing plan that omits it uses the installed worker's default.
+
+In the engine-role shell, use the updated launcher with the checked serving plan to capture the effective setting:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
+cat "$ENGINE_RUN/handshake-policy.json"
+```
+
+The inspection compares the serving command's `--kv-transfer-config` with the recorded connector object, reads the worker initializer from the pinned image, extracts its default and resolves the setting through `KVTransferConfig.get_from_extra_config`. It requires boolean `true` and writes `handshake-policy.json` with the effective value, whether the plan supplies the setting explicitly, the installed default, source text and hash, connector configuration, checked plan hash and image. The temporary Python container reads metadata and exits before model-worker creation, so the existing serving process and checked plan retain their state.
+
+Copy the captured boolean into `contract.enforce_handshake_compat` and the router fleet contract. Set `sources.enforce_handshake_compat` to the capture path and `NixlBaseConnectorWorker.__init__: self.enforce_compat_hash`. A false or non-boolean setting requires correcting the launch configuration, checking a fresh plan and restarting that engine through its deployment procedure. A changed worker implementation requires inspecting its compatibility-check assignment before deriving the field. Retain `handshake-policy.log` on failure and preserve earlier captures. This capture establishes the configured policy; the later peer handshake and KV-transfer gate exercises that policy between engines.
+
 ### Populate the contract and start the sidecar
 
 Populate `contract` from that host's deployed image, packages, model and launch configuration, and match those values to the router fleet config's `engine_contract`. Confirm the engine's `/health`, `/version` and `process_start_time_seconds` metric identify the running process, then launch the sidecar in that engine-host shell, replacing the placeholders with its engine HTTP URL, control-network bind address and attestation port from the private inventory.
@@ -579,7 +666,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
 | [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
-| [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, resolved model dimension getters, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, model inspection's `model-dimensions.json` and log, checked images and container ID; engine `runs/engine-attestation.production.json` and private inventory. |
+| [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, resolved model dimension getters and physical cache layout, resolved connector transfer mode and handshake policy, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, `transfer-mode.json` and `handshake-policy.json`, model inspection's `model-dimensions.json`, `cache-registration.json` and logs, checked images and container ID; engine `runs/engine-attestation.production.json` and private inventory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |

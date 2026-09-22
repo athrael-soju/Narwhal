@@ -168,7 +168,7 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         "kv_connector": "NixlConnector",
         "kv_role": "kv_both",
         "kv_load_failure_policy": "fail",
-        "kv_connector_extra_config": {"backends": ["UCX"]},
+        "kv_connector_extra_config": {"backends": ["UCX"], "enforce_handshake_compat": True},
     }
     args = [
         "-m",
@@ -447,7 +447,13 @@ def runtime_cache_probe(plan_path: Path) -> None:
 
         def initialize_from_config(self, configs):
             for rank, allocation in enumerate(configs):
-                captured.append({"rank": rank, "layers": cache_groups(allocation.kv_cache_groups)})
+                captured.append(
+                    {
+                        "rank": rank,
+                        "layers": cache_groups(allocation.kv_cache_groups),
+                        "kv_cache_layout": allocation.kv_cache_layout,
+                    }
+                )
             # EngineCore has loaded/profiled the model and resolved padding at this point.
             raise SizingComplete
 
@@ -476,6 +482,169 @@ def runtime_cache_probe(plan_path: Path) -> None:
     write_private(
         plan_path.parent / "cache-layout.pending.json", json.dumps(value, indent=2) + "\n"
     )
+
+
+def registration_layout(run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
+    """Map an explicitly resolved runtime layout to the contract's block grouping flag."""
+    require_checked(run, plan)
+    destination = run / "cache-registration.json"
+    if destination.exists():
+        raise ValueError(
+            "cache registration capture exists; retain it and use a fresh inspection plan"
+        )
+    data = source.read_bytes()
+    if from_runtime:
+        record = json.loads(data)
+        for field, expected in (
+            ("image", plan["image"]),
+            ("model_config_sha256", plan["model_config_sha256"]),
+            ("launch_config_sha256", plan["launch_sha256"]),
+        ):
+            if record[field] != expected:
+                raise ValueError(
+                    "cache layout record differs from this image, model or launch input"
+                )
+        tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
+        if sorted(rank["rank"] for rank in record["ranks"]) != list(range(tp)):
+            raise ValueError("cache layout record requires every TP rank exactly once")
+        names = {rank.get("kv_cache_layout") for rank in record["ranks"]}
+    else:
+        names = set(re.findall(r"\bUsing ([A-Z]+) KV cache layout\.", data.decode()))
+    if len(names) != 1 or None in names:
+        raise ValueError(
+            "Capture one resolved KV cache layout from the serving log "
+            "or updated measure-cache output"
+        )
+    name = next(iter(names))
+    script = """import hashlib, inspect, json, sys
+from pathlib import Path
+from vllm.v1.kv_cache_layout import KVCacheLayout
+layout = KVCacheLayout[sys.argv[1]]
+source = Path(inspect.getfile(KVCacheLayout))
+print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
+    'cross_layers_blocks': layout.is_block_outermost,
+    'kv_cache_layout': layout.name,
+    'source': 'KVCacheLayout.' + layout.name + '.is_block_outermost',
+    'module_file': str(source),
+    'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+}))
+"""
+    output = docker(
+        [
+            "run",
+            "--rm",
+            *plan["common"],
+            "--entrypoint",
+            "python3",
+            plan["image"],
+            "-c",
+            script,
+            name,
+        ],
+        run,
+        "cache-registration.log",
+    )
+    prefix = "NARWHAL_CACHE_REGISTRATION="
+    records = [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if len(records) != 1 or type(records[0].get("cross_layers_blocks")) is not bool:
+        raise ValueError(
+            "cache registration inspection requires one boolean result; inspect its log"
+        )
+    result = records[0]
+    if result["kv_cache_layout"] != name:
+        raise ValueError("cache registration inspection returned a different layout")
+    result.update(
+        image=plan["image"],
+        plan_sha256=digest(run / "launch.json"),
+        input_path=str(source.resolve()),
+        input_sha256=hashlib.sha256(data).hexdigest(),
+        input_kind="runtime_cache_layout" if from_runtime else "serving_startup_log",
+        launcher_sha256=digest(Path(__file__)),
+    )
+    write_private(destination, json.dumps(result, indent=2) + "\n")
+    print("Cache block grouping captured in cache-registration.json.")
+
+
+def handshake_policy(run: Path, plan: dict) -> None:
+    """Retain the installed worker's default and effective compatibility-check setting."""
+    require_checked(run, plan)
+    destination = run / "handshake-policy.json"
+    if destination.exists():
+        raise ValueError(
+            "handshake policy capture exists; retain it and use a fresh inspection plan"
+        )
+    arguments = plan["args"]
+    connector = json.loads(arguments[arguments.index("--kv-transfer-config") + 1])
+    if connector != plan["connector"]:
+        raise ValueError("serving arguments differ from the recorded connector configuration")
+    script = """import ast, hashlib, inspect, json, sys, textwrap
+from vllm.config import KVTransferConfig
+from vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker import NixlBaseConnectorWorker
+source = textwrap.dedent(inspect.getsource(NixlBaseConnectorWorker.__init__))
+defaults = []
+for node in ast.walk(ast.parse(source)):
+    if not isinstance(node, ast.Assign):
+        continue
+    if not any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+               and t.value.id == 'self' and t.attr == 'enforce_compat_hash' for t in node.targets):
+        continue
+    call = node.value
+    if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        and call.func.attr == 'get_from_extra_config'
+        and isinstance(call.func.value, ast.Attribute)
+        and call.func.value.attr == 'kv_transfer_config'
+        and isinstance(call.func.value.value, ast.Name)
+        and call.func.value.value.id == 'self' and len(call.args) == 2
+        and isinstance(call.args[0], ast.Constant)
+        and call.args[0].value == 'enforce_handshake_compat'):
+        defaults.append(ast.literal_eval(call.args[1]))
+if len(defaults) != 1 or type(defaults[0]) is not bool:
+    raise ValueError('Inspect the installed worker compatibility policy before declaring it')
+config = KVTransferConfig(**json.loads(sys.argv[1]))
+effective = config.get_from_extra_config('enforce_handshake_compat', defaults[0])
+if effective is not True:
+    raise ValueError('The resolved handshake compatibility setting must be boolean true')
+print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
+    'enforce_handshake_compat': effective,
+    'configured': 'enforce_handshake_compat' in config.kv_connector_extra_config,
+    'installed_default': defaults[0],
+    'source': 'NixlBaseConnectorWorker.__init__: self.enforce_compat_hash',
+    'source_code': source,
+    'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
+}))
+"""
+    output = docker(
+        [
+            "run",
+            "--rm",
+            *plan["common"],
+            "--entrypoint",
+            "python3",
+            plan["image"],
+            "-c",
+            script,
+            json.dumps(connector),
+        ],
+        run,
+        "handshake-policy.log",
+    )
+    prefix = "NARWHAL_HANDSHAKE_POLICY="
+    records = [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if len(records) != 1 or records[0].get("enforce_handshake_compat") is not True:
+        raise ValueError("handshake policy inspection requires boolean true; inspect its log")
+    result = records[0]
+    result.update(
+        image=plan["image"],
+        plan_sha256=digest(run / "launch.json"),
+        connector_config=connector,
+        launcher_sha256=digest(Path(__file__)),
+    )
+    write_private(destination, json.dumps(result, indent=2) + "\n")
+    print("Compatibility-check configuration captured in handshake-policy.json.")
 
 
 def measure_cache(run: Path, plan: dict) -> None:
@@ -559,8 +728,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("_model-dimensions", help=argparse.SUPPRESS).add_argument(
         "--plan", type=Path, required=True
     )
-    for command in ("check", "measure-cache", "model-dimensions", "start"):
+    for command in ("check", "measure-cache", "model-dimensions", "handshake-policy", "start"):
         sub.add_parser(command).add_argument("--run", type=Path, required=True)
+    registration = sub.add_parser("cache-registration")
+    registration.add_argument("--run", type=Path, required=True)
+    source = registration.add_mutually_exclusive_group(required=True)
+    source.add_argument("--startup-log", type=Path)
+    source.add_argument("--runtime-layout", type=Path)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -573,10 +747,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             run = args.run.resolve()
             plan = load(run)
+            if args.command == "cache-registration":
+                registration_layout(
+                    run,
+                    plan,
+                    args.runtime_layout or args.startup_log,
+                    args.runtime_layout is not None,
+                )
+                return 0
             {
                 "check": check,
                 "measure-cache": measure_cache,
                 "model-dimensions": model_dimensions,
+                "handshake-policy": handshake_policy,
                 "start": start,
             }[args.command](run, plan)
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:

@@ -264,7 +264,10 @@ class CacheSizingTests(unittest.TestCase):
 
             def core(config, executor_class, log_stats):
                 executor_class(config).initialize_from_config(
-                    [SimpleNamespace(kv_cache_groups=allocation()) for _ in range(2)]
+                    [
+                        SimpleNamespace(kv_cache_groups=allocation(), kv_cache_layout="LBNHC")
+                        for _ in range(2)
+                    ]
                 )
                 self.fail("Probe continued beyond final cache planning")
 
