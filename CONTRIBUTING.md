@@ -29,17 +29,17 @@ python3 -m venv .venv
 
 `make check` runs the full local validation pass: publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, three CPU process drills and the documentation link checker.
 
-CI is started manually and runs `make check` on GitHub-hosted runners. It also runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 collects subprocess coverage and runs the unit suite and integration drills from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
+CI is started manually and runs `make check` on GitHub-hosted runners. It also runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 builds the documentation and runs the unit suite and integration drills from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
 
 The CI jobs use the repository's CPU fixtures and a standard read-only GitHub token. For a narrower test pass, `make test` runs the unit tests and three CPU integration drills.
 
 ### Coverage and test scope
 
-Run `make coverage` to measure lines and branches across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts. CI retains these artifacts for 14 days.
+Run `make coverage` when line or branch evidence is needed across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts.
 
-Coverage measures package and tool code, so every counted line ships with the distribution; the HTML report renders executable source branches inline for reviewers. Each new test should assert a named failure or invariant. Shared CPU profiles and fleets live in `tools/tests/fixtures.py`.
+Coverage measures package and tool code; the HTML report renders executable source branches inline for reviewers. Each new test should assert a named failure or invariant. Tests live under `tests/` by component, with shared CPU profiles and fleets in `tests/fixtures.py`.
 
-CPU checks use local stubs, temporary files and synthetic credentials. Release validation requires live engines for kernel execution, memory capacity, NIXL transfers and measured profiles. Validate each production engine shape with two engines at its intended TP size and context. Check attestation, the ring, cross-engine generation and token accounting, holder-wave recovery, profiles, exact-output canaries and deployment load. Prefix-cache-enabled configurations also require exact-replay and continuation checks.
+CPU checks use local stubs, temporary files and synthetic credentials. Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, launch a representative per runtime group, qualify directed links, attest the live engines, profile and preflight the fleet, then run routed load through the private path with observability.
 
 ## Behaviour changes
 
@@ -115,6 +115,7 @@ Describe the problem, the resulting behaviour, and how you checked it. Link the 
 Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The prefix determines the release impact.
 
 Bring the branch up to date with `main` and run `make check` locally before merge. Documentation changes also require `make docs-build`.
+Install the documentation extra with `.venv/bin/pip install -e '.[docs]'` before building the site.
 
 A maintainer reviews the PR and local check results, then squash-merges it using the PR title. Branch protection requires a PR and blocks force pushes; GitHub deletes each branch at squash-merge.
 

@@ -22,9 +22,9 @@ coverage: $(BOOTSTRAP)
 	$(VENV_PYTHON) tools/maintenance/run_coverage.py $(COVERAGE_ARGS)
 
 unit: $(BOOTSTRAP)
-	$(VENV_PYTHON) -m unittest discover -s tools/tests
+	$(VENV_PYTHON) -m unittest discover -s tests -t .
 
-SOURCES := src tools
+SOURCES := src tools tests
 
 lint: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m ruff check $(SOURCES)

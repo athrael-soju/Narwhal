@@ -18,7 +18,7 @@ SUPPORT = ROOT / "tools/coverage_support"
 def commands(output):
     """Keep the measured cases aligned with make test."""
     return [
-        ("unit", ["-m", "unittest", "discover", "-s", "tools/tests"]),
+        ("unit", ["-m", "unittest", "discover", "-s", "tests", "-t", "."]),
         ("ha", ["-m", "tools.coverage_support.ha", "--out", str(output / "ha")]),
         (
             "lifecycle-individual",

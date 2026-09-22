@@ -8,8 +8,9 @@ include mkdocs.yml
 include config/engine-attestation.example.json config/engine-launch.example.json
 include config/fleet.example.json config/fleet.stub.json config/hosts.example.json
 recursive-include .github *.yml
-recursive-include docs *.md *.txt *.svg *.png *.css
+recursive-include docs *.md *.svg *.png *.css
 recursive-include deploy *.cfg
-recursive-include tools *.py *.sh *.json *.yml *.md
+recursive-include tools *.py *.json *.yml *.md
 recursive-include tools/coverage_support *.ini
+recursive-include tests *.py
 recursive-include src/narwhal py.typed *.json

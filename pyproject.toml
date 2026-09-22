@@ -76,6 +76,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101"
 # Standalone drivers adjust sys.path and may contain long evidence lines.
 # Harnesses use assertions, fixed seeds, and fake credentials.
 "tools/*.py" = ["E402", "E731", "D", "S"]
+"tests/*.py" = ["D", "E731", "S"]
 
 [tool.mypy]
 python_version = "3.11"
