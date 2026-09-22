@@ -1,5 +1,5 @@
 # Startup writes the deployed router and engine addresses to the gitignored
-# discovery files under runs/observability/targets.
+# discovery files under runs/observability/mounts/prometheus/targets.
 global:
   scrape_interval: 5s
   evaluation_interval: 15s

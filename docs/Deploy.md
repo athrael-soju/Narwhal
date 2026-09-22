@@ -6,10 +6,9 @@ From your management workstation, use the supplied inventory and private access 
 
 | Host | Work performed here | Supplied inputs |
 | --- | --- | --- |
-| Management workstation | Read the guides and inventory, open remote shells, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON, `config/engine-launch.local.json` and verified `config/ssh.known_hosts`. |
-| Router host | Install Narwhal, create the fleet config, profile and check engines, run the router. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets. |
+| Management workstation and initial load client | Read the guides and inventory, open remote shells, send trial traffic through an SSH tunnel, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON, `config/engine-launch.local.json` and verified `config/ssh.known_hosts`. |
+| Router and observability host | Install Narwhal, create the fleet config, profile and check engines, run the router, Prometheus and Grafana. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets; Docker Engine with the Compose plugin for monitoring. |
 | Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
-| Load-client and observability hosts | Generate deployment traffic, scrape metrics and inspect the dashboard. | Ingress route and credentials, workload, scrape targets and dashboard access. |
 
 The management workstation needs Git, Bash, Python 3.11 or newer and the supplied access tooling. Install Python 3.11 or newer with `venv`, Git, Make and curl on the remote hosts that run Narwhal commands. Engine hosts also need the declared accelerator driver, container runtime and transfer devices. The inventory assigns these roles to machines; a management workstation's local hardware describes that machine alone.
 
@@ -733,7 +732,7 @@ curl -fsS http://localhost:8000/v1/completions \
   -d '{"model":"<served-model>","prompt":"Return one sentence about narwhals.","max_tokens":32}'
 ```
 
-Use one concrete router URL for these probes, the Prometheus target and the deployment load client, confirming that the process listens on its selected address family because an IPv4 `127.0.0.1` client reaches a different listener from an IPv6-only `::` socket.
+Record the router listener and each client's route to it. Router-host probes and Prometheus use the router's local address; a workstation load client uses the forwarded address established in step 10. Confirm the listener's address family because an IPv4 `127.0.0.1` client reaches a different listener from an IPv6-only `::` socket.
 
 Before load, retain `/health` with process liveness and cached instance counts, `/ready` with admission state, `/narwhal/state` with every configured engine and the current split, and `/metrics`; then record one successful completion that increments `served`.
 
@@ -741,15 +740,47 @@ Keep the default anonymous listener on a trusted network until ingress supplies 
 
 ## 10. Validate ingress and capacity
 
-Use the deployment's designated load-client and observability hosts from the private inventory for workload and monitoring commands; keep Narwhal preflight on the router host. Close the deployment in this order:
+For the first deployment trial, generate load on the management workstation, run Prometheus and Grafana on the existing router host, and reach the router through the verified SSH management route. The inventory's `router` role supplies the destination and authentication for all three services. Record these role assignments, the workstation hostname and source revision, and the tunnel mapping in the private deployment record. This trial measures the private SSH path, including its network and encryption overhead; service ingress acceptance uses the deployed client route and its authentication, TLS and request limits.
+
+### Start monitoring on the router host
+
+Open the installed router-role shell as described in step 2. Follow [Set up observability](Observability.md#1-select-the-deployment) there, using `config/fleet.local.json` and `http://127.0.0.1:8000` for the listener started in step 9. Run `make observe` and retain its target and dashboard verification output. Prometheus reaches the router directly from that host and resolves engine targets from the fleet document.
+
+### Open the private trial route from the workstation
+
+In a management-checkout terminal with the supplied `.env` loaded as in step 1, run:
+
+```bash
+python3 tools/deploy_hosts.py tunnel --role router \
+  --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
+```
+
+The helper binds workstation loopback ports, verifies the supplied SSH host key, and uses the router host's existing password or SSH-agent/key configuration. Keep that terminal open. In another workstation terminal, probe the forwarded services:
+
+```bash
+export NARWHAL_TRIAL_URL=http://127.0.0.1:18000
+curl -fsS "$NARWHAL_TRIAL_URL/health"
+curl -fsS "$NARWHAL_TRIAL_URL/ready"
+curl -fsSG http://127.0.0.1:19090/api/v1/query \
+  --data-urlencode 'query=up{job=~"narwhal-router|engines"}' \
+  | python3 -m json.tool
+```
+
+Open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` for Grafana. Use `$NARWHAL_TRIAL_URL` as the workload client's base URL. Local port conflicts require a free left-hand port and matching client URL; remote connection failures require checking the service listener from the router shell. `--remote-address` selects a different remote listener address when required; run a separate tunnel command for services bound to different addresses. Preserve the tunnel log under its reported `runs/access-<id>/` path and capture terminal errors in the private deployment record. Ctrl-C closes this tunnel's forwards.
+
+### Measure and retain the trial
+
+Close the trial in this order:
 
 1. Create the deployment identifier and assemble the [deployment evidence set](Measure.md#2-validate-the-deployment-under-load).
-2. Run the default preflight mesh against those processes and retain its output.
-3. Configure Prometheus with the same router URL used by the deployment load client, then verify the router and every engine target.
-4. Configure the [intended ingress](Operate.md#configure-ingress), then run the [deployment workload](Measure.md#2-validate-the-deployment-under-load) through its intended ingress and attach its artifacts to the deployment identifier.
+2. Attach the passing step 8 default preflight mesh for the current processes, fleet, profiles and targets. Repeat preflight when those inputs change.
+3. Retain the monitoring startup output and successful router and engine scrape query from the preceding commands.
+4. Run the [initial synthetic workload](Measure.md#run-the-initial-synthetic-workload) from the workstation through `$NARWHAL_TRIAL_URL`: the guide supplies the workload preparation command and 200-request runs at 0.5 and 1 request/s for 8,192 input and 128 output tokens. Retain the generated workload, request records and summaries. Record the 2-second TTFT, 33.3-ms TPOT and 95% attainment thresholds as candidate targets until measured results and the service requirement establish acceptance. Use client CPU, memory, network and scheduling records alongside throughput to identify saturation of the load generator or SSH path.
 5. Drain resident work, reconcile every offer to its client and router terminal classes, query the dashboard's engine, request, token, role and pool-load series through Grafana's provisioned data source, then run the post-load KV ring.
 
 [Measure a fleet](Measure.md) defines timing boundaries, rate selection and artifact contents; [Set up observability](Observability.md) defines scrape and dashboard checks.
+
+For service ingress acceptance, configure the [intended ingress](Operate.md#configure-ingress), record its client host and URL, and repeat the workload through that route with its authentication and request policy. Retain the private-route trial and service-ingress results as separate runs under the deployment record.
 
 Run the post-load ring from the router host after resident work drains:
 
@@ -775,4 +806,4 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |
-| [Capacity acceptance](#10-validate-ingress-and-capacity) | Client workload, ingress route, SLO target and scrape targets. | SLO, accounting or scrape failure: reconcile client and router records, repair the identified bottleneck or target, then rerun the affected acceptance checks. | Private load-client and observability configuration, deployment evidence store. |
+| [Capacity acceptance](#10-validate-ingress-and-capacity) | Workstation Python load helper, router-host Docker Compose, existing router SSH access, generated synthetic workload, fixed launch/cache policy, candidate latency/attainment targets and selected trial or service ingress. | Tunnel bind failure: choose a free local port. Service or scrape failure: check the router-host listener and target error. Warmup or token-accounting failure: inspect the retained status, stream error and usage counts. Client schedule failure: inspect CPU, memory, network and lag before changing the offered rate. SLO or accounting failure: reconcile client and router records and inspect serving saturation. | Workstation access environment and tunnel logs, router fleet and role environment, Compose discovery files, private `runs/load-trial-<id>/` workload, manifests, per-request records, summaries and state/network snapshots. |
