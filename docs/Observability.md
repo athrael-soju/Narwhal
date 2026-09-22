@@ -8,7 +8,7 @@ The shipped Compose project runs Prometheus and Grafana on the router host. Prom
 - Linux, Docker Engine with the Compose plugin, Python 3.11 or newer, and curl.
 - Network access from the router host to every engine metrics endpoint.
 
-Run the collection commands from the deployed checkout in the [installed router-role shell](Deploy.md#open-installed-shells). The shell loads `.env.router` and activates the installed environment.
+Run the collection commands from the deployed checkout in the [installed router-role shell](Deploy.md#open-installed-shells). The shell loads `runs/deployment/.env.router` and activates the installed environment.
 
 The Compose file pins Prometheus `3.14.0` and Grafana `13.2.1`.
 
@@ -17,7 +17,7 @@ The Compose file pins Prometheus `3.14.0` and Grafana `13.2.1`.
 From the router-role shell:
 
 ```bash
-export NARWHAL_FLEET=config/fleet.local.json
+export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 

@@ -47,7 +47,7 @@ class HostEnvironmentTests(unittest.TestCase):
             self.assertEqual(values["ENGINE_TOKEN"], self.env["ENGINE_TOKEN"])
         router = select_values("router", None, self.fleet, self.env)
         self.assertNotIn("NARWHAL_ENGINE_IMAGE", router)
-        self.assertEqual(router["NARWHAL_FLEET"], "config/fleet.local.json")
+        self.assertEqual(router["NARWHAL_FLEET"], "runs/deployment/fleet.json")
         self.assertEqual(router["NARWHAL_NODE_2_URL"], self.env["NARWHAL_NODE_2_URL"])
         engine = select_values("engine", 1, self.fleet, self.env)
         self.assertNotIn("NARWHAL_NODE_2_URL", engine)

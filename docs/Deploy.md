@@ -71,7 +71,7 @@ Run discovery from the management checkout:
 
 ```bash
 python3 tools/deployment/discover_deployment.py --out runs/discovery/first-deploy
-. runs/discovery/first-deploy/derived.env
+. config/deployment.env
 python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
@@ -113,13 +113,13 @@ It writes the following files with mode `0600`:
 | `config/engine-launch.local.json`         | Combines accelerator allocation, model/image metadata, network devices and launch policy.                                          |
 | `config/engine-launch.sources.json`       | Maps engine roles to the inspection and policy records used to build their launch configuration.                                   |
 | `config/fleet.json`                       | Defines the model, measured hardware and TP shape, engine URL references, opening roles, initial latency targets and profile path. |
-| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths, fabric addresses, engine and attestation URLs, plus per-engine image and hash values used by later preparation.                             |
+| `config/deployment.env`                   | Selects generated configuration paths, fabric addresses, engine and attestation URLs, plus per-engine image and hash values used by later preparation.                             |
 
 Path variables in `.env` may select alternate locations for generated JSON and host-key files.
 
 Discovery also retains per-engine observations, SSH logs and output hashes below the directory supplied with `--out`.
 
-Existing generated JSON blocks discovery before remote inspection. Archive the previous generated configuration with its run, then choose a fresh output directory when rebuilding deployment state.
+Keep the generated `config/` files together when reusing an inspected fleet. Load `.env` and `config/deployment.env`, verify access, and prepare a new deployment run from those inputs. Step 3 checks each host's current hardware, image and model before launch. A change to those inputs requires a fresh discovery; archive the previous generated configuration and choose a fresh output directory before rebuilding it.
 
 ### Launch policy
 
@@ -191,7 +191,7 @@ Record the first host and gate that fail. Sanitised extracts from the private ac
 
 ### Prepare the deployment package
 
-Keep `.env` and the discovery run's `derived.env` loaded in the management shell.
+Keep `.env` and `config/deployment.env` loaded in the management shell.
 
 Create a new prepared deployment:
 
@@ -233,7 +233,7 @@ The mode-0600 manifest records:
 - approved source revision;
 - role-to-host mapping;
 - all relevant input hashes;
-- a unique remote directory below `~/Narwhal-deploy/`.
+- a unique remote installation directory below `~/Narwhal-deploy/`.
 
 Add the manifest path to the private deployment record.
 
@@ -360,7 +360,7 @@ For ROCm, count only agents with `Device Type` equal to `GPU` and take the produ
 
 A missing inspection utility, driver failure or empty device enumeration blocks engine launch. Repair the host's driver tooling, permissions or device exposure first.
 
-On the router host, compare observations with `hardware.accelerator` in `config/fleet.local.json`.
+On the router host, compare observations with `hardware.accelerator` in `runs/deployment/fleet.json`.
 
 For each replica:
 
@@ -372,7 +372,7 @@ The host's physical device count describes available hardware. Replica allocatio
 
 The role environment already contains image, model and run paths, model-config hash, fabric interface, service ports, engine URL, attestation URL and peer fabric addresses produced from `.env` plus discovery.
 
-The launch record contains selected devices and runtime policy. The router's `config/fleet.local.json` contains the full engine inventory.
+The launch record contains selected devices and runtime policy. The router's `runs/deployment/fleet.json` contains the full engine inventory.
 
 Where later commands show angle-bracket arguments, use these generated values.
 
@@ -425,7 +425,7 @@ Later gates use this evidence as follows:
 
 ### Group equivalent cache configurations
 
-From the management shell with `derived.env` loaded:
+From the management shell with `config/deployment.env` loaded:
 
 ```bash
 python3 - <<'PY_CACHE_GROUPS'
@@ -1049,7 +1049,7 @@ Stop temporary test servers before leaving this stage.
 
 Finish host qualification and the directed fabric matrix before expanding beyond the running cache representatives.
 
-On the router, edit the transferred `config/fleet.local.json` with:
+On the router, edit the transferred `runs/deployment/fleet.json` with:
 
 - model;
 - engine IDs;
@@ -1373,8 +1373,7 @@ Generate the role-specific private document from the checked plan, live cache ca
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py generate \
   --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
-export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["role"])' "$ENGINE_RUN/launch.json")"
-export ATTEST_DOCUMENT="runs/engine-attestation.${ENGINE_ROLE}.json"
+export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
 Before starting the sidecar, reconfirm:
@@ -1404,7 +1403,7 @@ export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv
 export ATTEST_URL_VAR="NARWHAL_NODE_${ENGINE_ROLE#engine-}_ATTESTATION_URL"
 export ATTEST_BASE="${!ATTEST_URL_VAR}"
 export ATTEST_BASE="${ATTEST_BASE%/v1/attestation}"
-export ATTEST_DOCUMENT="runs/engine-attestation.${ENGINE_ROLE}.json"
+export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 umask 077
 export ATTEST_RUN="$(mktemp -d "$ENGINE_RUN/attestation-check-XXXXXX")"
 .venv/bin/python - <<'PY_ATTEST_CHECK'
@@ -1446,10 +1445,10 @@ PY_ATTEST_CHECK
 
 Run this check for every engine and store its capture directory in the deployment record.
 
-After all sidecars pass, run this once in the router role shell. It reads each live engine and sidecar, verifies the process identity and complete contract, requires the same contract across the fleet, retains the initial generated fleet under `runs/`, and fills `engine_contract` in `config/fleet.local.json`:
+After all sidecars pass, run this once in the router role shell. It reads each live engine and sidecar, verifies the process identity and complete contract, requires the same contract across the fleet, retains the initial generated fleet under `runs/`, and fills `engine_contract` in `runs/deployment/fleet.json`:
 
 ```bash
-.venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet config/fleet.local.json
+.venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
 ```
 
 A differing contract identifies a specific engine launch or capture input to correct before profiling. Restart the affected engine and its sidecar from a checked plan, then rerun finalisation.
@@ -1466,7 +1465,7 @@ From the router host:
 
 ```bash
 .venv/bin/narwhal-profile \
-  --fleet config/fleet.local.json \
+  --fleet runs/deployment/fleet.json \
   --decode-input-lens 512,4096,8192 \
   --decode-concurrency 1,4,16,48
 ```
@@ -1503,7 +1502,7 @@ Keep the TPOT target above the measured per-token floor.
 From the router host:
 
 ```bash
-.venv/bin/narwhal-check --fleet config/fleet.local.json
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
 Use the same processes, fleet configuration and profiles from step 7.
@@ -1536,7 +1535,7 @@ On the router host:
 
 ```bash
 .venv/bin/narwhal-serve \
-  --fleet config/fleet.local.json \
+  --fleet runs/deployment/fleet.json \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -1600,7 +1599,7 @@ Open the installed router-role shell.
 
 Follow [Set up observability](Observability.md#1-select-the-deployment) using:
 
-- `config/fleet.local.json`;
+- `runs/deployment/fleet.json`;
 - router URL `http://127.0.0.1:8000`.
 
 Run:
@@ -1676,7 +1675,7 @@ Close the initial deployment trial in this order:
 After resident work drains, run:
 
 ```bash
-.venv/bin/narwhal-check --fleet config/fleet.local.json --ring
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
 ```
 
 The deployment trial is complete when all of the following hold:
@@ -1700,7 +1699,7 @@ When sharing deployment evidence outside the private environment, replace privat
 | [Engine inspection](#3-inspect-each-engine-host)                  | PCI accelerator identity, visible device count, replica allocation, TP size, image identity, model hash, paths and ports.                                                            | Restore missing devices or artifacts and resolve listener ownership before launch.                                                                                                                                                                                                                                                                            | Engine `.env.engine-<n>`, `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                        |
 | [Fabric qualification](#4-qualify-the-transfer-fabric)            | Peer addresses, TCP or RDMA transport, checked serving representative, captured cache pages, prompt length, handoff rate, burst allowance and transfer-time budget.                            | For serving capture errors, inspect the recorded container and startup log to isolate model, device, runtime or cache-spec input. For network failures, inspect route, source binding, listener, firewall, HCA and GID selection. For insufficient bandwidth, inspect link state, MTU, retransmissions or RDMA counters, CPU use and concurrent traffic before collecting another sample.           | Role environment, engine launch record, model config, delivered helper and digest, serving `ENGINE_RUN`, cache layout, container ID and log, budget, directed samples, link fingerprints, comparisons and edge matrix.                             |
 | [Engine launch](#5-configure-the-fleet-and-launch-engines)        | Qualified host and fabric state, immutable image, package pins, model flags, library environment, cache shape, TP allocation and selected devices.                                   | Package, tokenizer, connector or convolutional-layout mismatches fail the image check before model loading. For process or HTTP failure, inspect the exact recorded container and logs before creating a corrected plan.                                                                                                                                                                                              | Router fleet config, engine role environment, launch record, launcher snapshot, `runs/engine-launch-*/`, container environment, image-check output, container ID and HTTP captures.                                           |
-| [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | Capture dimensions through the live container when an earlier record lacks the architecture. For a hash, image, container or getter mismatch, inspect the pinned source and prepare a checked plan when that source changes. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-attestation.<engine-role>.json`; router `config/fleet.local.json` and `runs/fleet.before-attestation-*.json`. |
+| [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | Capture dimensions through the live container when an earlier record lacks the architecture. For a hash, image, container or getter mismatch, inspect the pinned source and prepare a checked plan when that source changes. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-launch-*/engine-attestation.json`; router `runs/deployment/fleet.json` and `runs/fleet.before-attestation-*.json`. |
 | [Profiling](#7-profile-idle-engines)                              | Idle engine reservation, cache policy, workload input lengths and concurrency.                                                                                                       | Inspect the failing engine, measured range and sample output. Correct the cause and write the next sweep to a fresh profile path.                                                                                                                                                                                                                             | Router fleet configuration and profile/sample files under `runs/`.                                                                                                                                                            |
 | [Preflight](#8-run-preflight-against-the-engine-and-kv-contract)  | Current engine processes, profile set and SLO targets.                                                                                                                               | Use the reported engine, leg and budget to select the matching check in [fleet troubleshooting](Troubleshoot.md).                                                                                                                                                                                                                                             | Router environment, fleet configuration and private preflight output.                                                                                                                                                         |
 | [Router verification](#9-start-the-router-and-verify-one-request) | Router bind address, served model, engine count and initial pool split.                                                                                                              | For bind or readiness failure, inspect listener ownership, address family and the corresponding router or engine error.                                                                                                                                                                                                                                       | Router environment, fleet configuration and endpoint captures.                                                                                                                                                                |

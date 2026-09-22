@@ -103,10 +103,11 @@ class DiscoveryTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, out)
-            for line in (out / "derived.env").read_text().splitlines():
+            for line in (root / "config/deployment.env").read_text().splitlines():
                 name, quoted = line.removeprefix("export ").split("=", 1)
                 env[name] = shlex.split(quoted)[0]
             self.assertEqual(env["NARWHAL_NODE_1_IP"], "10.0.0.1")
+            self.assertFalse((out / "derived.env").exists())
             self.assertEqual(env["NARWHAL_NODE_2_IP"], "10.0.0.2")
             self.assertEqual(env["NARWHAL_NODE_1_URL"], "http://10.0.0.1:8000")
             self.assertEqual(
@@ -132,7 +133,7 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertIn("--tensor-parallel-size", plan["args"])
                 self.assertEqual(records[role]["tensor_parallel_size"], 8)
                 self.assertTrue((run / f"node-{node}/.env.{role}").exists())
-            for file in [*(root / "config").iterdir(), out / "derived.env"]:
+            for file in (root / "config").iterdir():
                 self.assertEqual(file.stat().st_mode & 0o777, 0o600)
                 self.assertNotIn("private-test-password", file.read_text())
             old = Path(env["NARWHAL_FLEET"]).read_bytes()

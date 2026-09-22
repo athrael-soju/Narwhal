@@ -421,7 +421,7 @@ def generate(run: Path, startup_log: Path) -> Path:
     role = read_json(run / "launch.json")["role"]
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
-    destination = Path("runs") / f"engine-attestation.{role}.json"
+    destination = run / "engine-attestation.json"
     temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
     try:
         write_private(temporary, record)
@@ -439,7 +439,7 @@ def serve(run: Path) -> int:
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
     node = role.split("-")[1]
-    destination = Path("runs") / f"engine-attestation.{role}.json"
+    destination = run / "engine-attestation.json"
     AttestationDocument.load(destination)
     if read_json(destination) != engine_document(run, run / "startup.log"):
         raise ValueError("Attestation document differs from current serving evidence")

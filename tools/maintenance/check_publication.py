@@ -21,6 +21,7 @@ def private_path(name: str) -> bool:
         or path.name == "engine.env"
         or name == "config/fleet.json"
         or name == "config/ssh.known_hosts"
+        or name == "config/deployment.env"
         or name.startswith(("runs/", "profiles/"))
         or (
             name.startswith("config/engine-launch.")

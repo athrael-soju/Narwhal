@@ -40,7 +40,7 @@ Fleet JSON owns model names, hardware, profiles, and SLOs. Engine launch credent
 
 [Deployment discovery](Deploy.md#discover-the-deployed-hosts) derives the host inventory, SSH trust store, fleet, launch records, and source index from the supplied `.env` plus remote inspection. [Launch policy](Deploy.md#launch-policy) defines defaults and environment overrides.
 
-Keep every generated file with the discovery record that produced it. Each deployment run gets its own set.
+Keep `config/hosts.local.json`, `config/ssh.known_hosts`, `config/engine-launch.local.json`, `config/engine-launch.sources.json`, `config/fleet.json` and `config/deployment.env` together as private inputs for the inspected fleet. Discovery observations and command logs remain under `runs/discovery/<run>/`. Reuse the saved inputs after loading `.env` and `config/deployment.env`; [engine inspection](Deploy.md#3-inspect-each-engine-host) checks their current host, image and model assumptions before launch.
 
 ### Host environment files
 
@@ -60,13 +60,13 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 
 | Remote file                                              | Exported values                                                                                                                                                          | Workstation source                                                                                                                                                                                                          |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.env.router`                                            | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                    |
-| `.env.engine-<n>`                                        | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, derived node service URLs and fabric addresses, and the configured engine API credential. |
+| `runs/deployment/.env.router`                           | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                    |
+| `runs/deployment/.env.engine-<n>`                       | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, configured engine API credential.                                                       | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, derived node service URLs and fabric addresses, and the configured engine API credential. |
 | `config/engine-launch.engine-<n>.json`                   | Selected GPU allocation, TP size, device mappings, resolved UCX selection, generated launch arguments.                                                                   | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                     |
 | `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, with its path and SHA-256 recorded in the engine role environment.                                                                         | `tools/deployment/launch_engine.py` from the management checkout at preparation time.                                                                                                                                                  |
 | `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with path and SHA-256 recorded in `.env.engine-<n>`.                                                                                     | `tools/deployment/fabric_budget.py` from the management checkout at preparation time.                                                                                                                                                  |
 | `runs/deployment-tools/cache_capture_hook.py` on engine hosts | Serving cache capture snapshot, with path and SHA-256 recorded in `.env.engine-<n>`. | `tools/deployment/cache_capture_hook.py` from the management checkout at preparation time. |
-| `config/fleet.local.json` on the router                  | Generated fleet document copied before deployment edits.                                                                                                                 | File selected by workstation `NARWHAL_FLEET`.                                                                                                                                                                               |
+| `runs/deployment/fleet.json` on the router                  | Generated fleet document copied before deployment edits.                                                                                                                 | File selected by workstation `NARWHAL_FLEET`.                                                                                                                                                                               |
 
 Engine export requires:
 
@@ -105,7 +105,7 @@ An empty override for a required field is reported as an error against that fiel
 
 Keep management destinations, passwords, SSH identities, and host keys in the workstation's private access files.
 
-Generated workstation files live under ignored `runs/deployment-env/`. Remote Git ignores `.env.router`, `.env.engine-<n>`, and `config/fleet.local.json`.
+Prepared workstation files live under ignored `runs/deployment-env/`. Remote role environments and the effective fleet live under ignored `runs/deployment/`.
 
 Load a role environment with:
 
@@ -345,7 +345,7 @@ Use the ports actually configured by the engine deployment.
 
 Engine `url` and `attestation_url` accept environment references only when the entire JSON value is `${VARIABLE}`.
 
-For the generated deployment, supply `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT` and `NARWHAL_ATTEST_PORT` in `.env`. Discovery reads the selected interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `derived.env`. It builds the engine and attestation URLs from that address, with IPv6 host brackets where required. Set `NARWHAL_NODE_<n>_IP` when the interface has multiple global addresses, or set either full URL when its service uses a different reachable address. A port change also needs the matching per-node port override.
+For the generated deployment, supply `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT` and `NARWHAL_ATTEST_PORT` in `.env`. Discovery reads the selected interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `config/deployment.env`. It builds the engine and attestation URLs from that address, with IPv6 host brackets where required. Set `NARWHAL_NODE_<n>_IP` when the interface has multiple global addresses, or set either full URL when its service uses a different reachable address. A port change also needs the matching per-node port override.
 
 The generated fleet record refers to those derived values:
 
@@ -463,7 +463,7 @@ Verify the running shape through process-bound attestation, profiles, transfer t
 
 ### Attestation document
 
-The [attestation generator](Deploy.md#6-attest-each-engine-process) writes `runs/engine-attestation.<engine-role>.json` on each engine host from its checked serving plan, runtime inspections, live cache capture and startup log. The router finalisation command reads the live sidecars, requires matching complete contracts and fills `engine_contract` in `config/fleet.local.json`.
+The [attestation generator](Deploy.md#6-attest-each-engine-process) writes `runs/engine-launch-*/engine-attestation.json` on each engine host from its checked serving plan, runtime inspections, live cache capture and startup log. The router finalisation command reads the live sidecars, requires matching complete contracts and fills `engine_contract` in `runs/deployment/fleet.json`.
 
 [`config/engine-attestation.example.json`](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) describes the document shape for development and schema review.
 

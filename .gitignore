@@ -10,6 +10,7 @@ config/*.known_hosts
 config/engine-launch.*.json
 !config/engine-launch.example.json
 config/hosts.*.json
+config/deployment.env
 !config/hosts.example.json
 !config/fleet.example.json
 !config/fleet.stub.json

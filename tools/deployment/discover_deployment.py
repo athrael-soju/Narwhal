@@ -437,7 +437,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     )
 
 
-def discover(env: dict[str, str], out: Path) -> None:
+def discover(env: dict[str, str], out: Path) -> Path:
     hosts = derive_hosts(env)
     paths = {
         name: Path(env.get(name, default))
@@ -449,8 +449,12 @@ def discover(env: dict[str, str], out: Path) -> None:
         )
     }
     source_path = paths["NARWHAL_LAUNCH_CONFIG"].with_name("engine-launch.sources.json")
-    outputs = [paths[n] for n in paths if n != "NARWHAL_SSH_KNOWN_HOSTS"] + [source_path]
-    if len({p.resolve() for p in [*outputs, paths["NARWHAL_SSH_KNOWN_HOSTS"]]}) != 5:
+    derived_path = paths["NARWHAL_FLEET"].with_name("deployment.env")
+    outputs = [paths[n] for n in paths if n != "NARWHAL_SSH_KNOWN_HOSTS"] + [
+        source_path,
+        derived_path,
+    ]
+    if len({p.resolve() for p in [*outputs, paths["NARWHAL_SSH_KNOWN_HOSTS"]]}) != 6:
         raise ValueError("Select distinct private configuration output paths")
     if out.exists() or any(p.exists() for p in outputs):
         raise ValueError(
@@ -522,12 +526,13 @@ def discover(env: dict[str, str], out: Path) -> None:
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         write_private(path, (json.dumps(document, indent=2) + "\n").encode())
-    write_environment(out / "derived.env", derived)
+    write_environment(derived_path, derived)
     manifest = {
         "files": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [*outputs, trust]},
         "roles": list(launches["engines"]),
     }
     write_private(out / "manifest.json", json.dumps(manifest, indent=2).encode())
+    return derived_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -535,12 +540,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        discover(dict(os.environ), args.out)
+        derived_path = discover(dict(os.environ), args.out)
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         if type(error) is ValueError:
             parser.exit(1, f"{error}\n")
         parser.exit(1, "Discovery failed; inspect its private logs and the named .env fields.\n")
-    print(f"Generated private configuration. Load {args.out / 'derived.env'} before preparation.")
+    print(f"Generated private configuration. Load {derived_path} before preparation.")
     return 0
 
 

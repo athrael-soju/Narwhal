@@ -52,7 +52,7 @@ def select_values(
             values["NARWHAL_ENGINE_API_KEY"] = values[key_name]
 
     if role == "router":
-        values["NARWHAL_FLEET"] = "config/fleet.local.json"
+        values["NARWHAL_FLEET"] = "runs/deployment/fleet.json"
         for field in ROUTER_OPTIONAL:
             include(f"NARWHAL_{field}", required=False)
         for engine in fleet["engines"]:

@@ -187,12 +187,22 @@ def install_script(host: Host, manifest: dict) -> str:
     copies = []
     for name in role_files(host):
         target = f"config/{name}" if name.endswith(".json") else name
+        if name.startswith(".env."):
+            target = f"runs/deployment/{name}"
+        elif name == "fleet.local.json":
+            target = "runs/deployment/fleet.json"
         if name in ("fabric_budget.py", "launch_engine.py", "cache_capture_hook.py"):
             target = f"runs/deployment-tools/{name}"
-        copies.append(
-            f"if test -e {target}; then cmp ../{name} {target}; "
-            f"else install -m 600 ../{name} {target}; fi"
-        )
+        if name == "fleet.local.json":
+            copies.append(
+                f"if test -e {target}; then test -f {target} && test ! -L {target}; "
+                f"else install -m 600 ../{name} {target}; fi"
+            )
+        else:
+            copies.append(
+                f"if test -e {target}; then cmp ../{name} {target}; "
+                f"else install -m 600 ../{name} {target}; fi"
+            )
     return f"""set -eu
 umask 077
 cd {root}
@@ -204,7 +214,7 @@ if test ! -d checkout; then git clone --branch deployment source.bundle checkout
   test "$(git rev-parse HEAD)" = {revision}
   git diff --quiet
   git diff --cached --quiet
-  mkdir -p runs/deployment-tools
+  mkdir -p runs/deployment runs/deployment-tools
   {chr(10).join(copies)}
   if test -e ../installed; then
     test "$(cat ../installed)" = {revision}
@@ -326,7 +336,8 @@ def main(argv: list[str] | None = None) -> int:
                 script = "exec bash -l"
                 if manifest:
                     inner = (
-                        f"set +x; . ./.env.{args.role} && . ./.venv/bin/activate && "
+                        f"set +x; . ./runs/deployment/.env.{args.role} && "
+                        ". ./.venv/bin/activate && "
                         "exec bash --noprofile --norc -i"
                     )
                     script = (

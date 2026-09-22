@@ -352,7 +352,8 @@ class AttestationContractTests(unittest.TestCase):
                 os.chdir(folder)
                 try:
                     output = generate(run, log)
-                    self.assertEqual(output.name, "engine-attestation.engine-1.json")
+                    self.assertEqual(output, run / "engine-attestation.json")
+                    self.assertFalse((Path("runs") / "engine-attestation.engine-1.json").exists())
                     self.assertEqual(output.stat().st_mode & 0o777, 0o600)
                     self.assertEqual(
                         AttestationDocument.load(output).contract.fields(), document["contract"]
@@ -393,9 +394,9 @@ class AttestationContractTests(unittest.TestCase):
                     args = start.call_args.args[0]
                     self.assertEqual(args[args.index("--host") + 1], "192.0.2.11")
                     self.assertEqual(args[args.index("--port") + 1], "8010")
-                    record = json.loads(Path("runs/engine-attestation.engine-1.json").read_text())
+                    record = json.loads((run / "engine-attestation.json").read_text())
                     record["contract"]["head_size"] = 32
-                    save(Path("runs/engine-attestation.engine-1.json"), record)
+                    save(run / "engine-attestation.json", record)
                     with self.assertRaisesRegex(
                         ValueError, "differs from current serving evidence"
                     ):

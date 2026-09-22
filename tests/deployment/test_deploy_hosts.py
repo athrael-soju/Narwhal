@@ -147,15 +147,24 @@ class HostDeploymentTests(unittest.TestCase):
                     (root / host.id / "installs").read_text().splitlines(), ["install"]
                 )
             checkout = root / "node-1" / manifest["remote_dir"] / "checkout"
-            self.assertTrue((checkout / ".env.router").is_file())
-            self.assertTrue((checkout / ".env.engine-1").is_file())
+            self.assertTrue((checkout / "runs/deployment/.env.router").is_file())
+            self.assertTrue((checkout / "runs/deployment/.env.engine-1").is_file())
+            effective_fleet = checkout / "runs/deployment/fleet.json"
+            self.assertTrue(effective_fleet.is_file())
             record = json.loads((checkout / "config/engine-launch.engine-1.json").read_text())
             self.assertEqual(record["tensor_parallel_size"], 2)
-            self.assertIn("NARWHAL_ENGINE_LAUNCH_CONFIG", (checkout / ".env.engine-1").read_text())
-            for path in checkout.glob(".env.*"):
-                if path.name != ".env.example":
-                    self.assertNotIn("synthetic-management-secret", path.read_text())
-                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            engine_env = checkout / "runs/deployment/.env.engine-1"
+            self.assertIn("NARWHAL_ENGINE_LAUNCH_CONFIG", engine_env.read_text())
+            for path in (checkout / "runs/deployment").glob(".env.*"):
+                self.assertNotIn("synthetic-management-secret", path.read_text())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((checkout / ".env.router").exists())
+            self.assertFalse((checkout / "config/fleet.local.json").exists())
+            edited = json.loads(effective_fleet.read_text())
+            edited["engine_contract"] = {"example": "live-run-value"}
+            effective_fleet.write_text(json.dumps(edited))
+            install(self.hosts, manifest, run, transport)
+            self.assertEqual(json.loads(effective_fleet.read_text()), edited)
             existing = root / "node-1" / manifest["remote_dir"] / ".env.router"
             existing.write_text("existing operator configuration")
             calls = len(transport.calls)
@@ -185,7 +194,7 @@ class HostDeploymentTests(unittest.TestCase):
                     "bash",
                     "-c",
                     """set -eu
-. ./.env.engine-1
+. ./runs/deployment/.env.engine-1
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" --help
 test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256"
@@ -245,6 +254,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
 
     def test_private_host_inventory_is_excluded_from_publication(self):
         self.assertTrue(private_path("config/ssh.known_hosts"))
+        self.assertTrue(private_path("config/deployment.env"))
         self.assertTrue(private_path("config/hosts.local.json"))
         self.assertFalse(private_path("config/hosts.example.json"))
         self.assertTrue(private_path("config/engine-launch.local.json"))
