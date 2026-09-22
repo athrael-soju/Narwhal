@@ -4,17 +4,17 @@ From your management workstation, derive the deployment configuration from your 
 
 ## Hosts and inputs
 
-| Host | Work performed here | Inputs |
-| --- | --- | --- |
+| Host                                           | Work performed here                                                                                                       | Inputs                                                                                                                                                                                                                 |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Management workstation and initial load client | Create private configuration, open remote shells, send trial traffic through an SSH tunnel, retain the deployment record. | A private `.env` containing management destinations and credentials, the approved source revision, model/image selection, paths, fabric interface and service endpoints. Step 1 derives the other configuration files. |
-| Router and observability host | Install Narwhal, create the fleet config, profile and check engines, run the router, Prometheus and Grafana. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets; Docker Engine with the Compose plugin for monitoring. |
-| Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
+| Router and observability host                  | Install Narwhal, create the fleet config, profile and check engines, run the router, Prometheus and Grafana.              | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets; Docker Engine with the Compose plugin for monitoring.                                                         |
+| Engine hosts                                   | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars.                                   | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports.                                                                                                            |
 
 The management workstation needs Git, Bash, Python 3.11 or newer and the supplied access tooling. Install Python 3.11 or newer with `venv`, Git, Make and curl on the remote hosts that run Narwhal commands. Engine hosts also need the declared accelerator driver, container runtime and transfer devices. The inventory assigns these roles to machines; a management workstation's local hardware describes that machine alone.
 
 Narwhal serves one model and compatible KV layout across engines running vLLM with NIXL and effective `kv_both` behaviour. Every eligible producer must transfer KV to every eligible consumer, and one active controller owns the fleet.
 
-Run independent host work concurrently. After installation, open one role shell per physical engine host and perform step 3 and the step 4 cache probe in parallel; roles sharing a host or GPU allocation run serially. Wait for every cache layout before qualifying the fabric, measure one directed fabric edge at a time, then validate the first engine's shared launch path before launching and attesting the remaining engines concurrently. Fleet-wide gates advance after every participating host has produced its required evidence.
+Run independent host work concurrently. After installation, open one role shell per physical engine host and perform step 3 in parallel. Step 4 sizes one representative engine for each matching cache configuration, then measures one directed fabric edge at a time. Validate the first engine's shared launch path before launching and attesting the remaining engines concurrently.
 
 Create a private deployment record before the first command. At each gate, record the host, full source revision, starting state, commands actually run, exit status and artifact locations. Report the first blocked gate before recovery; after reporting, clean only the processes and files created by that test. The [gate reference](#deployment-gates-and-recovery) maps each step to its inputs and recovery.
 
@@ -48,14 +48,14 @@ Discovery records each host's SSH key on the first connection through the privat
 
 For each engine, discovery reads the GPU product and device mappings, model configuration/hash, selected network interface, and immutable image identity. A temporary container reads package metadata from the image and exits. It derives the model dtype and image runtime environment, then writes these mode-0600 files:
 
-| Generated file | Source and use |
-| --- | --- |
-| `config/hosts.local.json` | Groups the `.env` management destinations and assigns the router and numbered engine roles. |
-| `config/ssh.known_hosts` | Records server public keys during authenticated management access. |
-| `config/engine-launch.local.json` | Combines inspected GPU allocation, model/image metadata and network devices with the launch policy below. |
-| `config/engine-launch.sources.json` | Points each engine role to its retained inspection and policy source. |
-| `config/fleet.json` | Creates the model, measured hardware/TP shape, engine URL references, opening roles, initial latency targets and profile output path. |
-| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths and per-engine image/hash values for subsequent preparation. |
+| Generated file                            | Source and use                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `config/hosts.local.json`                 | Groups the `.env` management destinations and assigns the router and numbered engine roles.                                           |
+| `config/ssh.known_hosts`                  | Records server public keys during authenticated management access.                                                                    |
+| `config/engine-launch.local.json`         | Combines inspected GPU allocation, model/image metadata and network devices with the launch policy below.                             |
+| `config/engine-launch.sources.json`       | Points each engine role to its retained inspection and policy source.                                                                 |
+| `config/fleet.json`                       | Creates the model, measured hardware/TP shape, engine URL references, opening roles, initial latency targets and profile output path. |
+| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths and per-engine image/hash values for subsequent preparation.                                    |
 
 The corresponding path variables in `.env` select different JSON or host-key destinations. Discovery retains per-engine observations, SSH logs and output hashes under its `--out` directory. Existing generated JSON files stop discovery before remote inspection; archive them with their run and select a fresh output directory when recreating configuration.
 
@@ -65,14 +65,14 @@ For one engine role on a GPU host, discovery allocates every detected GPU and se
 
 The initial launch uses TCP on `NARWHAL_FABRIC_INTERFACE`, the model's dtype (bfloat16 when the config omits it), automatic KV dtype, 128-token requested blocks, an eager runtime, up to 16,384 context tokens (bounded by the model config), eight sequences and 0.9 GPU memory utilisation. The cache probe in step 4 captures the runtime's resolved layout. Image environment defaults carry into the launch record. These initial settings can be changed through `.env` before discovery:
 
-| Environment field | Override |
-| --- | --- |
-| `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE` | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size. |
-| `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE` | Model dtype and requested cache block size. |
-| `NARWHAL_ENGINE_ARGS` | JSON array replacing the initial serving arguments; [Runtime launch records](Configuration.md#runtime-launch-records) lists their meaning. |
-| `NARWHAL_ENGINE_ENV` | JSON object overriding image runtime environment fields supported by the launcher. |
-| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | `ucx_rdma`, HCA:port selection, and a JSON list of RDMA device paths when selecting RDMA. |
-| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S` | Initial candidate latency limits in seconds; defaults are 10 and 0.125 until step 7 calibrates them. |
+| Environment field                                                                        | Override                                                                                                                                   |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size.                                                                      |
+| `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype and requested cache block size.                                                                                                |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array replacing the initial serving arguments; [Runtime launch records](Configuration.md#runtime-launch-records) lists their meaning. |
+| `NARWHAL_ENGINE_ENV`                                                                     | JSON object overriding image runtime environment fields supported by the launcher.                                                         |
+| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | `ucx_rdma`, HCA:port selection, and a JSON list of RDMA device paths when selecting RDMA.                                                  |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial candidate latency limits in seconds; defaults are 10 and 0.125 until step 7 calibrates them.                                       |
 
 Engine policy fields accept `NARWHAL_NODE_<n>_<field>` overrides in the same form as the existing per-host environment fields. Put any required model-specific serving flags in `NARWHAL_ENGINE_ARGS`; the pinned image check, cache sizing and completion gates validate the resulting command. Runtime discovery outputs remain reproducible from `.env` and the selected hosts/image. Example JSON files document their schemas.
 
@@ -224,11 +224,45 @@ For ROCm, `/dev/kfd` and the selected DRI devices provide container GPU access; 
 
 ## 4. Prepare the transfer fabric
 
-Run this step in the installed engine-role shells after every host passes step 3. Open one shell per physical engine host and collect the pinned runtime's cache page sizes concurrently; each sizing process uses that host's assigned GPUs, captures the cache allocation specs and exits before serving or peer transfer. Serialize roles whose GPU allocations overlap. Wait for every `cache-layout.json`, then qualify one directed host link at a time for the declared handoff workload so another test does not consume the measured source, destination or fabric capacity. Step 8 exercises NIXL handoffs between running engines, and step 10 measures shared-link contention under concurrent deployment traffic.
+After every host passes step 3, group engine roles by the cache inputs observed during discovery. Size one representative per group; representatives on distinct hosts can run concurrently. Each sizing process loads the model on its assigned GPUs, captures the cache allocation specs and exits. Measure one directed host link at a time after the group budgets are calculated so another test does not consume the measured source, destination or fabric capacity. Step 6 compares every running engine's resolved cache layout with its representative, step 8 exercises NIXL handoffs, and step 10 measures shared-link contention under deployment traffic.
+
+### Select cache representatives
+
+In the management shell with discovery's `derived.env` loaded, group roles by immutable image ID, model-config hash, GPU product, TP size, runtime package versions, cache policy, model arguments, image environment and transfer transport. The command reads the generated launch records and their retained host inspections and prints a short signature and the roles it covers; retain its output with the private deployment record:
+
+```bash
+python3 - <<'PY_CACHE_GROUPS'
+import hashlib
+import json
+import os
+from collections import defaultdict
+from pathlib import Path
+
+launches = json.loads(Path(os.environ["NARWHAL_LAUNCH_CONFIG"]).read_text())["engines"]
+groups = defaultdict(list)
+for role, launch in sorted(launches.items()):
+    observed = json.loads(Path(launch["sources"]["runtime"]).read_text())
+    inputs = {
+        "image_id": observed["image_id"],
+        "model_config_sha256": observed["model_sha256"],
+        "accelerator": launch["accelerator"],
+        "tensor_parallel_size": launch["tensor_parallel_size"],
+        "gpu_visibility_env": launch["gpu_visibility_env"],
+        "runtime": launch["runtime"],
+        "transport": launch["transfer"]["transport"],
+    }
+    signature = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()[:16]
+    groups[signature].append(role)
+for signature, roles in sorted(groups.items()):
+    print(f"{signature}: representative={roles[0]}; roles={','.join(roles)}")
+PY_CACHE_GROUPS
+```
+
+Equal signatures identify roles that use the same inputs to vLLM cache planning; GPU indices, network addresses and device paths can differ while the recorded accelerator product and TP shape match. A distinct signature needs its own sizing probe and budget. Preserve the signature, representative role and group membership with the fabric evidence. Startup validation in step 6 checks the resolved layout on every role, including those sized through a representative.
 
 ### Capture the runtime cache layout
 
-Step 2 supplies the launcher and budget calculator as hashed snapshots beside the approved application bundle. In each engine-role shell, verify both helpers and prepare a private sizing plan from that host's launch record:
+Step 2 supplies the launcher and budget calculator as hashed snapshots beside the approved application bundle. In each representative engine-role shell, verify both helpers and prepare a private sizing plan from that host's launch record:
 
 ```bash
 umask 077
@@ -262,7 +296,55 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
 
 For each layer on each TP rank, the helper counts `ceil(prompt_tokens / block_tokens) + extra_blocks` padded pages, then sums their bytes across the replica. Full attention and MLA use the full prompt's pages; Mamba includes a boundary state and speculative/checkpoint slots; windowed attention includes a boundary page. This bounds a handoff by the complete padded cache for that prompt, including state pages that a connector may transfer more selectively. vLLM's [cache specs](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_interface.py) and [cache grouping](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/core/kv_cache_utils.py) supply the page geometry. The calculation uses those runtime sizes, including adjustments to the requested block size and Mamba padding.
 
-The rate is `8 * payload_bytes * max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`. The command prints decimal Gbit/s and writes a mode-0600 budget with the workload, payload bound, source hashes and image identity. Record `FABRIC_RUN` and `CACHE_RUN` in the private deployment record. Each source engine's budget applies to its outgoing edges; retain the declared workload for the later transfer and capacity gates.
+The rate is `8 * payload_bytes * max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) * headroom / 1e9`. The command prints decimal Gbit/s and writes a mode-0600 budget with the workload, payload bound, source hashes and image identity. Read the budget and confirm that all TP ranks resolved one layout name in the representative shell:
+
+```bash
+python3 - <<'PY_REPRESENTATIVE_BUDGET'
+import json
+import os
+from pathlib import Path
+
+run = Path(os.environ["FABRIC_RUN"])
+budget = json.loads((run / "budget.json").read_text())
+layout = json.loads((Path(os.environ["CACHE_RUN"]) / "cache-layout.json").read_text())
+names = {rank["kv_cache_layout"] for rank in layout["ranks"]}
+if len(names) != 1:
+    raise SystemExit("Inspect the differing TP cache layouts before using one group budget.")
+print(f"required_gbps={budget['required_gbps']}; kv_cache_layout={names.pop()}")
+PY_REPRESENTATIVE_BUDGET
+sha256sum "$FABRIC_RUN/budget.json"
+```
+
+Record each representative's `FABRIC_RUN`, `CACHE_RUN`, budget hash, required Gbit/s, resolved layout and cache-group signature in the private deployment record. The representative budget applies to outgoing edges from every matching role; retain the declared workload for the later transfer and capacity gates. If every host already has a completed cache probe and budget, retain those files and use each source's own budget during the matrix.
+
+For a source role using a representative's budget from another host, put the required Gbit/s and representative budget hash from the private record into that source's role shell, then write a private comparison file under its `FABRIC_RUN`:
+
+```bash
+umask 077
+mkdir -p runs
+export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
+export REQUIRED_GBPS='<required_gbps from representative budget.json>'
+export REPRESENTATIVE_BUDGET_SHA256='<SHA-256 of representative budget.json>'
+python3 - <<'PY_EDGE_BUDGET'
+import json
+import os
+from pathlib import Path
+
+required = float(os.environ["REQUIRED_GBPS"])
+if not 0 < required < float("inf"):
+    raise SystemExit("Use the positive finite rate from the representative budget.")
+digest = os.environ["REPRESENTATIVE_BUDGET_SHA256"]
+if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+    raise SystemExit("Use the representative budget's SHA-256 digest.")
+path = Path(os.environ["FABRIC_RUN"]) / "budget.json"
+with path.open("x") as stream:
+    json.dump({"required_gbps": required, "representative_budget_sha256": digest}, stream)
+    stream.write("\n")
+path.chmod(0o600)
+PY_EDGE_BUDGET
+```
+
+Use `sha256sum "$FABRIC_RUN/budget.json"` in the representative shell to obtain the digest, and read `required_gbps` from that same JSON file. The comparison file carries the representative budget identity into the source's retained samples. A role with its own calculated `budget.json` keeps that file. Select a fresh `FABRIC_RUN` for a repeated comparison so earlier budget and sample evidence stays intact.
 
 Retained throughput samples can be compared with a corrected budget while host assignments, routes, interfaces, transport settings and measurement conditions still match their recorded inputs. Repeat each step 4 comparison using the new budget and the original sample file, and retain the new comparison output alongside the earlier result. A runtime-layout correction changes the budget; a changed link or transport configuration requires a new throughput sample. Complete the comparisons for every directed edge before starting serving engines in step 5.
 
@@ -351,7 +433,7 @@ This measures one-way RDMA writes between host-memory buffers. Swap source and d
 
 ### Complete the edge matrix
 
-After the first pair passes in both directions, repeat for every ordered pair of participating engine hosts. A fleet of `n` distinct engine hosts produces `n * (n - 1)` directed samples. Measure one edge at a time and record source role, destination role, source revision, routes, transport, utility version, command, budget, sample and exit status. Reuse a host's calculated budget across its outgoing edges. Colocated replicas share a host and exercise their local handoff in step 8.
+After the first pair passes in both directions, repeat for every ordered pair of participating engine hosts. A fleet of `n` distinct engine hosts produces `n * (n - 1)` directed samples. Measure one edge at a time and record source role, destination role, source revision, routes, transport, utility version, command, budget signature, sample and exit status. Reuse the source role's representative or host-specific budget across its outgoing edges. Colocated replicas share a host and exercise their local handoff in step 8.
 
 A connection failure requires the named listener, route, firewall, HCA or GID check. A bandwidth failure requires inspection of the affected link's speed, MTU, retransmissions or RDMA counters, CPU saturation and concurrent traffic; retain the failed sample before repairing the cause and measuring into a fresh file. Keep the declared workload target with each comparison. Advance after every required edge meets that target. Retain the matrix, budgets and samples privately, stop the temporary servers owned by this test, and carry the declared cache shape and workload into engine launch and capacity acceptance.
 
@@ -376,7 +458,7 @@ python3 -m json.tool "$ENGINE_RUN/launch.json"
 
 Review `launch.json`: it records the immutable image, complete serving arguments, mounts, device mappings, endpoint, application revision and input hashes. `container.env` contains the explicit runtime and transport values and, when configured, the engine API key; keep this file private. The launcher supplies `NixlConnector`, `kv_role=kv_both`, the UCX backend and `kv_load_failure_policy=fail`. It derives the advertised side-channel address and port from the selected engine's role environment, selects TCP or RDMA through `UCX_TLS`, and disables prefix caching for the profiling procedure. [Runtime launch records](Configuration.md#runtime-launch-records) defines the fields and the [vLLM NIXL guide](https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/) describes the connector settings.
 
-Match the launch record and model-config hashes with the retained step 4 runtime layout and budget. The requested block size can be adjusted by vLLM during cache planning; the runtime layout records the resulting pages. Repeat cache sizing and budget calculation after changing the image, model, dtype, cache policy, TP allocation or model arguments; recalculate the budget after changing the workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
+For a representative engine, match the launch record and model-config hashes with its step 4 runtime layout and budget. For each other engine, match its image, model-config hash, accelerator, TP size and runtime policy to the recorded cache-group signature before launch; step 6 verifies its resolved cache layout. The requested block size can be adjusted by vLLM during cache planning, so a changed image, model, dtype, cache policy, TP allocation or model argument needs a fresh group comparison and sizing probe. Recalculate the budget after changing the workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
 
 ### Check the image and start the engine
 
@@ -522,7 +604,25 @@ cat "$MODEL_INSPECT_RUN/cache-registration.json"
 
 The inspection requires one distinct resolved layout name, imports the enum in a temporary image container, and writes `cache-registration.json` with the boolean, layout, enum source hash, input-log hash, checked plan hash and image identity. It reads metadata while the serving engine continues running or stays stopped. Copy `cross_layers_blocks` into the attestation and router contracts, and set `sources.cross_layers_blocks` to this capture's path and recorded enum property. Compare the source log's serving-plan inputs with the checked inspection plan before applying the value.
 
-The updated step 4 sizing probe also captures `kv_cache_layout` for each TP rank. When the retained serving log provides an incomplete layout record, use that sizing capture with the same command, replacing `--startup-log "$ENGINE_STARTUP_LOG"` with `--runtime-layout "$CACHE_RUN/cache-layout.json"`. The helper checks the image, model-config hash, launch-record hash, rank coverage and agreement on the layout. If both retained sources lack a resolved layout, repeat `measure-cache` with the updated helper and a fresh sizing plan, then inspect its capture. Retain the earlier fabric samples and budgets with their original records. An unknown layout or unavailable enum requires inspection of the pinned build's layout API before setting the boolean. Preserve failed inspection logs and use a fresh inspection plan for corrected input.
+Compare every role's `kv_cache_layout` in `cache-registration.json` with the layout recorded for all TP ranks in its representative's step 4 `cache-layout.json`. Set `REPRESENTATIVE_LAYOUT` to that recorded layout name in each role shell and check the local capture:
+
+```bash
+export REPRESENTATIVE_LAYOUT='<layout name from representative cache-layout.json>'
+python3 - <<'PY_CACHE_MATCH'
+import json
+import os
+from pathlib import Path
+
+record = json.loads((Path(os.environ["MODEL_INSPECT_RUN"]) / "cache-registration.json").read_text())
+actual = record["kv_cache_layout"]
+expected = os.environ["REPRESENTATIVE_LAYOUT"]
+if actual != expected:
+    raise SystemExit(f"Resolved layout {actual} differs from representative {expected}.")
+print(f"Resolved layout {actual} matches the cache representative.")
+PY_CACHE_MATCH
+```
+
+Matching discovery inputs and resolved layouts allow that representative's measured page geometry to supply the group's fabric budget. The sizing capture can also supply a representative engine's missing startup layout: replace `--startup-log "$ENGINE_STARTUP_LOG"` with `--runtime-layout "$CACHE_RUN/cache-layout.json"`; the helper checks image, model-config hash, launch-record hash, rank coverage and layout agreement. For an unprobed engine with a missing or different startup layout, retain its log, stop only its test container after capturing the log, run a fresh local `measure-cache` probe, recalculate its outgoing budget, compare its retained edge samples with the corrected rate and restart that engine from a fresh checked launch plan. An unknown layout or unavailable enum requires inspection of the pinned build's layout API before setting the boolean. Preserve failed inspection logs and use a fresh inspection plan for corrected input.
 
 ### Capture the resolved transfer mode
 
@@ -783,15 +883,15 @@ The setup is complete when the router serves the measured workload, client recor
 
 Share sanitised extracts from the private deployment record, using stable host aliases and replacing private addresses, paths and credential values.
 
-| Step and documentation | Required knowledge | Likely failure and recovery | Private value location |
-| --- | --- | --- | --- |
-| [Management access](#1-open-the-management-shells) | Workstation `.env`, installed remote image/model, GPU driver tools and initial launch policy. | Discovery failure: inspect its private log and correct the named environment field, host tool or image. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, generated JSON and host-key files, `runs/discovery/<run>/` and `runs/access-<id>/`. |
-| [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
-| [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
-| [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |
-| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
-| [Attestation](#6-attest-each-engine-process) | Running engine identity, installed connector protocol constant, resolved model dimension getters and physical cache layout, resolved connector transfer mode and handshake policy, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Launch directory's `nixl-connector-version.json`, `transfer-mode.json` and `handshake-policy.json`, model inspection's `model-dimensions.json`, `cache-registration.json` and logs, checked images and container ID; engine `runs/engine-attestation.production.json` and generated role values. |
-| [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
-| [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
-| [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |
-| [Capacity acceptance](#10-validate-private-route-capacity) | Workstation Python load helper, router-host Docker Compose, existing router SSH access, generated synthetic workload, fixed launch/cache policy, candidate latency/attainment targets and the private SSH route. | Tunnel bind failure: choose a free local port. Service or scrape failure: check the router-host listener and target error. Warmup or token-accounting failure: inspect the retained status, stream error and usage counts. Client schedule failure: inspect CPU, memory, network and lag before changing the offered rate. SLO or accounting failure: reconcile client and router records and inspect serving saturation. | Workstation access environment and tunnel logs, router fleet and role environment, Compose discovery files, private `runs/load-trial-<id>/` workload, manifests, per-request records, summaries and state/network snapshots. |
+| Step and documentation                                                      | Required knowledge                                                                                                                                                                                                    | Likely failure and recovery                                                                                                                                                                                                                                                                                                                                                                                               | Private value location                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Management access](#1-open-the-management-shells)                          | Workstation `.env`, installed remote image/model, GPU driver tools and initial launch policy.                                                                                                                         | Discovery failure: inspect its private log and correct the named environment field, host tool or image. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route.                                                                                                                                           | Workstation `.env`, generated JSON and host-key files, `runs/discovery/<run>/` and `runs/access-<id>/`.                                                                                                                                                                                          |
+| [Host installation](#2-install-narwhal-on-the-remote-hosts)                 | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites.                                                                           | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run.                                                                                                                                                                                      | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker.                                                                                                                                                              |
+| [Engine preparation](#3-inspect-each-engine-host)                           | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports.                                                                                     | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch.                                                                                                                                                                                                                                                                           | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                                                        |
+| [Fabric](#4-prepare-the-transfer-fabric)                                    | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget.                                                                 | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair.                                                                                              | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix.                                                                              |
+| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices.                                                                                 | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan.                                                                                                                                                                                                                                                             | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures.                                                                                                             |
+| [Attestation](#6-attest-each-engine-process)                                | Running engine identity, installed connector protocol constant, resolved model dimension getters and physical cache layout, resolved connector transfer mode and handshake policy, contract and sidecar bind address. | Connector import/constant or model-getter failure: inspect the pinned build's compatibility-hash source and resolved model configuration. Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process.                                                                                                                                          | Launch directory's `nixl-connector-version.json`, `transfer-mode.json` and `handshake-policy.json`, model inspection's `model-dimensions.json`, `cache-registration.json` and logs, checked images and container ID; engine `runs/engine-attestation.production.json` and generated role values. |
+| [Profiling](#7-profile-the-idle-engines)                                    | Idle engine reservation, cache policy, workload lengths and concurrency.                                                                                                                                              | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path.                                                                                                                                                                                                                                                             | Router fleet config and profile/sample files under `runs/`.                                                                                                                                                                                                                                      |
+| [Preflight](#8-check-the-engine-and-kv-contract)                            | Current engine set, profiles and SLO targets.                                                                                                                                                                         | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check.                                                                                                                                                                                                                                                                                                   | Router environment, fleet config and private preflight output.                                                                                                                                                                                                                                   |
+| [Router verification](#9-start-the-router-and-send-a-request)               | Listener address, served model, engine count and opening split.                                                                                                                                                       | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log.                                                                                                                                                                                                                                                                             | Router environment, ignored fleet config and endpoint captures.                                                                                                                                                                                                                                  |
+| [Capacity acceptance](#10-validate-private-route-capacity)                  | Workstation Python load helper, router-host Docker Compose, existing router SSH access, generated synthetic workload, fixed launch/cache policy, candidate latency/attainment targets and the private SSH route.      | Tunnel bind failure: choose a free local port. Service or scrape failure: check the router-host listener and target error. Warmup or token-accounting failure: inspect the retained status, stream error and usage counts. Client schedule failure: inspect CPU, memory, network and lag before changing the offered rate. SLO or accounting failure: reconcile client and router records and inspect serving saturation. | Workstation access environment and tunnel logs, router fleet and role environment, Compose discovery files, private `runs/load-trial-<id>/` workload, manifests, per-request records, summaries and state/network snapshots.                                                                     |
