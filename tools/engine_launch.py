@@ -7,6 +7,8 @@ import json
 import re
 from pathlib import Path
 
+from tools.launch_engine import validate_runtime
+
 
 def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
     """Resolve one engine's launch record and check allocation and transport declarations."""
@@ -71,6 +73,8 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
         for field in ("allocation", "devices", "transfer")
     ):
         raise ValueError(f"{role}: name the allocation, device and transfer sources")
+    if "runtime" in entry:
+        validate_runtime(entry["runtime"])
     entry["environment"] = {visibility: ",".join(devices), "UCX_NET_DEVICES": net}
     entry["vllm_args"] = ["--tensor-parallel-size", str(tp)]
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}

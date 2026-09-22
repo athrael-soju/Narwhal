@@ -180,6 +180,8 @@ class HostDeploymentTests(unittest.TestCase):
 . ./.env.engine-1
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" --help
+test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256"
+python3 "$NARWHAL_ENGINE_LAUNCHER" --help
 """,
                 ],
                 cwd=checkout,

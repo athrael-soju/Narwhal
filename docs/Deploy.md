@@ -52,7 +52,7 @@ With `.env` loaded, prepare a new deployment directory. The supplied `NARWHAL_DE
 python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
-The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and delivers it to each engine host at `runs/deployment-tools/fabric_budget.py`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The manifest records hashes for the source bundle, helper snapshot and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
+The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and `tools/launch_engine.py` and delivers both to each engine host under `runs/deployment-tools/`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The engine launcher uses the corresponding `NARWHAL_ENGINE_LAUNCHER` path and `NARWHAL_ENGINE_LAUNCHER_SHA256` digest. The manifest records hashes for the source bundle, helper snapshots and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
 
 Choose a fresh `--out` path for a new deployment; subsequent commands reuse that path through `--run`. The mode-0600 manifest records the approved revision, host assignments, input hashes and a unique remote directory under `~/Narwhal-deploy/`. Record its path in the private deployment record. A missing field or unavailable revision stops preparation on the workstation; correct the named input or recover the approved source, then prepare a fresh directory.
 
@@ -296,9 +296,87 @@ A connection failure requires the named listener, route, firewall, HCA or GID ch
 
 ## 5. Configure the fleet and launch engines
 
-On the router host, edit the transferred `config/fleet.local.json` using the supplied inventory. Set the model, engine IDs, opening roles, engine and attestation URLs, SLOs and a fresh profile path under `runs/`, then add the complete production `engine_contract` defined by the [configuration reference](Configuration.md#engine-contract). [Node URL references](Configuration.md#node-urls-from-the-environment) resolve endpoints from `.env.router`; `engine.engine_api_key_env` selects the exported engine credential. The exported `NARWHAL_FLEET=config/fleet.local.json` selects this file for observability. Keep this ignored config with its profile and deployment load evidence in private storage, and replace site addresses before sharing an extract.
+Complete the host inspection and directed fabric matrix before starting the first engine. On the router host, edit the transferred `config/fleet.local.json` to set model, engine IDs, opening roles, engine and attestation URLs, SLOs and a fresh profile path. [Node URL references](Configuration.md#node-urls-from-the-environment) resolve endpoints from `.env.router`. Step 6 fills the runtime `engine_contract` from the image check, running engine and attestation sources before profiling or router startup.
 
-On the engine hosts, apply the selected record's `environment`, `vllm_args`, `accelerator_devices`, `transfer.devices` and `network_mode` through the engine launcher, alongside the supplied image, model mounts and vLLM/NIXL configuration with effective `kv_both` behaviour. The record supplies allocation and device arguments; the runtime launcher supplies the complete serving command and connector settings. Match the cache dtype and block size to step 4's budget, or recalculate that budget for the selected runtime layout. Use the fabric configuration from step 4 and confirm each engine serves the declared model and HTTP port before starting its sidecar. An engine startup failure requires its process logs and the image, device, model or fabric check implicated by the error. Preserve existing processes and resolve listener ownership before starting replacements.
+### Prepare the first engine command
+
+The supplied per-engine record's `runtime` object names pinned package versions, library environment, model dtype, cache dtype, block size and model-specific arguments. Step 2 delivers `launch_engine.py` beside the fabric calculator and exports `NARWHAL_ENGINE_LAUNCHER` and `NARWHAL_ENGINE_LAUNCHER_SHA256` in each engine-role environment. The launcher builds a Docker command invoking `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`, mounts `NARWHAL_MODEL_DIR` read-only at `/model`, exposes the declared devices, and applies the selected TP allocation.
+
+In the installed engine-1 shell, verify the launcher and prepare a fresh private launch directory:
+
+```bash
+umask 077
+mkdir -p runs
+export ENGINE_RUN="runs/engine-launch-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256" &&
+python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
+python3 -m json.tool "$ENGINE_RUN/launch.json"
+```
+
+Review `launch.json`: it records the immutable image, complete serving arguments, mounts, device mappings, endpoint, application revision and input hashes. `container.env` contains the explicit runtime and transport values and, when configured, the engine API key; keep this file private. The launcher supplies `NixlConnector`, `kv_role=kv_both`, the UCX backend and `kv_load_failure_policy=fail`. It derives the advertised side-channel address and port from the selected engine's role environment, selects TCP or RDMA through `UCX_TLS`, and disables prefix caching for the profiling procedure. [Runtime launch records](Configuration.md#runtime-launch-records) defines the fields and the [vLLM NIXL guide](https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/) describes the connector settings.
+
+Match the record's dtype and block size with the retained fabric budget. The supplied two-byte model dtype with `kv_cache_dtype=auto` uses the budget's two-byte cache sizing. Recalculate step 4's budget when changing the cache layout or workload. A missing runtime record or launcher requires a fresh step 2 preparation from the updated management inputs; retain earlier prepared runs and open the new run's role shell.
+
+### Check the image and start the engine
+
+Run the image check in that engine shell:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
+```
+
+The check inspects the local immutable image identity, starts a temporary container to compare package versions and import the NIXL connector, then records the plan hash in `checked.json`. Its commands and output go to `image-check.log`. This container imports the runtime without loading model weights and exits after the check. Resolve the named package, library or connector error against the supplied image and runtime record before starting the engine.
+
+Inspect the planned listeners with `ss -ltnp`, then start the checked plan:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" start --run "$ENGINE_RUN"
+export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
+docker logs --follow "$ENGINE_CONTAINER"
+```
+
+`start` creates a uniquely named container, records its ID before starting it and retains Docker output in `launch.log`. It verifies the saved environment and checked plan before creating the container. Follow the engine log through model loading and HTTP startup; Ctrl-C ends the log follower while the engine container continues running. An existing `container.id` directs recovery to that recorded container. Inspect `docker inspect "$ENGINE_CONTAINER"` and `docker logs "$ENGINE_CONTAINER"` for a startup exit, then correct the implicated device, model, memory, library or transport input and prepare a fresh launch plan.
+
+### Verify the engine HTTP API
+
+After HTTP startup, run these probes in the same engine-role shell. They use the supplied engine endpoint and configured engine credential, and save responses under the launch directory:
+
+```bash
+python3 - <<'PY_ENGINE'
+import json
+import os
+from pathlib import Path
+from urllib.request import Request, urlopen
+run = Path(os.environ["ENGINE_RUN"])
+plan = json.loads((run / "launch.json").read_text())
+headers = {"Content-Type": "application/json"}
+if os.environ.get("NARWHAL_ENGINE_API_KEY"):
+    headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
+def probe(path, filename, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    request = Request(plan["endpoint"].rstrip("/") + path, data=data, headers=headers)
+    with urlopen(request, timeout=60) as response:
+        content = response.read()
+    with (run / filename).open("xb") as output:
+        output.write(content)
+    return content
+probe("/health", "health.txt")
+version = json.loads(probe("/version", "version.json"))
+assert version["version"] == plan["expected_packages"]["vllm"]
+models = json.loads(probe("/v1/models", "models.json"))
+assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
+metrics = probe("/metrics", "metrics.txt").decode()
+assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
+completion = json.loads(probe("/v1/completions", "completion.json", {
+    "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
+    "max_tokens": 32, "temperature": 0,
+}))
+assert completion["choices"][0]["text"]
+print("Engine health, version, model, process identity and completion passed.")
+PY_ENGINE
+```
+
+For a failed probe, retain its command, HTTP status and engine log with the first blocked gate. Preserve completed response files; use fresh filenames when repeating a probe after repair. After the first engine passes, apply the same prepare, check, start and probe sequence in each remaining engine-role shell with its own `ENGINE_RUN`. Record each container ID and launch directory for step 6. When cleaning a test deployment, capture its logs before using `docker stop` and `docker rm` on the container IDs created by that test.
 
 ## 6. Attest each engine process
 
@@ -423,7 +501,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, cache dimensions and TP, prompt length, handoff rate, burst and transfer-time budget. | Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/budget.json`, directed samples and private edge matrix. |
-| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Engine IDs, roles, runtime contract, model, TP size and launcher inputs. | Config error or startup exit: correct the named field or inspect engine logs against the declared launch configuration. | Router `config/fleet.local.json`, router environment, engine launch record and private engine launcher. |
+| [Fleet config and engine launch](#5-configure-the-fleet-and-launch-engines) | Complete host/fabric checks, immutable image, pinned packages, model flags, library environment, cache shape and selected TP/devices. | Image check failure: correct package or library input. Startup or HTTP failure: inspect the recorded container and logs, then prepare a fresh corrected plan. | Router fleet config; engine role environment and runtime record; delivered launcher; private `runs/engine-launch-*/` plan, environment, image check, container ID and HTTP captures. |
 | [Attestation](#6-attest-each-engine-process) | Running engine identity, contract and sidecar bind address. | Identity endpoint failure or contract mismatch: verify the engine process and document, then restart its sidecar against that process. | Engine `runs/engine-attestation.production.json` and private inventory. |
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |

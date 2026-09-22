@@ -53,6 +53,7 @@ From the management checkout, `python3 tools/deploy_hosts.py prepare --out <dire
 | `.env.router` | Revision, `NARWHAL_FLEET=config/fleet.local.json`, referenced engine and attestation URLs, configured engine API credential, optional router and observability settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `.env.engine-<n>` | Revision, launch and artifact fields, selected node URLs, fabric peer addresses and configured engine API credential. | Shared engine fields below, optional `NARWHAL_NODE_<n>_<field>` overrides, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL`, all supplied `NARWHAL_NODE_<n>_IP` values and the configured engine API credential. |
 | `config/engine-launch.engine-<n>.json` | Selected GPU allocation, TP size, device mappings, resolved UCX selection and generated launch arguments. | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`. |
+| `runs/deployment-tools/launch_engine.py` on engine hosts | Standalone launcher snapshot, path and SHA-256 in the engine role environment. | `tools/launch_engine.py` in the management checkout at preparation time. |
 | `runs/deployment-tools/fabric_budget.py` on engine hosts | Standalone calculator snapshot, with its path and SHA-256 exported in `.env.engine-<n>`. | `tools/fabric_budget.py` in the management checkout at preparation time. |
 | `config/fleet.local.json` on the router | Supplied fleet document, copied before deployment edits. | The file selected by workstation `NARWHAL_FLEET`. |
 
@@ -77,9 +78,24 @@ Generated files live under ignored `runs/deployment-env/` on the workstation. Gi
 | `transfer.devices` | List transport device paths mapped into the container; RDMA requires its character devices. A TCP record uses an empty list. |
 | `sources` | Name the allocation, device and transfer definitions that supply the record. |
 
-`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. Apply those arguments and mappings in the complete engine launcher, then inspect the running process and transfer behaviour during deployment.
+`prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. The delivered engine launcher combines those arguments and mappings with the runtime fields below, then records the complete container command for inspection.
 
 Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct an invalid record at the workstation and prepare a fresh run so its manifest captures the corrected inputs.
+
+### Runtime launch records
+
+Each supplied engine record's `runtime` object completes the serving configuration for `launch_engine.py`. Store image-specific values in the private `config/engine-launch.local.json`; preparation carries the selected record and launcher snapshot to the engine host. The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the structure.
+
+| Runtime field | Operator input |
+| --- | --- |
+| `expected_packages` | Exact installed distribution versions for `vllm` and `nixl` or `nixl-rocm`; include other image packages whose identity the check should verify. |
+| `model_dtype`, `kv_cache_dtype`, `block_size` | `bfloat16` or `float16`, `auto`, and the runtime block size; align these with the fabric budget. |
+| `environment` | Image-local ROCm/CUDA, UCX, NIXL and library-path settings. The launcher supplies GPU visibility, advertised addresses/ports, transport selection and engine authentication from the selected role. |
+| `extra_args` | Model-specific vLLM arguments: context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling or hybrid-cache policy. |
+
+The launcher fixes the model mount, served name, bind family and HTTP port from the role environment; it applies the declared TP size and uses `NixlConnector` with `kv_both`, UCX and failure propagation. Extra arguments are checked against the supported model options so they preserve those managed settings. The image check validates its identity, package pins and connector configuration/import before model startup. Pin an image whose NIXL connector supports the fleet's `kv_both` behaviour; the running transfer probes verify producer and consumer operations.
+
+When `engine.engine_api_key_env` selects an engine credential, the engine exporter also supplies it as `NARWHAL_ENGINE_API_KEY`. The launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and passes its filename to Docker. Keep the launch directory, environment file and runtime captures under ignored `runs/`; record the application revision, launcher digest and container ID with the deployment.
 
 ### Fabric workload budget
 
