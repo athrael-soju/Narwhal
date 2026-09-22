@@ -1,6 +1,6 @@
 # Deploy a fleet
 
-From your management workstation, use the supplied inventory and private access to open shells on the router and GPU engine hosts. Follow the numbered steps through a real model completion, then validate the intended ingress and workload before admitting client traffic.
+From your management workstation, use the supplied inventory and private access to open shells on the router and GPU engine hosts. Follow the numbered steps through a real model completion, measure the workload through the private SSH route, then verify supervised restart and readmission.
 
 ## Hosts and inputs
 
@@ -958,9 +958,9 @@ Before load, retain `/health` with process liveness and cached instance counts, 
 
 Keep the default anonymous listener on a trusted network until ingress supplies TLS, public authentication, WAF policy, request limits and model routing.
 
-## 10. Validate ingress and capacity
+## 10. Validate private-route capacity
 
-For the first deployment trial, generate load on the management workstation, run Prometheus and Grafana on the existing router host, and reach the router through the verified SSH management route. The inventory's `router` role supplies the destination and authentication for all three services. Record these role assignments, the workstation hostname and source revision, and the tunnel mapping in the private deployment record. This trial measures the private SSH path, including its network and encryption overhead; service ingress acceptance uses the deployed client route and its authentication, TLS and request limits.
+For the first deployment trial, generate load on the management workstation, run Prometheus and Grafana on the existing router host, and reach the router through the verified SSH management route. The inventory's `router` role supplies the destination and authentication for all three services. Record these role assignments, the workstation hostname and source revision, and the tunnel mapping in the private deployment record. This trial measures serving performance through the private SSH path, including its network and encryption overhead.
 
 ### Start monitoring on the router host
 
@@ -1000,15 +1000,13 @@ Close the trial in this order:
 
 [Measure a fleet](Measure.md) defines timing boundaries, rate selection and artifact contents; [Set up observability](Observability.md) defines scrape and dashboard checks.
 
-For service ingress acceptance, configure the [intended ingress](Operate.md#configure-ingress), record its client host and URL, and repeat the workload through that route with its authentication and request policy. Retain the private-route trial and service-ingress results as separate runs under the deployment record.
-
 Run the post-load ring from the router host after resident work drains:
 
 ```bash
 .venv/bin/narwhal-check --fleet config/fleet.local.json --ring
 ```
 
-[Operate Narwhal](Operate.md) covers supervision, failover, maintenance and upgrades after acceptance.
+Passing the two-rate workload trial, client/router reconciliation, dashboard queries and post-load KV ring completes this capacity gate. Continue with [Restart one engine](Operate.md#restart-one-engine) to verify supervised restart, process identity and router readmission against the running deployment. Retain the private-route workload results as the baseline for that check.
 
 ## Deployment gates and recovery
 
@@ -1026,4 +1024,4 @@ Share sanitised extracts from the private deployment record, using stable host a
 | [Profiling](#7-profile-the-idle-engines) | Idle engine reservation, cache policy, workload lengths and concurrency. | Probe failure or fit rejection: inspect the named engine, measured range and sample file; repair the cause and retain a new sweep under a fresh profile path. | Router fleet config and profile/sample files under `runs/`. |
 | [Preflight](#8-check-the-engine-and-kv-contract) | Current engine set, profiles and SLO targets. | Failed gate: use its engine, leg and budget to select the corresponding [fleet troubleshooting](Troubleshoot.md) check. | Router environment, fleet config and private preflight output. |
 | [Router verification](#9-start-the-router-and-send-a-request) | Listener address, served model, engine count and opening split. | Bind error or failed readiness/completion: check listener ownership, URL address family and the engine or controller error in the router log. | Router environment, ignored fleet config and endpoint captures. |
-| [Capacity acceptance](#10-validate-ingress-and-capacity) | Workstation Python load helper, router-host Docker Compose, existing router SSH access, generated synthetic workload, fixed launch/cache policy, candidate latency/attainment targets and selected trial or service ingress. | Tunnel bind failure: choose a free local port. Service or scrape failure: check the router-host listener and target error. Warmup or token-accounting failure: inspect the retained status, stream error and usage counts. Client schedule failure: inspect CPU, memory, network and lag before changing the offered rate. SLO or accounting failure: reconcile client and router records and inspect serving saturation. | Workstation access environment and tunnel logs, router fleet and role environment, Compose discovery files, private `runs/load-trial-<id>/` workload, manifests, per-request records, summaries and state/network snapshots. |
+| [Capacity acceptance](#10-validate-private-route-capacity) | Workstation Python load helper, router-host Docker Compose, existing router SSH access, generated synthetic workload, fixed launch/cache policy, candidate latency/attainment targets and the private SSH route. | Tunnel bind failure: choose a free local port. Service or scrape failure: check the router-host listener and target error. Warmup or token-accounting failure: inspect the retained status, stream error and usage counts. Client schedule failure: inspect CPU, memory, network and lag before changing the offered rate. SLO or accounting failure: reconcile client and router records and inspect serving saturation. | Workstation access environment and tunnel logs, router fleet and role environment, Compose discovery files, private `runs/load-trial-<id>/` workload, manifests, per-request records, summaries and state/network snapshots. |

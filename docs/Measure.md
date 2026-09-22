@@ -71,11 +71,11 @@ The pace gate compares engines with the fleet median when at least three probes 
 
 ## 2. Validate the deployment under load
 
-Run `narwhal-check` against the final fleet, then send the deployment workload through the same ingress, authentication, model route, cache policy, and request limits used by clients.
+Run `narwhal-check` against the final fleet, then send the deployment workload through the private SSH route with the recorded model, cache policy and request limits.
 
-The [first-deployment trial](Deploy.md#10-validate-ingress-and-capacity) uses the management workstation as its client and the existing router SSH destination as its private route. Record both endpoint hosts and the tunnel mapping with the workload. Attribute its throughput and latency to that route, then repeat through the service ingress when accepting service traffic.
+The [first-deployment trial](Deploy.md#10-validate-private-route-capacity) uses the management workstation as its client and the existing router SSH destination as its private route. Record both endpoint hosts and the tunnel mapping with the workload, and attribute its throughput and latency to that route.
 
-Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router, engine, ingress and supervisor configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots, metrics and canary results.
+Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router, engine, SSH route and supervisor configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots and metrics.
 
 Hold the source revision, model, runtime, profiles, workload shape, cache policy, and latency targets fixed across the run. Start with two offered rates to establish the scaling direction, then extend the sweep until the client attainment target fails or the intended operating ceiling passes. Let resident requests and transfer leases drain between runs.
 
@@ -83,7 +83,7 @@ For each rate, retain the offered count, terminal count, response classes, TTFT 
 
 ### Run the initial synthetic workload
 
-Use the management workstation and private tunnel from [Deploy step 10](Deploy.md#open-the-private-trial-route-from-the-workstation). The initial trial uses 8,192 input tokens, exactly 128 output tokens, and 200 requests at each of 0.5 and 1 request/s. Score a request against both candidate limits, TTFT at most 2 seconds and TPOT at most 0.0333 seconds, and require 190 of the 200 offers to pass for 95% observed attainment. These two rates establish the initial scaling direction; higher capacity requires further measured rates. This synthetic token-length workload measures serving performance for that shape; application acceptance adds representative prompts and output-quality checks.
+Use the management workstation and private tunnel from [Deploy step 10](Deploy.md#open-the-private-trial-route-from-the-workstation). The initial trial uses 8,192 input tokens, exactly 128 output tokens, and 200 requests at each of 0.5 and 1 request/s. Score a request against both candidate limits, TTFT at most 2 seconds and TPOT at most 0.0333 seconds, and require 190 of the 200 offers to pass for 95% observed attainment. These two rates establish the initial scaling direction; higher capacity requires further measured rates. This synthetic token-length workload measures serving performance for that shape through the private route.
 
 Confirm that 8,192-token inputs and 128-token outputs fit the accepted profile range and engine context limit, and retain the existing launch records that establish prefix caching is disabled for this trial. Keep the fleet, profiles, router targets and cache policy fixed across both rates. Reserve the router for trial traffic so its journal and state can be reconciled with the client records.
 
@@ -129,23 +129,8 @@ Each run waits for empty router admission queues and resident work, checks one u
 
 `summary.json` reports completion throughput, output-token throughput and SLO-qualified throughput over the offer window plus final response/drain time. It also records client CPU time, peak resident memory and scheduling lag; `network-before.json` and `network-after.json` retain workstation interface counters covering concurrent host traffic. The state snapshots retain admission and resident-work checks before warmup, after warmup and after load. Use those artifacts with router/engine metrics to distinguish client, SSH-route and serving limits. Retain each rate as a separate result and label the 95% fraction as observed attainment for this trial.
 
-Run artifacts use a fresh mode-0700 directory and mode-0600 files. The helper runs directly from the management checkout, so its recorded digest identifies a local helper update independently of the installed router revision. For authenticated service ingress, supply `--api-key-env NAME` with the token held in that workstation environment variable. Continue with journal reconciliation, dashboard queries and the post-load KV ring in [Deploy step 10](Deploy.md#measure-and-retain-the-trial).
+Run artifacts use a fresh mode-0700 directory and mode-0600 files. The helper runs directly from the management checkout, so its recorded digest identifies a local helper update independently of the installed router revision. Continue with journal reconciliation, dashboard queries and the post-load KV ring in [Deploy step 10](Deploy.md#measure-and-retain-the-trial).
 
-### Check output correctness
+The deployment acceptance record should name the highest offered rate meeting the candidate client target, the tested request shape and SSH route, the preflight revision, and the retained artifact paths. The deployment system owns that policy and decides when a configuration change requires another run.
 
-Copy the canary template, set its model, prompt and exact completion, then derive `expected_token_ids` from that completion under the deployed tokenizer. Add at least one plausible distractor to `allowed_token_ids`; `narwhal-canary` constrains generation to that set and rejects a case whose allowed set equals its expected set.
-
-```bash
-cp config/canary-cases.example.json runs/local/canary-cases.json
-narwhal-canary \
-  --base http://router:8000 \
-  --cases runs/local/canary-cases.json \
-  --duration <seconds> \
-  --out runs/local/canary-results.jsonl
-```
-
-The run compares returned text and token IDs with the case, then writes verdicts, timing, token counts, digests and nearby controller events under the [canary artifact contracts](API-and-Data-Reference.md#canary-artifacts).
-
-The deployment acceptance record should name the highest offered rate meeting the client SLO target, the tested request shape, the canary result, the preflight revision, and the retained artifact paths. The deployment system owns that policy and decides when a configuration change requires another run.
-
-Return the completed run to the [deployment acceptance sequence](Deploy.md#10-validate-ingress-and-capacity) for reconciliation, dashboard queries and the post-load KV ring. The [API and data reference](API-and-Data-Reference.md) defines journals, state, metrics and canary contracts; [Operate Narwhal](Operate.md) covers rollout and recovery.
+After the [capacity gate](Deploy.md#10-validate-private-route-capacity) passes, continue with [Restart one engine](Operate.md#restart-one-engine) for supervised restart and router readmission. The [API and data reference](API-and-Data-Reference.md) defines the journal, state and metrics used to compare the recovered deployment with the retained baseline.

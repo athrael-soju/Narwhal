@@ -83,4 +83,4 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 | Grafana serves an older dashboard | Rerun `make observe` to refresh the staged dashboard; the directory mount exposes replacements to Grafana's provisioner. Inspect the provisioning log if the dashboard check still fails. |
 | A rule fires for the wrong scope | Target relabelling for `job`, `instance` and `iid`. |
 
-Keep deployment addresses and captured responses under `runs/`. [Operate Narwhal](Operate.md#monitor-the-fleet) defines health semantics and operator actions. The [deployment acceptance sequence](Deploy.md#10-validate-ingress-and-capacity) binds the verified targets and dashboard queries to the retained load evidence.
+Keep deployment addresses and captured responses under `runs/`. [Operate Narwhal](Operate.md#monitor-the-fleet) defines health semantics and operator actions. The [deployment acceptance sequence](Deploy.md#10-validate-private-route-capacity) binds the verified targets and dashboard queries to the retained load evidence.
