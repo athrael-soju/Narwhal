@@ -1,12 +1,12 @@
 # Deploy a fleet
 
-From your management workstation, use the supplied inventory and private access to open shells on the router and GPU engine hosts. Follow the numbered steps through a real model completion, measure the workload through the private SSH route, then inspect the running fleet through Prometheus and Grafana.
+From your management workstation, derive the deployment configuration from your private `.env` and remote host inspection, then open shells on the router and GPU engine hosts. Follow the numbered steps through a real model completion, measure the workload through the private SSH route, then inspect the running fleet through Prometheus and Grafana.
 
 ## Hosts and inputs
 
-| Host | Work performed here | Supplied inputs |
+| Host | Work performed here | Inputs |
 | --- | --- | --- |
-| Management workstation and initial load client | Read the guides and inventory, open remote shells, send trial traffic through an SSH tunnel, retain the deployment record. | Checkout-local `.env`, `config/hosts.local.json`, private fleet JSON, `config/engine-launch.local.json` and verified `config/ssh.known_hosts`. |
+| Management workstation and initial load client | Create private configuration, open remote shells, send trial traffic through an SSH tunnel, retain the deployment record. | A private `.env` containing management destinations and credentials, the approved source revision, model/image selection, paths, fabric interface and service endpoints. Step 1 derives the other configuration files. |
 | Router and observability host | Install Narwhal, create the fleet config, profile and check engines, run the router, Prometheus and Grafana. | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO targets; Docker Engine with the Compose plugin for monitoring. |
 | Engine hosts | Inspect GPUs and artifacts, configure the fabric, launch vLLM and attestation sidecars. | Accelerator and TP shape, engine image, model checkpoint, launch configuration, fabric addresses and ports. |
 
@@ -18,18 +18,63 @@ Create a private deployment record before the first command. At each gate, recor
 
 ## 1. Open the management shells
 
-On the management workstation, use the supplied private `.env`, host inventory, fleet JSON and verified SSH host-key file in the Narwhal checkout. `NARWHAL_HOSTS` selects `config/hosts.local.json`, `NARWHAL_FLEET` selects the engine fleet document, `NARWHAL_LAUNCH_CONFIG` selects the supplied per-engine allocation and device records, and `NARWHAL_SSH_KNOWN_HOSTS` selects `config/ssh.known_hosts`. The host inventory defines each physical machine once, names its access variables and assigns its router and engine roles. [Host inventory and SSH access](Configuration.md#host-inventory-and-ssh-access) defines the format.
+### Load the supplied environment
 
-A fresh clone receives those private files separately from the public source. Preserve the supplied values and load `.env` from the management checkout with shell tracing disabled:
+Start in a fresh management checkout with the supplied private `.env`. [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) names its fields. The environment supplies the management destinations and credentials, source revision, engine image and model paths, fabric interface, run directory and service endpoints. Keep credentials on the workstation and load the environment with shell tracing disabled:
 
 ```bash
 set +x
 set -a
 . ./.env
 set +a
+```
+
+Set `NARWHAL_NODE_<n>_SSH` for each engine and `NARWHAL_ROUTER_SSH` for the router. Equal destination values assign those roles to one physical host and reuse one credential. A destination may be an OpenSSH alias with its username, port, key and jump route configured in SSH, or `user@host`. Password access uses the corresponding `_SSH_PASSWORD` variable; key access uses the configured identity or SSH agent.
+
+### Derive configuration from the hosts
+
+Run discovery from the management checkout. It needs the workstation's Python standard library, OpenSSH and `sshpass` for password access. The remote hosts need Python 3, Docker, `ip`, and the GPU driver inspection tool (`rocminfo` or `nvidia-smi`); the pinned image and model checkpoint must be present at the paths in `.env`.
+
+```bash
+python3 tools/discover_deployment.py --out runs/discovery/first-deploy
+. runs/discovery/first-deploy/derived.env
 python3 tools/deploy_hosts.py plan
 python3 tools/deploy_hosts.py check-access
 ```
+
+Discovery records each host's SSH key on the first connection through the private management route, authenticates with the supplied credential, and rejects changes to an already recorded key. This is trust on first use; an existing verified host-key file selected by `NARWHAL_SSH_KNOWN_HOSTS` also works. Subsequent deployment commands require a matching recorded key. A changed key requires checking that host through its provider console before replacing its entry.
+
+For each engine, discovery reads the GPU product and device mappings, model configuration/hash, selected network interface, and immutable image identity. A temporary container reads package metadata from the image and exits. It derives the model dtype and image runtime environment, then writes these mode-0600 files:
+
+| Generated file | Source and use |
+| --- | --- |
+| `config/hosts.local.json` | Groups the `.env` management destinations and assigns the router and numbered engine roles. |
+| `config/ssh.known_hosts` | Records server public keys during authenticated management access. |
+| `config/engine-launch.local.json` | Combines inspected GPU allocation, model/image metadata and network devices with the launch policy below. |
+| `config/engine-launch.sources.json` | Points each engine role to its retained inspection and policy source. |
+| `config/fleet.json` | Creates the model, measured hardware/TP shape, engine URL references, opening roles, initial latency targets and profile output path. |
+| `runs/discovery/first-deploy/derived.env` | Selects generated configuration paths and per-engine image/hash values for subsequent preparation. |
+
+The corresponding path variables in `.env` select different JSON or host-key destinations. Discovery retains per-engine observations, SSH logs and output hashes under its `--out` directory. Existing generated JSON files stop discovery before remote inspection; archive them with their run and select a fresh output directory when recreating configuration.
+
+### Launch policy and environment overrides
+
+For one engine role on a GPU host, discovery allocates every detected GPU and sets TP to that count. Colocated engine roles require disjoint `NARWHAL_NODE_<n>_GPU_IDS` lists in `.env`. The generated fleet uses a matching accelerator and TP shape across replicas, starts the first engine in the prefill pool and the others in decode, and writes fresh profiles to `runs/profiles.json` inside the new remote checkout.
+
+The initial launch uses TCP on `NARWHAL_FABRIC_INTERFACE`, the model's dtype (bfloat16 when the config omits it), automatic KV dtype, 128-token requested blocks, an eager runtime, up to 16,384 context tokens (bounded by the model config), eight sequences and 0.9 GPU memory utilisation. The cache probe in step 4 captures the runtime's resolved layout. Image environment defaults carry into the launch record. These initial settings can be changed through `.env` before discovery:
+
+| Environment field | Override |
+| --- | --- |
+| `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE` | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size. |
+| `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE` | Model dtype and requested cache block size. |
+| `NARWHAL_ENGINE_ARGS` | JSON array replacing the initial serving arguments; [Runtime launch records](Configuration.md#runtime-launch-records) lists their meaning. |
+| `NARWHAL_ENGINE_ENV` | JSON object overriding image runtime environment fields supported by the launcher. |
+| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | `ucx_rdma`, HCA:port selection, and a JSON list of RDMA device paths when selecting RDMA. |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S` | Initial candidate latency limits in seconds; defaults are 10 and 0.125 until step 7 calibrates them. |
+
+Engine policy fields accept `NARWHAL_NODE_<n>_<field>` overrides in the same form as the existing per-host environment fields. Put any required model-specific serving flags in `NARWHAL_ENGINE_ARGS`; the pinned image check, cache sizing and completion gates validate the resulting command. Runtime discovery outputs remain reproducible from `.env` and the selected hosts/image. Example JSON files document their schemas.
+
+### Verify access and open role shells
 
 `plan` lists host IDs and assigned roles. `check-access` verifies the pinned SSH key and login once per host, recording `hostname` and the executed command in private logs under `runs/access-<id>/`. A successful verified login completes the access gate for every role on that host. Hostnames serve as observed labels and can repeat across machines. Management destinations open shells; engine HTTP, attestation and fabric addresses retain their service roles.
 
@@ -45,13 +90,13 @@ Use `--role router` for the router shell and the corresponding numbered engine r
 
 ### Prepare the source and role environments on the workstation
 
-With `.env` loaded, prepare a new deployment directory. The supplied `NARWHAL_DEPLOYMENT_REVISION` selects the full approved commit in the management checkout. The helper packages that commit into a Git bundle and verifies the exact SHA with a fresh local clone before writing the completed manifest.
+With `.env` and the discovery run's `derived.env` loaded in the management shell, prepare a new deployment directory. The supplied `NARWHAL_DEPLOYMENT_REVISION` selects the full approved commit in the management checkout. The helper packages that commit into a Git bundle and verifies the exact SHA with a fresh local clone before writing the completed manifest.
 
 ```bash
 python3 tools/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
 ```
 
-The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the supplied fleet document and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and `tools/launch_engine.py` and delivers both to each engine host under `runs/deployment-tools/`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The engine launcher uses the corresponding `NARWHAL_ENGINE_LAUNCHER` path and `NARWHAL_ENGINE_LAUNCHER_SHA256` digest. The manifest records hashes for the source bundle, helper snapshots and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
+The helper exports `.env.router` and one `.env.engine-<n>` for every assigned role, using the fleet document generated in step 1 and shared engine values with per-node overrides. It copies the fleet document for the router and selects one `engine-launch.engine-<n>.json` per engine from `NARWHAL_LAUNCH_CONFIG`, validating its GPU allocation, TP size and transport device declarations. Preparation also snapshots the management checkout's `tools/fabric_budget.py` and `tools/launch_engine.py` and delivers both to each engine host under `runs/deployment-tools/`. The role environment exports that path as `NARWHAL_FABRIC_BUDGET_TOOL` and its digest as `NARWHAL_FABRIC_BUDGET_SHA256`. The engine launcher uses the corresponding `NARWHAL_ENGINE_LAUNCHER` path and `NARWHAL_ENGINE_LAUNCHER_SHA256` digest. The manifest records hashes for the source bundle, helper snapshots and all role files. Management credentials stay in the workstation environment. [Host environment files](Configuration.md#host-environment-files) lists the exported fields.
 
 Choose a fresh `--out` path for a new deployment; subsequent commands reuse that path through `--run`. The mode-0600 manifest records the approved revision, host assignments, input hashes and a unique remote directory under `~/Narwhal-deploy/`. Record its path in the private deployment record. A missing field or unavailable revision stops preparation on the workstation; correct the named input or recover the approved source, then prepare a fresh directory.
 
@@ -108,7 +153,7 @@ for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
 PY_LAUNCH
 ```
 
-The supplied private record declares the replica allocation, container device mappings and UCX selection; its `sources` entries identify the allocation and device definitions used to prepare it. [Engine launch records](Configuration.md#engine-launch-records) defines these fields. Retain this output in the private deployment record.
+The generated private record declares the replica allocation, container device mappings and UCX selection; its `sources` entries identify the allocation and device definitions used to prepare it. [Engine launch records](Configuration.md#engine-launch-records) defines these fields. Retain this output in the private deployment record.
 
 Run these read-only commands in that engine-role shell. The PCI vendor and device class select the NVIDIA or AMD inspection tool on that remote host:
 
@@ -142,7 +187,7 @@ Run these read-only commands in that engine-role shell. The PCI vendor and devic
 
 Record the reported product name and visible physical GPU count per host. For ROCm, count agents whose `Device Type` is `GPU` and use their `Marketing Name`; CPU agents describe the host processor. A missing inspection command, driver error or empty GPU enumeration requires repair of that host's driver tools, permissions or device exposure before launch.
 
-Use these observations to replace `<accelerator-model>` in the router's working `config/fleet.local.json` under `hardware.accelerator`. Confirm that every participating engine has the declared accelerator model. Set `hardware.accelerators_per_engine` to the length of the record's `gpu_ids` and `hardware.tensor_parallel` to its `tensor_parallel_size`; verify that the selected indices or UUIDs identify available GPUs on this host. A host's total GPU count describes available hardware; the selected replica allocation determines its TP shape. Record the observations with the deployment and retain the corrected fleet config for subsequent runs.
+Compare these observations with the generated `hardware.accelerator` in the router's working `config/fleet.local.json`. Confirm that every participating engine has the declared accelerator model. Set `hardware.accelerators_per_engine` to the length of the record's `gpu_ids` and `hardware.tensor_parallel` to its `tensor_parallel_size`; verify that the selected indices or UUIDs identify available GPUs on this host. A host's total GPU count describes available hardware; the selected replica allocation determines its TP shape. Record the observations with the deployment and retain the fleet config with this run.
 
 Take the engine image, model and run paths, model-config hash, fabric interface and ports from this host's supplied deployment values; [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) names these inputs. The router's ignored fleet document holds one entry per engine; the private inventory holds each engine's fabric address and peers. Replace angle-bracket placeholders in this guide from that inventory before executing commands.
 
@@ -314,7 +359,7 @@ Complete the host inspection and directed fabric matrix before starting the firs
 
 ### Prepare the first engine command
 
-The supplied per-engine record's `runtime` object names pinned package versions, library environment, model dtype, cache dtype, block size and model-specific arguments. Step 2 delivers `launch_engine.py` beside the fabric calculator and exports `NARWHAL_ENGINE_LAUNCHER` and `NARWHAL_ENGINE_LAUNCHER_SHA256` in each engine-role environment. The launcher builds a Docker command invoking `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`, mounts `NARWHAL_MODEL_DIR` read-only at `/model`, exposes the declared devices, and applies the selected TP allocation.
+The generated per-engine record's `runtime` object names pinned package versions, library environment, model dtype, cache dtype, block size and model-specific arguments. Step 2 delivers `launch_engine.py` beside the fabric calculator and exports `NARWHAL_ENGINE_LAUNCHER` and `NARWHAL_ENGINE_LAUNCHER_SHA256` in each engine-role environment. The launcher builds a Docker command invoking `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`, mounts `NARWHAL_MODEL_DIR` read-only at `/model`, exposes the declared devices, and applies the selected TP allocation.
 
 In the installed engine-1 shell, verify the launcher and prepare a fresh private launch directory:
 
@@ -738,7 +783,7 @@ Share sanitised extracts from the private deployment record, using stable host a
 
 | Step and documentation | Required knowledge | Likely failure and recovery | Private value location |
 | --- | --- | --- | --- |
-| [Management access](#1-open-the-management-shells) | Physical host IDs, assigned roles, access variable names and verified server keys. | Missing access input: fill the named environment field. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, `config/hosts.local.json`, `config/ssh.known_hosts` and `runs/access-<id>/`. |
+| [Management access](#1-open-the-management-shells) | Workstation `.env`, installed remote image/model, GPU driver tools and initial launch policy. | Discovery failure: inspect its private log and correct the named environment field, host tool or image. Host-key rejection: verify the destination and fingerprint before updating its entry. Login failure: inspect the host's private log and check its credential and route. | Workstation `.env`, generated JSON and host-key files, `runs/discovery/<run>/` and `runs/access-<id>/`. |
 | [Host installation](#2-install-narwhal-on-the-remote-hosts) | Approved commit in the management checkout, shared launch fields, per-engine allocation records, per-node overrides and host prerequisites. | Preparation failure: correct the named field or source revision. Transfer or checkout mismatch: inspect the prepared hashes and existing artifacts. Setup failure: repair the dependency error on that host and repeat the same run. | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config and installation marker. |
 | [Engine preparation](#3-inspect-each-engine-host) | Remote PCI vendor, observed GPU model and count, declared replica allocation and TP, image identity, model hash, paths and ports. | Device, artifact or listener mismatch: inspect the failing resource, restore the declared artifact or resolve resource ownership before launch. | Engine `.env.engine-<n>` and `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`. |
 | [Fabric](#4-prepare-the-transfer-fabric) | Peer addresses, TCP or RDMA selection, checked runtime, available GPUs for cache sizing, prompt length, handoff rate, burst and transfer-time budget. | Sizing failure: inspect the recorded probe and repair its model, device, runtime or cache-spec input. Route or connection failure: check the source address, listener, firewall and selected device/GID. Rate below budget: inspect link counters, MTU, CPU and concurrent traffic, then retain a fresh sample after repair. | Engine role environment and launch record; model config; helper path and digest; host-local `runs/fabric-*/cache-probe/` plan, page specs, container ID and logs; budget, directed samples and private edge matrix. |

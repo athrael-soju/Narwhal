@@ -47,7 +47,7 @@ The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K
 
 ## Deploy a fleet
 
-Follow [Deploy a fleet](docs/Deploy.md) from your management workstation. The guide uses the supplied private inventory and access to prepare the remote router and GPU engine hosts, launch vLLM with NIXL, and verify a model completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, then inspect the running fleet through Prometheus and Grafana.
+Follow [Deploy a fleet](docs/Deploy.md) from your management workstation. The guide derives deployment configuration from your private `.env` and host inspection to prepare the remote router and GPU engine hosts, launch vLLM with NIXL, and verify a model completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, then inspect the running fleet through Prometheus and Grafana.
 
 ## Documentation
 

@@ -42,6 +42,10 @@ Model names, hardware, profiles and SLOs belong in the fleet JSON. Engine launch
 
 The commented deployment inputs in `.env.example`, such as `NARWHAL_ENGINE_IMAGE`, `NARWHAL_MODEL_DIR`, and `NARWHAL_FABRIC_INTERFACE`, belong to the [engine-host preparation](Deploy.md#3-inspect-each-engine-host) shell or site automation. Narwhal reads the fleet JSON; its `engines` array defines inventory size. The loader resolves engine `url` and `attestation_url` when their entire values are environment references. Model path and image variables remain inputs to the engine launcher.
 
+### Generate deployment configuration
+
+Load the supplied workstation `.env` and run `python3 tools/discover_deployment.py --out runs/discovery/first-deploy`, then source `runs/discovery/first-deploy/derived.env`. [Deployment discovery](Deploy.md#derive-configuration-from-the-hosts) creates the host inventory, SSH trust store, fleet, launch records and source index from management destinations and remote observations. [Launch policy](Deploy.md#launch-policy-and-environment-overrides) defines defaults and `.env` overrides. Store observations and generated files with the deployment record; a new test generates its own copies.
+
 ### Host environment files
 
 `NARWHAL_DEPLOYMENT_REVISION` selects the full commit SHA in the management checkout. `tools/deploy_hosts.py prepare` packages that commit into `source.bundle` and verifies it with a fresh local clone; `install` transfers it to each selected host. Remote checkouts clone that bundle and compare their revision with the role file before installation. Store the bundle with the generated environment files under ignored `runs/deployment-env/`.
@@ -65,7 +69,7 @@ Generated files live under ignored `runs/deployment-env/` on the workstation. Gi
 
 ### Engine launch records
 
-`NARWHAL_LAUNCH_CONFIG` selects the supplied private `config/engine-launch.local.json` on the management workstation. Its `engines` object contains one entry per assigned `engine-<n>` role. When preparing a new inventory, use [the example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) and fill each entry from the approved engine launcher, container device definition or scheduler allocation. Keep allocation, device and transfer source descriptions in that entry's `sources`; store any supporting extracts with the private configuration. An existing supplied record goes directly into deployment preparation.
+`NARWHAL_LAUNCH_CONFIG` selects the generated private `config/engine-launch.local.json` on the management workstation. Discovery creates one entry per assigned `engine-<n>` role from detected GPUs, device paths, image package versions and environment-selected policy. Each entry's `sources` identifies its retained inspection and policy; `config/engine-launch.sources.json` indexes those references. [The example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents the schema. Change the corresponding `.env` policy and rerun discovery into fresh artifacts when changing an allocation or runtime setting.
 
 | Field | Deployment use |
 | --- | --- |
@@ -80,11 +84,11 @@ Generated files live under ignored `runs/deployment-env/` on the workstation. Gi
 
 `prepare` validates every assigned engine record before creating the output directory, generates matching GPU visibility and `UCX_NET_DEVICES` entries under `environment`, and writes `--tensor-parallel-size` arguments under `vllm_args`. `install` places each selected record under the engine checkout's `config/`; the role environment names its path. The delivered engine launcher combines those arguments and mappings with the runtime fields below, then records the complete container command for inspection.
 
-Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct an invalid record at the workstation and prepare a fresh run so its manifest captures the corrected inputs.
+Launch records and supporting extracts stay in ignored `config/engine-launch.*.json` files with mode 0600. The public example supplies the schema; actual allocations and runtime evidence belong in the private files. Correct the named `.env` field or remote prerequisite, regenerate the affected configuration, and prepare a fresh run so its manifest captures the corrected inputs.
 
 ### Runtime launch records
 
-Each supplied engine record's `runtime` object completes the serving configuration for `launch_engine.py`. Store image-specific values in the private `config/engine-launch.local.json`; preparation carries the selected record and launcher snapshot to the engine host. The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the structure.
+Each generated engine record's `runtime` object completes the serving configuration for `launch_engine.py`. Discovery reads package pins and supported runtime environment fields from the selected image, reads dtype from the model config, and applies the [environment launch policy](Deploy.md#launch-policy-and-environment-overrides). Preparation carries that record and the launcher snapshot to the engine host. The [example record](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) shows the structure.
 
 | Runtime field | Operator input |
 | --- | --- |
@@ -107,13 +111,13 @@ The generated mode-0600 `runs/fabric-*/budget.json` records input and runtime-la
 
 ### Host inventory and SSH access
 
-`NARWHAL_HOSTS` selects the private physical-host inventory, defaulting to `config/hosts.local.json`. Each `hosts` entry supplies a unique `id`, an `ssh_env` variable naming its management destination, an optional `password_env` variable and its `roles`. The `router` role appears once; each engine uses an `engine-<n>` role matching its numbered deployment variables. Assign colocated roles to the same host entry. The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) places `router` and `engine-1` on one host and `engine-2` on another.
+`NARWHAL_HOSTS` selects the generated physical-host inventory, defaulting to `config/hosts.local.json`. Discovery groups equal `NARWHAL_NODE_<n>_SSH` and `NARWHAL_ROUTER_SSH` values from `.env` into one host entry. Each `hosts` entry supplies a unique `id`, an `ssh_env` variable naming its management destination, an optional `password_env` variable and its `roles`. The `router` role appears once; each engine uses an `engine-<n>` role matching its numbered deployment variables. Assign colocated roles to the same host entry. The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) places `router` and `engine-1` on one host and `engine-2` on another.
 
 Store destinations and credentials in the workstation's `.env`; the inventory holds their variable names. Destinations accept an SSH alias or `user@management-host`. Supplying `password_env` selects password authentication and requires that variable to contain a value. Omitting it selects OpenSSH key or agent authentication. Every role assigned to a host reuses that host's access entry.
 
 `tools/deploy_hosts.py plan` validates unique host IDs, role ownership, required access variables and distinct destination entries. The helper groups deployment work by host ID. Two aliases for the same physical machine belong in one host entry with the combined roles; the supplied inventory determines machine identity. `check-access` opens one verified connection per host. `shell --role <role>` resolves the role through that inventory.
 
-Store verified management host keys in checkout-local `config/ssh.known_hosts` and select it with `NARWHAL_SSH_KNOWN_HOSTS`. Supply that file, `.env`, the host inventory, engine launch records and fleet JSON with a fresh management checkout, keeping private file permissions at mode 0600. The helper uses strict host-key checking against this store and passes a selected password to `sshpass` through a private file descriptor. Install OpenSSH and, for password access, `sshpass` on the management workstation.
+A fresh management checkout starts with `.env`; discovery generates the private files at mode 0600. `NARWHAL_SSH_KNOWN_HOSTS` selects checkout-local `config/ssh.known_hosts`. Discovery uses OpenSSH `accept-new` to record keys on first use and reject changed keys; an existing verified store retains its entries. Deployment commands then use strict host-key checking against that store. Password access passes the selected credential to `sshpass` through a private file descriptor. Install OpenSSH and, for password access, `sshpass` on the management workstation.
 
 For key or SSH-agent authentication, configure the workstation's private SSH configuration with the host's address, username, identity and optional `Port` or `ProxyJump`. Point the inventory's `ssh_env` variable to that alias. Verify a new or changed server key through the supplied private access source before updating the checkout-local host-key store. Record remote `hostname` output as an observed label; SSH keys establish server identity.
 

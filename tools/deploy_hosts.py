@@ -198,7 +198,7 @@ def load_run(run: Path, hosts: list[Host], env: dict[str, str]) -> dict:
 
 
 class SSH:
-    def __init__(self, env: dict[str, str], logs: Path):
+    def __init__(self, env: dict[str, str], logs: Path, *, enroll_hosts: bool = False):
         self.env = env
         client_keys = {
             "PATH",
@@ -223,7 +223,7 @@ class SSH:
             raise ValueError("NARWHAL_SSH_KNOWN_HOSTS must select the supplied host-key file")
         self.options = [
             "-o",
-            "StrictHostKeyChecking=yes",
+            "StrictHostKeyChecking=accept-new" if enroll_hosts else "StrictHostKeyChecking=yes",
             "-o",
             "GlobalKnownHostsFile=/dev/null",
             "-o",
