@@ -42,7 +42,7 @@ A longer queue or timeout can turn an immediate refusal into a late SLO miss, so
 
 1. Confirm the engine is ejected or quarantined and that other engines still receive work.
 2. Preserve its boot log and supervisor exit reason.
-3. Check `recovery.engine_restart_policy`. With `individual`, use the [Docker and Supervisor recovery commands](Deploy.md#supervise-the-engine-and-sidecar): check the recovered engine's HTTP endpoints, then restart its sidecar through Supervisor to bind the new identity. Inspect `attestation.log` for a sidecar in `BACKOFF` or `FATAL`, repair the named endpoint or contract failure, then issue `start attestation`. With `whole_wave`, use the complete-wave procedure below.
+3. Check `recovery.engine_restart_policy`. With `individual`, verify the recovered engine's HTTP endpoints, then restart its sidecar through the configured process manager to bind the new identity. Inspect the sidecar log and repair any named endpoint or contract failure. With `whole_wave`, use the complete-wave procedure below.
 4. Watch `/narwhal/lifecycle`. A contracted fleet automatically runs health, attestation, model, generation, role-permitted KV, and final-health gates.
 5. If validation passes, confirm the engine returns to `accepts_new: true` and the ejection clears.
 6. If individual validation fails, repair the `blocked` engine and call `/narwhal/lifecycle/readmit`; readmission clears its ejection after every recovery gate passes. A `whole_wave` fleet requires complete-wave readmission.

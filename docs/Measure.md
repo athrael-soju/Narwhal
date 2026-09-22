@@ -75,7 +75,7 @@ Run `narwhal-check` against the final fleet, then send the deployment workload t
 
 The [first-deployment trial](Deploy.md#10-validate-private-route-capacity) uses the management workstation as its client and the existing router SSH destination as its private route. Record both endpoint hosts and the tunnel mapping with the workload, and attribute its throughput and latency to that route.
 
-Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router, engine, SSH route and supervisor configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots and metrics.
+Before the run, bind one deployment identifier to the exact Narwhal release, source revision, distribution digest, fleet config, profile and sample stores, engine image digest and launcher, attestation documents, router, engine and SSH route configuration, preflight output, endpoint captures, deployment-client output, router journal, state snapshots and metrics.
 
 Hold the source revision, model, runtime, profiles, workload shape, cache policy, and latency targets fixed across the run. Start with two offered rates to establish the scaling direction, then extend the sweep until the client attainment target fails or the intended operating ceiling passes. Let resident requests and transfer leases drain between runs.
 
@@ -133,4 +133,4 @@ Run artifacts use a fresh mode-0700 directory and mode-0600 files. The helper ru
 
 The deployment acceptance record should name the highest offered rate meeting the candidate client target, the tested request shape and SSH route, the preflight revision, and the retained artifact paths. The deployment system owns that policy and decides when a configuration change requires another run.
 
-After the [capacity gate](Deploy.md#10-validate-private-route-capacity) passes, continue with [Restart one engine](Operate.md#restart-one-engine) for supervised restart and router readmission. The [API and data reference](API-and-Data-Reference.md) defines the journal, state and metrics used to compare the recovered deployment with the retained baseline.
+The [capacity gate](Deploy.md#10-validate-private-route-capacity) completes setup with a measured workload, reconciled journal, working dashboard and passing post-load KV ring. The [API and data reference](API-and-Data-Reference.md) defines the retained journal, state and metrics.

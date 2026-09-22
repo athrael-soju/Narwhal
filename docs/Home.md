@@ -4,7 +4,7 @@
 
 # Narwhal documentation
 
-[Deploy a fleet](Deploy.md) starts on your management workstation with the supplied private inventory and access, then takes you through remote host preparation, engine launch, KV transfer checks and a routed completion. Continue through the private-route workload trial, then verify supervised restart and readmission.
+[Deploy a fleet](Deploy.md) starts on your management workstation with the supplied private inventory and access, then takes you through remote host preparation, engine launch, KV transfer checks and a routed completion. Continue through the private-route workload trial, then inspect the running fleet through Prometheus and Grafana.
 
 ## Deployment and operations
 
