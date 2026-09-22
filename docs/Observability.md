@@ -32,6 +32,8 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
 
 `make observe` writes router and engine discovery files from the selected deployment, binds each listener check to this Compose project, reports an external owner before Compose changes the project, and starts the pinned images. Startup then requires one healthy router target, every fleet engine target, `narwhal_router_ready`, the selected Prometheus datasource and the provisioned dashboard query contract. Docker and owner queries receive a 10-second deadline, while initial image retrieval and container creation receive five minutes. Prometheus 3.14.0 and Grafana 13.2.1 receive 60 seconds to satisfy the complete contract.
 
+After listener ownership checks, startup copies the Prometheus configuration and alert rules, Grafana provisioning and dashboard, and generated targets into `runs/observability/mounts/`. This parent directory uses mode `0700`; each mounted subtree uses directories with mode `0755` and files with mode `0644`, so the containers' service users can read the bind mounts. Docker mounts only the `prometheus`, `grafana-provisioning` and `grafana-dashboards` subdirectories, each read-only. Source checkout permissions and private role environments retain their existing modes. Rerunning `make observe` refreshes these copies and repairs their permissions before Compose updates the monitoring services.
+
 Select isolated loopback listeners when the defaults belong to another deployment:
 
 ```bash
@@ -75,9 +77,10 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 | Startup reports an occupied listener | Stop the reported process or socket unit, or select isolated addresses with `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | Startup reports a command deadline | Docker daemon health, registry reachability and `docker compose -f tools/observability/compose.yml ps`. |
 | Startup reports a container exit or readiness deadline | `docker compose -f tools/observability/compose.yml logs prometheus grafana` and the pinned image versions. |
+| Prometheus reports config permission denied or Grafana returns dashboard 404 | Use the updated monitoring startup helper and Compose file together, then rerun `make observe` from the same deployed checkout. Inspect the staged mount permissions and container logs if readiness still fails; retain the failure output in the private deployment record. |
 | Startup reports a router target failure | `NARWHAL_ROUTER_URL`, its route from the Prometheus host, and Prometheus `/targets`. |
 | Engine charts lose a replica | Generated targets, engine metrics reachability and its `iid` label. |
-| Grafana serves an older dashboard | Recreate Grafana so its file mount follows the current dashboard inode. |
+| Grafana serves an older dashboard | Rerun `make observe` to refresh the staged dashboard; the directory mount exposes replacements to Grafana's provisioner. Inspect the provisioning log if the dashboard check still fails. |
 | A rule fires for the wrong scope | Target relabelling for `job`, `instance` and `iid`. |
 
 Keep deployment addresses and captured responses under `runs/`. [Operate Narwhal](Operate.md#monitor-the-fleet) defines health semantics and operator actions. The [deployment acceptance sequence](Deploy.md#10-validate-ingress-and-capacity) binds the verified targets and dashboard queries to the retained load evidence.

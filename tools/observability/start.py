@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from tools.observability.make_targets import TargetContract, load_contract, write_contract
+from tools.observability.artifacts import stage_artifacts
+from tools.observability.make_targets import TargetContract, load_contract
 
 BASE = Path(__file__).resolve().parent
 COMPOSE_FILE = BASE / "compose.yml"
@@ -708,7 +709,7 @@ def start(
     *,
     get: HttpGet = http_get,
     timeout_s: float = DEFAULT_READY_TIMEOUT_S,
-    target_writer: Callable[[TargetContract], None] = write_contract,
+    target_writer: Callable[[TargetContract], None] = stage_artifacts,
 ) -> dict[str, Container]:
     """Check listeners, launch Compose and verify the resulting services."""
     services = configured_services(env)
