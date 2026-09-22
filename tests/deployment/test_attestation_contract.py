@@ -1,12 +1,16 @@
 """Reject stale engine evidence and derive the router contract from live sidecars."""
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -14,11 +18,15 @@ import httpx
 from narwhal.config import EngineContract
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from tools.deployment.attestation_contract import (
+    MODEL_DIMENSIONS_CAPTURE,
+    MODEL_DIMENSIONS_CAPTURE_TAG,
     attention_backends,
+    capture_model_dimensions,
     capture_nixl,
     engine_document,
     finalize_fleet,
     generate,
+    read_json,
     serve,
 )
 
@@ -56,6 +64,7 @@ class AttestationContractTests(unittest.TestCase):
                 "auto",
             ],
             "env_sha256": "e" * 64,
+            "launcher_sha256": "f" * 64,
             "connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
             "expected_packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0"},
         }
@@ -193,6 +202,139 @@ class AttestationContractTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "NIXL capture"):
                         capture_nixl(run)
                     self.assertFalse(output.exists())
+
+    def test_live_dimensions_complete_an_old_plan_without_restarting_its_container(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, log = self.engine_evidence(Path(folder))
+            previous = read_json(run / "model-dimensions.json")
+            previous.pop("model_architecture")
+            save(run / "model-dimensions.json", previous)
+            plan = read_json(run / "launch.json")
+            plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
+            cid = "b" * 64
+            with patch("tools.deployment.attestation_contract.live_container", return_value=cid):
+                with self.assertRaisesRegex(ValueError, "Capture live model dimensions"):
+                    engine_document(run, log)
+                record = {
+                    **previous,
+                    "model_architecture": "TestForCausalLM",
+                    "launcher_sha256": plan["launcher_sha256"],
+                }
+                output = (
+                    "INFO: vLLM initialization\n"
+                    + MODEL_DIMENSIONS_CAPTURE_TAG
+                    + json.dumps(record)
+                    + "\n"
+                )
+                result = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=output, stderr=""
+                )
+                with patch(
+                    "tools.deployment.attestation_contract.subprocess.run", return_value=result
+                ) as run_docker:
+                    capture = capture_model_dimensions(run)
+                command = run_docker.call_args.args[0]
+                self.assertEqual(
+                    command[:4], ["docker", "exec", "--env", "NARWHAL_CAPTURE_CACHE=0"]
+                )
+                self.assertEqual(command[4], cid)
+                self.assertEqual(command[command.index("-c") + 2], plan_hash)
+                live = read_json(capture)
+                self.assertEqual(live["model_architecture"], "TestForCausalLM")
+                self.assertEqual(live["container_id"], cid)
+                self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
+                logs = list(run.glob("model-dimensions.live-*.log"))
+                self.assertEqual(len(logs), 1)
+                self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
+                self.assertEqual(
+                    live["capture_log_sha256"], hashlib.sha256(logs[0].read_bytes()).hexdigest()
+                )
+                self.assertEqual(
+                    engine_document(run, log)["contract"]["model_architecture"], "TestForCausalLM"
+                )
+                self.assertNotIn("model_architecture", read_json(run / "model-dimensions.json"))
+                with self.assertRaisesRegex(ValueError, "already exist"):
+                    capture_model_dimensions(run)
+                live["container_id"] = "c" * 64
+                save(capture, live)
+                with self.assertRaisesRegex(ValueError, "container_id differs"):
+                    engine_document(run, log)
+
+    def test_live_dimensions_reject_mismatch_before_writing_capture(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, _ = self.engine_evidence(Path(folder))
+            previous = read_json(run / "model-dimensions.json")
+            previous.pop("model_architecture")
+            save(run / "model-dimensions.json", previous)
+            plan = read_json(run / "launch.json")
+            plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
+            record = {
+                **previous,
+                "model_architecture": "TestForCausalLM",
+                "launcher_sha256": plan["launcher_sha256"],
+                "contract": {**previous["contract"], "head_size": 576},
+            }
+            result = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=MODEL_DIMENSIONS_CAPTURE_TAG + json.dumps(record) + "\n",
+                stderr="",
+            )
+            with (
+                patch(
+                    "tools.deployment.attestation_contract.live_container", return_value="b" * 64
+                ),
+                patch("tools.deployment.attestation_contract.subprocess.run", return_value=result),
+                self.assertRaisesRegex(ValueError, "differ from the retained plan capture"),
+            ):
+                capture_model_dimensions(run)
+            self.assertFalse((run / "model-dimensions.live.json").exists())
+            self.assertEqual(plan_hash, record["plan_sha256"])
+
+    def test_live_dimension_probe_uses_the_plan_mounted_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            launcher = root / "launch_engine.py"
+            launcher.write_text("# pinned launcher\n")
+            config = root / "config.json"
+            config.write_text("{}")
+            plan = {
+                "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
+                "model_config_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "image": "sha256:" + "a" * 64,
+                "revision": "d" * 40,
+            }
+            plan_path = root / "launch.json"
+            save(plan_path, plan)
+            plan_hash = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+            model = SimpleNamespace(
+                get_head_size=lambda: 576,
+                get_total_num_kv_heads=lambda: 96,
+                get_total_num_hidden_layers=lambda: 93,
+                architecture="TestForCausalLM",
+                use_mla=True,
+            )
+            pinned = ModuleType("launch_engine")
+            pinned.__file__ = str(launcher)
+            pinned.runtime_config = lambda _: SimpleNamespace(model_config=model)
+            with (
+                patch.dict(sys.modules, {"launch_engine": pinned}),
+                patch.object(sys, "argv", ["-c", plan_hash, str(plan_path), str(config)]),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+            ):
+                exec(compile(MODEL_DIMENSIONS_CAPTURE, "live-model-dimensions", "exec"), {})
+            record = json.loads(output.getvalue().split(MODEL_DIMENSIONS_CAPTURE_TAG, 1)[1])
+            self.assertEqual(
+                record["contract"], {"head_size": 576, "kv_heads": 96, "hidden_layers": 93}
+            )
+            self.assertEqual(record["launcher_sha256"], plan["launcher_sha256"])
+            launcher.write_text("# changed launcher\n")
+            with (
+                patch.dict(sys.modules, {"launch_engine": pinned}),
+                patch.object(sys, "argv", ["-c", plan_hash, str(plan_path), str(config)]),
+                self.assertRaisesRegex(ValueError, "mounted launcher differs"),
+            ):
+                exec(compile(MODEL_DIMENSIONS_CAPTURE, "live-model-dimensions", "exec"), {})
 
     def test_engine_document_uses_checked_captures_and_rejects_stale_plan(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -40,11 +40,14 @@ def read_json(path: Path) -> dict:
     return value
 
 
-def write_private(path: Path, value: dict) -> None:
-    data = json.dumps(value, indent=2) + "\n"
+def write_private_text(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as output:
         output.write(data)
+
+
+def write_private(path: Path, value: dict) -> None:
+    write_private_text(path, json.dumps(value, indent=2) + "\n")
 
 
 def checked_plan(run: Path) -> tuple[dict, dict, str]:
@@ -93,21 +96,128 @@ print("\\n" + {NIXL_CAPTURE_TAG!r} + json.dumps(record), flush=True)
 """
 
 
-def parse_nixl_capture(output: str) -> dict:
-    captures = [
-        line.removeprefix(NIXL_CAPTURE_TAG)
-        for line in output.splitlines()
-        if line.startswith(NIXL_CAPTURE_TAG)
-    ]
+def parse_tagged_capture(output: str, tag: str, label: str) -> dict:
+    captures = [line.removeprefix(tag) for line in output.splitlines() if line.startswith(tag)]
     if len(captures) != 1:
-        raise ValueError(f"Expected one tagged NIXL capture, received {len(captures)}")
+        raise ValueError(f"Expected one tagged {label} capture, received {len(captures)}")
     try:
         record = json.loads(captures[0])
     except json.JSONDecodeError as exc:
-        raise ValueError("Tagged NIXL capture contains invalid JSON") from exc
+        raise ValueError(f"Tagged {label} capture contains invalid JSON") from exc
     if not isinstance(record, dict):
-        raise ValueError("Tagged NIXL capture must contain a JSON object")
+        raise ValueError(f"Tagged {label} capture must contain a JSON object")
     return record
+
+
+def parse_nixl_capture(output: str) -> dict:
+    return parse_tagged_capture(output, NIXL_CAPTURE_TAG, "NIXL")
+
+
+MODEL_DIMENSIONS_CAPTURE_TAG = "NARWHAL_LIVE_MODEL_DIMENSIONS_V1:"
+MODEL_DIMENSIONS_CAPTURE = f"""import hashlib, json, sys
+from pathlib import Path
+import launch_engine
+plan_path = Path(sys.argv[2])
+plan_data = plan_path.read_bytes()
+plan_hash = hashlib.sha256(plan_data).hexdigest()
+if plan_hash != sys.argv[1]:
+    raise ValueError("mounted launch plan differs from the checked serving plan")
+plan = json.loads(plan_data)
+launcher_hash = hashlib.sha256(Path(launch_engine.__file__).read_bytes()).hexdigest()
+if launcher_hash != plan["launcher_sha256"]:
+    raise ValueError("mounted launcher differs from the checked serving plan")
+model_hash = hashlib.sha256(Path(sys.argv[3]).read_bytes()).hexdigest()
+if model_hash != plan["model_config_sha256"]:
+    raise ValueError("mounted model configuration differs from the checked serving plan")
+model = launch_engine.runtime_config(plan).model_config
+methods = {{"head_size": "get_head_size", "kv_heads": "get_total_num_kv_heads",
+           "hidden_layers": "get_total_num_hidden_layers"}}
+values = {{field: getattr(model, method)() for field, method in methods.items()}}
+if any(type(value) is not int or value < 1 for value in values.values()):
+    raise ValueError("model contract getters must return positive integers")
+architecture = model.architecture
+if not isinstance(architecture, str) or not architecture.strip():
+    raise ValueError("runtime model architecture is empty")
+record = {{"contract": values,
+          "sources": {{field: f"ModelConfig.{{method}}()" for field, method in methods.items()}},
+          "model_architecture": architecture, "use_mla": model.use_mla,
+          "model_config_sha256": model_hash, "plan_sha256": plan_hash,
+          "launcher_sha256": launcher_hash, "image": plan["image"],
+          "revision": plan["revision"]}}
+print("\\n" + {MODEL_DIMENSIONS_CAPTURE_TAG!r} + json.dumps(record), flush=True)
+"""
+
+
+def capture_model_dimensions(run: Path) -> Path:
+    plan, checked, plan_hash = checked_plan(run)
+    cid = live_container(run, checked)
+    destination = run / "model-dimensions.live.json"
+    if destination.exists():
+        raise ValueError("Live model dimensions already exist; retain the capture")
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "--env",
+            "NARWHAL_CAPTURE_CACHE=0",
+            cid,
+            "python3",
+            "-c",
+            MODEL_DIMENSIONS_CAPTURE,
+            plan_hash,
+            "/narwhal-hooks/launch.json",
+            "/model/config.json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    log = run / f"model-dimensions.live-{uuid.uuid4().hex}.log"
+    write_private_text(log, result.stdout + "\nSTDERR\n" + result.stderr)
+    if result.returncode:
+        raise ValueError(f"Live model dimension inspection failed; inspect {log}")
+    try:
+        record = parse_tagged_capture(
+            result.stdout, MODEL_DIMENSIONS_CAPTURE_TAG, "model dimensions"
+        )
+    except ValueError as exc:
+        raise ValueError(f"{exc}; inspect {log}") from exc
+    require_binding(
+        record,
+        "Live model dimensions",
+        plan_sha256=plan_hash,
+        image=plan["image"],
+        revision=plan["revision"],
+        model_config_sha256=plan["model_config_sha256"],
+        launcher_sha256=plan["launcher_sha256"],
+    )
+    if (
+        not isinstance(record.get("model_architecture"), str)
+        or not record["model_architecture"].strip()
+    ):
+        raise ValueError("Live model dimensions lack the resolved architecture")
+    contract = record.get("contract")
+    if not isinstance(contract, dict) or any(
+        type(contract.get(field)) is not int or contract[field] < 1
+        for field in ("head_size", "kv_heads", "hidden_layers")
+    ):
+        raise ValueError("Live model dimensions contain invalid compatibility getters")
+    original = run / "model-dimensions.json"
+    if original.exists():
+        previous = read_json(original)
+        require_binding(
+            previous,
+            "Prior model dimensions",
+            plan_sha256=plan_hash,
+            image=plan["image"],
+            revision=plan["revision"],
+            model_config_sha256=plan["model_config_sha256"],
+        )
+        if previous.get("contract") != contract:
+            raise ValueError("Live model dimensions differ from the retained plan capture")
+    record.update(image_id=checked["image_id"], container_id=cid, capture_log_sha256=digest(log))
+    write_private(destination, record)
+    return destination
 
 
 def capture_nixl(run: Path) -> Path:
@@ -165,7 +275,10 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     cid = live_container(run, checked)
     inspection = run
     inspection_hash = plan_hash
-    dimensions = read_json(inspection / "model-dimensions.json")
+    original_dimensions = inspection / "model-dimensions.json"
+    live_dimensions = inspection / "model-dimensions.live.json"
+    dimension_source = live_dimensions if live_dimensions.exists() else original_dimensions
+    dimensions = read_json(dimension_source)
     registration = read_json(inspection / "cache-registration.json")
     require_binding(
         dimensions,
@@ -175,6 +288,26 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         model_config_sha256=plan["model_config_sha256"],
         revision=plan["revision"],
     )
+    if dimension_source == live_dimensions:
+        require_binding(
+            dimensions,
+            "Live model dimensions",
+            image_id=checked["image_id"],
+            container_id=cid,
+            launcher_sha256=plan["launcher_sha256"],
+        )
+        if original_dimensions.exists():
+            previous = read_json(original_dimensions)
+            require_binding(
+                previous,
+                "Prior model dimensions",
+                plan_sha256=plan_hash,
+                image=plan["image"],
+                model_config_sha256=plan["model_config_sha256"],
+                revision=plan["revision"],
+            )
+            if previous.get("contract") != dimensions.get("contract"):
+                raise ValueError("Live model dimensions differ from the retained plan capture")
     require_binding(
         registration, "Cache registration", plan_sha256=inspection_hash, image=plan["image"]
     )
@@ -208,7 +341,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         raise ValueError("Model configuration changed after launch preparation")
     architecture = dimensions.get("model_architecture")
     if not isinstance(architecture, str) or not architecture.strip():
-        raise ValueError("Pinned model inspection lacks the resolved architecture")
+        raise ValueError("Capture live model dimensions for the resolved architecture")
     version = read_json(run / "version.json").get("version")
     if version != checked.get("vllm_api_version"):
         raise ValueError("HTTP version differs from the checked image")
@@ -259,11 +392,11 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "image_digest": run / "checked.json",
         "nixl_version": run / "launch.json",
         "nixl_connector_version": run / "nixl-connector-version.json",
-        "model_architecture": inspection / "model-dimensions.json",
+        "model_architecture": dimension_source,
         "model_dtype": run / "launch.json",
-        "kv_heads": inspection / "model-dimensions.json",
-        "head_size": inspection / "model-dimensions.json",
-        "hidden_layers": inspection / "model-dimensions.json",
+        "kv_heads": dimension_source,
+        "head_size": dimension_source,
+        "hidden_layers": dimension_source,
         "attention_backend": startup_log,
         "kv_cache_dtype": run / "launch.json",
         "cross_layers_blocks": inspection / "cache-registration.json",
@@ -384,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     capture = commands.add_parser("capture-nixl")
     capture.add_argument("--run", required=True, type=Path)
+    dimensions = commands.add_parser("capture-model-dimensions")
+    dimensions.add_argument("--run", required=True, type=Path)
     engine = commands.add_parser("generate")
     engine.add_argument("--run", required=True, type=Path)
     engine.add_argument("--startup-log", required=True, type=Path)
@@ -396,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "capture-nixl":
             result = capture_nixl(args.run)
             print(f"Captured pinned NIXL protocol in {result}")
+        elif args.command == "capture-model-dimensions":
+            result = capture_model_dimensions(args.run)
+            print(f"Captured live model dimensions in {result}")
         elif args.command == "generate":
             result = generate(args.run, args.startup_log)
             print(f"Generated private engine attestation in {result}")

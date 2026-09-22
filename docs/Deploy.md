@@ -1075,6 +1075,8 @@ Create attestations after every engine passes the HTTP gate.
 
 Run per-host attestation work concurrently where inspection containers and device allocations do not interfere.
 
+Reuse captures already bound to the checked plan in `ENGINE_RUN`; each capture command creates its destination exclusively. The live dimensions command writes a separate record and retains an earlier `model-dimensions.json` for comparison.
+
 Capture the complete startup log for the checked serving container. The generator reads the resolved attention backend and binds each contract field to retained evidence:
 
 ```bash
@@ -1113,7 +1115,8 @@ Populate:
 
 - `head_size`;
 - `kv_heads`;
-- `hidden_layers`.
+- `hidden_layers`;
+- `model_architecture`.
 
 Take them from the installed runtime's:
 
@@ -1129,19 +1132,19 @@ For DeepSeek-style MLA with MLA enabled, the [head-size resolver](https://github
 kv_lora_rank + qk_rope_head_dim
 ```
 
-The contract should contain the getter results from the actual pinned runtime and launch settings.
+The contract uses the getter results and resolved architecture from the pinned runtime and launch settings.
 
-Read the model dimensions from the same checked serving plan:
+Capture these fields through the running serving container:
 
 ```bash
 umask 077
-python3 "$NARWHAL_ENGINE_LAUNCHER" model-dimensions --run "$ENGINE_RUN"
-cat "$ENGINE_RUN/model-dimensions.json"
+.venv/bin/python tools/deployment/attestation_contract.py capture-model-dimensions --run "$ENGINE_RUN"
+cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-The temporary image process exits after reading configuration and does not create model workers.
+The capture reads the plan and launcher mounted in that container, checks their hashes against `launch.json`, and obtains the getters and architecture from its installed vLLM. The temporary inspection process exits after configuration resolution while the serving engine stays running.
 
-The generator reads the three integers and records their capture path and getter names in `sources`.
+The capture writes `model-dimensions.live.json` beside the serving plan and keeps a private `model-dimensions.live-*.log`. When an earlier `model-dimensions.json` exists, the capture compares its three getter values with the live values and retains both records. The generator reads the live values and cites their capture path in `sources`.
 
 Keep these inspection values with:
 
@@ -1151,11 +1154,11 @@ Keep these inspection values with:
 - application revision;
 - serving plan hash.
 
-The model inspection uses the checked serving plan; the generator requires its plan hash to match the captured dimensions.
+The model inspection uses the checked serving plan, image ID and container ID; the generator requires those bindings to match the live process. A newly installed launcher can inspect an older running plan through this command because the container supplies its plan-mounted launcher.
 
 Run the same inspection on every engine's checked serving plan.
 
-A model import, hash or getter error belongs to that runtime's model metadata or argument compatibility. Retain `model-dimensions.log` and use a fresh plan after repair.
+A model import, hash or getter error identifies the failing pinned runtime, model metadata or launch input. Inspect the private `model-dimensions.live-*.log`, then correct the identified input before recapturing against the matching running process.
 
 ### Capture physical cache grouping
 
@@ -1697,7 +1700,7 @@ When sharing deployment evidence outside the private environment, replace privat
 | [Engine inspection](#3-inspect-each-engine-host)                  | PCI accelerator identity, visible device count, replica allocation, TP size, image identity, model hash, paths and ports.                                                            | Restore missing devices or artifacts and resolve listener ownership before launch.                                                                                                                                                                                                                                                                            | Engine `.env.engine-<n>`, `config/engine-launch.engine-<n>.json`; workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                        |
 | [Fabric qualification](#4-qualify-the-transfer-fabric)            | Peer addresses, TCP or RDMA transport, checked serving representative, captured cache pages, prompt length, handoff rate, burst allowance and transfer-time budget.                            | For serving capture errors, inspect the recorded container and startup log to isolate model, device, runtime or cache-spec input. For network failures, inspect route, source binding, listener, firewall, HCA and GID selection. For insufficient bandwidth, inspect link state, MTU, retransmissions or RDMA counters, CPU use and concurrent traffic before collecting another sample.           | Role environment, engine launch record, model config, delivered helper and digest, serving `ENGINE_RUN`, cache layout, container ID and log, budget, directed samples, link fingerprints, comparisons and edge matrix.                             |
 | [Engine launch](#5-configure-the-fleet-and-launch-engines)        | Qualified host and fabric state, immutable image, package pins, model flags, library environment, cache shape, TP allocation and selected devices.                                   | Package, tokenizer, connector or convolutional-layout mismatches fail the image check before model loading. For process or HTTP failure, inspect the exact recorded container and logs before creating a corrected plan.                                                                                                                                                                                              | Router fleet config, engine role environment, launch record, launcher snapshot, `runs/engine-launch-*/`, container environment, image-check output, container ID and HTTP captures.                                           |
-| [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | A capture or plan mismatch requires a fresh checked plan and matching inspection. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-attestation.<engine-role>.json`; router `config/fleet.local.json` and `runs/fleet.before-attestation-*.json`. |
+| [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | Capture dimensions through the live container when an earlier record lacks the architecture. For a hash, image, container or getter mismatch, inspect the pinned source and prepare a checked plan when that source changes. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-attestation.<engine-role>.json`; router `config/fleet.local.json` and `runs/fleet.before-attestation-*.json`. |
 | [Profiling](#7-profile-idle-engines)                              | Idle engine reservation, cache policy, workload input lengths and concurrency.                                                                                                       | Inspect the failing engine, measured range and sample output. Correct the cause and write the next sweep to a fresh profile path.                                                                                                                                                                                                                             | Router fleet configuration and profile/sample files under `runs/`.                                                                                                                                                            |
 | [Preflight](#8-run-preflight-against-the-engine-and-kv-contract)  | Current engine processes, profile set and SLO targets.                                                                                                                               | Use the reported engine, leg and budget to select the matching check in [fleet troubleshooting](Troubleshoot.md).                                                                                                                                                                                                                                             | Router environment, fleet configuration and private preflight output.                                                                                                                                                         |
 | [Router verification](#9-start-the-router-and-verify-one-request) | Router bind address, served model, engine count and initial pool split.                                                                                                              | For bind or readiness failure, inspect listener ownership, address family and the corresponding router or engine error.                                                                                                                                                                                                                                       | Router environment, fleet configuration and endpoint captures.                                                                                                                                                                |
