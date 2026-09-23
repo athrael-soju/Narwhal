@@ -1,6 +1,6 @@
 # Gate B: Package and install the approved revision
 
-This gate proves that every remote role runs the same approved commit and receives only the role files and helpers derived from the prepared run.
+`prepare` bundles the approved commit with role-specific files and helper snapshots; `install` verifies that commit on each host before installing Narwhal.
 
 ## Build an immutable deployment package
 
@@ -67,6 +67,6 @@ Recovery rules:
 - Revision validation failure: verify the bundle and role files came from the same prepared run.
 - Interrupted dependency installation: rerun the same `install --run`; completion is marked only after the CLI responds.
 - `.install-lock`: remove only after proving the owning installer has exited.
-- Existing deployments remain untouched during recovery.
+- Preserve existing deployments during recovery.
 
 Continue with [Gate C: Prove each host and one engine per cache class](03-Validate-Engines.md).

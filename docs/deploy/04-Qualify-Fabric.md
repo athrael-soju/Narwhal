@@ -1,6 +1,6 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Fabric qualification uses the resolved cache layout. Representatives remain idle while each link is measured.
+Keep representatives idle while measuring each directed link against a budget derived from their resolved cache layout.
 
 ## Build the source budget
 

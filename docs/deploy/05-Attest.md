@@ -1,7 +1,5 @@
 # Gate E: Expand the fleet and attest the exact live processes
 
-Once host and fabric qualification pass, the remaining engines may start. Attestation then binds every compatibility field to a checked serving process and requires one common contract across the fleet.
-
 ## Finalise router inventory and start remaining engines
 
 On the router, edit `runs/deployment/fleet.json` with model, engine IDs, initial role split, engine URLs, attestation URLs, SLO values, and a fresh profile path. Endpoint references resolve through `.env.router`.
@@ -68,7 +66,7 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-For a representative with no startup-layout line, use its captured runtime layout:
+When `cache-layout.json` supplies the representative's resolved layout, register that capture:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
@@ -127,7 +125,7 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-Check that connector class against the serving startup log. If no unique class was retained, repeat connector resolution with the pinned image check.
+Check that connector class against the serving startup log. When the log yields zero or multiple classes, repeat connector resolution with the pinned image check.
 
 Capture handshake enforcement:
 

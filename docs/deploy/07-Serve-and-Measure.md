@@ -77,7 +77,7 @@ Record router role assignment, workstation hostname, source revision, and local-
 
 ## Run the initial capacity trial
 
-Close the trial in this order:
+Run the capacity trial and retain its evidence in this order:
 
 1. Create a deployment identifier and assemble the deployment evidence set defined by [Measure a fleet](../Measure.md).
 2. Attach the passing full preflight mesh for the current processes, fleet, profiles, and targets. Repeat preflight whenever any one changes.
@@ -91,7 +91,7 @@ After drain:
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
 ```
 
-The trial closes only when the router serves the measured workload, client records reconcile with the router journal, Prometheus scrapes router and engines successfully, Grafana contains the required series, and the post-load KV ring passes.
+The trial passes when the router serves the measured workload, client records reconcile with the router journal, Prometheus scrapes router and engines successfully, Grafana contains the required series, and the post-load KV ring passes.
 
 Retain service locations, approved source revision, fleet configuration, profiles, router journal, and monitoring endpoints with the private deployment record.
 

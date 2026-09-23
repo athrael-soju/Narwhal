@@ -1,7 +1,5 @@
 # Gate C: Prove each host and one engine per cache class
 
-This gate establishes host truth, launch truth, live API identity, and the runtime cache geometry needed for fabric budgeting.
-
 ## Inspect every engine host
 
 Run host inspection concurrently in installed engine-role shells. `NARWHAL_ENGINE_LAUNCH_CONFIG` points to the transferred role-specific launch record.
@@ -22,7 +20,7 @@ PY_LAUNCH
 
 Retain this output. The `sources` object identifies the records used to derive allocation and device configuration.
 
-Inspect physical accelerators without changing host state:
+Read physical accelerator identity and count:
 
 ```bash
 (
@@ -52,11 +50,11 @@ Inspect physical accelerators without changing host state:
 )
 ```
 
-Record accelerator product and visible physical GPU count. On ROCm, count only agents whose `Device Type` is `GPU`; use `Marketing Name` for the product.
+Record accelerator product and visible physical GPU count. On ROCm, count agents with `Device Type` set to `GPU` and use `Marketing Name` for the product.
 
 On the router, compare observations with `hardware.accelerator` in `runs/deployment/fleet.json`. For each replica, set `hardware.accelerators_per_engine` to the number of `gpu_ids`, set `hardware.tensor_parallel` to `tensor_parallel_size`, and confirm every selected index or UUID is visible. Physical GPU count describes available hardware; replica allocation defines the TP shape Narwhal actually uses.
 
-Before any engine process exists, verify local artifacts and listeners:
+Before launching an engine, verify local artifacts and planned listeners:
 
 ```bash
 test "$(docker image inspect "$NARWHAL_ENGINE_IMAGE" --format '{{.Id}}')" = "$NARWHAL_ENGINE_IMAGE"
@@ -142,7 +140,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
 python3 -m json.tool "$ENGINE_RUN/launch.json"
 ```
 
-Inspect `launch.json`. It records immutable image, complete serving command, mounts, device mappings, endpoint, application revision, and source hashes. `container.env` may contain the engine API key and must remain private.
+Inspect `launch.json` for the immutable image, complete serving command, mounts, device mappings, endpoint, application revision, and source hashes. Keep `container.env` private because it can contain the engine API key.
 
 The generated connector policy uses `NixlConnector`, `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`. The launcher derives advertised side-channel address and port from the role environment, configures TCP or RDMA via `UCX_TLS`, and disables prefix caching for profiling.
 
@@ -166,14 +164,14 @@ export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
 docker logs --follow "$ENGINE_CONTAINER"
 ```
 
-Ctrl-C stops only the log follower. If startup fails:
+Ctrl-C stops the log follower and leaves the serving container running. If startup fails:
 
 ```bash
 docker inspect "$ENGINE_CONTAINER"
 docker logs "$ENGINE_CONTAINER"
 ```
 
-Use the recorded container ID. Root-cause the failure to a device, model, memory, library, or transport input before creating another plan.
+Use the recorded container ID. Trace the failure to a device, model, memory, library, or transport input before creating another plan.
 
 If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, retain the failed evidence, rerun discovery from the corrected approved revision into fresh outputs, prepare a new deployment run, install engine 1 into the new checkout, and validate it before updating the rest. Compare old and new image IDs, model-config hashes, accelerator/TP allocations, runtime settings, and transport. A changed hardware, model, image, cache policy, route, or transport invalidates evidence for that gate.
 

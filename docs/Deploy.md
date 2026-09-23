@@ -1,6 +1,6 @@
 # Narwhal fleet deployment runbook
 
-This runbook is for an operator bringing up a Narwhal fleet for the first time from a management workstation. The objective is to prove, in order, that the inspected hardware and model are the ones being deployed, the approved source revision is installed, each engine satisfies its runtime contract, every required KV-transfer path has enough measured capacity, the fleet can transfer KV between live peers, and the router can sustain a measured workload through the private management path.
+From a management workstation, inspect the target hardware and model, install the approved source revision, and validate each engine's runtime contract. Measure each required directed KV path against the running cache geometry, verify live peer transfer, then run a workload through the router over the private management path.
 
 Prometheus and Grafana run on the router host for the initial trial.
 
@@ -18,17 +18,15 @@ Three machine roles are involved:
 
 The management workstation needs Git, Bash, Python 3.11 or newer, OpenSSH, and the supplied access tooling. Any remote host that runs Narwhal commands needs Python 3.11 or newer with `venv`, Git, Make, and curl. Engine hosts also need the configured accelerator driver, container runtime, and transfer devices. Password-based SSH additionally requires `sshpass` on the workstation.
 
-Inventory roles describe deployment responsibilities. Hardware discovered on the management workstation applies only to that workstation.
+Compare each engine allocation with the GPU inventory collected on that engine host. Management workstation inspection describes the workstation's hardware.
 
 ### Concurrency rules
-
-Parallelise work only where the evidence remains attributable to one host, process, or link.
 
 - After installation, keep one shell per physical engine host and inspect hosts concurrently.
 - Start one serving representative for each distinct cache configuration. Representatives on different hosts may load concurrently.
 - Measure fabric one directed edge at a time.
-- After fabric qualification, start and attest remaining engines concurrently only where GPU allocations do not overlap.
-- Colocated roles that overlap GPU allocations must be serialised.
+- After fabric qualification, start and attest remaining engines with disjoint GPU allocations concurrently.
+- Serialise colocated roles that share GPUs.
 
 ### Deployment record
 
@@ -41,7 +39,9 @@ Create a private deployment record before the first command. For every gate, ret
 - exit status;
 - generated artifacts and paths.
 
-Record a blocked gate before modifying the failed state. When recovering a failed attempt, retain its evidence and remove only files and processes created by that attempt. A passing Gate G hands the running engines, attestation sidecars, router, and monitoring stack to the operator for continued service. When evidence leaves the private environment, replace private addresses, paths, and credentials with stable aliases.
+Record a blocked gate before changing its state. During recovery, retain the failed attempt's evidence and remove only the files and processes it created.
+
+Gate G leaves the engines, attestation sidecars, router, and monitoring stack running for continued service. Replace private addresses, paths, and credentials with stable aliases in evidence exported from the private environment.
 
 ## Deployment sequence
 
@@ -57,26 +57,22 @@ Follow each gate in order. Record its result before entering the next gate.
 
 ## Evidence and recovery index
 
-Use this table to decide what must be preserved before changing a failed state.
-
 | Gate                       | Inputs that define the gate                                                                                                | Typical correction path                                                                                                                                                         | Evidence to retain                                                                                                                      |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key.                             | Fix named environment field, missing host utility, image inspection issue, credential or route. Verify changed host keys independently.                                         | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`.                                                |
 | Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | Correct preparation input and create a new prepared run. Resume dependency installation only after host cause is fixed.                                                         | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths and ports.   | Restore device exposure or artifacts; resolve listener ownership; for checkpoint mismatch repair the differing file and repeat discovery.                                       | Engine role env and launch record; discovery checkpoint manifests and `model_tree_sha256`; `ENGINE_RUN`, image-check and HTTP captures. |
 | Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget.                                     | Diagnose route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, concurrent traffic. Re-sample only after root cause is identified. | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix.                                       |
-| Fleet expansion            | Qualified host/fabric state, pinned image and packages, cache shape, device allocation.                                    | Repeat checked launch procedure for the affected role;                                                                                                                          | Fleet config, role env, launch record, helper digests, container ID/logs, HTTP captures.                                                |
+| Fleet expansion            | Qualified host/fabric state, pinned image and packages, cache shape, device allocation.                                    | Repeat the checked launch procedure for the affected role.                                                                                                                      | Fleet config, role env, launch record, helper digests, container ID/logs, HTTP captures.                                                |
 | Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint. | Inspect the bound capture and source; restart only affected process or sidecar as required, then rerun finalisation.                                                            | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before/after attestation.                                            |
 | Profiling                  | Idle engines, unchanged runtime, generated sequence limits, prompt lengths and concurrency.                                | Correct the failing engine or sweep; write new samples to a fresh profile path. Restart means reprofile.                                                                        | Fleet config, profiling limits, profile and sample files.                                                                               |
 | Preflight                  | Current processes, profiles, fleet contract and SLOs.                                                                      | Follow the reported engine, transfer leg, or budget into the matching troubleshooting path.                                                                                     | Router environment, fleet config, private check output.                                                                                 |
 | Router                     | Bind address, model, engine count and role split.                                                                          | Inspect listener ownership, address family, router error, or upstream engine error.                                                                                             | Router env, fleet config, endpoint captures.                                                                                            |
 | Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime/cache policy, workload and thresholds.        | Resolve local port conflicts, remote listeners, scrape failures, client saturation or scheduler lag; reconcile records before attributing an SLO miss to serving capacity.      | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state/network snapshots.                |
 
-## References used by the procedure
+## Runtime and tooling references
 
-The commands and compatibility rules in the linked gates rely on the project documentation and pinned upstream behaviour referenced by the deployment tooling, including `.env.example`, `Configuration.md`, `Measure.md`, `Observability.md`, `Troubleshoot.md`, Hugging Face snapshot/model-card documentation, ROCm container guidance, vLLM v0.29.0 NIXL and cache-layout sources, iperf3 documentation, and perftest documentation.
-
-### External implementation references
+Use [Configuration](Configuration.md), [Measure](Measure.md), [Observability](Observability.md), and [Troubleshoot](Troubleshoot.md) while applying the gates. The sources below specify environment fields, model downloads, ROCm container devices, vLLM v0.29.0 KV layout and NIXL behaviour, and fabric test commands.
 
 - Narwhal environment template: https://github.com/athrael-soju/Narwhal/blob/main/.env.example
 - Hugging Face snapshot download: https://huggingface.co/docs/huggingface_hub/guides/download

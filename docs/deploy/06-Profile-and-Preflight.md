@@ -12,7 +12,7 @@ Reserve the real engines and keep them otherwise idle. From the router:
   --decode-input-lens 512,4096,8192
 ```
 
-Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`. The profiler caps concurrency at that limit, includes the limit as a measurement point when necessary, reads `max_model_len` from each live `/tokenize` response, chooses lengths that leave one prefill output token or 64 decode output tokens, and checks exact tokenised length before each completion.
+Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`. The profiler bounds decode concurrency to that limit and adds it as a sweep point when needed. It reads `max_model_len` from each live `/tokenize` response, chooses lengths that leave one prefill output token or 64 decode output tokens, and checks actual tokenised length before each completion.
 
 Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model and keep prefix caching disabled.
 
@@ -20,7 +20,7 @@ Prefill profiling measures one-token latency versus input length. Decode profili
 
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
-Do not restart engines or change runtime configuration between profiling, preflight, and trial. Any restart or runtime change requires a fresh profile set and new preflight.
+Keep the same engine processes and runtime configuration through profiling, preflight, and trial. A restart or runtime change requires a fresh profile set and preflight.
 
 Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed engine shape. Keep TPOT above the measured per-token floor.
 
@@ -32,7 +32,7 @@ From the router:
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
-Use the same engine processes, fleet document, and profiles used for the trial.
+Run preflight with the fleet document and profiles planned for the trial.
 
 | Gate       | What must pass                                                                                                                                                                                              |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -48,6 +48,6 @@ Use the same engine processes, fleet document, and profiles used for the trial.
 
 By default every eligible producer-consumer pair is exercised. `--ring` tests the configured maintenance ring. `--repeats` is for intermittent transfer diagnosis.
 
-Do not start the router until all required gates pass.
+Start the router after every required gate passes.
 
 Continue with [Gate G: Start the service and validate capacity through the private path](07-Serve-and-Measure.md).

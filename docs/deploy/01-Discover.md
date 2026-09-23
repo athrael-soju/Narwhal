@@ -1,6 +1,6 @@
 # Gate A: Freeze inputs and discover the real deployment
 
-This gate converts the private `.env`, live host state, checkpoint contents, and pinned image into generated configuration. Any later change to hardware, model, image, launch policy, route, or transport invalidates the evidence derived from the changed input.
+Discovery reads the private `.env`, live host state, checkpoint contents, and pinned image, then writes deployment configuration. A later change to hardware, model, image, launch policy, route, or transport invalidates evidence derived from that input.
 
 ## Load the private environment
 
@@ -15,12 +15,12 @@ set +a
 
 Define `NARWHAL_NODE_<n>_SSH` for every engine. Discovery assigns the router to the first engine host unless `NARWHAL_ROUTER_SSH` points elsewhere.
 
-Discovery reads the unique global address on `NARWHAL_FABRIC_INTERFACE` and derives engine and attestation URLs from that address plus the configured service ports. Use the following overrides only when discovery cannot infer the intended endpoint:
+Discovery reads the unique global address on `NARWHAL_FABRIC_INTERFACE` and derives engine and attestation URLs from that address plus the configured service ports. Set per-node overrides for an interface with several global addresses or a service using another reachable endpoint:
 
 - `NARWHAL_NODE_<n>_IP`: choose one global address when the interface has several;
 - `NARWHAL_NODE_<n>_URL`: engine service is reachable through another address;
 - `NARWHAL_NODE_<n>_ATTESTATION_URL`: attestation service is reachable through another address;
-- corresponding per-node port overrides when a service does not use the fleet-wide port.
+- corresponding per-node port overrides for a service bound to a different port.
 
 Identical SSH destination values mean multiple roles share one physical host and credential. A destination may be an OpenSSH alias with username, port, identity, and jump route, or a direct `user@host`. Password authentication uses the matching `_SSH_PASSWORD`; key authentication uses the configured identity or SSH agent.
 
@@ -36,7 +36,7 @@ hf download "$MODEL_REPO_ID" --revision "$MODEL_REVISION" --local-dir "$NARWHAL_
 
 Retain the repository ID and commit SHA in the private record. Other checkpoint sources may use the same directory layout.
 
-The deployment pin for an already provisioned model directory is the discovered content manifest. Discovery hashes every regular file below the model directory except the root `README.md` and `.cache/huggingface/` metadata, compares retained path, byte count, and SHA-256 across replicas, and stops before configuration or installation if any shard, tokenizer, configuration, or code file differs.
+Discovery filters the root `README.md` and `.cache/huggingface/` metadata from an already provisioned model directory, then hashes each retained regular file. It compares paths, byte counts, and SHA-256 values across replicas, stopping before configuration or installation when a shard, tokenizer, configuration, or code file differs.
 
 ## Run discovery and access checks
 
