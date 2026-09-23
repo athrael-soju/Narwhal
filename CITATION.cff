@@ -4,7 +4,7 @@ message: >-
   algorithms the scheduling core implements.
 title: narwhal
 type: software
-version: 0.2.0
+version: 0.2.1
 license: Apache-2.0
 repository-code: https://github.com/athrael-soju/Narwhal
 authors:

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/athrael-soju/Narwhal/compare/v0.2.0...v0.2.1) (2026-09-23)
+
+
+### Features
+
+* publish Narwhal distributions to PyPI ([a328d00](https://github.com/athrael-soju/Narwhal/commit/a328d00af8909220ee8c1319a9d4bf873b93da9d))
+
 ## [0.2.0](https://github.com/athrael-soju/Narwhal/compare/v0.1.0...v0.2.0) (2026-09-23)
 
 
