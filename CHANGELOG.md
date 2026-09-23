@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/athrael-soju/Narwhal/compare/v0.1.0...v0.2.0) (2026-09-23)
+
+
+### Features
+
+* make first fleet deployment reproducible ([14f27f0](https://github.com/athrael-soju/Narwhal/commit/14f27f03ef9d7909afad31da18ce1fb2c4da835e))
+
+
+### Fixes
+
+* **ci:** give deployment bundle tests Git history ([33c2f9f](https://github.com/athrael-soju/Narwhal/commit/33c2f9fe6e8a220d0e04bfe4dbeb7d54c3bc875f))
+
 ## 0.1.0 (2026-09-20)
 
 Narwhal's initial public release routes LLM inference across prefill and decode engines and changes their roles while model weights remain loaded.
