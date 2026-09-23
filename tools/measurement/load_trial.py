@@ -291,6 +291,8 @@ async def prepare(client, base, args):
 async def run_trial(client, base, args):
     run_id = getattr(args, "run_id", uuid.uuid4().hex)
     workload = load_workload(args.workload)
+    if getattr(args, "expected_model", None) and workload["model"] != args.expected_model:
+        raise ValueError("Workload model differs from --expected-model")
     private_json(args.out / "workload.json", workload)
     private_json(args.out / "state-before.json", await drain(client, base, args.timeout))
     warmup = await request_one(
@@ -379,6 +381,7 @@ def main(argv=None):
         "--api-key-env", help="environment variable containing ingress bearer token"
     )
     parser.add_argument("--workload", type=Path)
+    parser.add_argument("--expected-model", help="require the workload to name this served model")
     parser.add_argument("--input-tokens", type=int, default=8192)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=1729)
