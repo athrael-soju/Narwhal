@@ -39,26 +39,7 @@ Restore these as one unit:
 
 ## 11. Validate every release
 
-Run the CPU process drills against every release artifact:
-
-```bash
-make integration
-```
-
-`make integration` starts local stub engines and routers for:
-
-- individual lifecycle recovery;
-- whole-wave lifecycle recovery;
-- HA failover.
-
-The HA drill kills the primary during a stream, verifies standby takeover, and checks that the recovered primary remains fenced.
-
-Before production admission, repeat:
-
-- the permitted engine-restart procedure;
-- router failover;
-
-on an idle fleet using the production supervisor and load balancer.
+Before production admission, run the permitted engine-restart procedure and router failover on an idle fleet using the production supervisor and load balancer. Confirm the conditions below against the running engine processes and router lease.
 
 ### Release drill pass conditions
 

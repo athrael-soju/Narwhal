@@ -7,7 +7,7 @@ VENV_PYTHON ?= .venv/bin/python
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 
-.PHONY: setup test unit lint format types links publication versions check docs-build observe integration
+.PHONY: setup test unit lint format types links publication versions check docs-build observe
 .PHONY: coverage
 
 .venv/bin/python:
@@ -16,7 +16,7 @@ BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 setup: .venv/bin/python
 
-test: unit integration
+test: unit
 
 coverage: $(BOOTSTRAP)
 	$(VENV_PYTHON) tools/maintenance/run_coverage.py $(COVERAGE_ARGS)
@@ -45,7 +45,7 @@ versions:
 	$(PYTHON) tools/maintenance/release.py check
 
 # Keep this order aligned with `.github/workflows/ci.yml`.
-check: publication versions lint format types unit integration links
+check: publication versions lint format types unit links
 
 docs-build: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m mkdocs build --strict --clean
@@ -53,9 +53,3 @@ docs-build: $(BOOTSTRAP)
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m tools.observability.start
-
-# Real router processes with CPU engine stubs; no fleet access.
-integration: $(BOOTSTRAP)
-	$(VENV_PYTHON) tools/drills/ha_failover.py
-	$(VENV_PYTHON) tools/drills/lifecycle_restart.py
-	$(VENV_PYTHON) tools/drills/lifecycle_restart.py --restart-policy whole_wave

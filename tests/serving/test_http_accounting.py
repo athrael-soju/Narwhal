@@ -72,7 +72,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         """Submit one ordinary completion through HTTP."""
         return await client.post(
             "/v1/completions",
-            json={"model": "stub", "prompt": "hello", "max_tokens": 1, "stream": False},
+            json={"model": self.cfg.model, "prompt": "hello", "max_tokens": 1, "stream": False},
             **kwargs,
         )
 
@@ -239,7 +239,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         client = self.client()
         response = await client.post(
             "/v1/completions",
-            json={"model": "stub", "prompt": "hello", "max_tokens": 1, "stream": True},
+            json={"model": self.cfg.model, "prompt": "hello", "max_tokens": 1, "stream": True},
         )
         self.assertEqual(response.status_code, 200)
         first = json.loads(response.text.splitlines()[0].removeprefix("data: "))

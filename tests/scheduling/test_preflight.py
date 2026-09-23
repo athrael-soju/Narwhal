@@ -69,7 +69,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"version": contract.vllm_version})
             if request.url.path == "/metrics":
                 return httpx.Response(200, text="process_start_time_seconds 100\n")
-            start = 101 if request.url.port == 8104 else 100
+            start = 101 if request.url.host == "engine-3.invalid" else 100
             return httpx.Response(
                 200, json=make_attestation(document, EngineIdentity(contract.vllm_version, start))
             )
