@@ -134,14 +134,7 @@ The `serving` object exposes:
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
 
-`below_floor.live_prefill` counts placement-eligible prefill engines.
-
-Role changes obey both configured floors, although failures and operator hold-outs may force actual fleet capacity below them.
-
-The controller moves healthy decode capacity into prefill until:
-
-- the prefill floor is restored, or
-- `min_decode` prevents another move
+Narwhal checks each proposed role move against `min_prefill` and `min_decode`, using engines eligible for placement as the live count. An ejection or operator hold can lower that count independently of role control. When prefill falls below its floor, the controller moves healthy decode engines into prefill while preserving `min_decode`; `below_floor.live_prefill` reports the eligible prefill count through that recovery.
 
 Aggregate mode treats an initial zero-prefill pool as its baseline.
 

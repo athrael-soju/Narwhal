@@ -50,16 +50,9 @@ Narwhal counts engines eligible for placement after ejection, drain, and quarant
 
 Use Prometheus scrape targets and breaker state for engine-level liveness.
 
-### `GET /ready`
+## `GET /ready`
 
-Use `/ready` for load-balancer routing.
-
-HTTP `200` means the router:
-
-- owns control
-- is admitting client requests
-
-HTTP `503` may indicate:
+Narwhal answers each `/ready` probe with HTTP `200` when this router holds fleet control and admits new work, allowing the load balancer to send it client requests. An HTTP `503` keeps the router out of rotation for one of these conditions:
 
 - standby state
 - fencing

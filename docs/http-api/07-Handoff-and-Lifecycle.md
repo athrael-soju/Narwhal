@@ -56,25 +56,11 @@ The replacement process starts fresh process-local state for:
 - floor history
 - monitoring-failure counters
 
-Narwhal writes the handoff to:
-
-```text
-recovery.state_path
-```
-
-for:
-
-```text
-narwhal-serve --resume
-```
-
-Warm standbys retrieve the same state through `/narwhal/handoff`.
+Narwhal writes the current handoff to `recovery.state_path`; `narwhal-serve --resume` loads it after a process restart. A warm standby polls `/narwhal/handoff`, retains a lease-validated snapshot, and applies it when it takes control.
 
 ---
 
 ## Lifecycle API
-
-Narwhal exposes explicit lifecycle state and actions for planned engine restarts.
 
 ### `GET /narwhal/lifecycle`
 
@@ -169,17 +155,6 @@ HTTP `409` leaves candidates that fail validation blocked.
 
 ### Whole-wave restart policy
 
-With:
-
-```text
-recovery.engine_restart_policy: whole_wave
-```
-
-every lifecycle action covers wave members that have both:
-
-- a recorded drain identity
-- a newer process
-
-Operators must issue an explicit wave drain before restarting the engines.
+With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the wave after every replacement passes validation with a newer start.
 
 See [Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) for the external-supervisor restart sequence and whole-wave requirements.

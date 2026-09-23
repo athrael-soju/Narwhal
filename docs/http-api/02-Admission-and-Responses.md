@@ -82,7 +82,7 @@ If the engine omits `usage`, Narwhal computes it from:
 
 ## Token identity and output accounting
 
-For engines exposing token IDs, Narwhal adds the following to decode requests:
+Narwhal requests token IDs with the decode stream from engines that support them:
 
 ```json
 {
@@ -91,40 +91,8 @@ For engines exposing token IDs, Narwhal adds the following to decode requests:
 }
 ```
 
-Narwhal counts identified output tokens across:
+Narwhal checks the ID list on each event carrying generated text, reasoning, tool calls, or refusals, counting IDs that are nonnegative integers. An event that omits the list, supplies a Boolean ID, or returns a malformed list fails the decode attempt or profiling measurement.
 
-- text
-- reasoning
-- tool-call output
+Validated IDs give Narwhal output length and per-token timing for TPOT scoring. Narwhal uses the same identified output for decode correction, drift scoring, and output-length learning.
 
-A valid token ID is a nonnegative integer.
-
-Booleans are invalid token IDs.
-
-Serving and profiling paths that require exact counting require valid token identity for:
-
-- text
-- reasoning
-- tool-call output
-- refusal output
-
-Invalid identity fails the decode attempt or measurement.
-
-The `token_ids` accounting dialect provides exact token identity for:
-
-- output length
-- TPOT scoring
-
-Other accounting dialects report:
-
-```text
-unavailable
-```
-
-The following features require identified tokens:
-
-- decode correction
-- drift scoring
-- output-length learning
-
-Clients requesting `return_token_ids` receive token IDs in both streaming and non-streaming responses.
+The router reports `token_accounting: token_ids` for engines that supply IDs and `token_accounting: unavailable` for other dialects. Clients requesting `return_token_ids` receive the IDs in streaming and assembled responses.
