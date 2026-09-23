@@ -20,6 +20,7 @@ from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
 from ..observability.metrics import render
+from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle import (
@@ -113,6 +114,29 @@ def create_app(
                 + ": run `narwhal-profile` against the fleet first. Placement requires "
                 "a profile for exactly the configured engine set."
             )
+        generation_failures = []
+        for spec in cfg.engines:
+            profile = router.profiles.get(spec.iid)
+            if profile is None:
+                continue
+            try:
+                generation = await read_generation(
+                    spec,
+                    cfg.engine_contract,
+                    timeout_s=cfg.health_timeout_s,
+                    headers=cfg.engine_headers(),
+                    transport=lifecycle_transport,
+                )
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                generation_failures.append(
+                    f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission"
+                )
+                continue
+            problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
+            if problem:
+                generation_failures.append(problem)
+        if generation_failures:
+            raise RuntimeError("; ".join(generation_failures))
         watch = None
         lease_watch = None
         if lease is not None:

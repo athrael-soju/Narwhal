@@ -20,7 +20,7 @@ Prefill profiling measures one-token latency versus input length. Decode profili
 
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
-Keep the same engine processes and runtime configuration through profiling, preflight, and trial. A restart or runtime change requires a fresh profile set and preflight.
+Narwhal records the verified attestation and process start with each engine's samples, then checks the resulting generation digest at preflight and router startup. After a restart or runtime change, profile the affected engine process again, assemble a fleet-wide store, and rerun preflight.
 
 Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed engine shape. Keep TPOT above the measured per-token floor.
 
@@ -38,12 +38,12 @@ Run preflight with the fleet document and profiles planned for the trial.
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `reach`    | Every engine answers inside configured health budget.                                                                                                                                                       |
 | `contract` | Attestation matches current process and declared runtime.                                                                                                                                                   |
+| `profile`  | Each saved generation digest matches its live engine; profile IDs match the fleet and measured decode errors stay within policy.                                                                            |
 | `model`    | Every engine serves the configured model.                                                                                                                                                                   |
 | `pace`     | Prefill latency remains within permitted slowdown. With at least three successful probes, comparison uses fleet median. Saved per-engine profiles are used when available; smaller fleets require profiles. |
 | `tokenize` | Exact input sizing succeeds when enabled.                                                                                                                                                                   |
 | `produce`  | Every tested producer can export a KV handoff.                                                                                                                                                              |
 | `consume`  | Every tested peer can consume that handoff.                                                                                                                                                                 |
-| `profile`  | Profile engine IDs exactly match fleet IDs.                                                                                                                                                                 |
 | `slo`      | Configured TTFT/TPOT targets are feasible against measured profiles.                                                                                                                                        |
 
 By default every eligible producer-consumer pair is exercised. `--ring` tests the configured maintenance ring. `--repeats` is for intermittent transfer diagnosis.
