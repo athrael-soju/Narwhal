@@ -19,18 +19,18 @@ Store the router journal, ingress and supervisor status, engine boot logs, fleet
 
 ## Router, admission, and lifecycle signals
 
-| Signal                                     | Next check or action                                                                                                           |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Request to `/health` fails                 | Query peer `/ready` to identify the lease holder; inspect the router process, host, and network path.                         |
-| `/health` reports `standby`                | Send traffic and lifecycle actions to the active lease holder.                                                                |
-| `/health` reports `fenced`                 | Identify the current lease holder and remove the fenced router from the load balancer.                                         |
-| `/health` reports `maintenance`            | Follow `/narwhal/lifecycle` through the engine wave until readiness returns.                                                  |
-| Both routers return HTTP 503 from `/ready` | Compare refusal reasons, then inspect backend health, lifecycle holds, monitoring, lease ownership, and handoff freshness.    |
-| HTTP 429 increases                         | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity.                                              |
-| HTTP 502 increases                         | Inspect engine failures, ejection, quarantine, and in-flight work.                                                            |
-| HTTP 504 increases                         | Separate queue and request expiry from engine timeouts using the response error and terminal journal row.                    |
-| A stream terminates with an error frame    | Inspect failed attempts, final outcome, and participating engines after the HTTP 200 response has started.                   |
-| Lifecycle state is `blocked`               | Repair the failed drain identity capture or readmission check, then retry that operation.                                    |
+| Signal                                     | Next check or action                                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Request to `/health` fails                 | Query peer `/ready` to identify the lease holder; inspect the router process, host, and network path.                      |
+| `/health` reports `standby`                | Send traffic and lifecycle actions to the active lease holder.                                                             |
+| `/health` reports `fenced`                 | Identify the current lease holder and remove the fenced router from the load balancer.                                     |
+| `/health` reports `maintenance`            | Follow `/narwhal/lifecycle` through the engine wave until readiness returns.                                               |
+| Both routers return HTTP 503 from `/ready` | Compare refusal reasons, then inspect backend health, lifecycle holds, monitoring, lease ownership, and handoff freshness. |
+| HTTP 429 increases                         | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity.                                           |
+| HTTP 502 increases                         | Inspect engine failures, ejection, quarantine, and in-flight work.                                                         |
+| HTTP 504 increases                         | Separate queue and request expiry from engine timeouts using the response error and terminal journal row.                  |
+| A stream terminates with an error frame    | Inspect failed attempts, final outcome, and participating engines after the HTTP 200 response has started.                 |
+| Lifecycle state is `blocked`               | Repair the failed drain identity capture or readmission check, then retry that operation.                                  |
 
 Continue with the procedure for the affected path:
 
@@ -44,9 +44,9 @@ Read `admission`, `serving`, `resident`, and pool load from `/narwhal/state` to 
 
 When reconciling load-test attainment, divide router completions by admitted requests and client successes by all offered requests, including predictive refusals.
 
-Reduce offered traffic at ingress, or add a fleet whose deployment has already been validated.
+Reduce offered traffic at ingress or add a fleet whose deployment passed validation.
 
-Keep `serving.max_connections`, queue depth, and timeouts at their current values until a controlled two-point measurement establishes the scaling direction. Longer queues or timeouts can turn an immediate refusal into a late SLO miss.
+Run the same request mix at two offered rates with `serving.max_connections`, queue depth, and timeouts fixed, comparing completed throughput and SLO-qualified requests before raising a limit that could hold work past its TTFT budget.
 
 ## After recovery
 

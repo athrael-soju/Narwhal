@@ -33,7 +33,7 @@ Narwhal provides:
 
 ## Architecture
 
-Each engine can execute both prefill and decode. The controller assigns roles using request demand, resident work and engine profiles, with configurable role floors, cooldowns and health checks. Role changes affect new request placement; existing requests remain tracked until completion.
+On regular controller passes, Narwhal prices the current and adjacent prefill/decode splits from measured engine curves, offered demand, and resident work, moving an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
 
 ![Narwhal's reactive controller changes engine roles while model weights remain resident.](docs/assets/architectures/hotswap.svg)
 

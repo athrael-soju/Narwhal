@@ -34,17 +34,7 @@ For `whole_wave`, use the complete-wave procedure below for drain and readmissio
 
 ### Planned restart of one engine
 
-Use the [drain sequence](../operate/03-Restart-Engines.md#7-restart-one-engine).
-
-The external supervisor may stop the engine after the lifecycle state reports:
-
-```text
-ready_to_stop: true
-```
-
-At that point new placement has stopped and resident work has drained.
-
-Readmission requires a newer process identity and reruns the recovery gates before the engine resumes placement.
+Drain the engine through the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine) until `/narwhal/lifecycle` reports `ready_to_stop: true`, then stop it through the external supervisor. Start the replacement with a newer process identity and submit readmission; Narwhal reruns the recovery gates before placing new work on that engine.
 
 ## Whole-wave recovery
 
