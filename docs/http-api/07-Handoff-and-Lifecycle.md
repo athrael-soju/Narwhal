@@ -80,13 +80,7 @@ Narwhal exposes explicit lifecycle state and actions for planned engine restarts
 
 ### `GET /narwhal/lifecycle`
 
-Returns:
-
-```text
-narwhal.lifecycle
-```
-
-schema version `1`.
+The response uses `narwhal.lifecycle` schema version `1`.
 
 `router.controls_fleet` distinguishes:
 
@@ -118,7 +112,7 @@ Top-level `engine_restart_policy` contains the configured restart policy.
 
 `process_starts` maps engine IDs to the last accepted process-start timestamps.
 
-Top-level `error` is empty on success. For a non-2xx response, it contains the rejected action's error.
+Top-level `error` carries the rejected action's message on non-2xx responses and an empty string on success.
 
 ---
 
@@ -126,10 +120,7 @@ Top-level `error` is empty on success. For a non-2xx response, it contains the r
 
 ### `POST /narwhal/lifecycle/drain`
 
-Starts a lifecycle drain for:
-
-- one engine, or
-- the entire fleet as one wave
+Narwhal starts a lifecycle drain for one engine or the whole fleet as a wave.
 
 Narwhal removes every target from placement before recording process identity.
 
@@ -159,9 +150,7 @@ The hold is deliberately retained after process-identity failure so the affected
 
 ### `POST /narwhal/lifecycle/readmit`
 
-Validates one or more engines and releases their lifecycle hold only after all required checks pass.
-
-Example:
+Send the engine ID to readmit:
 
 ```json
 {
@@ -169,7 +158,7 @@ Example:
 }
 ```
 
-Readmission checks:
+Narwhal runs these checks before releasing the candidate's lifecycle hold:
 
 1. health
 2. process-bound attestation

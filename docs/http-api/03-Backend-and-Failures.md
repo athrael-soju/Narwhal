@@ -2,13 +2,9 @@
 
 ## Disaggregated backend execution
 
-Narwhal's shipping vLLM/NIXL path separates producer prefill from decode.
-
 ### Prefill
 
-The producer receives a non-streaming completion request for one generated token.
-
-Narwhal discards that generated token.
+Narwhal sends the producer a non-streaming, one-token completion request and discards the generated token after capturing the KV handoff descriptor.
 
 `PrefillResult` associates the backend-owned KV descriptor with:
 
@@ -101,18 +97,13 @@ Internal Python APIs may change between releases.
 
 ## Engine failure handling
 
-Engine faults are mapped according to failure shape.
-
-- timeout-shaped faults return HTTP `504`
-- other engine faults return HTTP `502`
+Narwhal maps timeout-shaped engine faults to HTTP `504` and other engine faults to HTTP `502`.
 
 Prefill finishes before client streaming begins, so prefill failures can be returned as ordinary HTTP errors.
 
 ### Breaker readmission
 
-In a fleet configured with an `engine_contract`, an ejected engine must pass lifecycle validation before the breaker readmits it.
-
-Development fleets without an engine contract may recover through health checks alone.
+When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
 
 After:
 
@@ -160,15 +151,7 @@ An error object carried inside an upstream HTTP `200` stream propagates with the
 
 `engine.first_token_timeout_s` limits the time between opening the decode stream and receiving the first generated token.
 
-After the first token:
-
-```text
-engine.decode_read_timeout_s
-```
-
-limits silence between transport chunks.
-
-Metadata chunks reset this timer.
+After the first token, `engine.decode_read_timeout_s` bounds silence between transport chunks; metadata chunks reset the timer.
 
 Expiry returns HTTP `504` with detail beginning:
 
@@ -176,7 +159,7 @@ Expiry returns HTTP `504` with detail beginning:
 engine went silent between tokens
 ```
 
-A value of zero uses the original request deadline as the stream bound.
+A zero `engine.decode_read_timeout_s` uses the original request deadline as the stream bound.
 
 ### Retries
 

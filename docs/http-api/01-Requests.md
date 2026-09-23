@@ -2,35 +2,21 @@
 
 ## Completion API
 
-Narwhal supports one sequence per request and serves one configured model. Client requests use OpenAI-compatible request and response shapes where supported.
+Both completion routes serve the model configured for the fleet and return OpenAI-compatible response shapes.
 
 ### `POST /v1/completions`
 
-Accepts an OpenAI completions request.
-
-For a non-streaming response:
-
-- `object` is `"text_completion"`.
-- generated text is returned in `choices[0].text`.
+For a non-streaming completion, Narwhal returns `object: "text_completion"` with generated text in `choices[0].text`.
 
 ### `POST /v1/chat/completions`
 
-Accepts an OpenAI chat completions request.
-
-For a non-streaming response:
-
-- `object` is `"chat.completion"`.
-- the generated message is returned in `choices[0].message`.
-- `choices[0].message.role` is `"assistant"`.
-- `content` is `null` when the response contains only reasoning or tool-call output.
+For a non-streaming chat completion, Narwhal returns `object: "chat.completion"` and an assistant message in `choices[0].message`. Its `content` is `null` when the response contains reasoning or tool-call output alone.
 
 ---
 
 ## Request contract
 
-Both completion routes require a JSON object.
-
-Narwhal validates router-interpreted fields before admission or engine dispatch.
+Narwhal parses each completion request as a JSON object and validates router-interpreted fields before reserving admission or dispatching engine work.
 
 ### Validated field types
 
@@ -46,7 +32,7 @@ Non-null values must use the following types:
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 
-Invalid JSON, an invalid top-level body shape, or an invalid router-interpreted field type returns HTTP `400` in an OpenAI error envelope.
+Narwhal returns HTTP `400` in an OpenAI error envelope for invalid JSON, body shape, or router-interpreted field type and records one invalid terminal outcome before reserving admission or engine capacity.
 
 Example:
 
@@ -61,44 +47,19 @@ Example:
 }
 ```
 
-The diagnostic identifies the affected field and violated rule.
-
 Fields outside the router validation set pass through unchanged.
-
-A validation failure records one invalid terminal outcome before Narwhal reserves admission or engine capacity.
 
 ### Model handling
 
-Narwhal validates the submitted model name before dispatch.
-
-If it matches the configured model, Narwhal replaces the request's `model` value with the configured served model when constructing the engine request.
-
-A different requested model returns:
-
-- HTTP `404`
-- error code `model_not_found`
+Narwhal compares the requested `model` with the configured model before dispatch, writes the configured served model into a matching engine request, and returns HTTP `404` with `model_not_found` for another name.
 
 ### Sampling width
 
-Narwhal supports one sequence per request.
-
-Either of the following returns HTTP `400`:
-
-```text
-n > 1
-best_of > 1
-```
-
-This keeps prefill and decode sampling widths aligned.
+Narwhal returns HTTP `400` for `n > 1` or `best_of > 1` because the one-token prefill leg and decode leg must use the same sampling width.
 
 ### Output and tool restrictions
 
-Non-streaming requests support:
-
-- text output
-- function tools
-
-Narwhal returns HTTP `400` before engine dispatch when a non-streaming request asks for:
+Non-streaming requests accept text output and function tools. Narwhal returns HTTP `400` before engine dispatch for:
 
 - `audio`
 - an output `modalities` value other than `["text"]`
@@ -112,22 +73,8 @@ Model and engine configuration determine actual support for input formats, reaso
 
 ## Request identity and authentication
 
-Narwhal assigns `x-request-id` when a request reaches the router.
+Narwhal assigns a router request ID at ingress, returns it as `x-request-id`, and derives a backend ID for each engine attempt and execution phase to track KV ownership. The request journal stores the forwarded client request ID as `client_rid` for correlation.
 
-Each engine attempt and each execution phase receives its own backend request ID for KV ownership. The request journal records the original client request identifier as `client_rid`, preserving correlation across the full request lifecycle.
-
-Ingress owns client authentication.
-
-It must remove client credentials before forwarding a request to Narwhal.
-
-Set:
-
-```text
-engine.engine_api_key_env
-```
-
-to attach the deployment's engine credential to serving and control requests.
-
-Ingress should also remove client-supplied internal credentials and request IDs before installing trusted replacements. Narwhal derives client identity from those trusted values.
+Ingress authenticates clients, strips client credentials and client-supplied internal IDs, then installs trusted values that Narwhal uses for client identity. Set `engine.engine_api_key_env` to attach the deployment's engine credential to serving and control requests.
 
 See [Configure Narwhal](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) for the engine authentication boundary and [Operate Narwhal](../operate/01-Start-Routers.md#3-configure-the-client-path) for ingress requirements.

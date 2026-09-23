@@ -14,36 +14,13 @@ pruned_buckets
 pruned_outcomes
 ```
 
-It stores diagnostic outcomes for requests that are:
-
-- completed
-- failed
-- expired
-- predictively refused
-
-Requests contribute:
-
-- TTFT-met counts
-- TPOT-met counts
-- total counts
-
-Bucket width is `monitor_interval_s`.
-
-Pruning:
-
-- is anchored to the newest recorded bucket
-- retains four demand windows
-- includes the full boundary bucket in window queries
-
-`attainment` reports retained and already-pruned counts.
+Narwhal buckets completed, failed, expired, and predictively refused requests by `monitor_interval_s`, recording TTFT-met, TPOT-met, and total counts for each bucket. Pruning advances from the newest recorded bucket, retains four demand windows, and includes the full boundary bucket in window queries.
 
 `covered_s` reports the age of the oldest retained bucket, capped at the configured retention span.
 
 ---
 
 ## Demand accounting
-
-`demand_history` records the request stream used by the reactive controller.
 
 ### Unsized offers
 
@@ -57,19 +34,9 @@ demand_history.unsized
 
 `observations` counts retained offers that terminated before workload sizing.
 
-Demand history includes authenticated offers that passed request validation.
-
 ### Input-size repricing
 
-Parsed offers initially enter demand history using local input-size estimates.
-
-If the request later reaches admission and tokenization completes, the tokenizer result replaces the estimate at the request's original arrival timestamp.
-
-Requests rejected before tokenization retain the local estimate.
-
-Repricing preserves bounded shape aggregation.
-
-If the last observation defining a bucket boundary moves into another cohort, that boundary evidence becomes invalid.
+Parsed offers enter demand history at a local input-size estimate. When tokenization finishes after admission, Narwhal replaces the estimate at the original arrival timestamp; requests rejected before tokenization keep the local estimate. If repricing moves the last observation defining a bucket boundary into another cohort, Narwhal invalidates that boundary evidence.
 
 ### Bucketing and retention
 
@@ -78,7 +45,7 @@ Each demand bucket stores:
 - at most 128 exact request shapes
 - one overflow cohort
 
-Unsized history needs only one shape.
+Narwhal stores unsized offers as one shape per time bucket.
 
 Bucket width is the minimum of:
 
@@ -95,22 +62,15 @@ Recording new evidence prunes expired buckets even when the control loop is stop
 
 ### Overflow
 
-Overflow preserves every request count.
+Overflow retains every request count and prices the cohort from its largest input length and requested output length.
 
-When pricing work, it uses the largest:
-
-- input length
-- requested output length
-
-within the overflow cohort.
-
-Uncapped overflow represents incomplete demand.
+An overflow cohort with a zero requested output length marks decode demand incomplete.
 
 Overflow in output history disables learned discounts until the affected observations expire.
 
 A cohort crossing a window boundary contributes its complete count, adding at most one bucket of history.
 
-Consolidation evidence includes only observations guaranteed to occur after its cutoff.
+Consolidation evidence counts observations whose timestamps are known to fall after its cutoff.
 
 `demand_history` and the `narwhal_demand_history_*` metrics expose:
 
@@ -135,18 +95,7 @@ Output-length estimates and decode correction are built once and reused across b
 
 ### Prefill recovery ratio
 
-When priced prefill waiters exist:
-
-```text
-recovery_prefill_ratio
-```
-
-is the greater of:
-
-1. observed prefill pressure
-2. resident-plus-queued prefill seconds divided by current prefill engine count and the TTFT SLO
-
-With no priced prefill waiters, observed pressure is used directly.
+With priced prefill waiters, Narwhal sets `recovery_prefill_ratio` to the larger of observed prefill pressure and resident-plus-queued prefill seconds divided by the current prefill engine count and TTFT SLO. For zero priced waiters, it uses observed prefill pressure.
 
 Incomplete-demand decisions expose:
 
@@ -203,16 +152,4 @@ envelope_decode_engines
 blocked_gate
 ```
 
-The top-level record represents consolidation evidence for every decode-to-prefill gate, including:
-
-- retained span
-- sample count
-- required minima
-- bounded lookback
-- closure state
-- short-horizon decode estimate
-- long-horizon decode estimate
-- trend ratio
-- conservative envelope
-- active risk event
-- per-kind risk counts
+Narwhal captures `demand_evidence` for every decode-to-prefill gate, including decisions blocked before movement.

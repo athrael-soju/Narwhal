@@ -1,8 +1,6 @@
 # Model, health, and metrics inspection
 
-## Inspection API
-
-### `GET /v1/models`
+## `GET /v1/models`
 
 Returns the configured served model in OpenAI list format.
 
@@ -19,7 +17,7 @@ Returns the configured served model in OpenAI list format.
 }
 ```
 
-### `GET /health`
+## `GET /health`
 
 Reports router process liveness.
 
@@ -48,11 +46,7 @@ Example:
 
 All `/health` states return HTTP `200`.
 
-`available_instances` reflects the router's current:
-
-- ejection state
-- drain state
-- quarantine state
+Narwhal counts engines eligible for placement after ejection, drain, and quarantine in `available_instances`.
 
 Use Prometheus scrape targets and breaker state for engine-level liveness.
 
@@ -74,13 +68,7 @@ HTTP `503` may indicate:
 - loss of eligible backends
 - monitoring degradation
 
-After:
-
-```text
-controller.monitor_failure_limit
-```
-
-consecutive failed monitoring passes, readiness reports:
+After `controller.monitor_failure_limit` consecutive failed monitoring passes, `/ready` reports:
 
 ```text
 monitoring degraded: <stage> <class>
@@ -90,7 +78,7 @@ Standbys count the same failures toward takeover.
 
 One completely successful monitoring pass clears degraded state.
 
-If no engine remains eligible for placement:
+When the eligible engine count reaches zero, `/ready` returns HTTP `503` with:
 
 ```json
 {
@@ -98,12 +86,7 @@ If no engine remains eligible for placement:
 }
 ```
 
-is reported with HTTP `503`.
-
-New completion requests then receive:
-
-- `backend_unavailable`
-- `Retry-After: 1`
+New completion requests receive `backend_unavailable` with `Retry-After: 1`.
 
 Lifecycle and control holds take precedence over backend state.
 
@@ -113,16 +96,9 @@ During a whole-wave hold:
 - `/ready` reports the lifecycle reason
 - completion requests return HTTP `503` with error code `standby`
 
-`control_ready` may remain true during backend loss or managed maintenance when the router still:
+`control_ready` stays true during backend loss or managed maintenance while lease ownership and monitoring remain healthy, allowing standbys to keep handoffs current.
 
-- owns its lease
-- has healthy monitoring
-
-Standbys use that condition to keep handoffs current.
-
-Client traffic should be sent only to routers whose `/ready` endpoint returns HTTP `200`.
-
-### `GET /metrics`
+## `GET /metrics`
 
 Returns Prometheus exposition format `0.0.4`.
 

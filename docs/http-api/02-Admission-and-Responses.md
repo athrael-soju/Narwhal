@@ -2,12 +2,10 @@
 
 ## Admission and refusal semantics
 
-Narwhal applies validation, retention limits, concurrency limits, predictive admission, placement availability, and router control state before starting engine work.
-
 | Condition                                                                    |  HTTP | Result                                                           |
 | ---------------------------------------------------------------------------- | ----: | ---------------------------------------------------------------- |
 | Invalid JSON, body shape, or router-interpreted field type                   | `400` | `invalid_request_error`; affected field appears in `param`       |
-| Requested model does not match the configured model                          | `404` | `model_not_found`                                                |
+| Requested model differs from the configured model                            | `404` | `model_not_found`                                                |
 | `n > 1` or `best_of > 1`                                                     | `400` | Invalid sampling width                                           |
 | Unsupported non-streaming audio, modality, or tool request                   | `400` | `invalid_request_error` naming the option in `param`             |
 | Request exceeds `serving.max_request_bytes`                                  | `413` | `request_too_large`                                              |
@@ -17,7 +15,7 @@ Narwhal applies validation, retention limits, concurrency limits, predictive adm
 | Original request deadline expires before response headers                    | `504` | Terminal expiry                                                  |
 | Predictive admission prices queued work above the TTFT budget                | `429` | `Retry-After` contains the rounded queue overrun                 |
 | Prompt alone exceeds the TTFT budget                                         | `429` | Error envelope; shorten the prompt or raise the target           |
-| No engine is eligible for placement                                          | `503` | `backend_unavailable`, `Retry-After: 1`                          |
+| Scheduler finds zero placement-eligible engines                              | `503` | `backend_unavailable`, `Retry-After: 1`                          |
 | Router is standby, fenced, in whole-wave maintenance, or monitoring-degraded | `503` | Retryable refusal, `Retry-After: 1`; `/ready` reports the reason |
 
 Set:
@@ -32,13 +30,7 @@ Concurrency limits remain active.
 
 ### Admission counters
 
-Every request reaching a supported completion endpoint increments `offered` exactly once.
-
-If the body terminates before Narwhal can size the workload, it also increments:
-
-```text
-unsized_offered
-```
+Narwhal records one `offered` arrival for each request to a completion route and increments `unsized_offered` when the body ends before workload sizing.
 
 Global accounting classifies terminal conditions as follows:
 
@@ -52,9 +44,7 @@ Global accounting classifies terminal conditions as follows:
 
 ### Streaming responses
 
-Streaming responses retain the engine's delta fields and response shape, subject to Narwhal's token-ID exposure rules.
-
-Serving limits, request deadlines, stream validation, and engine failure handling apply to both streaming and non-streaming requests.
+Narwhal forwards streaming delta fields in the engine's response shape, applying its token-ID exposure rules.
 
 ### Non-streaming assembly
 
@@ -76,15 +66,9 @@ Every tool call must contain:
 - an ID
 - a function name
 
-Tool arguments remain engine-generated strings. Interpretation belongs to the client.
+Tool arguments remain engine-generated strings for the client to interpret.
 
-Narwhal's non-streaming assembler accepts a fixed set of choice and chat-delta fields. Any unexpected non-null field causes HTTP `502`, including:
-
-- audio
-- annotations
-- custom tool output
-
-Malformed values in otherwise supported fields also fail the request.
+The non-streaming assembler returns HTTP `502` for unsupported choice or chat-delta fields that carry a value, including audio, annotations, and custom tool output, and for malformed supported fields.
 
 ### Metadata and usage
 

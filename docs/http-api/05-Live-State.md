@@ -4,21 +4,7 @@
 
 ### `GET /narwhal/state`
 
-Returns the current scheduler and router state.
-
-Schema:
-
-```text
-narwhal.state
-```
-
-Schema version:
-
-```text
-1
-```
-
-The endpoint is intended for operational inspection, controller diagnosis, and automation.
+Narwhal returns live scheduler and router state as `narwhal.state` schema version `1`.
 
 ### Top-level state
 
@@ -80,7 +66,7 @@ Each engine's health record contains drift-window accounting for:
 
 `prefill_pauses` counts transitions into that condition.
 
-Confirmed ejection removes the health record. Readmission therefore begins with no retained drift history.
+Confirmed ejection clears the engine's drift-window record, so readmission starts a fresh health window.
 
 #### `breaker`
 
@@ -238,11 +224,7 @@ role_floors_safe
 source_pressure_safe
 ```
 
-For this path:
-
-```text
-decision_basis = projected_ttft_recovery
-```
+Scored projected-TTFT recovery decisions set `decision_basis=projected_ttft_recovery`.
 
 `projected_ttft_ratio` continues to represent the demand model's ratio for the candidate split.
 
@@ -263,7 +245,7 @@ Possible constraints include:
 - dwell
 - resident guard
 
-Decisions made before candidate scoring, such as decisions stopped by insufficient demand history or a fleet-health change, contain only the fields available at that point.
+For insufficient demand history or a fleet-health change before candidate scoring, `control.last_decision` records the inputs available at that stage.
 
 ### Role-change history
 
@@ -299,4 +281,4 @@ to
 why
 ```
 
-Narwhal also writes per-request evidence to the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
+The [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) records per-request evidence.
