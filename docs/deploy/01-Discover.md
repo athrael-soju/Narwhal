@@ -13,7 +13,9 @@ set -a
 set +a
 ```
 
-Define `NARWHAL_NODE_<n>_SSH` for every engine. Discovery assigns the router to the first engine host unless `NARWHAL_ROUTER_SSH` points elsewhere.
+Set `NARWHAL_NODE_<n>_SSH` for every engine. Discovery selects the lowest-numbered engine destination for the router, substitutes `NARWHAL_ROUTER_SSH` when supplied, and groups roles with identical destinations under one host and credential.
+
+A destination may be an OpenSSH alias with username, port, identity, and jump route, or a direct `user@host`. Password authentication uses the matching `_SSH_PASSWORD`; key authentication uses the configured identity or SSH agent.
 
 Discovery reads the unique global address on `NARWHAL_FABRIC_INTERFACE` and derives engine and attestation URLs from that address plus the configured service ports. Set per-node overrides for an interface with several global addresses or a service using another reachable endpoint:
 
@@ -21,8 +23,6 @@ Discovery reads the unique global address on `NARWHAL_FABRIC_INTERFACE` and deri
 - `NARWHAL_NODE_<n>_URL`: engine service is reachable through another address;
 - `NARWHAL_NODE_<n>_ATTESTATION_URL`: attestation service is reachable through another address;
 - corresponding per-node port overrides for a service bound to a different port.
-
-Identical SSH destination values mean multiple roles share one physical host and credential. A destination may be an OpenSSH alias with username, port, identity, and jump route, or a direct `user@host`. Password authentication uses the matching `_SSH_PASSWORD`; key authentication uses the configured identity or SSH agent.
 
 ## Stage and identify the checkpoint
 
