@@ -2,7 +2,14 @@ name: pr-title
 on:
   pull_request_target:
     types: [opened, reopened, edited, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number for a bot-created release PR
+        required: true
+        type: number
 permissions:
+  contents: read
   pull-requests: read
 jobs:
   validate:
@@ -10,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        if: github.event_name == 'pull_request_target'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -24,3 +32,19 @@ jobs:
             refactor
             chore
             revert
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate bot-created release PR title
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr="repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+          test "$(gh api "$pr" --jq '.head.sha')" = "$GITHUB_SHA"
+          title=$(gh api "$pr" --jq '.title')
+          PR_TITLE="$title" python tools/maintenance/release.py title

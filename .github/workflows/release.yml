@@ -206,3 +206,4 @@ jobs:
           if [ -z "$number" ]; then exit 0; fi
           # Dispatch CI explicitly for the bot-created release PR.
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          gh workflow run pr-title.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" -f pr_number="$number"
