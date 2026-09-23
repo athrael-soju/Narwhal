@@ -116,7 +116,9 @@ Push your branch to your fork and open a pull request against `athrael-soju/Narw
 
 Describe the problem, the resulting behaviour, and how you checked it. Link the relevant issue. Include reproduction steps for a bug fix and identify any checks that require hardware. Sanitize logs and configuration before attaching them.
 
-Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The prefix determines the release impact.
+Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The PR title check validates the prefix, and the prefix determines the release impact.
+
+Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
 
 Bring the branch up to date with `main` and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
 
