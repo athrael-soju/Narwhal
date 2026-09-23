@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
+  <img src="docs/assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
 </p>
 
 <p align="center">
@@ -10,17 +10,16 @@
 </p>
 
 <p align="center">
-  <a href="docs/Home.md">Documentation</a> |
-  <a href="#getting-started">Getting started</a> |
-  <a href="docs/03-Deploy.md">Deployment</a> |
-  <a href="docs/09-API-and-Data-Reference.md">API reference</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
+  <a href="docs/Deploy.md">Deployment</a> |
+  <a href="docs/HTTP-API.md">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ## About
 
-Narwhal is a disaggregated LLM inference framework with adaptive prefill/decode scheduling, which reallocates running vLLM engines between prefill and decode as demand changes while weights remain loaded on every engine.
+Narwhal is a disaggregated LLM inference framework, which reallocates prefill and decode roles as demand changes while model weights stay loaded.
 
 Narwhal provides:
 
@@ -34,44 +33,30 @@ Narwhal provides:
 
 ## Architecture
 
-Each engine can execute both prefill and decode. The controller assigns roles using request demand, resident work and engine profiles, with configurable role floors, cooldowns and health checks. Role changes affect new request placement; existing requests remain tracked until completion.
+On regular controller passes, Narwhal prices the current and adjacent prefill/decode splits from measured engine curves, offered demand, and resident work, moving an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](assets/architectures/hotswap.svg)
+![Narwhal's reactive controller changes engine roles while model weights remain resident.](docs/assets/architectures/hotswap.svg)
 
-See [Core concepts](docs/02-Core-Concepts.md) for request flow and scheduling, and [Configuration](docs/07-Configuration.md) for controller settings.
+See [Core concepts](docs/Core-Concepts.md) for request flow and scheduling, and [Configuration](docs/Configuration.md) for controller settings.
 
 ## Benchmark snapshot
 
-The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K3 workloads measured with AlPerf v0.12.0 and prefix caching enabled.
+AlPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal, Dynamo Planner, and Ray Serve LLM.
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](assets/infographic.png)
+![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](docs/assets/infographic.png)
 
-## Getting started
+## Deploy a fleet
 
-Requirements: Linux, Python 3.11+ with `venv`, Git and Make.
-
-```bash
-git clone https://github.com/athrael-soju/Narwhal.git
-cd Narwhal
-make setup
-```
-
-`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
-
-The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
-
-## GPU deployment
-
-Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model through a compatible KV layout and transfer topology. Operators provision and launch the engines, record the running contract in the generic fleet configuration, then collect profiles, preflight results and [deployment-load evidence](docs/06-Measure.md) for that exact hardware and tensor-parallel shape. Follow the [deployment guide](docs/03-Deploy.md) to bind the running fleet to Narwhal.
+From a management workstation, [Deploy a fleet](docs/Deploy.md) uses the private `.env` and host inspection to prepare router and GPU engine hosts, launch vLLM with NIXL, and verify a completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, and inspect the fleet through Prometheus and Grafana.
 
 ## Documentation
 
-- [Architecture and scheduling](docs/02-Core-Concepts.md)
-- [Fleet configuration](docs/07-Configuration.md)
-- [API compatibility and limits](docs/09-API-and-Data-Reference.md#response-compatibility)
-- [Fleet measurement](docs/06-Measure.md)
-- [Ingress, monitoring and maintenance](docs/04-Operate.md)
-- [Troubleshooting](docs/05-Troubleshoot.md)
+- [Architecture and scheduling](docs/Core-Concepts.md)
+- [Fleet configuration](docs/Configuration.md)
+- [HTTP API](docs/HTTP-API.md)
+- [Fleet measurement](docs/Measure.md)
+- [Ingress, monitoring and maintenance](docs/Operate.md)
+- [Troubleshooting](docs/Troubleshoot.md)
 
 ## Contributing
 

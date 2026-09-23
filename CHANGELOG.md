@@ -43,4 +43,4 @@ Narwhal's initial public release routes LLM inference across prefill and decode 
 - Collect per-engine profiles, live runtime evidence, exact-output canaries and deployment load results before serving client traffic.
 - Validate prefix caching and speculative decoding against the selected model, engine build and KV layout before enabling them. Prefix caching requires exact-replay and continuation checks. Use whole-wave restart policy when the engine build shares peer registrations across the fleet.
 
-See the [configuration reference](docs/07-Configuration.md) for defaults and the [measurement guide](docs/06-Measure.md) for deployment requirements.
+See the [configuration reference](docs/Configuration.md) for defaults and the [measurement guide](docs/Measure.md) for deployment requirements.

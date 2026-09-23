@@ -20,18 +20,9 @@ jobs:
           cache: pip
       - run: pip install -e '.[dev]' -c constraints-dev.txt
       - run: make check VENV_PYTHON=python
-      - run: make coverage VENV_PYTHON=python COVERAGE_ARGS='--out runs/coverage/ci'
-      - name: Retain coverage reports and CPU drill evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cpu-coverage-python-3.12
-          path: runs/coverage/ci
-          include-hidden-files: true
-          retention-days: 14
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
-        run: python tools/release.py check --release
+        run: python tools/maintenance/release.py check --release
 
   unit:
     runs-on: ubuntu-latest
@@ -72,16 +63,18 @@ jobs:
           python -m pip install dist/*.whl
           source_root="$PWD"
           cd "$(mktemp -d)"
-          python "$source_root/tools/check_installed.py" \
+          python "$source_root/tools/maintenance/check_installed.py" \
             --expected-version "$EXPECTED_VERSION" --source-root "$source_root"
 
-      - name: Run unit tests and integration drills from the source distribution
+      - name: Build docs and run tests from the source distribution
         if: matrix.python == '3.12'
         run: |
           archive_dir=$(mktemp -d)
           tar -xzf dist/*.tar.gz -C "$archive_dir"
           cd "$archive_dir"/*/
-          python -m pip install '.[dev]' -c constraints-dev.txt
+          for file in LICENSE NOTICE CITATION.cff CONTRIBUTING.md; do test -s "$file"; done
+          python -m pip install '.[dev,docs]' -c constraints-dev.txt
+          make docs-build VENV_PYTHON=python
           make test VENV_PYTHON=python
 
   gates:
