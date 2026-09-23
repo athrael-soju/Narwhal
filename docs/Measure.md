@@ -1,8 +1,6 @@
 # Production Fleet Measurement and Acceptance
 
-Production performance results apply only to the exact serving configuration that produced them. Treat every result as bound to the model, engine build, hardware shape, topology, workload, cache policy, and latency targets used during the run.
-
-This procedure establishes a reproducible measurement record for a fleet, from idle-engine profiling through deployment acceptance.
+Bind each production result to a deployment identifier that records the model, engine build, hardware shape, topology, workload, cache policy, and TTFT/TPOT targets used in the run.
 
 ## Measurement sequence
 
