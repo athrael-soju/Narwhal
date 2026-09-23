@@ -16,7 +16,7 @@
         {"type": "feat", "section": "Features"},
         {"type": "fix", "section": "Fixes"},
         {"type": "perf", "section": "Performance"},
-        {"type": "docs", "section": "Documentation", "hidden": true},
+        {"type": "docs", "section": "Documentation"},
         {"type": "chore", "hidden": true},
         {"type": "ci", "hidden": true},
         {"type": "test", "hidden": true},

@@ -1,4 +1,3 @@
-# Include the portable source tree needed by integration drills and documented tools.
 # Explicit paths keep private fleet overrides and run artifacts out of the sdist.
 include LICENSE NOTICE CITATION.cff CHANGELOG.md CONTRIBUTING.md
 include Makefile .gitignore .pre-commit-config.yaml .env.example
@@ -6,11 +5,11 @@ include .release-please-manifest.json release-please-config.json
 include constraints-dev.txt
 include mkdocs.yml
 include config/engine-attestation.example.json config/engine-launch.example.json
-include config/fleet.example.json config/fleet.stub.json config/hosts.example.json
+include config/fleet.example.json config/hosts.example.json
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
 recursive-include deploy *.cfg
 recursive-include tools *.py *.json *.yml *.md
-recursive-include tools/coverage_support *.ini
 recursive-include tests *.py
+include tests/data/fleet.json
 recursive-include src/narwhal py.typed *.json

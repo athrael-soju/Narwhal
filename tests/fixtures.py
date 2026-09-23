@@ -1,4 +1,4 @@
-"""Shared CPU fleet and profile fixtures for contract-level tests."""
+"""Fleet and profile fixtures for contract tests."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -32,8 +32,8 @@ def profile(iid="e0", **changes):
 
 
 def fleet(root):
-    """Create a two-engine stub fleet and write profiles under the supplied directory."""
-    cfg = FleetConfig.load(ROOT / "config/fleet.stub.json")
+    """Create a two-engine fleet and write profiles under the supplied directory."""
+    cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
     cfg.engines = [cfg.engines[0], cfg.engines[3]]
     cfg.profiles_path = root / "profiles.json"
     store = ProfileStore(cfg.profiles_path)

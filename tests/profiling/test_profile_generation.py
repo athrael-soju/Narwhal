@@ -22,7 +22,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.cfg = fleet(Path(folder.name))
         self.starts = {"e0": 100.0, "e3": 100.0}
-        self.by_host = {spec.url.split(":")[-1]: spec.iid for spec in self.cfg.engines}
+        self.by_host = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
         contract = self.cfg.engine_contract
         self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "fixture"))
         self.transport = httpx.MockTransport(self.respond)
@@ -34,7 +34,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
             store.put(replace(profile(spec.iid), generation_digest=generation.digest))
 
     def respond(self, request):
-        iid = self.by_host[str(request.url.port)]
+        iid = self.by_host[request.url.host]
         identity = EngineIdentity(self.cfg.engine_contract.vllm_version, self.starts[iid])
         if request.url.path == "/version":
             return httpx.Response(200, json={"version": identity.vllm_version})

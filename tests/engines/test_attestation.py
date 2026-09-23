@@ -27,7 +27,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
     """Local HTTP responses distinguish process restart from declaration mismatch."""
 
     def setUp(self):
-        self.contract = FleetConfig.load(ROOT / "config/fleet.stub.json").engine_contract
+        self.contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         self.document = AttestationDocument(
             self.contract, dict.fromkeys(self.contract.fields(), "test-launch")
         )

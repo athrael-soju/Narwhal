@@ -1,0 +1,67 @@
+name: pr-title
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number for a bot-created release PR
+        required: true
+        type: number
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+jobs:
+  validate:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        if: github.event_name == 'pull_request_target'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            docs
+            ci
+            build
+            test
+            refactor
+            chore
+            revert
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate bot-created release PR title
+        id: bot_title
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr="repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+          test "$(gh api "$pr" --jq '.head.sha')" = "$GITHUB_SHA"
+          title=$(gh api "$pr" --jq '.title')
+          PR_TITLE="$title" python tools/maintenance/release.py title
+      - name: Report release PR title status
+        if: always() && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE_OUTCOME: ${{ steps.bot_title.outcome }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='Conventional Commit title validation failed'
+          if [ "$TITLE_OUTCOME" = success ]; then
+            state=success
+            description='Conventional Commit title validation passed'
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context='Validate PR title' -f description="$description"

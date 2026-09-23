@@ -66,8 +66,6 @@ config/fleet.json
 config/fleet.*.json
 ```
 
-The repository tracks the example and stub configurations.
-
 After loading `.env`, invoke profiling, preflight, and serving with:
 
 ```bash

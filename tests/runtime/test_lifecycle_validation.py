@@ -244,7 +244,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             ("attestation", httpx.Response(503), "attestation unreadable"),
             ("attestation", {}, "attestation:"),
             ("/v1/models", httpx.Response(503), "model list unreadable"),
-            ("/v1/models", {"data": [{"id": "other"}]}, "expected stub"),
+            ("/v1/models", {"data": [{"id": "other"}]}, "expected test-model"),
             ("/v1/completions", {"choices": []}, "generation failed"),
         ):
             with self.subTest(route=route, expected=expected):

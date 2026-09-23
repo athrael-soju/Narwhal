@@ -52,7 +52,6 @@ Narwhal's initial public release routes LLM inference across prefill and decode 
 ### Measurement and operations
 
 - Profiling measures per-engine prefill and decode curves; correctness canaries track exact output across live controller events.
-- CPU lifecycle and failover drills run under `make check`.
 - Per-request journals, controller state, Prometheus metrics, a Grafana dashboard, and
   engine-down alerts. One startup command derives router and engine scrape targets from the
   deployed fleet, then verifies target health and populated dashboard queries.

@@ -10,12 +10,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.config import FleetConfig
+from tests.fixtures import ROOT
 from tools.observability import make_targets
 
 
 class TargetGenerationTests(unittest.TestCase):
     def test_environment_targets_match_the_loaded_fleet(self) -> None:
-        raw = json.loads(Path("config/fleet.stub.json").read_text())
+        raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
         env = {}
         for index, engine in enumerate(raw["engines"]):
             name = f"TEST_NODE_{index}_URL"

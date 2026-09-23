@@ -3,7 +3,6 @@ site_description: Adaptive hot-swap disaggregation for LLM inference
 site_url: https://athrael-soju.github.io/Narwhal/
 repo_url: https://github.com/athrael-soju/Narwhal
 repo_name: athrael-soju/Narwhal
-edit_uri: edit/main/docs/
 strict: true
 
 theme:
@@ -14,7 +13,6 @@ theme:
     primary: custom
     accent: custom
   features:
-    - content.action.edit
     - content.code.copy
     - navigation.footer
     - navigation.indexes
