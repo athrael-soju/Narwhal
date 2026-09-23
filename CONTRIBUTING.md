@@ -122,6 +122,12 @@ Address review comments on the same branch and rerun the relevant checks after e
 
 Update the docs when a config field, route, journal field, metric, CLI flag or operator procedure changes.
 
+## PyPI publishing
+
+Configure the `narwhal-inference` project on PyPI with a GitHub trusted publisher: owner `athrael-soju`, repository `Narwhal`, workflow `release.yml`, and environment `pypi`. The release job requests an OIDC token only after the GitHub release artifacts pass the package and installed-wheel checks. Its PyPI check compares both artifact hashes before a retry; an existing version with different bytes stops the release.
+
+The next PyPI version must exceed the existing 0.2.0 upload. Preserve the `Release-As: 0.3.0` footer when squashing the PyPI publishing PR, then check that the generated release PR agrees on the package, citation, manifest and changelog versions before merge. The release workflow publishes the reviewed wheel and source archive to GitHub and PyPI after that release PR is merged.
+
 ## Wiki publishing
 
 Edit the Markdown under `docs/` through a pull request. `docs/wiki-pages.txt` selects the wiki pages. The `wiki` workflow publishes canonical `main` after a documentation or asset change.

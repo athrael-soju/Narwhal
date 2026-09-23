@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
+  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
 </p>
 
 <p align="center">
@@ -7,15 +7,16 @@
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 through 3.13">
   <img src="https://img.shields.io/badge/style-ruff-261230" alt="Lint and format by ruff">
   <img src="https://img.shields.io/badge/types-mypy-blue" alt="Types checked with mypy">
+  <a href="https://pypi.org/project/narwhal-inference/"><img src="https://img.shields.io/pypi/v/narwhal-inference" alt="Latest PyPI version"></a>
 </p>
 
 <p align="center">
-  <a href="docs/Home.md">Documentation</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
   <a href="#getting-started">Getting started</a> |
-  <a href="docs/03-Deploy.md">Deployment</a> |
-  <a href="docs/09-API-and-Data-Reference.md">API reference</a> |
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/docs/03-Deploy.md">Deployment</a> |
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/docs/09-API-and-Data-Reference.md">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
 
 ## About
@@ -36,19 +37,26 @@ Narwhal provides:
 
 Each engine can execute both prefill and decode. The controller assigns roles using request demand, resident work and engine profiles, with configurable role floors, cooldowns and health checks. Role changes affect new request placement; existing requests remain tracked until completion.
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](assets/architectures/hotswap.svg)
+![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/architectures/hotswap.svg)
 
-See [Core concepts](docs/02-Core-Concepts.md) for request flow and scheduling, and [Configuration](docs/07-Configuration.md) for controller settings.
+See [Core concepts](https://github.com/athrael-soju/Narwhal/blob/main/docs/02-Core-Concepts.md) for request flow and scheduling, and [Configuration](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md) for controller settings.
 
 ## Benchmark snapshot
 
 The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K3 workloads measured with AlPerf v0.12.0 and prefix caching enabled.
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](assets/infographic.png)
+![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/infographic.png)
 
 ## Getting started
 
-Requirements: Linux, Python 3.11+ with `venv`, Git and Make.
+Install the router on Linux with Python 3.11+:
+
+```bash
+python -m pip install narwhal-inference
+narwhal-serve --help
+```
+
+Narwhal connects to separately provisioned vLLM engines. The local walkthrough uses Git and Make:
 
 ```bash
 git clone https://github.com/athrael-soju/Narwhal.git
@@ -56,29 +64,29 @@ cd Narwhal
 make setup
 ```
 
-`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
+`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
 
-The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](.env.example) to `.env` and follow the [environment setup](docs/07-Configuration.md#environment-variables).
+The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) to `.env` and follow the [environment setup](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md#environment-variables).
 
 ## GPU deployment
 
-Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model through a compatible KV layout and transfer topology. Operators provision and launch the engines, record the running contract in the generic fleet configuration, then collect profiles, preflight results and [deployment-load evidence](docs/06-Measure.md) for that exact hardware and tensor-parallel shape. Follow the [deployment guide](docs/03-Deploy.md) to bind the running fleet to Narwhal.
+Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model through a compatible KV layout and transfer topology. Operators provision and launch the engines, record the running contract in the generic fleet configuration, then collect profiles, preflight results and [deployment-load evidence](https://github.com/athrael-soju/Narwhal/blob/main/docs/06-Measure.md) for that exact hardware and tensor-parallel shape. Follow the [deployment guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/03-Deploy.md) to bind the running fleet to Narwhal.
 
 ## Documentation
 
-- [Architecture and scheduling](docs/02-Core-Concepts.md)
-- [Fleet configuration](docs/07-Configuration.md)
-- [API compatibility and limits](docs/09-API-and-Data-Reference.md#response-compatibility)
-- [Fleet measurement](docs/06-Measure.md)
-- [Ingress, monitoring and maintenance](docs/04-Operate.md)
-- [Troubleshooting](docs/05-Troubleshoot.md)
+- [Architecture and scheduling](https://github.com/athrael-soju/Narwhal/blob/main/docs/02-Core-Concepts.md)
+- [Fleet configuration](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md)
+- [API compatibility and limits](https://github.com/athrael-soju/Narwhal/blob/main/docs/09-API-and-Data-Reference.md#response-compatibility)
+- [Fleet measurement](https://github.com/athrael-soju/Narwhal/blob/main/docs/06-Measure.md)
+- [Ingress, monitoring and maintenance](https://github.com/athrael-soju/Narwhal/blob/main/docs/04-Operate.md)
+- [Troubleshooting](https://github.com/athrael-soju/Narwhal/blob/main/docs/05-Troubleshoot.md)
 
 ## Contributing
 
-[Contributing](CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md) covers vulnerability reports.
+[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 
-Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](CITATION.cff) contains both references.
+Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
 
-License: [Apache-2.0](LICENSE).
+License: [Apache-2.0](https://github.com/athrael-soju/Narwhal/blob/main/LICENSE).
