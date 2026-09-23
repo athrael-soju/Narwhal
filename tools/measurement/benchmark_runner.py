@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.measurement.benchmark_evidence import EvidenceCollector
 from tools.measurement.load_trial import idle
 
 
@@ -67,6 +68,46 @@ def load_plan(path: Path) -> dict:
             raise ValueError(f"{name}: client_argv must be a nonempty string array")
         for field in ("client_timeout_s", "drain_timeout_s"):
             positive(point.get(field), f"{name}.{field}")
+    evidence = plan.get("evidence")
+    if evidence is not None:
+        if not isinstance(evidence, dict):
+            raise ValueError("evidence must be an object")
+        for field in ("journal_path", "fleet_path", "profiles_path"):
+            if not isinstance(evidence.get(field), str) or not evidence[field]:
+                raise ValueError(f"evidence.{field} must name a local file")
+        positive(evidence.get("sample_interval_s"), "evidence.sample_interval_s")
+        urls = evidence.get("engine_metrics_urls")
+        if (
+            not isinstance(urls, dict)
+            or not urls
+            or any(
+                not isinstance(key, str)
+                or not isinstance(url, str)
+                or not url.startswith(("http://", "https://"))
+                for key, url in urls.items()
+            )
+        ):
+            raise ValueError(
+                "evidence.engine_metrics_urls requires engine names and HTTP metrics URLs"
+            )
+        identity = evidence.get("identity")
+        required = (
+            "narwhal_revision",
+            "model_id",
+            "benchmark_client_version",
+            "engine_image",
+            "engine_version",
+            "checkpoint_revision",
+            "gpu_shape",
+            "gpu_allocation",
+            "initial_role_split",
+        )
+        if not isinstance(identity, dict) or any(not identity.get(key) for key in required):
+            raise ValueError(
+                "evidence.identity requires revision, engine, checkpoint, GPU, and role fields"
+            )
+        if any(not isinstance(identity[key], str) for key in required if key != "gpu_allocation"):
+            raise ValueError("evidence.identity labels must be strings")
     return plan
 
 
@@ -79,10 +120,9 @@ def command_for(point: dict, base: str, model: str, directory: Path) -> list[str
     }
     command = []
     for arg in point["client_argv"]:
-        try:
-            command.append(arg.format_map(substitutions))
-        except (KeyError, ValueError) as error:
-            raise ValueError(f"{point['id']}: invalid client argument {arg!r}: {error}") from error
+        for key, value in substitutions.items():
+            arg = arg.replace("{" + key + "}", value)
+        command.append(arg)
     if not any("{base}" in arg for arg in point["client_argv"]):
         raise ValueError(f"{point['id']}: client_argv must pass {{base}} to the client")
     if not any("{model}" in arg for arg in point["client_argv"]):
@@ -182,17 +222,33 @@ def run(plan: dict, base: str, model: str, out: Path, client: httpx.Client) -> i
                 record["condition"] = "initial_drain_" + record["initial_drain"]["condition"]
             else:
                 command = command_for(point, base, model, directory)
-                record["client"] = run_client(command, directory, point["client_timeout_s"])
-                record["drain"] = wait_for_drain(client, base, point["drain_timeout_s"])
-                if record["drain"]["condition"] != "idle":
-                    record["condition"] = "drain_" + record["drain"]["condition"]
-                elif (
-                    record["client"]["condition"] != "exited"
-                    or record["client"]["exit_status"] != 0
-                ):
-                    record["condition"] = "client_failure"
-                else:
-                    record["condition"] = "completed"
+                collector = None
+                try:
+                    if plan.get("evidence"):
+                        collector = EvidenceCollector(
+                            plan["evidence"], base, point, directory, dict(client.headers)
+                        )
+                        collector.start()
+                    record["client"] = run_client(command, directory, point["client_timeout_s"])
+                    record["drain"] = wait_for_drain(client, base, point["drain_timeout_s"])
+                    if collector:
+                        evidence = collector.finish()
+                        record["evidence"] = {
+                            "file": "evidence.json",
+                            "diagnostics": len(evidence["diagnostics"]),
+                        }
+                    if record["drain"]["condition"] != "idle":
+                        record["condition"] = "drain_" + record["drain"]["condition"]
+                    elif (
+                        record["client"]["condition"] != "exited"
+                        or record["client"]["exit_status"] != 0
+                    ):
+                        record["condition"] = "client_failure"
+                    else:
+                        record["condition"] = "completed"
+                except (OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
+                    record["condition"] = "evidence_error"
+                    record["evidence_error"] = str(error)
         record["finished_at"] = now()
         write_json(directory / "result.json", record)
         print(f"{point['id']}: {record['condition']}")
