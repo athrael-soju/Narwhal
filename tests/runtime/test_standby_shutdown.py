@@ -5,11 +5,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime import state
@@ -35,6 +36,13 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
             monitor_interval_s=60,
         )
         profiles = ProfileStore(self.cfg.profiles_path)
+        generation = "sha256:" + "a" * 64
+        generation_reader = patch(
+            "narwhal.serving.app.read_generation",
+            new=AsyncMock(return_value=GenerationEvidence(generation, {"engine": {}})),
+        )
+        generation_reader.start()
+        self.addCleanup(generation_reader.stop)
         for iid in ("p", "d"):
             profiles.put(
                 Profile(
@@ -50,6 +58,7 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
                     decode_max_kv_tokens=1024,
                     decode_fit_mape=0.0,
                     decode_cv_mape=0.0,
+                    generation_digest=generation,
                 )
             )
 

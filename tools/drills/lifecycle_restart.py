@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -16,6 +17,8 @@ from typing import Any
 
 import httpx
 
+from narwhal.config import FleetConfig
+from narwhal.profiling.generation import read_generation
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
 
@@ -113,12 +116,20 @@ def _write_inputs(out: Path, base: int, policy: str) -> Path:
     fleet.setdefault("engine", {})["tokenize"] = False
     config = out / "fleet.json"
     config.write_text(json.dumps(fleet, indent=2) + "\n")
-    # Synthetic fits match the local CPU stubs.
-    store = ProfileStore(out / "profiles.json")
-    for k in range(3):
+    return config
+
+
+def _profiles(config: Path) -> None:
+    # Synthetic fits match the local CPU stubs and bind to their live processes.
+    cfg = FleetConfig.load(config)
+    store = ProfileStore(cfg.profiles_path)
+    for spec in cfg.engines:
+        generation = asyncio.run(
+            read_generation(spec, cfg.engine_contract, timeout_s=cfg.health_timeout_s)
+        )
         store.put(
             Profile(
-                f"e{k}",
+                spec.iid,
                 2e-8,
                 6e-5,
                 0.005,
@@ -130,9 +141,9 @@ def _write_inputs(out: Path, base: int, policy: str) -> Path:
                 decode_max_kv_tokens=1_000_000_000,
                 decode_fit_mape=0.0,
                 decode_cv_mape=0.0,
+                generation_digest=generation.digest,
             )
         )
-    return config
 
 
 def _post(url: str, path: str, body: dict[str, Any], status: int = 200) -> dict[str, Any]:
@@ -173,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         for k, port in enumerate(engine_ports):
             engines[k] = _start(_stub_command(f"e{k}", port), out / f"e{k}.log")
             _wait(f"http://127.0.0.1:{port}", "/health", 200)
+        _profiles(config)
         router = _start(
             [
                 sys.executable,

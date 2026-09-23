@@ -14,7 +14,9 @@ The profile file declares:
 }
 ```
 
-Serving and preflight validate the schema structure, measured decode bounds, and error evidence for each profile row before pricing engine capacity.
+With `engine_contract` configured, the profiler reads each engine's process identity and verified attestation before its sweep, repeats the read after the sweep, and saves the attestation digest with the fit. The sample sidecar retains the full attestation response, including the process start, contract fields, and their evidence sources. With `engine_contract` omitted, the same two reads bind the fit to the live `/version` and `/metrics` process identity.
+
+Preflight and router startup read the live generation for every configured engine. A changed digest names the engine and requires a fresh profile before admission; preflight also checks measured decode bounds and error evidence before pricing capacity.
 
 A malformed profile aborts the operation with the affected file, engine, and field:
 
@@ -31,6 +33,7 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | Field                                          | JSON type         | Constraint                                                                                                         |
 | ---------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `iid`                                          | string            | Nonempty.                                                                                                          |
+| `generation_digest`                            | string            | SHA-256 digest of the verified attestation, or the process identity when the fleet has no declared contract.      |
 | `ttft_a`, `ttft_b`, `ttft_c`                   | number            | Nonnegative prefill quadratic coefficients.                                                                        |
 | `tpot_slope`                                   | number            | Strictly positive decode interval per resident KV token. A zero slope would price decode capacity as infinite.     |
 | `tpot_intercept`                               | number            | Nonnegative zero-contention decode interval.                                                                       |
@@ -49,6 +52,8 @@ true
 ```
 
 `NaN` and `Infinity` abort profile loading during JSON decoding, before the row validator examines engine IDs.
+
+Profile stores written before generation binding retain their schema version and carry rows from an earlier measurement contract. Preflight and router startup reject those rows with `profile has no generation evidence`; run `narwhal-profile` against the current engine processes into a fresh store and keep its `.samples.json` sidecar. Refit accepts saved samples carrying the generation digest and evidence; earlier samples require a fresh sweep to establish process provenance.
 
 ### Decode capacity derived from the profile
 

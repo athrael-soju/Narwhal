@@ -1,6 +1,6 @@
 # `narwhal-profile`
 
-`narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config. It writes raw observations beside the store, replacing the profile path suffix with `.samples.json`.
+`narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config. It binds each fit to the verified attestation when `engine_contract` is configured, or to the live process identity otherwise, and retains that evidence with raw observations in the `.samples.json` sidecar.
 
 The profiler rejects symlink destinations and requires `--overwrite` to replace existing files. Give each run a new output path to retain prior profiles and samples.
 
@@ -10,7 +10,7 @@ The profiler rejects symlink destinations and requires `--overwrite` to replace 
 | ---------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--fleet PATH`         | required    | Fleet config JSON                                                                                                                                                       |
 | `--only IID`           | all engines | Repeatable engine selector                                                                                                                                              |
-| `--refit-samples PATH` | omitted     | Refit TTFT from a saved `.samples.json` file while retaining its decode measurements. Requires `--out` and a complete fleet selection.                                  |
+| `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining their decode measurements. Requires `--out` and a complete fleet selection.                             |
 | `--out PATH`           | omitted     | Fresh profile path for `--refit-samples`; the command writes a matching `.samples.json` sidecar.                                                                        |
 | `--limits PATH`        | omitted     | Generated per-engine `max_num_seqs` limits from deployment preparation. The profiler bounds each decode cohort before probing.                                          |
 | `--overwrite`          | false       | Replaces existing profile and sample files when the first engine completes; with `--only`, the new store contains the selected profiles.                              |

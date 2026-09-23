@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -17,7 +18,9 @@ from typing import Any
 
 import httpx
 
+from narwhal.config import EngineSpec
 from narwhal.contracts import FLEET, versioned
+from narwhal.profiling.generation import read_generation
 
 
 def _port_block(size: int) -> int:
@@ -82,13 +85,20 @@ def _config(path: Path, engine_port: int, state: Path) -> None:
     )
 
 
-def _profiles(path: Path) -> None:
+def _profiles(path: Path, engine_port: int) -> None:
     # Synthetic fits match the local CPU stubs.
     from narwhal.profiling.model import Profile
     from narwhal.profiling.store import ProfileStore
 
     store = ProfileStore(path)
     for k in range(4):
+        generation = asyncio.run(
+            read_generation(
+                EngineSpec(f"e{k}", f"http://127.0.0.1:{engine_port + k}"),
+                None,
+                timeout_s=5,
+            )
+        )
         store.put(
             Profile(
                 f"e{k}",
@@ -103,6 +113,7 @@ def _profiles(path: Path) -> None:
                 decode_max_kv_tokens=1_000_000_000,
                 decode_fit_mape=0.0,
                 decode_cv_mape=0.0,
+                generation_digest=generation.digest,
             )
         )
 
@@ -200,7 +211,6 @@ def main(argv: list[str] | None = None) -> int:
     primary_url = f"http://127.0.0.1:{primary_port}"
     standby_url = f"http://127.0.0.1:{standby_port}"
     lease = out / "router.lease"
-    _profiles(out / "profiles.json")
     primary_config = out / "primary.json"
     standby_config = out / "standby.json"
     _config(primary_config, engine_port, out / "primary.state.json")
@@ -223,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         for port in range(engine_port, engine_port + 4):
             _wait(f"http://127.0.0.1:{port}", "/health", 200)
+        _profiles(out / "profiles.json", engine_port)
         primary = _start(
             _serve_command(primary_config, primary_port, "router-a", lease),
             out / "primary.log",
