@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Before starting observability, confirm that you have:
+Start monitoring with:
 
 - a running Narwhal router;
 - the fleet document used for that deployment;
@@ -12,9 +12,7 @@ Before starting observability, confirm that you have:
 - `curl`;
 - network reachability from the router host to every engine metrics endpoint.
 
-Run monitoring commands from the deployed checkout inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells). That shell loads `runs/deployment/.env.router` and activates the installed Python environment.
-
-`make observe` uses the project environment created by `make setup`.
+Run the commands from the deployed checkout inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells), which loads `runs/deployment/.env.router` and activates the installed Python environment. `make observe` uses the project environment created by `make setup`.
 
 ## Configure the monitored deployment
 
@@ -25,11 +23,7 @@ export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 
-`NARWHAL_FLEET` supplies the engine identities and metrics addresses used to generate Prometheus discovery targets.
-
-Engine URLs may contain [environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments). Those references are resolved from variables already loaded in the router-role shell.
-
-`NARWHAL_ROUTER_URL` must identify the router origin that Prometheus can reach from the router host network. Deployment automation may expose that origin directly or through a stable local tunnel.
+`make observe` reads `NARWHAL_FLEET` for engine IDs and metrics URLs, resolving [environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) with variables loaded by the router-role shell before it writes discovery targets. Set `NARWHAL_ROUTER_URL` to an origin Prometheus can reach from the router host, directly or through a stable local tunnel.
 
 ## Start Prometheus and Grafana
 
@@ -39,18 +33,18 @@ Run:
 make observe
 ```
 
-The command performs the monitoring deployment as a checked startup sequence. It:
+`make observe` starts monitoring in this order:
 
 1. Generates Prometheus discovery for the router and configured engines.
 2. Checks ownership of the monitoring listeners.
-3. Reports listeners owned outside the current deployment instead of replacing them.
+3. Reports the owner of an occupied listener so the deployment can use another address.
 4. Stages Prometheus, Grafana, alerting, dashboard, and target files.
 5. Starts the pinned Prometheus and Grafana images.
 6. Verifies the complete monitoring readiness contract.
 
 ### Readiness contract
 
-`make observe` succeeds only when all of these conditions hold:
+Startup completes after these checks pass:
 
 - exactly one router target is healthy;
 - every configured engine target is healthy;
@@ -74,7 +68,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
   | python3 -m json.tool
 ```
 
-The result should contain:
+Prometheus returns:
 
 - one series for the Narwhal router;
 - one series for every configured engine.
@@ -88,20 +82,14 @@ Prometheus `/targets` provides the corresponding discovery state and scrape erro
 
 ## Staged monitoring files
 
-Monitoring configuration is staged under:
-
-```text
-runs/observability/mounts/
-```
-
-The parent directory uses mode `0700`.
+Narwhal stages monitoring configuration under `runs/observability/mounts/`, whose parent directory uses mode `0700`.
 
 Files mounted into the containers are staged with permissions that allow the Prometheus and Grafana service users to read them:
 
 - mounted subdirectories: `0755`;
 - mounted files: `0644`.
 
-Docker bind-mounts only these staged subdirectories, all read-only:
+Compose bind-mounts these staged subdirectories read-only:
 
 ```text
 prometheus

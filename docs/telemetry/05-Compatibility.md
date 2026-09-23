@@ -2,9 +2,7 @@
 
 ## Check interface compatibility before deployment
 
-Every versioned Narwhal interface declares both a schema name and a schema version.
-
-Readers accept the expected schema name at the current supported version. Any other schema/version combination fails validation.
+Each Narwhal reader checks a document's schema name and version against the pair it supports, failing validation when either differs.
 
 Inspect the contracts installed with the package:
 

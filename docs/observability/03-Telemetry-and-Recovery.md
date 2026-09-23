@@ -2,21 +2,11 @@
 
 ## GPU telemetry
 
-Run the AMD or NVIDIA exporter selected for the deployment to:
-
-- discover GPU devices;
-- collect sensor metrics;
-- publish those metrics through the deployment's hardware dashboard.
+Run the deployment's AMD or NVIDIA exporter to discover GPUs and collect sensor metrics for the hardware dashboard.
 
 ## Alert evaluation
 
-Prometheus loads:
-
-```text
-tools/observability/prometheus-alerts.yml
-```
-
-Evaluated and firing alerts are exposed through the `ALERTS` series.
+Prometheus evaluates `tools/observability/prometheus-alerts.yml` and exports evaluated and firing alerts through the `ALERTS` series.
 
 Inspect the loaded and evaluated rules with:
 
@@ -24,15 +14,7 @@ Inspect the loaded and evaluated rules with:
 curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 ```
 
-The rules depend on the labels generated for the monitoring targets:
-
-```text
-job="narwhal-router"
-job="engines"
-iid=<engine identity>
-```
-
-The target generator supplies these labels.
+The target generator labels router scrapes `job="narwhal-router"` and engine scrapes `job="engines"` with `iid=<engine identity>`; the alert rules select targets through those labels.
 
 Production monitoring uses the same rules file and routes:
 
@@ -56,14 +38,8 @@ through the deployment's alert manager.
 | Grafana shows an older dashboard                       | Rerun `make observe` to replace the staged dashboard. The directory mount exposes the replacement to Grafana's provisioner. If the dashboard contract still fails, inspect the provisioning log.                                                                           |
 | An alert evaluates against the wrong scope             | Inspect target relabelling for `job`, `instance`, and `iid`.                                                                                                                                                                                                               |
 
-## Retained deployment evidence
+## Retain monitoring captures
 
-Store deployment addresses and captured monitoring responses under:
+Store deployment addresses and captured monitoring responses under `runs/`.
 
-```text
-runs/
-```
-
-[Operate Narwhal](../operate/02-Monitor.md#6-monitor-placement-and-control) defines fleet-health semantics and the corresponding operator actions.
-
-The [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md) ties the verified Prometheus targets and dashboard queries to the retained load evidence.
+Follow [Operate Narwhal](../operate/02-Monitor.md#6-monitor-placement-and-control) for fleet-health actions. Include verified Prometheus targets and dashboard queries with the retained load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).

@@ -1,11 +1,6 @@
 # Set up observability
 
-Narwhal ships a Compose-based monitoring stack for the router host. It runs:
-
-- Prometheus `3.14.0` for router and engine scraping, alert evaluation, and dashboard data.
-- Grafana `13.2.1` with a provisioned **Narwhal Orchestrator** dashboard.
-
-The monitoring stack is generated from the deployed fleet definition, so Prometheus target identities and metrics endpoints remain aligned with the running deployment.
+`make observe` builds scrape targets from the deployed fleet's engine IDs and metrics endpoints, then starts Prometheus `3.14.0` for router and engine metrics and alert evaluation and Grafana `13.2.1` with the provisioned **Narwhal Orchestrator** dashboard.
 
 ## Monitoring tasks
 

@@ -2,8 +2,6 @@
 
 ## Diagnose monitoring degradation
 
-Narwhal monitors independent router subsystems through staged monitoring passes.
-
 | Metric                                          | Meaning                                                                   | Labels  |
 | ----------------------------------------------- | ------------------------------------------------------------------------- | ------- |
 | `narwhal_monitoring_degraded`                   | `1` while repeated monitoring-pass failures block new admissions.         | none    |
@@ -59,16 +57,6 @@ verify_inference
 
 When a probe completes, Narwhal either clears the relevant failure streaks or ejects the engine. Engine ejection is exported through `narwhal_ejected`.
 
-The repository ships Prometheus alert expressions in:
-
-```text
-tools/observability/prometheus-alerts.yml
-```
-
-and the Grafana dashboard definition in:
-
-```text
-tools/observability/grafana-narwhal.json
-```
+`make observe` stages `tools/observability/prometheus-alerts.yml` for Prometheus rule evaluation and `tools/observability/grafana-narwhal.json` for Grafana dashboard provisioning.
 
 [Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents the panel scope and metric boundaries.

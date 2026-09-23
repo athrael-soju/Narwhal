@@ -2,13 +2,11 @@
 
 ## Access the dashboard from a workstation
 
-Grafana and Prometheus normally remain bound to the router side of the deployment. Access them through the deployment SSH path.
+Keep Grafana and Prometheus on router-side listeners and reach them through the deployment SSH path.
 
 Run the tunnel command from the management checkout with the workstation `.env` loaded.
 
-If the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) is already running, reuse it. That tunnel already includes the monitoring forwards.
-
-Otherwise, open a monitoring-only tunnel:
+Reuse the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) when it is running with the monitoring forwards. For monitoring access by itself, open:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \
@@ -38,9 +36,7 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-Grafana derives its `Prometheus` datasource URL from the selected Prometheus listener.
-
-When Prometheus is configured with a wildcard bind, Grafana datasource generation and readiness checks resolve that listener through loopback. The actual Prometheus listener keeps the configured wildcard address.
+Grafana derives its `Prometheus` datasource URL from the selected listener. With a wildcard Prometheus bind, Narwhal points Grafana and readiness probes at loopback while the Prometheus socket keeps its configured wildcard address.
 
 For the isolated listener example using `127.0.0.2`, add:
 

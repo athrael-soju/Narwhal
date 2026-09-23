@@ -14,7 +14,7 @@ The profile file declares:
 }
 ```
 
-Serving and preflight use the same validator. Narwhal requires the declared schema structure, measured decode bounds, and error evidence before accepting a profile row.
+Serving and preflight validate the schema structure, measured decode bounds, and error evidence for each profile row before pricing engine capacity.
 
 A malformed profile aborts the operation with the affected file, engine, and field:
 
@@ -22,15 +22,9 @@ A malformed profile aborts the operation with the affected file, engine, and fie
 profiles.json: profile n4: tpot_slope must be positive
 ```
 
-The completed profile store must contain exactly the engines configured for the deployment. Missing rows and extra rows both fail validation, with the affected engine IDs included in the error.
+Build one profile store whose `iid` set matches the configured fleet; validation reports any missing or extra engine IDs.
 
-When profiling engines independently:
-
-```bash
-narwhal-profile --only
-```
-
-combine the measured rows into one complete profile store before running preflight or starting the router.
+When profiling engines independently with `narwhal-profile --only`, combine their measured rows into one fleet-wide profile store before preflight or router startup.
 
 ### Profile fields
 
@@ -46,9 +40,7 @@ combine the measured rows into one complete profile store before running preflig
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer           | Positive measured resident-KV range with `min <= max`.                                                             |
 | `decode_fit_mape`, `decode_cv_mape`            | number            | Nonnegative fit error and leave-one-out cross-validation error.                                                    |
 
-JSON type checking is strict.
-
-Integer fields reject:
+Integer fields reject Boolean, string, and fractional JSON values such as:
 
 ```json
 true
@@ -67,4 +59,4 @@ Narwhal caps decode concurrency for each fitted engine at the smaller of:
 
 The KV budget begins at `decode_max_kv_tokens`. When `kv_capacity_tokens` is present, physical capacity can reduce that budget further.
 
-When Narwhal cannot apply the measured request bound, decode request capacity becomes zero.
+Narwhal prices capacity from the limits above for positive `context_tokens` with a measured `decode_max_requests`. The zero-capacity result covers `context_tokens <= 0` and `decode_max_requests: null`.

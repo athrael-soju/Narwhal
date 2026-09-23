@@ -2,9 +2,7 @@
 
 ## Read live state from Prometheus
 
-Prometheus exposes two classes of state with different restart semantics.
-
-These request-outcome counters survive resume and standby takeover:
+Narwhal restores these request-outcome counters on resume and standby takeover:
 
 ```text
 narwhal_served_total
@@ -15,7 +13,7 @@ narwhal_rejected_total
 narwhal_cancelled_total
 ```
 
-The following state belongs to the current router process and resets on restart:
+A replacement router process initializes these counters and measurements afresh:
 
 - offered, unsized, and expired counters;
 - attempt counters;
@@ -26,7 +24,7 @@ The following state belongs to the current router process and resets on restart:
 - floor counters;
 - invalid-request counter.
 
-When reconciling Prometheus with the request journal, use journal `run` as the router-process boundary. Cumulative outcome counters and process-local offered counters intentionally have different restart semantics.
+Use journal `run` as the process boundary when reconciling restored outcome counters with process-local offered counts.
 
 ### Metric families
 
@@ -52,7 +50,7 @@ When reconciling Prometheus with the request journal, use journal `run` as the r
 
 Role-change counters begin accumulating when the scheduler starts.
 
-`narwhal_flip_reversals_total` increments when an engine returns from its previous recorded target role. An engine becomes eligible for reversal counting from its second recorded move.
+`narwhal_flip_reversals_total` increments when an engine moves back from its previous target role, starting with its second recorded move.
 
 `narwhal_flips_refused_total` records role changes blocked by:
 
@@ -63,11 +61,9 @@ Role-change counters begin accumulating when the scheduler starts.
 - the resident guard;
 - advisory mode.
 
-Controller decision metrics expose the outcomes of controller evaluations.
-
 `narwhal_pool_load` uses the phase-specific normalization documented under [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control). A value of `1.0` means the phase target has been reached.
 
-## Interpret latency histograms
+## Read latency histograms
 
 `narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
 
@@ -92,11 +88,9 @@ Queue-wait and seat-time histograms use the request-lifecycle bounds configured 
 
 Compute histogram quantiles from bucket rates grouped by `instance` and `le`.
 
-Aggregate histograms from multiple routers only when every router uses identical bucket edges.
+Aggregate router histograms with identical bucket edges.
 
 ## Inspect retained attainment evidence
-
-The attainment-evidence gauges describe controller outcome buckets retained in memory.
 
 `narwhal_attainment_evidence_pruned_total` begins appearing after Narwhal has dropped evidence older than every consumer horizon. Its `kind` label identifies the pruned data as either:
 
@@ -123,8 +117,6 @@ Router restart clears these process-local histories. The new process reads `narw
 | `narwhal_demand_history_overflow_observations` | gauge | same `window` values                                                               | Observations coalesced after the cohort limit was reached. |
 
 ## Inspect consolidation gates
-
-Consolidation decisions expose the evidence window, current demand estimates, trend state, and any gate blocking a consolidation.
 
 | Metric                                            | Meaning                                                                                                 | Labels                              |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------- |
