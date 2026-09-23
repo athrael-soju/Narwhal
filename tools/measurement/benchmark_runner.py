@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import math
@@ -19,7 +20,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.measurement.benchmark_evidence import EvidenceCollector
-from tools.measurement.load_trial import idle
+from tools.measurement.load_trial import poll_drain
 
 
 def now() -> str:
@@ -154,27 +155,16 @@ def probe(client: httpx.Client, base: str, model: str) -> dict:
 
 def wait_for_drain(client: httpx.Client, base: str, timeout: float, poll_s: float = 0.25) -> dict:
     start = time.monotonic()
-    deadline = start + timeout
-    result = {"started_at": now(), "condition": "timeout", "polls": 0}
-    while True:
-        try:
-            response = client.get(
-                base + "/narwhal/state", timeout=min(10.0, max(0.1, deadline - time.monotonic()))
-            )
-            response.raise_for_status()
-            state = response.json()
-            result["polls"] += 1
-            result["last_state"] = state
-            if idle(state):
-                result["condition"] = "idle"
-                break
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
-            result["condition"] = "state_error"
-            result["error"] = str(error)
-            break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+    started_at = now()
+
+    async def observe() -> dict:
+        async with httpx.AsyncClient(
+            headers=client.headers, timeout=10, trust_env=False
+        ) as observer:
+            return await poll_drain(observer, base, timeout, poll_s)
+
+    result = asyncio.run(observe())
+    result["started_at"] = started_at
     result["finished_at"] = now()
     result["elapsed_s"] = time.monotonic() - start
     return result

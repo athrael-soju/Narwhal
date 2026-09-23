@@ -195,17 +195,39 @@ def idle(state: dict) -> bool:
     )
 
 
-async def drain(client, base, timeout):
+async def poll_drain(client, base, timeout, poll_s=1):
     deadline = time.monotonic() + timeout
+    result = {"condition": "timeout", "polls": 0}
     while True:
-        response = await client.get(base + "/narwhal/state")
-        response.raise_for_status()
-        state = response.json()
-        if idle(state):
-            return state
+        try:
+            response = await client.get(
+                base + "/narwhal/state",
+                timeout=min(10.0, max(0.1, deadline - time.monotonic())),
+            )
+            response.raise_for_status()
+            state = response.json()
+            result["polls"] += 1
+            result["last_state"] = state
+            if idle(state):
+                result["condition"] = "idle"
+                break
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+            result["condition"] = "state_error"
+            result["error"] = str(error)
+            break
         if time.monotonic() >= deadline:
-            raise ValueError("Router drain deadline: inspect admission and resident work")
-        await asyncio.sleep(1)
+            break
+        await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+    return result
+
+
+async def drain(client, base, timeout):
+    result = await poll_drain(client, base, timeout)
+    if result["condition"] == "idle":
+        return result["last_state"]
+    if result["condition"] == "state_error":
+        raise ValueError(f"Router drain state error: {result['error']}")
+    raise ValueError("Router drain deadline: inspect admission and resident work")
 
 
 def summary(rows, args, elapsed):

@@ -28,6 +28,23 @@ def private_json(path: Path, value: object) -> None:
         stream.write("\n")
 
 
+def retain_client_file(path: Path, directory: Path, snapshot_name: str) -> tuple[str, dict]:
+    """Read one client input and keep a private copy only if it lives outside the point."""
+    content = path.read_bytes()
+    root = directory.resolve()
+    source = path.resolve()
+    if not source.is_relative_to(root):
+        retained = directory / snapshot_name
+        with open(retained, "xb", opener=lambda p, flags: os.open(p, flags, 0o600)) as stream:
+            stream.write(content)
+    else:
+        retained = source
+    return content.decode("utf-8"), {
+        "path": str(retained.relative_to(root)),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
 def cursor(path: Path) -> dict:
     stat = path.stat()
     return {"device": stat.st_dev, "inode": stat.st_ino, "offset": stat.st_size}
@@ -353,8 +370,12 @@ class EvidenceCollector:
             )
         )
         client_rows = []
+        client_files = {}
         if client_path.exists():
-            for number, line in enumerate(client_path.read_text(encoding="utf-8").splitlines(), 1):
+            client_text, client_files["records"] = retain_client_file(
+                client_path, self.directory, "client-records.snapshot.jsonl"
+            )
+            for number, line in enumerate(client_text.splitlines(), 1):
                 try:
                     client_rows.append(json.loads(line))
                 except ValueError:
@@ -363,14 +384,21 @@ class EvidenceCollector:
                     )
             warmup = client_path.with_name("warmup.json")
             if warmup.exists():
+                warmup_text, client_files["warmup"] = retain_client_file(
+                    warmup, self.directory, "client-warmup.snapshot.json"
+                )
                 try:
-                    client_rows.append(
-                        json.loads(warmup.read_text(encoding="utf-8")) | {"benchmark_warmup": True}
-                    )
+                    client_rows.append(json.loads(warmup_text) | {"benchmark_warmup": True})
                 except ValueError:
                     journal_errors.append({"kind": "warmup_parse_error", "point": self.point["id"]})
         else:
             journal_errors.append({"kind": "client_records_missing", "point": self.point["id"]})
+        client_summary = client_path.with_name("summary.json")
+        summary_text = None
+        if client_summary.exists():
+            summary_text, client_files["summary"] = retain_client_file(
+                client_summary, self.directory, "client-summary.snapshot.json"
+            )
         result = reconcile(self.point["id"], client_rows, rows, self.samples, self.interval)
         result["diagnostics"].extend(journal_errors)
         result["cursors"] = {"start": self.start_cursor, "end": end_cursor}
@@ -384,7 +412,12 @@ class EvidenceCollector:
             name: hashlib.sha256(Path(self.config[field]).read_bytes()).hexdigest()
             for name, field in (("fleet", "fleet_path"), ("profiles", "profiles_path"))
         }
-        result["file_digests"] = self.start_digests
+        result["file_digests"] = self.start_digests | {
+            f"client_{name}": item["sha256"] for name, item in client_files.items()
+        }
+        result["retained_client_files"] = {
+            name: item["path"] for name, item in client_files.items()
+        }
         for name, value in end_digests.items():
             if value != self.start_digests[name]:
                 result["diagnostics"].append(
@@ -394,7 +427,6 @@ class EvidenceCollector:
         private_json(self.directory / "evidence.json", result)
         private_json(self.directory / "samples.json", self.samples)
         private_json(self.directory / "journal-rows.json", rows)
-        private_json(self.directory / "client-rows.json", client_rows)
         safe_identity = {
             key: self.config["identity"].get(key)
             for key in (
@@ -412,10 +444,9 @@ class EvidenceCollector:
         safe_identity["gpu_allocation_sha256"] = hashlib.sha256(
             json.dumps(self.config["identity"]["gpu_allocation"], sort_keys=True).encode()
         ).hexdigest()
-        client_summary = client_path.with_name("summary.json")
         performance = {}
-        if client_summary.exists():
-            source = json.loads(client_summary.read_text(encoding="utf-8"))
+        if summary_text is not None:
+            source = json.loads(summary_text)
             performance = {
                 key: source.get(key)
                 for key in (
