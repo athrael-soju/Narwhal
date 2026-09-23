@@ -58,7 +58,7 @@ class ConfigTests(unittest.TestCase):
         """The package resource retains the canonical bytes across archive builds."""
         packaged = ROOT / "src/narwhal/fleet.example.json"
         canonical = ROOT / "config/fleet.example.json"
-        if (ROOT / ".git").exists():
+        if (ROOT / ".git").exists() and not (ROOT / "PKG-INFO").exists():
             self.assertTrue(packaged.is_symlink())
             self.assertEqual(packaged.resolve(), canonical.resolve())
         self.assertEqual(packaged.read_bytes(), canonical.read_bytes())
