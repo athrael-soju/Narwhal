@@ -54,7 +54,7 @@ Password authentication uses the matching `_SSH_PASSWORD` variable. Key authenti
 
 ### Identify the model checkpoint
 
-`NARWHAL_ENGINE_MODEL_NAME` names the served model, while `NARWHAL_MODEL_DIR` names its checkpoint directory on each engine host. Discovery hashes the provisioned checkpoint files and requires one matching content manifest across replicas before generating the fleet. The manifest binds weights, configuration, tokenizer and model code without a model-specific repository setting.
+`NARWHAL_ENGINE_MODEL_NAME` names the served model, while `NARWHAL_MODEL_DIR` names its checkpoint directory on each engine host. Discovery hashes the provisioned serving files and requires one matching content manifest across replicas before generating the fleet. The manifest binds weights, configuration, tokenizer and model code without a model-specific repository setting.
 
 Stage a checkpoint before discovery when the model directory is empty. For a [Hugging Face snapshot](https://huggingface.co/docs/huggingface_hub/guides/download), select its repository ID and full commit SHA, then run `hf download "$MODEL_REPO_ID" --revision "$MODEL_REVISION" --local-dir "$NARWHAL_MODEL_DIR"` on each engine host. Retain those source values in the private deployment record. Other checkpoint sources can use the same directory layout; discovery pins their content manifest.
 
@@ -95,7 +95,7 @@ For every engine, discovery reads:
 - selected network interface and its global address;
 - immutable container image identity.
 
-Discovery hashes every regular file below the model directory, excluding Hugging Face's `.cache/huggingface/` download metadata, and compares each path, byte count and SHA-256 across engine roles. Independent hosts hash their checkpoints concurrently. A differing shard, tokenizer or code file stops discovery before configuration or installation. Per-engine manifests and the first differing path remain in the private discovery record.
+Discovery hashes every regular file below the model directory, excluding the root [Hugging Face model card](https://huggingface.co/docs/hub/model-cards) at `README.md` and `.cache/huggingface/` download metadata. It compares each retained path, byte count and SHA-256 across engine roles. Independent hosts hash their checkpoints concurrently. A differing shard, tokenizer or code file stops discovery before configuration or installation. Per-engine manifests, their exclusion policy and the first differing path remain in the private discovery record.
 
 A temporary container reads package metadata from the image and then exits. Discovery derives the model dtype and image runtime environment from that inspection.
 

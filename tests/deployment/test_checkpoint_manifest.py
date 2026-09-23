@@ -52,7 +52,24 @@ class CheckpointManifestTests(unittest.TestCase):
             metadata.write_text("b" * 40)
             second = inspect_checkpoint(root)
             self.assertEqual(first, second)
-            self.assertNotIn(".cache", json.dumps(first))
+            self.assertNotIn(".cache", json.dumps(first["files"]))
+
+    def test_root_model_card_is_excluded_from_checkpoint_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text("{}")
+            (root / "model.safetensors").write_bytes(b"weights")
+            (root / "README.md").write_text("first card")
+            first = inspect_checkpoint(root)
+            (root / "README.md").write_text("revised card")
+            second = inspect_checkpoint(root)
+            self.assertEqual(first, second)
+            self.assertEqual(first["file_count"], 2)
+            self.assertEqual(first["excluded_paths"], ["README.md", ".cache/huggingface/**"])
+            (root / "config.json").write_text('{"changed":true}')
+            self.assertNotEqual(
+                first["model_tree_sha256"], inspect_checkpoint(root)["model_tree_sha256"]
+            )
 
     def test_missing_config_blocks_inspection(self):
         with (

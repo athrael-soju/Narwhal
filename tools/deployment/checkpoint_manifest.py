@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+EXCLUDED_PATHS = ("README.md", ".cache/huggingface/**")
+
 
 def inspect_checkpoint(root: Path) -> dict:
     """Return a stable content manifest for the files served from a model directory."""
@@ -16,7 +18,7 @@ def inspect_checkpoint(root: Path) -> dict:
     files = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
-        if relative.parts[:2] == (".cache", "huggingface"):
+        if relative == Path("README.md") or relative.parts[:2] == (".cache", "huggingface"):
             continue
         if path.is_dir() and not path.is_symlink():
             continue
@@ -37,6 +39,8 @@ def inspect_checkpoint(root: Path) -> dict:
         raise ValueError("checkpoint directory contains no files")
     encoded = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
     return {
+        "manifest_version": 2,
+        "excluded_paths": list(EXCLUDED_PATHS),
         "model_tree_sha256": hashlib.sha256(encoded).hexdigest(),
         "files": files,
         "file_count": len(files),
