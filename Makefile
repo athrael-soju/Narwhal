@@ -7,7 +7,7 @@ VENV_PYTHON ?= .venv/bin/python
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 
-.PHONY: setup test unit lint format types links publication versions check docs-build stub-fleet observe integration
+.PHONY: setup test unit lint format types links publication versions check docs-build observe integration
 .PHONY: coverage
 
 .venv/bin/python:
@@ -53,10 +53,6 @@ docs-build: $(BOOTSTRAP)
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m tools.observability.start
-
-# Run six engine-protocol stubs in the foreground on ports 8101 through 8106.
-stub-fleet: $(BOOTSTRAP)
-	$(VENV_PYTHON) tools/drills/stub_fleet.py --base-port 8101 --instances 6 --model stub
 
 # Real router processes with CPU engine stubs; no fleet access.
 integration: $(BOOTSTRAP)
