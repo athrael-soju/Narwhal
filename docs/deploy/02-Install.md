@@ -22,9 +22,9 @@ Preparation also snapshots:
 
 These are installed under `runs/deployment-tools/` on engine hosts. The role environment exports each path and SHA-256 through `NARWHAL_FABRIC_BUDGET_TOOL` / `NARWHAL_FABRIC_BUDGET_SHA256`, `NARWHAL_ENGINE_LAUNCHER` / `NARWHAL_ENGINE_LAUNCHER_SHA256`, and `NARWHAL_CACHE_CAPTURE_HOOK` / `NARWHAL_CACHE_CAPTURE_HOOK_SHA256`.
 
-The manifest hashes the source bundle, helper snapshots, and every role file. Management credentials never leave the workstation environment. The mode-0600 manifest also records source revision, role-to-host mapping, relevant input hashes, and a unique remote installation directory below `~/Narwhal-deploy/`.
+Preparation writes a mode-0600 manifest with the approved revision, role-to-host mapping, input hashes, a unique install path under `~/Narwhal-deploy/`, and SHA-256 hashes of the source bundle, helper snapshots, and role files. Later SSH operations revalidate the prepared directory against this manifest and read management credentials from the workstation environment.
 
-Use a new `--out` directory for every preparation. Keep the prepared directory intact because every later SSH operation revalidates it.
+Use a new `--out` directory for every preparation and retain it through deployment.
 
 ## Install one host, then fan out
 

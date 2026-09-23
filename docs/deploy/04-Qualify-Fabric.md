@@ -24,7 +24,7 @@ For every layer and TP rank, page demand is:
 ceil(prompt_tokens / block_tokens) + extra_blocks
 ```
 
-The calculator sums padded page bytes across the replica. Full attention and MLA include the complete prompt, Mamba includes boundary state plus speculative/checkpoint slots, and windowed attention includes a boundary page. The bound covers the complete padded cache represented by the runtime specification, even when the connector transfers a subset.
+The calculator counts the complete prompt for full attention and MLA, boundary state plus speculative/checkpoint slots for Mamba, and a boundary page for windowed attention. It sums padded page bytes across every layer and TP rank in the resolved runtime layout, so the source budget covers the complete padded cache even when the connector transfers a subset.
 
 Required link rate is:
 
@@ -247,8 +247,8 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
 
 RDMA samples use `.txt`. For legacy samples collected before `record-edge`, reconstruct the original link record only when exact original routes, interfaces, transport, utility version, and command can be proven. Otherwise collect a new directed sample.
 
-Runtime-layout change means new budget. Network-path or transport change means new throughput sample.
+Recalculate from the new `cache-layout.json` when the runtime layout changes, and rerun the directed bandwidth test when its route or transport changes.
 
-Do not launch remaining engines until every required directed edge meets its source budget. For insufficient throughput, investigate link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic before collecting another sample.
+A link below its source budget keeps the remaining engines idle while you inspect link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic. After fixing the cause, sample that directed link again; launch the engines when every edge in the matrix passes.
 
 Continue with [Gate E: Expand the fleet and attest the exact live processes](05-Attest.md).
