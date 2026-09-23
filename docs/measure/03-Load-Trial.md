@@ -2,41 +2,9 @@
 
 ## 7. Run the synthetic deployment trial
 
-Use the [private tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) from the management workstation.
+Through the [private tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) from the management workstation, send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s. After a passing run and router drain, test 1 request/s. A rate meets the candidate 95% target when at least 190 requests complete with TTFT at or below 2.0 s and TPOT at or below 0.0333 s.
 
-The initial workload consists of:
-
-```text
-requests       = 200
-input_tokens   = 8192
-output_tokens  = 128
-```
-
-Test the workload first at:
-
-```text
-0.5 request/s
-```
-
-then at:
-
-```text
-1 request/s
-```
-
-A tested rate satisfies the candidate 95% target when at least 190 requests complete within both limits:
-
-```text
-TTFT <= 2.0 s
-TPOT <= 0.0333 s
-```
-
-Before starting the trial:
-
-1. verify that the workload lies inside the accepted profile domain;
-2. verify that it fits inside the engine context limit;
-3. retain launch records showing `--no-enable-prefix-caching`;
-4. reserve the router for trial traffic so every client record can be reconciled with the router journal.
+Before the trial, check that the workload fits the accepted profile domain and engine context limit, retain launch records showing `--no-enable-prefix-caching`, and reserve the router for trial traffic so each client record can be reconciled with the journal.
 
 ### Create the trial directory and workload
 
@@ -60,17 +28,7 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` queries the served model, sends an unscored 32-token completion using a fixed public seed prompt, and writes the returned token IDs to:
-
-```text
-workload/workload.json
-```
-
-For request sequence `n`, the sampler draws 8,192 input token IDs from that pool using:
-
-```text
-seed + n
-```
+`prepare` queries the served model, sends an unscored 32-token completion from a fixed public seed prompt, and writes the returned token IDs to `workload/workload.json`. For request sequence `n`, the sampler draws 8,192 input IDs from that pool using `seed + n`.
 
 Both rate tests reuse the same workload file with:
 
@@ -116,7 +74,7 @@ Interpret the helper exit code as follows:
 | Exit  | Meaning                                                             | Required action                                                                                                                                                                                                                                                                        |
 | ----- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`   | Schedule validity and candidate attainment both passed              | Drain the router, then continue to the next rate                                                                                                                                                                                                                                       |
-| `2`   | The run completed with an attainment miss or client scheduling miss | Inspect `client_schedule_valid` in `summary.json`. Keep a correctly scheduled run containing latency misses or HTTP refusals as a valid rate measurement. If client start times were missed, inspect `requests.jsonl`, correct the client-side scheduling problem, and repeat the rate |
+| `2`   | Candidate attainment or client scheduling missed                    | Inspect `client_schedule_valid` in `summary.json`. A scheduled run with latency misses or HTTP refusals measures that rate. For missed client starts, inspect `requests.jsonl`, repair scheduling, and repeat the rate                                                     |
 | `1`   | The helper reported a blocking error                                | Diagnose the reported failure and retained artefacts before retrying                                                                                                                                                                                                                   |
 | `130` | The run was interrupted and partial artefacts were preserved        | Inspect the partial record before retrying                                                                                                                                                                                                                                             |
 
@@ -143,20 +101,8 @@ Before each measured run, the helper:
 3. drains the fleet again;
 4. schedules all 200 offers independently of response completion.
 
-The client allows 64 concurrent requests by default.
+The helper allows 64 concurrent requests and 50 ms scheduling lag by default; exceeding either limit records a terminal `client_schedule_miss` and marks `client_schedule_valid: false`. The client sends each offer once and keeps HTTP refusals, stream errors, and timeouts in the 200-offer denominator.
 
-Its scheduling-lag limit is:
-
-```text
-50 ms
-```
-
-Missing a scheduling slot creates a terminal client-miss record and invalidates the offered-rate comparison.
-
-Every sent offer gets one attempt.
-
-HTTP refusals, stream errors, and timeouts remain in the denominator.
-
-Raise a client-side limit only after CPU, memory, network, and scheduling measurements show that the deployment client itself is the bottleneck.
+Use CPU, memory, network, and scheduling measurements to establish client saturation before raising its limits.
 
 Continue with [client and router reconciliation](04-Reconcile-and-Accept.md).

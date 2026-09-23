@@ -2,14 +2,7 @@
 
 ## 5. Set production SLOs
 
-After accepting the profiles, run light traffic and choose:
-
-```text
-slo.ttft_s
-slo.tpot_s
-```
-
-from the service requirement and the measured latency distribution.
+Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured latency distribution.
 
 A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
 
@@ -21,32 +14,17 @@ narwhal-check --fleet config/fleet.production.json
 
 ### Pace gate
 
-With at least three successful probes, the pace gate compares each engine with the fleet median.
-
-For smaller fleets, every engine must instead have:
-
-* a saved prefill profile;
-* an exact `usage.prompt_tokens` count.
-
-Both paths apply the same maximum slowdown:
-
-```text
-1.5x
-```
+With at least three successful probes, the pace gate compares each engine with the fleet median under a `1.5x` slowdown limit. For one or two successful probes, it requires a saved prefill profile and exact `usage.prompt_tokens` for each engine to apply the same limit.
 
 ## 6. Freeze the deployment under test
 
-Run:
+Run preflight against the final fleet before sending measured traffic:
 
 ```bash
 narwhal-check --fleet config/fleet.production.json
 ```
 
-against the final fleet before sending measured traffic.
-
-Assign a deployment identifier before the load test begins.
-
-Bind that identifier to the exact:
+Before the load test, assign a deployment identifier and attach the exact:
 
 * Narwhal release;
 * source revision;
@@ -68,7 +46,7 @@ Bind that identifier to the exact:
 
 Record the workstation host, router host, and SSH tunnel mapping under the same identifier.
 
-During the offered-rate sweep, keep the following fixed:
+Across the offered-rate sweep, vary the request rate while holding these inputs fixed:
 
 * source revision;
 * model;
@@ -80,13 +58,8 @@ During the offered-rate sweep, keep the following fixed:
 * TTFT target;
 * TPOT target.
 
-Change only the offered request rate.
-
 Between rates, drain resident work and transfer leases.
 
-Stop after either:
-
-* candidate attainment fails; or
-* the intended operating ceiling has been tested.
+End the sweep at the first candidate attainment miss or after testing the intended operating ceiling.
 
 Continue with the [synthetic load trial](03-Load-Trial.md).
