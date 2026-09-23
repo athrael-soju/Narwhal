@@ -85,6 +85,15 @@ class FakeInspectionSSH:
     def run(self, host, gate, script, payload=None):
         self.calls.append((host.id, gate))
         if payload:
+            if gate == "hash checkpoint files":
+                return json.dumps(
+                    {
+                        "model_tree_sha256": "c" * 64,
+                        "files": [{"path": "config.json", "size": 12, "sha256": "d" * 64}],
+                        "file_count": 1,
+                        "bytes_verified": 12,
+                    }
+                )
             return json.dumps(observation(address="10.0.0." + host.id.split("-")[-1]))
         with self.trust.open("a") as f:
             f.write(f"{host.id} ssh-ed25519 synthetic-public-key\n")
@@ -119,6 +128,9 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(hosts[0].roles, ("engine-1", "router"))
             fleet = json.loads(Path(env["NARWHAL_FLEET"]).read_text())
             self.assertEqual(fleet["hardware"]["tensor_parallel"], 8)
+            manifest = json.loads((out / "manifest.json").read_text())
+            self.assertEqual(manifest["model_tree_sha256"], "c" * 64)
+            self.assertTrue((out / "engine-1-checkpoint.json").is_file())
             self.assertNotIn("engine_contract", fleet)
             self.assertFalse((root / "runs/profiles.json").exists())
             run = root / "prepared"
@@ -142,6 +154,28 @@ class DiscoveryTests(unittest.TestCase):
                     discover(env, root / "another-discovery")
                 ssh.assert_not_called()
             self.assertEqual(Path(env["NARWHAL_FLEET"]).read_bytes(), old)
+
+    def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
+        class DifferentCheckpointSSH(FakeInspectionSSH):
+            def run(self, host, gate, script, payload=None):
+                result = super().run(host, gate, script, payload)
+                if gate == "hash checkpoint files" and host.id == "node-2":
+                    record = json.loads(result)
+                    record["model_tree_sha256"] = "e" * 64
+                    record["files"][0]["sha256"] = "f" * 64
+                    return json.dumps(record)
+                return result
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            with (
+                patch("tools.deployment.discover_deployment.SSH", DifferentCheckpointSSH),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(ValueError, "checkpoint file config.json differs"),
+            ):
+                discover(env, root / "discovery")
+            self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
 
     def test_router_management_destination_defaults_to_first_engine(self):
         env = environment(Path("/synthetic"))

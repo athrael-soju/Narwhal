@@ -54,7 +54,11 @@ Password authentication uses the matching `_SSH_PASSWORD` variable. Key authenti
 
 ### Identify the model checkpoint
 
-`NARWHAL_ENGINE_MODEL_NAME` names the served model, while `NARWHAL_MODEL_DIR` names its checkpoint directory on each engine host. The Kimi K3 checkpoint comes from the [Moonshot AI Kimi K3 model repository](https://huggingface.co/moonshotai/Kimi-K3). Discovery inspects a provisioned directory; step 3 derives and verifies its full repository revision on each engine before launch.
+`NARWHAL_ENGINE_MODEL_NAME` names the served model, while `NARWHAL_MODEL_DIR` names its checkpoint directory on each engine host. Discovery hashes the provisioned checkpoint files and requires one matching content manifest across replicas before generating the fleet. The manifest binds weights, configuration, tokenizer and model code without a model-specific repository setting.
+
+Stage a checkpoint before discovery when the model directory is empty. For a [Hugging Face snapshot](https://huggingface.co/docs/huggingface_hub/guides/download), select its repository ID and full commit SHA, then run `hf download "$MODEL_REPO_ID" --revision "$MODEL_REVISION" --local-dir "$NARWHAL_MODEL_DIR"` on each engine host. Retain those source values in the private deployment record. Other checkpoint sources can use the same directory layout; discovery pins their content manifest.
+
+The content manifest is the deployment pin for an already provisioned directory. A Hub commit SHA describes source provenance when available; the manifest verifies the files this fleet will serve.
 
 ### Discover the deployed hosts
 
@@ -91,9 +95,11 @@ For every engine, discovery reads:
 - selected network interface and its global address;
 - immutable container image identity.
 
+Discovery hashes every regular file below the model directory, excluding Hugging Face's `.cache/huggingface/` download metadata, and compares each path, byte count and SHA-256 across engine roles. Independent hosts hash their checkpoints concurrently. A differing shard, tokenizer or code file stops discovery before configuration or installation. Per-engine manifests and the first differing path remain in the private discovery record.
+
 A temporary container reads package metadata from the image and then exits. Discovery derives the model dtype and image runtime environment from that inspection.
 
-When checkpoint metadata contains `auto_map`, discovery adds `--trust-remote-code` to the serving arguments. A model with convolutional SSM transfer state receives `VLLM_SSM_CONV_STATE_LAYOUT=DS` in its generated engine launch record before installation. For Kimi K3, `text_config.linear_attn_config.kda_layers` and `short_conv_kernel_size` identify that state in the [checkpoint config](https://huggingface.co/moonshotai/Kimi-K3/blob/main/config.json). The image check verifies both settings before the model loads; the pinned [vLLM layout resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/mamba/mamba_utils.py) defaults to SD.
+When checkpoint metadata contains `auto_map`, discovery adds `--trust-remote-code` to the serving arguments. A model with convolutional SSM transfer state receives `VLLM_SSM_CONV_STATE_LAYOUT=DS` in its generated engine launch record before installation. Discovery reads `text_config.linear_attn_config.kda_layers`, `short_conv_kernel_size` and other SSM fields from the checkpoint configuration. The image check verifies both settings before the model loads; the pinned [vLLM layout resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/mamba/mamba_utils.py) defaults to SD.
 
 It writes the following files with mode `0600`:
 
@@ -108,7 +114,7 @@ It writes the following files with mode `0600`:
 
 Path variables in `.env` may select alternate locations for generated JSON and host-key files.
 
-Discovery also retains per-engine observations, SSH logs and output hashes below the directory supplied with `--out`.
+Discovery also retains per-engine observations, SSH logs, `engine-<n>-checkpoint.json` file manifests and the shared `model_tree_sha256` below the directory supplied with `--out`.
 
 Keep the generated `config/` files together when reusing an inspected fleet. Load `.env` and `config/deployment.env`, verify access, and prepare a new deployment run from those inputs. Step 3 checks each host's current hardware, image and model before launch. A change to those inputs requires a fresh discovery; archive the previous generated configuration and choose a fresh output directory before rebuilding it.
 
@@ -368,67 +374,6 @@ The launch record contains selected devices and runtime policy. The router's `ru
 
 Where later commands show angle-bracket arguments, use these generated values.
 
-### Verify the checkpoint revision
-
-In each installed engine role shell from step 2, use a local [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/guides/cli). Install it in an isolated environment when the host has no `hf` command:
-
-```bash
-if command -v hf >/dev/null 2>&1 && hf cache verify --help >/dev/null 2>&1; then
-  HF_BIN=$(command -v hf)
-else
-  python3 -m venv "$NARWHAL_RUN_DIR/checkpoint-verify-venv"
-  "$NARWHAL_RUN_DIR/checkpoint-verify-venv/bin/python" -m pip install huggingface_hub
-  HF_BIN="$NARWHAL_RUN_DIR/checkpoint-verify-venv/bin/hf"
-fi
-```
-
-Resolve a candidate revision from a Hugging Face snapshot path or local download metadata. A provisioned copy without either uses the Hub's current `main` commit as its first candidate. The candidate remains untrusted until the file verification passes:
-
-```bash
-MODEL_REVISION=$(
-  python3 - "$NARWHAL_MODEL_DIR" <<'PY_MODEL_REVISION'
-import json
-import re
-import sys
-from pathlib import Path
-from urllib.request import urlopen
-
-root = Path(sys.argv[1]).resolve()
-parts = root.parts
-if len(parts) >= 2 and parts[-2] == "snapshots" and re.fullmatch(r"[0-9a-f]{40}", parts[-1]):
-    candidate = parts[-1]
-else:
-    metadata = root / ".cache/huggingface/download"
-    candidates = {
-        path.read_text().splitlines()[0]
-        for path in metadata.rglob("*.metadata")
-        if path.read_text().splitlines()
-    } if metadata.is_dir() else set()
-    if len(candidates) == 1:
-        candidate = next(iter(candidates))
-    else:
-        with urlopen("https://huggingface.co/api/models/moonshotai/Kimi-K3/revision/main", timeout=20) as response:
-            candidate = json.load(response).get("sha")
-if not candidate or not re.fullmatch(r"[0-9a-f]{40}", candidate):
-    raise SystemExit("Could not resolve a full Kimi K3 commit SHA")
-print(candidate)
-PY_MODEL_REVISION
-)
-"$HF_BIN" cache verify moonshotai/Kimi-K3 --revision "$MODEL_REVISION" \
-  --local-dir "$NARWHAL_MODEL_DIR" --fail-on-missing-files --fail-on-extra-files &&
-  printf 'model repository: moonshotai/Kimi-K3\nmodel revision: %s\nmodel directory: %s\n' "$MODEL_REVISION" "$NARWHAL_MODEL_DIR"
-```
-
-Retain each host's verification output, full revision and checkpoint path in the private deployment record; compare all six revisions before engine launch. The verifier checks the checkpoint's weight shards, tokenizer and configuration against the Hub revision. When a candidate fails, inspect the reported missing or mismatched files. A provisioned copy without revision evidence can be repaired by staging the chosen full revision and rerunning verification:
-
-```bash
-"$HF_BIN" download moonshotai/Kimi-K3 --revision "$MODEL_REVISION" --local-dir "$NARWHAL_MODEL_DIR"
-"$HF_BIN" cache verify moonshotai/Kimi-K3 --revision "$MODEL_REVISION" \
-  --local-dir "$NARWHAL_MODEL_DIR" --fail-on-missing-files --fail-on-extra-files
-```
-
-Discovery hashes `config.json` for launch-plan binding. The verified repository revision and file check establish checkpoint identity across replicas. A failed verification blocks engine launch; inspect the missing, extra or mismatched file list before selecting a recovery.
-
 Before creating any engine process, verify the declared artifacts and local resources:
 
 ```bash
@@ -440,6 +385,8 @@ ss -ltnp
 ```
 
 The Docker equality test applies when `NARWHAL_ENGINE_IMAGE` contains an image ID. If the deployment uses a registry digest, inspect the runtime's resolved digest instead.
+
+The `config.json` SHA-256 binds the launch plan to model configuration. The private discovery record contains the complete checkpoint manifest and one matched tree digest for every engine. Repeat discovery when the provisioned checkpoint changes.
 
 Check every declared device path:
 
@@ -1750,7 +1697,7 @@ When sharing deployment evidence outside the private environment, replace privat
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Management access](#1-bootstrap-management-access)               | Workstation `.env`, installed image and model, GPU inspection utilities, initial launch policy.                                                                                      | For discovery failure, use its log to identify the failing environment field, host utility or image inspection. Verify any rejected host key independently before replacing it. For login failure, inspect the per-host log, management route and credential.                                                                                                 | Workstation `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`.                                                                                                                          |
 | [Host installation](#2-install-narwhal)                           | Approved commit, common launch fields, per-engine allocation records, node overrides, host prerequisites.                                                                            | Correct preparation inputs before creating another run. For transfer or checkout mismatch, compare prepared hashes with existing remote files. Dependency failure may resume through the same prepared run once the host problem is fixed.                                                                                                                    | Workstation `runs/deployment-env/<run>/`; remote `~/Narwhal-deploy/<id>/`, role files, router fleet config, install marker.                                                                                                   |
-| [Engine inspection](#3-inspect-each-engine-host) | PCI accelerator identity, visible device count, replica allocation, TP size, image identity, provisioned checkpoint path, verified model revision, paths and ports. | Restore missing devices or artifacts and resolve listener ownership before launch. For checkpoint mismatch, inspect the verifier file list, then stage and verify one selected full repository revision across replicas. | Engine `.env.engine-<n>`, `config/engine-launch.engine-<n>.json`, checkpoint verification output and revision in the private deployment record; workstation `NARWHAL_LAUNCH_CONFIG`. |
+| [Engine inspection](#3-inspect-each-engine-host) | PCI accelerator identity, visible device count, replica allocation, TP size, image identity, checkpoint tree digest, paths and ports. | Restore missing devices or artifacts and resolve listener ownership before launch. For a checkpoint mismatch, inspect the first differing path and private per-engine manifests, repair the affected files, then repeat discovery. | Engine `.env.engine-<n>` and launch record; workstation `runs/discovery/<run>/engine-<n>-checkpoint.json` and shared `model_tree_sha256`. |
 | [Fabric qualification](#4-qualify-the-transfer-fabric)            | Peer addresses, TCP or RDMA transport, checked serving representative, captured cache pages, prompt length, handoff rate, burst allowance and transfer-time budget.                            | For serving capture errors, inspect the recorded container and startup log to isolate model, device, runtime or cache-spec input. For network failures, inspect route, source binding, listener, firewall, HCA and GID selection. For insufficient bandwidth, inspect link state, MTU, retransmissions or RDMA counters, CPU use and concurrent traffic before collecting another sample.           | Role environment, engine launch record, model config, delivered helper and digest, serving `ENGINE_RUN`, cache layout, container ID and log, budget, directed samples, link fingerprints, comparisons and edge matrix.                             |
 | [Engine launch](#5-configure-the-fleet-and-launch-engines)        | Qualified host and fabric state, immutable image, package pins, model flags, library environment, cache shape, TP allocation and selected devices.                                   | Package, tokenizer, connector or convolutional-layout mismatches fail the image check before model loading. For process or HTTP failure, inspect the exact recorded container and logs before creating a corrected plan.                                                                                                                                                                                              | Router fleet config, engine role environment, launch record, launcher snapshot, `runs/engine-launch-*/`, container environment, image-check output, container ID and HTTP captures.                                           |
 | [Attestation](#6-attest-each-engine-process) | Checked serving plan, live container and HTTP identity, NIXL protocol, model dimensions, cache layout, transfer mode, handshake policy and sidecar URL from the role environment. | Capture dimensions through the live container when an earlier record lacks the architecture. For a hash, image, container or getter mismatch, inspect the pinned source and prepare a checked plan when that source changes. A sidecar identity failure requires checking the serving process before restarting its sidecar. The router finalisation command identifies a mismatched engine contract before writing the fleet configuration. | Engine `runs/engine-launch-*/` captures and `runs/engine-launch-*/engine-attestation.json`; router `runs/deployment/fleet.json` and `runs/fleet.before-attestation-*.json`. |

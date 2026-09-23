@@ -40,7 +40,7 @@ Fleet JSON owns model names, hardware, profiles, and SLOs. Engine launch credent
 
 [Deployment discovery](Deploy.md#discover-the-deployed-hosts) derives the host inventory, SSH trust store, fleet, launch records, and source index from the supplied `.env` plus remote inspection. [Launch policy](Deploy.md#launch-policy) defines defaults and environment overrides.
 
-Keep `config/hosts.local.json`, `config/ssh.known_hosts`, `config/engine-launch.local.json`, `config/engine-launch.sources.json`, `config/fleet.json` and `config/deployment.env` together as private inputs for the inspected fleet. Discovery observations and command logs remain under `runs/discovery/<run>/`. Reuse the saved inputs after loading `.env` and `config/deployment.env`; [engine inspection](Deploy.md#3-inspect-each-engine-host) checks their current host, image and model assumptions before launch.
+Keep `config/hosts.local.json`, `config/ssh.known_hosts`, `config/engine-launch.local.json`, `config/engine-launch.sources.json`, `config/fleet.json` and `config/deployment.env` together as private inputs for the inspected fleet. Discovery records per-engine checkpoint file hashes and a matching tree digest under `runs/discovery/<run>/` alongside observations and command logs. Reuse the saved inputs after loading `.env` and `config/deployment.env`; [engine inspection](Deploy.md#3-inspect-each-engine-host) checks current host, image and model configuration before launch.
 
 ### Host environment files
 

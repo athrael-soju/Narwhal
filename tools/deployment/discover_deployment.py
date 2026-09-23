@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -468,6 +469,7 @@ def discover(env: dict[str, str], out: Path) -> Path:
         write_private(trust, b"")
     ssh = SSH(env, out / "logs", enroll_hosts=True)
     observations = {}
+    checkpoint_jobs = {}
     for host in hosts:
         ssh.run(host, "enroll management host", "hostname")
         print(f"{host.id}: authenticated; SSH host key recorded", flush=True)
@@ -501,9 +503,58 @@ def discover(env: dict[str, str], out: Path) -> Path:
                     payload=payload,
                 )
             )
-            write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
             observations[role] = observed
+            key = (host.id, inputs["model_dir"])
+            if key not in checkpoint_jobs:
+                checkpoint_jobs[key] = (host, payload, [])
+            checkpoint_jobs[key][2].append(role)
             print(f"{role}: GPU devices, image packages and model inspected", flush=True)
+    checkpoint_script = Path(__file__).with_name("checkpoint_manifest.py").read_text()
+
+    def inspect_checkpoint(job):
+        host, payload, _ = job
+        return json.loads(
+            ssh.run(
+                host,
+                "hash checkpoint files",
+                "python3 -c " + shlex.quote(checkpoint_script),
+                payload=payload,
+            )
+        )
+
+    checkpoints = {}
+    jobs = list(checkpoint_jobs.values())
+    with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+        for job, checkpoint in zip(jobs, pool.map(inspect_checkpoint, jobs), strict=True):
+            for role in job[2]:
+                checkpoints[role] = checkpoint
+                observed = observations[role]
+                observed["model_tree_sha256"] = checkpoint["model_tree_sha256"]
+                observed["model_file_count"] = checkpoint["file_count"]
+                write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
+                write_private(
+                    out / f"{role}-checkpoint.json", json.dumps(checkpoint, indent=2).encode()
+                )
+                print(f"{role}: checkpoint files hashed", flush=True)
+    baseline_role = next(iter(checkpoints))
+    baseline = checkpoints[baseline_role]
+    baseline_files = {row["path"]: row for row in baseline["files"]}
+    for role, checkpoint in checkpoints.items():
+        if checkpoint["model_tree_sha256"] == baseline["model_tree_sha256"]:
+            continue
+        files = {row["path"]: row for row in checkpoint["files"]}
+        differing = next(
+            (
+                path
+                for path in sorted(baseline_files.keys() | files.keys())
+                if baseline_files.get(path) != files.get(path)
+            ),
+            "<manifest digest>",
+        )
+        raise ValueError(
+            f"{role}: checkpoint file {differing} differs from {baseline_role}; "
+            "inspect the private per-engine checkpoint manifests"
+        )
     fleet, launches, sources, derived = build_records(hosts, env, observations, out)
     derived.update({name: str(path) for name, path in paths.items()})
     role_env = {
@@ -530,6 +581,8 @@ def discover(env: dict[str, str], out: Path) -> Path:
     manifest = {
         "files": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [*outputs, trust]},
         "roles": list(launches["engines"]),
+        "model_tree_sha256": baseline["model_tree_sha256"],
+        "model_file_count": baseline["file_count"],
     }
     write_private(out / "manifest.json", json.dumps(manifest, indent=2).encode())
     return derived_path
