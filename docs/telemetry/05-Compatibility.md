@@ -25,6 +25,4 @@ Current interfaces are:
 | Prometheus metrics   | `narwhal.metrics`           |       1 |
 | Contract manifest    | `narwhal.contract-manifest` |       1 |
 
-Fields documented by these versions form the compatibility contract. An incompatible change requires a new schema version.
-
-Before an upgrade, compare contract manifests. Keep the previous code, configuration, profiles, and compatible state together as the rollback set.
+Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

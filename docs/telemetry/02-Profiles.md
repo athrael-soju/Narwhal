@@ -48,7 +48,7 @@ true
 1.5
 ```
 
-Number fields accept integer and floating-point JSON numbers. Every numeric value must be finite. `NaN` and `Infinity` fail before row parsing.
+`NaN` and `Infinity` abort profile loading during JSON decoding, before the row validator examines engine IDs.
 
 ### Decode capacity derived from the profile
 
