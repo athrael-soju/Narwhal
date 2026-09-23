@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
+  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" width="100%">
 </p>
 
 <p align="center">
@@ -11,17 +11,16 @@
 </p>
 
 <p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
-  <a href="#getting-started">Getting started</a> |
-  <a href="https://github.com/athrael-soju/Narwhal/blob/main/docs/03-Deploy.md">Deployment</a> |
-  <a href="https://github.com/athrael-soju/Narwhal/blob/main/docs/09-API-and-Data-Reference.md">API reference</a> |
+  <a href="https://github.com/athrael-soju/Narwhal/tree/main/docs">Documentation</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/Deploy/">Deployment</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
   <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
 
 ## About
 
-Narwhal is a disaggregated LLM inference framework with adaptive prefill/decode scheduling, which reallocates running vLLM engines between prefill and decode as demand changes while weights remain loaded on every engine.
+Narwhal routes disaggregated LLM inference across vLLM engines, reallocating prefill and decode roles as demand changes while model weights stay loaded.
 
 Narwhal provides:
 
@@ -35,51 +34,37 @@ Narwhal provides:
 
 ## Architecture
 
-Each engine can execute both prefill and decode. The controller assigns roles using request demand, resident work and engine profiles, with configurable role floors, cooldowns and health checks. Role changes affect new request placement; existing requests remain tracked until completion.
+The controller prices adjacent fleet splits from request demand, resident work, and measured engine profiles. Role floors, cooldowns, and health checks govern moves; new requests follow the resulting split while resident requests complete on their assigned engines.
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/architectures/hotswap.svg)
+![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-See [Core concepts](https://github.com/athrael-soju/Narwhal/blob/main/docs/02-Core-Concepts.md) for request flow and scheduling, and [Configuration](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md) for controller settings.
+See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
 
-## Benchmark snapshot
+## Install from PyPI
 
-The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K3 workloads measured with AlPerf v0.12.0 and prefix caching enabled.
-
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/assets/infographic.png)
-
-## Getting started
-
-Install the router on Linux with Python 3.11+:
+Install the router commands on Linux with Python 3.11 or newer:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install narwhal-inference
-narwhal-serve --help
+narwhal-check --help
 ```
 
-Narwhal connects to separately provisioned vLLM engines. The local walkthrough uses Git and Make:
+The [PyPI installation guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/Install-from-PyPI.md) covers version checks and the fleet inputs needed after installation. A production deployment also uses an approved source checkout for host preparation and engine launch.
 
-```bash
-git clone https://github.com/athrael-soju/Narwhal.git
-cd Narwhal
-make setup
-```
+## Deploy a fleet
 
-`make setup` installs Narwhal and its development dependencies in `.venv`. The [getting started guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/01-Get-Started.md) starts a six-engine stub fleet, profiles it, launches the router and sends an API request through the scheduling path.
-
-The CPU walkthrough needs no credentials. For engine credentials and observability settings, copy [.env.example](https://github.com/athrael-soju/Narwhal/blob/main/.env.example) to `.env` and follow the [environment setup](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md#environment-variables).
-
-## GPU deployment
-
-Narwhal supports vLLM with NIXL (`kv_both`) when every engine serves one model through a compatible KV layout and transfer topology. Operators provision and launch the engines, record the running contract in the generic fleet configuration, then collect profiles, preflight results and [deployment-load evidence](https://github.com/athrael-soju/Narwhal/blob/main/docs/06-Measure.md) for that exact hardware and tensor-parallel shape. Follow the [deployment guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/03-Deploy.md) to bind the running fleet to Narwhal.
+From a management workstation, [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) uses the private `.env` and host inspection to prepare router and GPU engine hosts, launch vLLM with NIXL, and verify a completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, and inspect the fleet through Prometheus and Grafana.
 
 ## Documentation
 
-- [Architecture and scheduling](https://github.com/athrael-soju/Narwhal/blob/main/docs/02-Core-Concepts.md)
-- [Fleet configuration](https://github.com/athrael-soju/Narwhal/blob/main/docs/07-Configuration.md)
-- [API compatibility and limits](https://github.com/athrael-soju/Narwhal/blob/main/docs/09-API-and-Data-Reference.md#response-compatibility)
-- [Fleet measurement](https://github.com/athrael-soju/Narwhal/blob/main/docs/06-Measure.md)
-- [Ingress, monitoring and maintenance](https://github.com/athrael-soju/Narwhal/blob/main/docs/04-Operate.md)
-- [Troubleshooting](https://github.com/athrael-soju/Narwhal/blob/main/docs/05-Troubleshoot.md)
+- [Architecture and scheduling](https://athrael-soju.github.io/Narwhal/Core-Concepts/)
+- [Fleet configuration](https://athrael-soju.github.io/Narwhal/Configuration/)
+- [HTTP API](https://athrael-soju.github.io/Narwhal/HTTP-API/)
+- [Fleet measurement](https://athrael-soju.github.io/Narwhal/Measure/)
+- [Ingress, monitoring and maintenance](https://athrael-soju.github.io/Narwhal/Operate/)
+- [Troubleshooting](https://athrael-soju.github.io/Narwhal/Troubleshoot/)
 
 ## Contributing
 

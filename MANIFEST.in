@@ -9,6 +9,7 @@ include config/fleet.example.json config/fleet.stub.json
 recursive-include .github *.yml
 recursive-include docs *.md *.txt
 recursive-include assets *.svg *.png
+exclude assets/infographic.png docs/assets/infographic.png
 recursive-include deploy *.cfg
 recursive-include tools *.py *.sh *.json *.yml *.md
 recursive-include tools/coverage_support *.ini

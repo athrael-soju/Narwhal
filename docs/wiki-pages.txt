@@ -1,4 +1,5 @@
 Home.md
+Install-from-PyPI.md
 01-Get-Started.md
 02-Core-Concepts.md
 03-Deploy.md

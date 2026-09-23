@@ -56,7 +56,7 @@ narwhal-profile = "narwhal.profiling.probe:main"
 narwhal-canary = "narwhal.diagnostics.canary:main"
 
 [project.urls]
-Documentation = "https://github.com/athrael-soju/Narwhal/wiki"
+Documentation = "https://github.com/athrael-soju/Narwhal/tree/main/docs"
 Repository = "https://github.com/athrael-soju/Narwhal"
 Issues = "https://github.com/athrael-soju/Narwhal/issues"
 

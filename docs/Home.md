@@ -8,6 +8,8 @@ Narwhal profiles the fleet's engines, admits each request against measured SLO b
 
 Start with the local path, then follow the pages in order for a real deployment.
 
+Install the router package from [PyPI](Install-from-PyPI.md), or use the source checkout for the CPU walkthrough and deployment tools.
+
 | Page | Use it for |
 | --- | --- |
 | [1. Get started](01-Get-Started.md) | Run the complete request path on CPU stubs. |
