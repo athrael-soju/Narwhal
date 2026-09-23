@@ -1,5 +1,6 @@
 """Integrate the evidence collector with a live local runner and fake telemetry."""
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -30,6 +31,7 @@ for name in ('a', 'b') if mode == 'restart' else ('a',):
 target = pathlib.Path(directory) / 'client'
 target.mkdir(exist_ok=True)
 (target / 'requests.jsonl').write_text(''.join(json.dumps(row) + '\\n' for row in rows))
+(target / 'summary.json').write_text(json.dumps({'completed_rps_including_drain': 1.25}))
 """
 
 
@@ -142,7 +144,10 @@ class EvidenceTests(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
-    def execute(self, mode="normal"):
+    def execute(self, mode="normal", *, external_client=False):
+        client_dir = self.root / "external-client" if external_client else "{point_dir}"
+        if external_client:
+            client_dir.mkdir()
         plan = {
             "schema": 1,
             "evidence": {
@@ -151,6 +156,11 @@ class EvidenceTests(unittest.TestCase):
                 "profiles_path": str(self.root / "profiles.json"),
                 "sample_interval_s": 0.05,
                 "engine_metrics_urls": {"e0": self.base + "/engine-metrics"},
+                **(
+                    {"client_records": str(client_dir / "client/requests.jsonl")}
+                    if external_client
+                    else {}
+                ),
                 "identity": {
                     "narwhal_revision": "test-revision",
                     "model_id": "test-model",
@@ -172,7 +182,7 @@ class EvidenceTests(unittest.TestCase):
                         "-c",
                         CLIENT,
                         "{base}",
-                        "{point_dir}",
+                        str(client_dir),
                         mode,
                         "{model}",
                     ],
@@ -205,9 +215,24 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["journal"]["outcomes"], {"completed": 1})
         self.assertEqual(evidence["counter_deltas_by_run"]["run-a"]["narwhal_offered_total"], 1)
         self.assertTrue(any("flip" in item for item in evidence["role_timeline"]))
+        point = out / "point-a"
+        records = point / "client/requests.jsonl"
+        self.assertEqual(
+            evidence["retained_client_files"],
+            {"records": "client/requests.jsonl", "summary": "client/summary.json"},
+        )
+        self.assertEqual(
+            evidence["file_digests"]["client_records"],
+            hashlib.sha256(records.read_bytes()).hexdigest(),
+        )
+        self.assertFalse((point / "client-rows.json").exists())
+        self.assertFalse((point / "client-records.snapshot.jsonl").exists())
         shareable = (out / "point-a/summary.shareable.json").read_text()
         self.assertNotIn(self.base, shareable)
         self.assertNotIn("private.registry", shareable)
+        self.assertEqual(
+            json.loads(shareable)["performance"]["completed_rps_including_drain"], 1.25
+        )
 
     def test_two_runs_use_separate_counter_boundaries(self):
         status, evidence, _ = self.execute("restart")
@@ -226,6 +251,29 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["client"]["warmup_sent"], 1)
         self.assertEqual(evidence["client"]["measured_sent"], 1)
         self.assertEqual(evidence["journal"]["terminal"], 2)
+
+    def test_external_client_files_are_snapshotted_and_bound_to_evidence(self):
+        status, evidence, out = self.execute("warmup", external_client=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(evidence["diagnostics"], [])
+        self.assertEqual(evidence["client"]["warmup_sent"], 1)
+        point = out / "point-a"
+        for name, snapshot, source in (
+            ("records", "client-records.snapshot.jsonl", "requests.jsonl"),
+            ("warmup", "client-warmup.snapshot.json", "warmup.json"),
+            ("summary", "client-summary.snapshot.json", "summary.json"),
+        ):
+            retained = point / snapshot
+            self.assertEqual(evidence["retained_client_files"][name], snapshot)
+            self.assertEqual(
+                retained.read_bytes(), (self.root / "external-client/client" / source).read_bytes()
+            )
+            self.assertEqual(
+                evidence["file_digests"][f"client_{name}"],
+                hashlib.sha256(retained.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(retained.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((point / "client-rows.json").exists())
 
     def test_discrepancy_and_scrape_gap_are_tied_to_point(self):
         self.missing_journal = True
