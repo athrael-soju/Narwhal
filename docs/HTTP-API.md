@@ -1,13 +1,6 @@
 # Narwhal HTTP API reference
 
-Narwhal exposes an OpenAI-compatible completion API, operational inspection endpoints, and lifecycle controls for disaggregated inference fleets.
-
-FastAPI publishes the generated schema at:
-
-- `/docs`
-- `/openapi.json`
-
-This reference describes the HTTP contract for Narwhal v0.1.0, including request validation, response assembly, admission behaviour, engine failure handling, scheduler state, HA handoff, and engine lifecycle operations.
+FastAPI generates `/openapi.json` from Narwhal v0.1.0's routes and serves its interactive view at `/docs`.
 
 ## Interface map
 
@@ -26,7 +19,7 @@ This reference describes the HTTP contract for Narwhal v0.1.0, including request
 | Router telemetry     | `narwhal_*`                               |
 | Persisted schemas    | `narwhal.*`, versioned per document       |
 
-`narwhal_contract_info` identifies metrics contract version 1.
+The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="1"} 1`.
 
 For Arrow research attribution, use [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).
 
@@ -42,20 +35,17 @@ For Arrow research attribution, use [CITATION.cff](https://github.com/athrael-so
 
 ## Select an endpoint
 
-Use the endpoints according to the question being answered:
+| Operator task | Endpoint |
+| ------------- | -------- |
+| Check router liveness | [`GET /health`](http-api/04-Inspection.md#get-health) |
+| Check readiness for new client traffic | [`GET /ready`](http-api/04-Inspection.md#get-ready) |
+| Read the configured model | [`GET /v1/models`](http-api/04-Inspection.md#get-v1models) |
+| Inspect scheduler, controller, admission, and breaker state | [`GET /narwhal/state`](http-api/05-Live-State.md#get-narwhalstate) |
+| Read handoff state for a standby router | [`GET /narwhal/handoff`](http-api/07-Handoff-and-Lifecycle.md#get-narwhalhandoff) |
+| Inspect engine drain and readmission state | [`GET /narwhal/lifecycle`](http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) |
+| Drain or readmit engines | [`POST /narwhal/lifecycle/drain`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain), [`POST /narwhal/lifecycle/readmit`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) |
+| Scrape router metrics | [`GET /metrics`](http-api/04-Inspection.md#get-metrics) |
 
-| Need                                                                   | Endpoint             |
-| ---------------------------------------------------------------------- | -------------------- |
-| Is the router process alive?                                           | [`/health`](http-api/04-Inspection.md#get-health)                       |
-| Should a load balancer send new client traffic here?                   | [`/ready`](http-api/04-Inspection.md#get-ready)                         |
-| Which model is served?                                                 | [`/v1/models`](http-api/04-Inspection.md#get-v1models)                 |
-| What are current scheduler, controller, admission, and breaker states? | [`/narwhal/state`](http-api/05-Live-State.md#get-narwhalstate)         |
-| What state should a warm standby inherit?                              | [`/narwhal/handoff`](http-api/07-Handoff-and-Lifecycle.md#get-narwhalhandoff) |
-| Can an engine be stopped or readmitted?                                | [`/narwhal/lifecycle`](http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) |
-| What time-series data should monitoring scrape?                        | [`/metrics`](http-api/04-Inspection.md#get-metrics)                     |
+`/health` returns HTTP 200 with router status and engine counts; `/ready` returns 200 during client admission and 503 with `Retry-After: 1` when admission is closed.
 
-`/health` is a liveness endpoint.
-
-`/ready` is the client-traffic admission signal.
-
-`/narwhal/state`, `/narwhal/handoff`, and `/narwhal/lifecycle` expose internal control-plane state and should be treated as trusted operational interfaces.
+Restrict `/narwhal/state`, `/narwhal/handoff`, and `/narwhal/lifecycle` (including its action routes) to the trusted control network; these routes publish live scheduler and handoff state and can drain or readmit engines.
