@@ -11,6 +11,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.config import FleetConfig
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -20,7 +21,7 @@ from tools.deployment.discover_deployment import (
     fabric_address,
     service_url,
 )
-from tools.deployment.engine_launch import load_launches
+from tools.deployment.engine_launch import load_launches, selected_launch
 from tools.deployment.host_access import SSH, load_hosts
 from tools.deployment.launch_engine import build
 from tools.deployment.prepare_host_env import select_values
@@ -45,6 +46,16 @@ def observation(runtime="rocm", address="10.0.0.1"):
         "image_environment": {"VLLM_ROCM_USE_AITER": "1"},
         "interfaces": [{"ifname": "fabric0", "addr_info": [{"local": address, "scope": "global"}]}],
     }
+
+
+def cuda_observation(address="10.0.0.1"):
+    observed = observation(runtime="cuda", address=address)
+    observed["gpus"] = [
+        {"id": str(i), "name": "RTX 5090", "uuid": f"GPU-{i}", "device": f"/dev/nvidia{i}"}
+        for i in range(2)
+    ]
+    observed["common_devices"] = ["/dev/nvidiactl", "/dev/nvidia-uvm"]
+    return observed
 
 
 def environment(root):
@@ -279,6 +290,85 @@ class DiscoveryTests(unittest.TestCase):
         env.update(NARWHAL_NODE_1_GPU_IDS="0,1", NARWHAL_NODE_2_GPU_IDS="1,2")
         with self.assertRaisesRegex(ValueError, "overlap"):
             build_records(hosts, env, observations, Path("/synthetic"))
+        env["NARWHAL_NODE_2_GPU_IDS"] = "2,3"
+        fleet, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+        self.assertEqual(fleet["hardware"]["accelerators_per_engine"], 2)
+        self.assertNotIn("shared_device", launches["engines"]["engine-1"])
+        env["NARWHAL_NODE_1_GPU_MEMORY_UTILIZATION"] = "0.4"
+        with self.assertRaisesRegex(ValueError, "requires shared GPU policy"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+
+    def test_shared_gpu_allocation_survives_launch_and_fleet_loading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            for node in (2, 3):
+                env[f"NARWHAL_NODE_{node}_SSH"] = env["NARWHAL_NODE_1_SSH"]
+                env[f"NARWHAL_NODE_{node}_ENGINE_PORT"] = str(8000 + node)
+                env[f"NARWHAL_NODE_{node}_ATTEST_PORT"] = str(8010 + node)
+            env.update(
+                NARWHAL_SHARED_GPU_ALLOWANCE="0.9",
+                NARWHAL_NODE_1_GPU_IDS="GPU-0",
+                NARWHAL_NODE_2_GPU_IDS="0",
+                NARWHAL_NODE_3_GPU_IDS="GPU-0",
+                NARWHAL_NODE_1_GPU_MEMORY_UTILIZATION="0.3",
+                NARWHAL_NODE_2_GPU_MEMORY_UTILIZATION="0.3",
+                NARWHAL_NODE_3_GPU_MEMORY_UTILIZATION="0.3",
+            )
+            hosts = derive_hosts(env)
+            observations = {f"engine-{i}": cuda_observation() for i in (1, 2, 3)}
+            fleet, launches, _, derived = build_records(hosts, env, observations, root)
+            allocations = [e["shared_device"] for e in fleet["engines"]]
+            self.assertEqual({a["group"] for a in allocations}, {"node-1:GPU-0"})
+            self.assertEqual({a["gpu_uuid"] for a in allocations}, {"GPU-0"})
+            self.assertEqual([a["gpu_memory_utilization"] for a in allocations], [0.3] * 3)
+            for role in ("engine-1", "engine-2", "engine-3"):
+                launch = launches["engines"][role]
+                self.assertEqual(launch["shared_device"], allocations[int(role[-1]) - 1])
+                args = launch["runtime"]["extra_args"]
+                self.assertEqual(args[args.index("--gpu-memory-utilization") + 1], "0.3")
+                selected_launch(launches, role, {})
+            changed = copy.deepcopy(launches)
+            changed["engines"]["engine-1"]["runtime"]["extra_args"][5] = "0.6"
+            with self.assertRaisesRegex(ValueError, "memory setting differs"):
+                selected_launch(changed, "engine-1", {})
+            path = root / "fleet.json"
+            path.write_text(json.dumps(fleet))
+            with patch.dict("os.environ", derived):
+                loaded = FleetConfig.load(path)
+            loaded.save(root / "roundtrip.json")
+            self.assertEqual(FleetConfig.load(root / "roundtrip.json"), loaded)
+
+    def test_shared_gpu_allocation_rejects_identity_and_budget_errors(self):
+        env = environment(Path("/synthetic"))
+        env["NARWHAL_NODE_2_SSH"] = env["NARWHAL_NODE_1_SSH"]
+        env.update(
+            NARWHAL_SHARED_GPU_ALLOWANCE="0.8",
+            NARWHAL_NODE_1_GPU_IDS="0",
+            NARWHAL_NODE_2_GPU_IDS="0",
+            NARWHAL_NODE_1_GPU_MEMORY_UTILIZATION="0.4",
+            NARWHAL_NODE_2_GPU_MEMORY_UTILIZATION="0.4",
+        )
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": cuda_observation() for i in (1, 2)}
+        build_records(hosts, env, observations, Path("/synthetic"))
+        cases = [
+            ({"NARWHAL_SHARED_GPU_ALLOWANCE": "0"}, "ALLOWANCE"),
+            ({"NARWHAL_NODE_2_GPU_MEMORY_UTILIZATION": "nan"}, "GPU_MEMORY_UTILIZATION"),
+            ({"NARWHAL_NODE_2_GPU_MEMORY_UTILIZATION": "0.5"}, "budgets total"),
+            ({"NARWHAL_NODE_2_GPU_IDS": "1"}, "physical GPU identities"),
+            (
+                {"NARWHAL_NODE_2_ENGINE_ARGS": '["--gpu-memory-utilization", "0.9"]'},
+                "declared budget",
+            ),
+        ]
+        for changes, message in cases:
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
+                build_records(hosts, {**env, **changes}, observations, Path("/synthetic"))
+        changed = copy.deepcopy(observations)
+        changed["engine-2"]["gpus"][0]["uuid"] = "GPU-other"
+        with self.assertRaisesRegex(ValueError, "physical GPU identities"):
+            build_records(hosts, env, changed, Path("/synthetic"))
 
     def test_mixed_hardware_and_management_environment_are_rejected(self):
         env = environment(Path("/synthetic"))

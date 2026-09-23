@@ -25,6 +25,17 @@ class EngineSpec:
     pin: bool = False
     # Full URL served by the engine-side attestation process.
     attestation_url: str = ""
+    shared_device: SharedDeviceAllocation | None = None
+
+
+@dataclass(frozen=True)
+class SharedDeviceAllocation:
+    """Physical GPU and memory allocation for a colocated engine."""
+
+    group: str
+    gpu_uuid: str
+    device_allowance: float
+    gpu_memory_utilization: float
 
 
 @dataclass(frozen=True)

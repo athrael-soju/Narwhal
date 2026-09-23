@@ -21,6 +21,7 @@ def document(config: FleetConfig) -> dict[str, Any]:
             {"iid": e.iid, "url": e.url, "role": e.role.value}
             | ({"pin": True} if e.pin else {})
             | ({"attestation_url": e.attestation_url} if e.attestation_url else {})
+            | ({"shared_device": asdict(e.shared_device)} if e.shared_device else {})
             for e in config.engines
         ],
         "slo": {"ttft_s": config.slo.ttft_s, "tpot_s": config.slo.tpot_s},

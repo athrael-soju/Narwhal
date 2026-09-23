@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from pathlib import Path
 
@@ -75,6 +76,41 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
         raise ValueError(f"{role}: name the allocation, device and transfer sources")
     if "runtime" in entry:
         validate_runtime(entry["runtime"])
+    shared = entry.get("shared_device")
+    if shared is not None:
+        if not isinstance(shared, dict) or set(shared) != {
+            "group",
+            "gpu_uuid",
+            "device_allowance",
+            "gpu_memory_utilization",
+        }:
+            raise ValueError(f"{role}: shared_device requires group, GPU UUID and memory limits")
+        if visibility != "CUDA_VISIBLE_DEVICES" or len(devices) != 1 or tp != 1:
+            raise ValueError(f"{role}: shared_device requires one CUDA GPU and TP=1")
+        if not all(
+            isinstance(shared[name], str) and shared[name] for name in ("group", "gpu_uuid")
+        ):
+            raise ValueError(f"{role}: shared_device group and GPU UUID must be nonempty")
+        for name in ("device_allowance", "gpu_memory_utilization"):
+            fraction = shared[name]
+            if (
+                type(fraction) not in (int, float)
+                or not math.isfinite(fraction)
+                or not 0 < fraction <= 1
+            ):
+                raise ValueError(f"{role}: shared_device.{name} must be above 0 and at most 1")
+        if shared["gpu_memory_utilization"] > shared["device_allowance"]:
+            raise ValueError(f"{role}: GPU memory budget exceeds device allowance")
+        args = entry["runtime"]["extra_args"]
+        positions = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
+        if len(positions) != 1 or positions[0] + 1 >= len(args):
+            raise ValueError(f"{role}: shared GPU launch requires one memory-utilization argument")
+        try:
+            matches = float(args[positions[0] + 1]) == shared["gpu_memory_utilization"]
+        except ValueError:
+            matches = False
+        if not matches:
+            raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
     entry["environment"] = {visibility: ",".join(devices), "UCX_NET_DEVICES": net}
     entry["vllm_args"] = ["--tensor-parallel-size", str(tp)]
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}
