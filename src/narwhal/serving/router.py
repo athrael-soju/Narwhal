@@ -460,6 +460,7 @@ class NarwhalRouter:
     def state(self) -> dict[str, Any]:
         """Return the live state exposed by `/narwhal/state`."""
         out = {
+            "journal_run": self.journal.run,
             "served": self.served,
             "offered": self.offered,
             "unsized_offered": self.unsized_offered,

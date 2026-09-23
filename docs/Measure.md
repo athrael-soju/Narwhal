@@ -9,3 +9,4 @@ Bind each production result to a deployment identifier that records the model, e
 3. [Synthetic load trial](measure/03-Load-Trial.md)
 4. [Reconcile and accept](measure/04-Reconcile-and-Accept.md)
 5. [Ordered benchmark points](measure/05-Benchmark-Runner.md)
+6. [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md)
