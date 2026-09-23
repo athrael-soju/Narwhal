@@ -1,10 +1,8 @@
 # Troubleshoot a Fleet
 
-Use this procedure to diagnose router, engine, lifecycle, overload, failover, and rollback failures without destroying the state needed to explain them.
+## Capture router and engine state
 
-## Capture the control state first
-
-Create one ignored evidence directory for each router and incident before changing router or engine state.
+Before changing router or engine state, create a separate ignored evidence directory for each router in the incident and capture its control endpoints.
 
 ```bash
 mkdir -p runs/diagnostics
@@ -17,27 +15,24 @@ curl -sS http://router:8000/narwhal/lifecycle > "$incident_dir/lifecycle.json"
 curl -sS http://router:8000/metrics > "$incident_dir/metrics.txt"
 ```
 
-Add the router journal, ingress and supervisor status, engine boot logs, fleet configuration, profiles, and deployment load results to the same directory.
+Store the router journal, ingress and supervisor status, engine boot logs, fleet configuration, profiles, and deployment load results beside the endpoint snapshots. Before stopping an engine, capture the evidence required by its planned lifecycle restart or unplanned-failure procedure.
 
-An engine restart must follow either its lifecycle contract or the unplanned-failure procedure. Preserve the evidence required by that path before stopping the process.
+## Router, admission, and lifecycle signals
 
-## Classify the failure from the control plane
+| Signal                                     | Next check or action                                                                                                           |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Request to `/health` fails                 | Query peer `/ready` to identify the lease holder; inspect the router process, host, and network path.                         |
+| `/health` reports `standby`                | Send traffic and lifecycle actions to the active lease holder.                                                                |
+| `/health` reports `fenced`                 | Identify the current lease holder and remove the fenced router from the load balancer.                                         |
+| `/health` reports `maintenance`            | Follow `/narwhal/lifecycle` through the engine wave until readiness returns.                                                  |
+| Both routers return HTTP 503 from `/ready` | Compare refusal reasons, then inspect backend health, lifecycle holds, monitoring, lease ownership, and handoff freshness.    |
+| HTTP 429 increases                         | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity.                                              |
+| HTTP 502 increases                         | Inspect engine failures, ejection, quarantine, and in-flight work.                                                            |
+| HTTP 504 increases                         | Separate queue and request expiry from engine timeouts using the response error and terminal journal row.                    |
+| A stream terminates with an error frame    | Inspect failed attempts, final outcome, and participating engines after the HTTP 200 response has started.                   |
+| Lifecycle state is `blocked`               | Repair the failed drain identity capture or readmission check, then retry that operation.                                    |
 
-Use the first available signal to choose the recovery path.
-
-| Signal                                     | Control-plane state                                     | Action                                                                                                                      |
-| ------------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `/health` is unreachable                   | The router or its host is unavailable                   | Query `/ready` on the peer router and identify the lease holder                                                             |
-| `/health` reports `standby`                | The router is alive without fleet control               | Keep traffic and lifecycle actions on the active router                                                                     |
-| `/health` reports `fenced`                 | Lease ownership has moved to another router             | Find the current lease holder and keep the fenced router out of the load balancer                                           |
-| `/health` reports `maintenance`            | An engine-wide maintenance wave is active               | Follow `/narwhal/lifecycle` until readiness returns                                                                         |
-| Both routers return HTTP 503 from `/ready` | Neither router currently accepts traffic                | Read both refusal reasons, then inspect backend health, lifecycle holds, monitoring, lease ownership, and handoff freshness |
-| HTTP 429 increases                         | Admission control is rejecting or shedding more work    | Split failures by `rejected`, `refused`, and queue-shed reason before changing capacity                                     |
-| HTTP 502 or 504 increases                  | An engine failed or exceeded its timeout                | Inspect engine health, ejection, quarantine, and in-flight work                                                             |
-| A stream terminates with an error frame    | Failure occurred after the HTTP 200 response started    | Inspect failed attempts, final outcome, and participating engines                                                           |
-| Lifecycle state is `blocked`               | Drain identity capture or readmission validation failed | Repair the failed check, then retry the failed drain or readmission operation                                               |
-
-Follow the matching procedure:
+Continue with the procedure for the affected path:
 
 - [Fleet overload with healthy engines](#fleet-overload-with-healthy-engines)
 - [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md)
@@ -45,18 +40,9 @@ Follow the matching procedure:
 
 ## Fleet overload with healthy engines
 
-Read `admission`, `serving`, `resident`, and pool load from `/narwhal/state`.
+Read `admission`, `serving`, `resident`, and pool load from `/narwhal/state` to trace overload to immediate concurrency rejection, queue-full shedding, queue expiry, or predictive refusal.
 
-Separate the overload mode before changing limits:
-
-- immediate concurrency rejection;
-- queue-full shedding;
-- queue expiry;
-- predictive refusal.
-
-These modes fail at different points in admission and scheduling, so a single increase in capacity limits can move the failure later without improving attainment.
-
-The router journal and the client report attainment over different populations. The router divides completions by admitted requests. The client divides successful requests by all offered requests, including predictively rejected requests. Use both denominators when reconciling load-test output.
+When reconciling load-test attainment, divide router completions by admitted requests and client successes by all offered requests, including predictive refusals.
 
 Reduce offered traffic at ingress, or add a fleet whose deployment has already been validated.
 
@@ -65,5 +51,3 @@ Keep `serving.max_connections`, queue depth, and timeouts at their current value
 ## After recovery
 
 Run the [release and production drills](operate/04-Upgrade-and-Validate.md#11-validate-every-release) after the repair.
-
-Those drills exercise the deployment's lifecycle and failover paths under the repaired configuration.
