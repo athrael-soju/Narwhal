@@ -14,6 +14,12 @@ CLIENT = """
 import json, pathlib, sys, time, urllib.request
 base, directory, mode, model = sys.argv[1:]
 rows = []
+if mode == 'warmup':
+    urllib.request.urlopen(base + '/start/warmup').read()
+    target = pathlib.Path(directory) / 'client'
+    target.mkdir()
+    (target / 'warmup.json').write_text(json.dumps(
+        {'client_rid': 'warmup', 'sent': True, 'outcome': 'completed'}))
 for name in ('a', 'b') if mode == 'restart' else ('a',):
     if name == 'b':
         urllib.request.urlopen(base + '/restart').read()
@@ -22,7 +28,7 @@ for name in ('a', 'b') if mode == 'restart' else ('a',):
     rows.append({'client_rid': name, 'sent': True, 'outcome': 'completed'})
     time.sleep(0.2)
 target = pathlib.Path(directory) / 'client'
-target.mkdir()
+target.mkdir(exist_ok=True)
 (target / 'requests.jsonl').write_text(''.join(json.dumps(row) + '\\n' for row in rows))
 """
 
@@ -211,6 +217,15 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["counter_deltas_by_run"]["run-a"]["narwhal_offered_total"], 1)
         self.assertEqual(evidence["counter_deltas_by_run"]["run-b"]["narwhal_offered_total"], 1)
         self.assertEqual(evidence["counter_deltas_by_run"]["run-b"]["narwhal_served_total"], 1)
+
+    def test_warmup_is_reconciled_but_excluded_from_measured_counts(self):
+        status, evidence, _ = self.execute("warmup")
+        self.assertEqual(status, 0)
+        self.assertEqual(evidence["diagnostics"], [])
+        self.assertEqual(evidence["client"]["sent"], 2)
+        self.assertEqual(evidence["client"]["warmup_sent"], 1)
+        self.assertEqual(evidence["client"]["measured_sent"], 1)
+        self.assertEqual(evidence["journal"]["terminal"], 2)
 
     def test_discrepancy_and_scrape_gap_are_tied_to_point(self):
         self.missing_journal = True

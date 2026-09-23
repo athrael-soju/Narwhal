@@ -268,9 +268,22 @@ async def prepare(client, base, args):
     )
     response.raise_for_status()
     seed = response.json()
-    ids = token_ids(event_choices(seed))
-    if ids is None or len(ids) != 32 or seed.get("error"):
+    choices = event_choices(seed)
+    generated_ids = token_ids(choices)
+    if generated_ids is None or len(generated_ids) != 32 or seed.get("error"):
         raise ValueError("Seed completion must return 32 identified output tokens")
+    prompt_ids = choices[0].get("prompt_token_ids") if len(choices) == 1 else None
+    if (
+        isinstance(prompt_ids, list)
+        and prompt_ids
+        and all(type(value) is int and value >= 0 for value in prompt_ids)
+        and len(set(prompt_ids)) > 1
+    ):
+        pool = prompt_ids
+    else:
+        pool = list(generated_ids)
+    if len(set(pool)) < 2:
+        raise ValueError("Seed response has no diverse token IDs for the workload")
     private_json(args.out / "seed-response.json", seed)
     private_json(
         args.out / "workload.json",
@@ -281,7 +294,7 @@ async def prepare(client, base, args):
             "input_tokens": args.input_tokens,
             "output_tokens": args.output_tokens,
             "seed": args.seed,
-            "token_pool": list(ids),
+            "token_pool": list(pool),
             "seed_prompt": SEED_PROMPT,
             "recipe": "Python random.Random(seed + sequence).choice(token_pool) per input token",
         },

@@ -63,6 +63,7 @@ nav:
           - Reconcile and accept: measure/04-Reconcile-and-Accept.md
           - Ordered benchmark points: measure/05-Benchmark-Runner.md
           - Benchmark evidence bundle: measure/06-Benchmark-Evidence.md
+          - GPU benchmark qualification: measure/07-GPU-Qualification.md
       - Set up observability:
           - Overview: Observability.md
           - Start and verify monitoring: observability/01-Start-and-Verify.md

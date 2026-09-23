@@ -267,7 +267,16 @@ def reconcile(
         "point": point_id,
         "client": {
             "sent": len(client_sent),
+            "measured_sent": sum(not row.get("benchmark_warmup", False) for row in client_sent),
+            "warmup_sent": sum(row.get("benchmark_warmup", False) for row in client_sent),
             "outcomes": dict(Counter(row.get("outcome", "unknown") for row in client_rows)),
+            "measured_outcomes": dict(
+                Counter(
+                    row.get("outcome", "unknown")
+                    for row in client_rows
+                    if not row.get("benchmark_warmup", False)
+                )
+            ),
         },
         "journal": {
             "terminal": len(terminal),
@@ -355,7 +364,9 @@ class EvidenceCollector:
             warmup = client_path.with_name("warmup.json")
             if warmup.exists():
                 try:
-                    client_rows.append(json.loads(warmup.read_text(encoding="utf-8")))
+                    client_rows.append(
+                        json.loads(warmup.read_text(encoding="utf-8")) | {"benchmark_warmup": True}
+                    )
                 except ValueError:
                     journal_errors.append({"kind": "warmup_parse_error", "point": self.point["id"]})
         else:
