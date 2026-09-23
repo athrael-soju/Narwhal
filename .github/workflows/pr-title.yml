@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  statuses: write
 jobs:
   validate:
     name: Validate PR title
@@ -38,6 +39,7 @@ jobs:
           ref: main
           persist-credentials: false
       - name: Validate bot-created release PR title
+        id: bot_title
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,3 +50,18 @@ jobs:
           test "$(gh api "$pr" --jq '.head.sha')" = "$GITHUB_SHA"
           title=$(gh api "$pr" --jq '.title')
           PR_TITLE="$title" python tools/maintenance/release.py title
+      - name: Report release PR title status
+        if: always() && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE_OUTCOME: ${{ steps.bot_title.outcome }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='Conventional Commit title validation failed'
+          if [ "$TITLE_OUTCOME" = success ]; then
+            state=success
+            description='Conventional Commit title validation passed'
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context='Validate PR title' -f description="$description"
