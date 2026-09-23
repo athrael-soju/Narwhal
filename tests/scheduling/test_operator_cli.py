@@ -22,6 +22,7 @@ class OperatorCliTests(unittest.TestCase):
                 ["--decode-tokens", "2"],
                 ["--prefill-lens", "0,1,2"],
                 ["--prefill-repeats", "0"],
+                ["--prefill-repeats", "2"],
             ):
                 with (
                     self.subTest(options=options),

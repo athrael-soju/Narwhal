@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import re
 import statistics
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 import httpx
 
 from ..config import FleetConfig
+from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import event_choices, event_object, token_ids
@@ -24,7 +26,7 @@ from .fitting import (
     decode_cross_validation_mape,
     decode_mape,
     fit_decode_plane,
-    fit_quadratic,
+    fit_prefill_samples,
 )
 from .model import Profile
 from .store import ProfileStore
@@ -153,6 +155,7 @@ async def probe_prefill(
                 f"prefill input {n} plus one output token exceeds {url} max_model_len "
                 f"{max_model_len}; choose shorter --prefill-lens"
             )
+        first = len(samples)
         for _ in range(repeats):
             body = {
                 "model": model,
@@ -189,7 +192,8 @@ async def probe_prefill(
             if not valid:
                 raise RuntimeError("prefill probe lacks a complete response with exact token usage")
             samples.append((float(n), elapsed))
-        print(f"    prefill {n:>6} tok -> {samples[-1][1] * 1000:7.1f} ms")
+        median = statistics.median(row[1] for row in samples[first:])
+        print(f"    prefill {n:>6} tok -> {median * 1000:7.1f} ms median")
     return samples
 
 
@@ -386,6 +390,15 @@ async def profile_instance(
         chars_per_token,
         max_model_len,
     )
+    if evidence is not None:
+        evidence["prefill"] = prefill
+    (a, b, c), representatives, prefill_fit_mape = fit_prefill_samples(prefill)
+    print(f"    prefill median fit MAPE {prefill_fit_mape:.1%}")
+    if evidence is not None:
+        evidence.update(
+            prefill_fit_points=representatives,
+            prefill_fit_mape=prefill_fit_mape,
+        )
     decode_intervals: list[dict[str, object]] = []
     decode = await probe_decode(
         client,
@@ -400,8 +413,7 @@ async def profile_instance(
         max_model_len=max_model_len,
     )
     if evidence is not None:
-        evidence.update(prefill=prefill, decode=decode, decode_intervals=decode_intervals)
-    a, b, c = fit_quadratic(prefill)
+        evidence.update(decode=decode, decode_intervals=decode_intervals)
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
     capacity = await kv_capacity(client, url)
@@ -478,6 +490,58 @@ def load_sequence_limits(path: Path, engine_ids: set[str]) -> dict[str, int]:
     return limits
 
 
+def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[str]) -> int:
+    """Rebuild TTFT coefficients from retained repeats while keeping measured decode fits."""
+    sidecar_path = output_path.with_suffix(".samples.json")
+    for path in (output_path, sidecar_path):
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"output exists: {path}; choose a fresh profile path")
+    record = json.loads(samples_path.read_text())
+    if not isinstance(record, dict) or not isinstance(record.get("engines"), dict):
+        raise ValueError(f"invalid profile samples: {samples_path}")
+    rows = record["engines"]
+    if set(rows) != engine_ids:
+        raise ValueError("saved profile samples must cover every configured engine")
+    profiles = []
+    for iid in sorted(engine_ids):
+        row = rows[iid]
+        if not isinstance(row, dict) or not isinstance(row.get("prefill"), list):
+            raise ValueError(f"{iid}: saved prefill samples are missing")
+        if any(
+            not isinstance(point, list)
+            or len(point) != 2
+            or any(type(value) not in (int, float) for value in point)
+            for point in row["prefill"]
+        ):
+            raise ValueError(f"{iid}: saved prefill samples are invalid")
+        try:
+            samples = [tuple(point) for point in row["prefill"]]
+            old = Profile(**row["profile"])
+        except (TypeError, KeyError, ValueError) as exc:
+            raise ValueError(f"{iid}: saved profile evidence is invalid") from exc
+        if old.iid != iid:
+            raise ValueError(f"{iid}: saved profile identity differs from the fleet")
+        (a, b, c), representatives, error = fit_prefill_samples(samples)
+        updated = replace(old, ttft_a=a, ttft_b=b, ttft_c=c)
+        row.update(
+            prefill_fit_points=representatives,
+            prefill_fit_mape=error,
+            profile=asdict(updated),
+        )
+        print(f"  {iid}: prefill median fit MAPE {error:.1%}")
+        profiles.append(asdict(updated))
+    record["method_version"] = 2
+    record["prefill_refit_source"] = str(samples_path)
+    profile_document = versioned(PROFILES, {"meta": stamp()["meta"], "profiles": profiles})
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    for path, document in ((output_path, profile_document), (sidecar_path, record)):
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(json.dumps(document, indent=2) + "\n")
+    print(f"refitted {len(profiles)} profile(s) to {output_path}")
+    return 0
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -512,7 +576,7 @@ async def run(
     dialect = lookup_dialect(cfg.dialect)
     evidence_rows: dict[str, object] = {}
     measurement_record = {
-        "method_version": 1,
+        "method_version": 2,
         **stamp(),
         "model": cfg.model,
         "sweep": asdict(sweep or Sweep()),
@@ -549,17 +613,27 @@ async def run(
             }
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
-            profile = await profile_instance(
-                client,
-                spec.iid,
-                spec.url,
-                cfg.model,
-                engine_sweep,
-                dialect,
-                cfg.chars_per_token,
-                evidence=engine_evidence,
-                max_model_len=max_model_len,
-            )
+            try:
+                profile = await profile_instance(
+                    client,
+                    spec.iid,
+                    spec.url,
+                    cfg.model,
+                    engine_sweep,
+                    dialect,
+                    cfg.chars_per_token,
+                    evidence=engine_evidence,
+                    max_model_len=max_model_len,
+                )
+            except (ValueError, RuntimeError) as exc:
+                engine_evidence["error"] = str(exc)
+                evidence_rows[spec.iid] = engine_evidence
+                evidence_path.parent.mkdir(parents=True, exist_ok=True)
+                with evidence_path.open(
+                    "x" if len(evidence_rows) == 1 and not overwrite else "w", encoding="utf-8"
+                ) as output:
+                    output.write(json.dumps(measurement_record, indent=2) + "\n")
+                raise
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence
             # Keep a completed engine's observations even if a later engine fails.
@@ -599,6 +673,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
+    ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")
+    ap.add_argument("--out", type=Path, help="fresh profile path for --refit-samples")
     ap.add_argument(
         "--limits",
         type=Path,
@@ -658,12 +734,18 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("profile lengths must be positive")
     if any(value < 1 for value in sweep.decode_concurrency):
         ap.error("decode concurrency must be at least 1")
-    if sweep.decode_tokens < 3 or sweep.prefill_repeats < 1:
+    if sweep.decode_tokens < 3 or sweep.prefill_repeats < 3:
         ap.error(
             "--decode-tokens needs at least 3 (two intervals need three tokens); "
-            "--prefill-repeats at least 1"
+            "--prefill-repeats at least 3 for a repeat median"
         )
     try:
+        if args.refit_samples is not None or args.out is not None:
+            if args.refit_samples is None or args.out is None or args.only:
+                ap.error("--refit-samples requires --out and a complete fleet selection")
+            return refit_saved_prefill(
+                args.refit_samples, args.out, {engine.iid for engine in cfg.engines}
+            )
         return asyncio.run(
             run(
                 cfg,

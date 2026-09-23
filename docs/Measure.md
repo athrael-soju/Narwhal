@@ -43,7 +43,7 @@ Decode probes request exact output token IDs with one token per SSE event. The p
 
 `narwhal-profile` writes `profiles.json` and `profiles.samples.json`.
 
-`profiles.samples.json` contains software identity, sweep settings, per-engine prefill observations, decode intervals, cell medians, and fitted profiles. If the run stops part-way through, completed engines remain in the output. `--overwrite` creates a new pair containing only the selected engines.
+`profiles.samples.json` contains software identity, sweep settings, every prefill repeat, the per-length medians used for the TTFT fit, decode intervals, cell medians, and fitted profiles. A failed TTFT fit retains its raw prefill observations and error in the sidecar; completed engines remain there if a later engine fails. `--overwrite` creates a new pair containing only the selected engines.
 
 Keep both files with the deployment record.
 
@@ -51,7 +51,15 @@ The profiler reads `kv_cache_size_tokens` from vLLM's `cache_config_info` metric
 
 ### Accept or reject the profile
 
-Inspect prefill coverage and fit error manually. Measured prefill latency includes the HTTP round trip and one generated token.
+The profiler fits one median latency per exact input length, so an isolated slow repeat stays in the raw evidence without shifting the TTFT curve. It rejects a curve above 20% mean or 50% worst-point error against those medians before decode profiling. Measured prefill latency includes the HTTP round trip and one generated token.
+
+To repair a completed profile set recorded by an earlier raw-repeat fitter, refit the retained sample sidecar into a fresh pair without contacting the engines:
+
+```bash
+narwhal-profile --fleet runs/deployment/fleet.json --refit-samples runs/profiles.samples.json --out runs/profiles-refit.json
+```
+
+The command requires saved samples and profile snapshots for every configured engine, preserves the original pair, and copies the measured decode coefficients into the new profiles. Set `profiles.path` in the private fleet document to `runs/profiles-refit.json`, then run the full preflight against that document and the unchanged engine processes. Retain both profile pairs with the deployment record.
 
 Resident-token count alone does not determine decode interval. Two cells with the same resident KV total can behave differently when their sequence counts differ.
 

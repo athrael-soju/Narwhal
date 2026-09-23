@@ -6,12 +6,29 @@ from narwhal.profiling.fitting import (
     decode_cross_validation_mape,
     decode_mape,
     fit_decode_plane,
+    fit_prefill_samples,
     fit_quadratic,
 )
 
 
 class ProfileFittingTests(unittest.TestCase):
     """Synthetic samples separate numerical fitting from engine measurement."""
+
+    def test_prefill_fit_uses_repeat_medians_and_rejects_inconsistent_lengths(self):
+        lengths = (256, 512, 1024, 2048, 4096)
+        expected = [(length, 0.25 + 0.0001 * length) for length in lengths]
+        samples = [
+            (length, elapsed)
+            for length, elapsed in expected
+            for elapsed in (elapsed, elapsed, 19.0 if length == 256 else elapsed)
+        ]
+        coefficients, points, error = fit_prefill_samples(samples)
+        self.assertEqual(points, expected)
+        self.assertAlmostEqual(coefficients[1], 0.0001)
+        self.assertLess(error, 0.01)
+        bad = [(length, 3.0 if length == 1024 else elapsed) for length, elapsed in expected]
+        with self.assertRaisesRegex(ValueError, "prefill median fit error"):
+            fit_prefill_samples(bad)
 
     def test_quadratic_recovers_coefficients_at_token_scale(self):
         """Input scaling preserves the coefficients in original token units."""
