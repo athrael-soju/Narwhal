@@ -4,15 +4,7 @@
 
 ### Primary router failed
 
-Query the private `/ready` endpoint on both routers.
-
-Exactly one lifecycle document must report:
-
-```text
-router.controls_fleet: true
-```
-
-The load balancer must select only that router.
+Query private `/ready` on both routers and confirm exactly one `/narwhal/lifecycle` document reports `router.controls_fleet: true` and direct load-balancer traffic to that router.
 
 Compare the active router with the failed primary:
 

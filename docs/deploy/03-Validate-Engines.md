@@ -64,7 +64,9 @@ ip address show dev "$NARWHAL_FABRIC_INTERFACE"
 ss -ltnp
 ```
 
-If `NARWHAL_ENGINE_IMAGE` is a registry digest rather than an image ID, compare the runtime's resolved digest instead. The complete checkpoint manifest and matched tree digest remain in the private discovery record; repeat discovery if provisioned checkpoint contents change.
+For a registry digest in `NARWHAL_ENGINE_IMAGE`, compare the runtime's resolved digest with the configured digest before launch.
+
+The private discovery record binds the checkpoint to its complete manifest and matched tree digest. Ensure to rerun discovery when provisioned checkpoint contents change.
 
 Check every declared device path:
 
