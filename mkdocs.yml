@@ -26,7 +26,7 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
-copyright: Copyright &copy; NCA LTD
+copyright: Copyright &copy; athrael-soju
 
 plugins:
   - search
@@ -44,16 +44,70 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Deploy a fleet: Deploy.md
+  - Deploy a fleet:
+      - Overview: Deploy.md
+      - A. Discover the fleet: deploy/01-Discover.md
+      - B. Install Narwhal: deploy/02-Install.md
+      - C. Validate engines: deploy/03-Validate-Engines.md
+      - D. Qualify fabric: deploy/04-Qualify-Fabric.md
+      - E. Attest engines: deploy/05-Attest.md
+      - F. Profile and preflight: deploy/06-Profile-and-Preflight.md
+      - G. Serve and measure: deploy/07-Serve-and-Measure.md
   - Deployment operations:
-      - Measure a fleet: Measure.md
-      - Set up observability: Observability.md
-      - Operate Narwhal: Operate.md
-      - Troubleshoot a fleet: Troubleshoot.md
+      - Measure a fleet:
+          - Overview: Measure.md
+          - Measurement contract and profiling: measure/01-Profile.md
+          - Targets and deployment freeze: measure/02-Targets-and-Freeze.md
+          - Synthetic load trial: measure/03-Load-Trial.md
+          - Reconcile and accept: measure/04-Reconcile-and-Accept.md
+      - Set up observability:
+          - Overview: Observability.md
+          - Start and verify monitoring: observability/01-Start-and-Verify.md
+          - Access dashboards and isolate listeners: observability/02-Access.md
+          - GPU telemetry, alerts, and recovery: observability/03-Telemetry-and-Recovery.md
+      - Operate Narwhal:
+          - Overview: Operate.md
+          - Production boundary and router pair: operate/01-Start-Routers.md
+          - Router state and placement monitoring: operate/02-Monitor.md
+          - Engine restart and process replacement: operate/03-Restart-Engines.md
+          - Upgrade, rollback, and release drills: operate/04-Upgrade-and-Validate.md
+      - Troubleshoot a fleet:
+          - Overview: Troubleshoot.md
+          - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md
+          - Router failover and rollback: troubleshoot/02-Router-Recovery.md
   - Concepts:
-      - Core concepts: Core-Concepts.md
+      - Overview: Core-Concepts.md
+      - Request flow and topology: concepts/01-Request-and-Topology.md
+      - Role control and capacity floors: concepts/02-Role-Control.md
+      - Failure, readmission, and state: concepts/03-Failure-and-State.md
   - Reference:
-      - Configuration: Configuration.md
-      - CLI: CLI-Reference.md
-      - HTTP API: HTTP-API.md
-      - Telemetry and artifacts: Telemetry-and-Artifacts.md
+      - Configuration:
+          - Overview: Configuration.md
+          - Fleet schema and contract: configuration/01-Fleet-Schema.md
+          - Serving and role control: configuration/02-Serving-and-Role-Control.md
+          - Recovery and validation: configuration/03-Recovery-and-Validation.md
+          - Deployment inputs and SSH trust: configuration/04-Deployment-Inputs.md
+          - Engine endpoints and launch: configuration/05-Engine-Launch.md
+          - Fabric and operations: configuration/06-Fabric-and-Operations.md
+      - CLI:
+          - Overview: CLI-Reference.md
+          - narwhal-attest: cli/Attest.md
+          - narwhal-serve: cli/Serve.md
+          - narwhal-profile: cli/Profile.md
+          - narwhal-check: cli/Check.md
+      - HTTP API:
+          - Overview: HTTP-API.md
+          - Completion requests: http-api/01-Requests.md
+          - Admission and responses: http-api/02-Admission-and-Responses.md
+          - Backend execution and failures: http-api/03-Backend-and-Failures.md
+          - Model, health, and metrics: http-api/04-Inspection.md
+          - Live router and scheduler state: http-api/05-Live-State.md
+          - SLO and demand accounting: http-api/06-SLO-and-Demand.md
+          - HA handoff and lifecycle: http-api/07-Handoff-and-Lifecycle.md
+      - Telemetry and artifacts:
+          - Overview: Telemetry-and-Artifacts.md
+          - Request journal: telemetry/01-Journal.md
+          - Engine profiles and capacity: telemetry/02-Profiles.md
+          - Metrics and controller state: telemetry/03-Metrics-and-Control.md
+          - Monitoring and engine failures: telemetry/04-Failures.md
+          - Interface versions and compatibility: telemetry/05-Compatibility.md

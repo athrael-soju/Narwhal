@@ -273,7 +273,9 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" --help
         self.assertFalse(private_path("config/engine-launch.example.json"))
 
     def test_documented_gpu_discovery_uses_pci_vendor_on_the_engine_host(self):
-        blocks = re.findall(r"```bash\n(.*?)\n```", (ROOT / "docs/Deploy.md").read_text(), re.S)
+        blocks = re.findall(
+            r"```bash\n(.*?)\n```", (ROOT / "docs/deploy/03-Validate-Engines.md").read_text(), re.S
+        )
         block = next(b for b in blocks if "/sys/bus/pci/devices" in b)
         for vendor, command in (("0x10de", "nvidia-smi"), ("0x1002", "rocminfo"), ("0x1a03", None)):
             with self.subTest(vendor=vendor), tempfile.TemporaryDirectory() as folder:

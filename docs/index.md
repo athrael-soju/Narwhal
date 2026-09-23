@@ -1,30 +1,47 @@
 # Narwhal documentation
 
+Narwhal manages adaptive, disaggregated inference across a role-free fleet. Deployment starts from a management workstation: Narwhal inspects the target hosts, derives their configuration, prepares the remote engines, and verifies routed inference over the private deployment path.
+
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="Narwhal, adaptive disaggregated inference on a role-free fleet">
-  <p class="narwhal-hero__copy"><a href="Deploy.md">Deploy a fleet</a> from a management workstation. Narwhal inspects the hosts to derive configuration, prepares the remote engines, and checks routed inference over the private deployment path.</p>
 </div>
 
-## Deployment and operations
+## Start with the task you need to complete
 
-| Guide                                    | Covers                                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Deploy a fleet](Deploy.md)              | Provision engines and the router, then verify routed inference.                      |
-| [Measure a fleet](Measure.md)            | Choose profiling ranges, calibrate SLOs, and measure the target workload.            |
-| [Set up observability](Observability.md) | Configure Prometheus targets and use the Grafana dashboard.                          |
-| [Operate Narwhal](Operate.md)            | Manage ingress, routers, engines, and upgrades.                                      |
-| [Troubleshoot a fleet](Troubleshoot.md)  | Trace overload, engine failures, and router failures from the first observed signal. |
+| Goal                                                                                        | Guide                                    |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Bring up a new fleet and confirm that requests are routed correctly                         | [Deploy a fleet](Deploy.md)              |
+| Profile the fleet, select measurement ranges, calibrate SLOs, and measure a target workload | [Measure a fleet](Measure.md)            |
+| Export metrics to Prometheus and inspect the fleet in Grafana                               | [Set up observability](Observability.md) |
+| Manage ingress, routers, engines, and software upgrades                                     | [Operate Narwhal](Operate.md)            |
+| Diagnose overload, engine failures, or router failures from the first visible symptom       | [Troubleshoot a fleet](Troubleshoot.md)  |
 
-## Architecture and reference
+For a new deployment, begin with [Deploy a fleet](Deploy.md). Once the fleet is serving routed inference, use [Measure a fleet](Measure.md) to characterize the workload and [Set up observability](Observability.md) to establish operational visibility.
 
-| Reference                                                      | Covers                                                              |
-| -------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [Core concepts](Core-Concepts.md)                              | Engine contracts, request placement, role control, and fleet state. |
-| [Configuration](Configuration.md)                              | Fleet configuration fields, environment inputs, and defaults.       |
-| [CLI reference](CLI-Reference.md)                              | Commands, options, and exit behaviour.                              |
-| [HTTP API reference](HTTP-API.md)                              | Completion, inspection, and lifecycle endpoints.                    |
-| [Telemetry and artifact reference](Telemetry-and-Artifacts.md) | Journals, profiles, metrics, and persisted contract versions.       |
+## Understand and configure the system
 
-## Contributing
+Use these references when you need to understand Narwhal's runtime model, change fleet configuration, or integrate with its interfaces.
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) documents the development environment, local test workflow, and pull request process.
+### System model
+
+[Core concepts](Core-Concepts.md) describes the contracts that govern engines, request placement, role control, and fleet state.
+
+### Fleet configuration
+
+[Configuration](Configuration.md) defines fleet configuration fields, environment inputs, and their defaults.
+
+### Command-line interface
+
+[CLI reference](CLI-Reference.md) documents available commands and options, including command exit behaviour.
+
+### HTTP interfaces
+
+[HTTP API reference](HTTP-API.md) covers completion, inspection, and lifecycle endpoints.
+
+### Runtime data and persisted artifacts
+
+[Telemetry and artifact reference](Telemetry-and-Artifacts.md) documents journals, profiles, metrics, and persisted contract versions.
+
+## Development
+
+To build or modify Narwhal itself, see [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) for development environment setup, the local test workflow, and the pull request process.

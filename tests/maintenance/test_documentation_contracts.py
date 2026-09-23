@@ -31,45 +31,49 @@ def parser_actions(parser):
 class DocumentationContractTests(unittest.TestCase):
     def test_configuration_literal_defaults(self):
         """Backticked JSON defaults agree with their owning configuration fields."""
-        engine = EngineSpec("e0", "http://stub")
-        cfg = FleetConfig(model="stub", engines=[engine], slo=SLO(1, 1))
+        engine = asdict(EngineSpec("e0", "http://stub"))
+        contract = EngineContract().fields()
+        cfg = FleetConfig(model="stub", engines=[EngineSpec("e0", "http://stub")], slo=SLO(1, 1))
         fleet = document(cfg)
         section = ""
         checked = 0
-        for line in (ROOT / "docs/Configuration.md").read_text().splitlines():
-            if line.startswith("## "):
-                section = line
-            match = re.match(r"\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|", line)
-            if match is None:
-                continue
-            field, raw = match.groups()
-            try:
-                expected = json.loads(raw)
-            except ValueError:
-                continue
-            source = fleet
-            if section == "## Engine contract":
-                source = EngineContract().fields()
-            elif section == "## Required fields" and field in asdict(engine):
-                source = asdict(engine)
-            with self.subTest(section=section, field=field):
-                actual = source
-                for part in field.split("."):
-                    actual = actual[part]
-                actual = getattr(actual, "value", actual)
-                self.assertEqual(actual, expected)
-            checked += 1
+        for page in sorted((ROOT / "docs/configuration").glob("*.md")):
+            for line in page.read_text().splitlines():
+                if line.startswith("## "):
+                    section = line
+                match = re.match(r"\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|", line)
+                if match is None:
+                    continue
+                field, raw = match.groups()
+                try:
+                    expected = json.loads(raw)
+                except ValueError:
+                    continue
+                source = fleet
+                if section == "## 2. Minimal fleet definition" and field in engine:
+                    source = engine
+                elif (
+                    section == "## 3. Engine shape and compatibility contract" and field in contract
+                ):
+                    source = contract
+                with self.subTest(page=page.name, section=section, field=field):
+                    actual = source
+                    for part in field.split("."):
+                        actual = actual[part]
+                    actual = getattr(actual, "value", actual)
+                    self.assertEqual(actual, expected)
+                checked += 1
         self.assertGreaterEqual(checked, 85)
 
     def test_cli_tables_name_registered_options_and_literal_defaults(self):
         """Each command table maps to its shipped parser, including subcommands."""
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-        sections = dict(
-            re.findall(
-                r"## `(narwhal-[^`]+)`\n([\s\S]*?)(?=\n## |\Z)",
-                (ROOT / "docs/CLI-Reference.md").read_text(),
-            )
-        )
+        sections = {}
+        for page in (ROOT / "docs/cli").glob("*.md"):
+            content = page.read_text()
+            heading = re.match(r"# `(narwhal-[^`]+)`\n", content)
+            self.assertIsNotNone(heading, page)
+            sections[heading.group(1)] = content
         self.assertEqual(set(sections), set(project["scripts"]))
         for name, entry in project["scripts"].items():
             captured = []
@@ -109,8 +113,8 @@ class DocumentationContractTests(unittest.TestCase):
                         self.assertEqual(actual, expected)
 
     def test_reference_versions_cover_the_contract_registry(self):
-        """Every persisted interface appears with its current schema version."""
-        text = (ROOT / "docs/Telemetry-and-Artifacts.md").read_text()
+        """Every versioned interface appears with its current schema version."""
+        text = (ROOT / "docs/telemetry/05-Compatibility.md").read_text()
         rows = re.findall(r"^\|[^|]+\|\s*`(narwhal\.[^`]+)`\s*\|\s*(\d+)\s*\|", text, re.M)
         self.assertEqual(
             {schema: int(version) for schema, version in rows},

@@ -53,7 +53,7 @@ Follow [Deploy a fleet](docs/Deploy.md) from your management workstation. The gu
 
 - [Architecture and scheduling](docs/Core-Concepts.md)
 - [Fleet configuration](docs/Configuration.md)
-- [API compatibility and limits](docs/HTTP-API.md#response-compatibility)
+- [HTTP API](docs/HTTP-API.md)
 - [Fleet measurement](docs/Measure.md)
 - [Ingress, monitoring and maintenance](docs/Operate.md)
 - [Troubleshooting](docs/Troubleshoot.md)

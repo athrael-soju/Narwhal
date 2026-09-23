@@ -18,7 +18,7 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 class DeploymentHTTPProbeTests(unittest.TestCase):
     def test_attestation_capture_checks_live_identity_and_retains_failure(self):
         root = Path(__file__).resolve().parents[2]
-        guide = (root / "docs/Deploy.md").read_text()
+        guide = (root / "docs/deploy/05-Attest.md").read_text()
         script = guide.split("<<'PY_ATTEST_CHECK'\n", 1)[1].split("\nPY_ATTEST_CHECK", 1)[0]
         document_path = root / "config/engine-attestation.example.json"
         document = AttestationDocument.load(document_path)
@@ -64,10 +64,15 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 ):
                     client.return_value.__enter__.return_value.get.side_effect = responses
                     if passes:
-                        exec(compile(script, "docs/Deploy.md:PY_ATTEST_CHECK", "exec"), {})
+                        exec(
+                            compile(script, "docs/deploy/05-Attest.md:PY_ATTEST_CHECK", "exec"), {}
+                        )
                     else:
                         with self.assertRaises(SystemExit):
-                            exec(compile(script, "docs/Deploy.md:PY_ATTEST_CHECK", "exec"), {})
+                            exec(
+                                compile(script, "docs/deploy/05-Attest.md:PY_ATTEST_CHECK", "exec"),
+                                {},
+                            )
                     if status == 503:
                         fetch.assert_not_called()
                     else:
@@ -82,7 +87,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 )
 
     def test_transfer_mode_capture_uses_resolved_class_and_preserves_evidence(self):
-        guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
+        guide = (Path(__file__).resolve().parents[2] / "docs/deploy/05-Attest.md").read_text()
         script = guide.split("<<'PY_TRANSFER_MODE'\n", 1)[1].split("\nPY_TRANSFER_MODE", 1)[0]
         cases = (
             (["NixlPullConnector"], "pull"),
@@ -123,10 +128,17 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 ):
                     if mode is None:
                         with self.assertRaises(SystemExit):
-                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                            exec(
+                                compile(
+                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
+                                ),
+                                {},
+                            )
                         self.assertFalse((run / "transfer-mode.json").exists())
                     else:
-                        exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                        exec(
+                            compile(script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"), {}
+                        )
                         output = run / "transfer-mode.json"
                         record = json.loads(output.read_text())
                         self.assertEqual(record["transfer_mode"], mode)
@@ -137,12 +149,22 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
                         retained = output.read_bytes()
                         with self.assertRaises(FileExistsError):
-                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                            exec(
+                                compile(
+                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
+                                ),
+                                {},
+                            )
                         self.assertEqual(output.read_bytes(), retained)
                         checked["plan_sha256"] = "0" * 64
                         (run / "checked.json").write_text(json.dumps(checked))
                         with self.assertRaisesRegex(SystemExit, "belonging to this launch plan"):
-                            exec(compile(script, "docs/Deploy.md:PY_TRANSFER_MODE", "exec"), {})
+                            exec(
+                                compile(
+                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
+                                ),
+                                {},
+                            )
                 self.assertEqual(log.read_bytes(), original)
 
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
@@ -186,7 +208,9 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                     self.assertEqual(output.getvalue(), "")
 
     def test_exact_api_version_controls_gate_while_distribution_keeps_build_suffix(self):
-        guide = (Path(__file__).resolve().parents[2] / "docs/Deploy.md").read_text()
+        guide = (
+            Path(__file__).resolve().parents[2] / "docs/deploy/03-Validate-Engines.md"
+        ).read_text()
         script = guide.split("python3 - <<'PY_ENGINE'\n", 1)[1].split("\nPY_ENGINE", 1)[0]
         for api_version in ("0.29.0", "0.29.1", "0.29.0+other"):
             with self.subTest(api_version=api_version), tempfile.TemporaryDirectory() as folder:
@@ -225,12 +249,20 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()),
                 ):
                     if api_version == "0.29.0":
-                        exec(compile(script, "docs/Deploy.md:PY_ENGINE", "exec"), {})
+                        exec(
+                            compile(script, "docs/deploy/03-Validate-Engines.md:PY_ENGINE", "exec"),
+                            {},
+                        )
                         self.assertEqual(request.call_count, 5)
                         self.assertTrue((run / "completion.json").exists())
                     else:
                         with self.assertRaisesRegex(AssertionError, "checked image expects"):
-                            exec(compile(script, "docs/Deploy.md:PY_ENGINE", "exec"), {})
+                            exec(
+                                compile(
+                                    script, "docs/deploy/03-Validate-Engines.md:PY_ENGINE", "exec"
+                                ),
+                                {},
+                            )
                         self.assertEqual(request.call_count, 2)
                         self.assertFalse((run / "models.json").exists())
                 self.assertEqual(
