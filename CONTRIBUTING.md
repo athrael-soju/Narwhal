@@ -35,7 +35,7 @@ The CI jobs use the repository's CPU fixtures and a standard read-only GitHub to
 
 ### Coverage and test scope
 
-Run `make coverage` when line or branch evidence is needed across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts.
+`make coverage` runs the unit suite and CPU drills with package and tool coverage, writing HTML branch annotations, JSON suite contexts, subprocess data, and logs to a new `runs/coverage/run-*` directory. Set `COVERAGE_ARGS='--out runs/coverage/review'` to choose the output path.
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the CPU profiles and fleets in `tests/fixtures.py`.
 

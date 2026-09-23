@@ -44,7 +44,7 @@ Every retry obtains fresh KV ownership.
 
 | Topology             | Role assignment                                               | Cost of changing the split                                                                    |
 | -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Aggregated           | Every engine performs both prefill and decode                 | No explicit reallocation; both phases contend on each engine                                  |
+| Aggregated           | Every engine executes prefill and decode with local KV        | Long prefills occupy the same scheduler as decode batches                                    |
 | Static disaggregated | Separate fixed prefill and decode pools                       | Operator must manually change pool membership                                                 |
 | Adaptive cold-swap   | Engines can move between pools by draining and relaunching    | Capacity is unavailable during drain, restart, weight load, peer registration, and validation |
 | Adaptive hot-swap    | Dual-capability engines form logical prefill and decode pools | Scheduler changes the role label while weights remain resident                                |
@@ -52,8 +52,6 @@ Every retry obtains fresh KV ownership.
 ### Aggregated serving
 
 ![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
-
-Each engine performs prefill and decode with local KV, so long prefills and occupied decode batches compete for its scheduler.
 
 ### Static disaggregation
 
