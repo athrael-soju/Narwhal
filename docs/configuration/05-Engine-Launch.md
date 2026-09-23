@@ -8,7 +8,7 @@ An engine URL points to the running vLLM HTTP service, for example:
 http://10.0.0.11:8000
 ```
 
-It may use an IP address directly. The router must be able to reach the selected address and port.
+An engine URL may use an IP address directly when the router can reach that address and port.
 
 The attestation sidecar has a separate URL, for example:
 
@@ -93,13 +93,9 @@ Discovery creates one launch record per assigned `engine-<n>` role from:
 - image package versions
 - environment-selected launch policy
 
-Each record contains `sources`, identifying the inspection and policy inputs retained for that record.
+Each record identifies its retained inspection and policy inputs under `sources`; `config/engine-launch.sources.json` indexes those references.
 
-`config/engine-launch.sources.json` indexes those source references.
-
-The public schema example is:
-
-[config/engine-launch.example.json](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json)
+The [launch-record example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents allocation, transport, and runtime fields.
 
 To change GPU allocation or runtime policy, change the corresponding `.env` policy input and rerun discovery into a fresh output set.
 
@@ -143,9 +139,9 @@ Launch records and their supporting extracts remain private in ignored mode-0600
 config/engine-launch.*.json
 ```
 
-The public example documents the schema; real allocation and runtime evidence remain private.
+Keep real allocation and runtime evidence in private files.
 
-If preparation finds a bad `.env` input or a missing remote prerequisite, correct the named input, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
+When preparation reports an invalid `.env` input or a missing remote prerequisite, correct the named input, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
 
 ---
 
@@ -161,10 +157,6 @@ Discovery reads:
 - policy from [environment launch policy](../deploy/01-Discover.md#confirm-launch-policy)
 
 Preparation transfers both the launch record and a launcher snapshot to the engine host.
-
-The same public launch-record example documents the runtime schema:
-
-[config/engine-launch.example.json](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json)
 
 | Runtime field       | Operator input                                                                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -203,9 +195,9 @@ When model metadata identifies convolutional SSM transfer state, discovery sets:
 VLLM_SSM_CONV_STATE_LAYOUT=DS
 ```
 
-These derived settings still apply when `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` provides other values.
+The launcher retains these derived settings when `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` supplies additional values.
 
-`extra_args` are validated against supported model options so they cannot override launcher-managed settings.
+The launcher rejects `extra_args` that override launcher-managed settings.
 
 Before model startup, the image check:
 

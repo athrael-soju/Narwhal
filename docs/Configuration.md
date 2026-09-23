@@ -1,8 +1,8 @@
 # Narwhal fleet configuration and deployment reference
 
-Narwhal serves one model from one engine fleet per router process. A second model requires a separate fleet and router; select between models at ingress.
+Each router process serves one model from one engine fleet. Route a second model through a separate fleet and router, with model selection at ingress.
 
-A fleet is described by a JSON document. The same document drives serving, profiling, validation, role control, recovery, and engine compatibility checks. Deployment tooling derives private host-specific inputs from that fleet plus workstation environment data.
+A fleet JSON controls serving, profiling, validation, role control, recovery, and engine compatibility checks. Deployment tooling combines the fleet with workstation environment data to derive private host inputs.
 
 Use the annotated example as the starting point for a new fleet:
 
@@ -10,9 +10,9 @@ Use the annotated example as the starting point for a new fleet:
 .venv/bin/narwhal-check --print-example-config
 ```
 
-`narwhal-serve`, `narwhal-profile`, and `narwhal-check` require the fleet path through `--fleet`. Python callers of `create_app()` may instead select the file with `NARWHAL_FLEET`.
+Pass the fleet path to `narwhal-serve`, `narwhal-profile`, and `narwhal-check` through `--fleet`. Python callers of `create_app()` can select the file with `NARWHAL_FLEET`.
 
-The fleet document declares:
+Fleet files declare their schema identity and version:
 
 ```json
 {
@@ -21,11 +21,13 @@ The fleet document declares:
 }
 ```
 
-Version 1 keeps client identity and content capture outside Narwhal, at ingress. Narwhal owns one global admission budget and measures requests in token counts and durations. Schema validation runs before fleet fields are read.
+Narwhal validates the declared schema and version before reading fleet fields.
 
-The contract-version reference in [Telemetry and Artifacts](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment) defines the complete public interface set.
+In version 1, ingress handles client identity and content capture. Narwhal applies one global admission budget and measures requests in token counts and durations.
 
-## Configuration sections
+Check [interface versions](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment) for the schemas used by the fleet, profiles, and runtime artifacts.
+
+## Fleet and deployment contracts
 
 - [Fleet schema and engine contract](configuration/01-Fleet-Schema.md)
 - [Serving and role control](configuration/02-Serving-and-Role-Control.md)

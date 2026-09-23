@@ -19,7 +19,7 @@ The native fleet document accepts these top-level keys:
 - `recovery`
 - `profiles`
 
-Unknown keys are rejected, except underscore-prefixed annotation fields. Validation accumulates cross-field failures and reports them together.
+The loader accepts the listed keys and underscore-prefixed annotation fields, and reports cross-field validation failures together.
 
 Use JSON-native types:
 
@@ -37,20 +37,13 @@ engine.tokenize must be a boolean; serving.max_connections must be an integer; c
 
 Relative fleet and profile paths resolve from the checkout root when used by the deployment workflow.
 
-At serving time, relative values for:
+`narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` values from its working directory.
 
-- `profiles.path`
-- `recovery.state_path`
-
-resolve from the serving process working directory.
-
-`narwhal-serve --journal` is CLI-only. When omitted, the journal is placed beside `profiles.path` as `journal.jsonl`.
+The `--journal` flag selects a journal path. By default, `narwhal-serve` writes `journal.jsonl` beside `profiles.path`.
 
 ### 1.3 Environment loading
 
-Narwhal reads the process environment directly, without loading `.env`.
-
-The deployment workflow in [Deploy a fleet](../deploy/01-Discover.md#load-the-private-environment) defines how workstation variables are loaded and how role-specific environments are generated for remote commands.
+Narwhal reads variables from the process environment. The [deployment workflow](../deploy/01-Discover.md#load-the-private-environment) loads workstation `.env` and generates role-specific environments for remote commands.
 
 Common variables are:
 
@@ -74,9 +67,9 @@ Engine `url` and `attestation_url` values support environment substitution only 
 }
 ```
 
-A missing or empty referenced variable fails configuration loading and reports both the field path and variable name.
+The loader requires a populated referenced variable and reports the URL field path and variable name when that check fails.
 
-Only complete URL values can be substituted. Shell expressions, default syntax, partial interpolation, and recursive expansion are unsupported. All other JSON fields remain literal.
+The loader expands a complete `${VARIABLE}` reference in an engine URL field and treats other JSON fields literally. It rejects shell expressions, default syntax, partial interpolation, and recursive references in URL fields.
 
 `FleetConfig.save()` writes resolved URLs. Save that output only to an ignored fleet path.
 
@@ -125,9 +118,7 @@ Set TTFT and TPOT targets from measurements taken on the deployed engine shape. 
 
 ## 3. Engine shape and compatibility contract
 
-Production fleets serving client traffic should define a complete `engine_contract`.
-
-Narwhal uses the contract during preflight, lifecycle readmission, restart handling, and live NIXL checks. Before it exercises NIXL against a peer, the router must be able to distinguish a restarted process from a different engine build.
+Define a complete `engine_contract` for production traffic. Preflight, lifecycle readmission, restart handling, and live NIXL checks use it to distinguish a restarted process from a different engine build before peer transfer.
 
 Lifecycle drain and readmission require every contract field. If a required contract value is empty, the engine remains held out with `missing-contract`.
 
@@ -137,14 +128,9 @@ Lifecycle drain and readmission require every contract field. If a required cont
 
 Engine-host inspection in [Deploy](../deploy/03-Validate-Engines.md#inspect-every-engine-host) discovers accelerator vendor and product. Set `hardware.accelerator` to that observed product name.
 
-Both:
+Set `hardware.accelerators_per_engine` and `hardware.tensor_parallel` to positive counts, with tensor parallelism at or below the replica's accelerator allocation.
 
-- `hardware.accelerators_per_engine`
-- `hardware.tensor_parallel`
-
-must be positive. Tensor parallelism cannot exceed the accelerator count assigned to a replica.
-
-The external launcher controls vLLM TP size. Keep `hardware.tensor_parallel` equal to the launch value and `hardware.accelerators_per_engine` equal to the replica's allocated accelerator count.
+The external launcher sets vLLM TP size. Set `hardware.tensor_parallel` to that positive launch value and `hardware.accelerators_per_engine` to the replica's positive allocated accelerator count, with TP at or below the allocation.
 
 Verify the running shape through attestation, profiles, transfer tests, and deployment load.
 
@@ -165,7 +151,7 @@ Verify the running shape through attestation, profiles, transfer tests, and depl
 | `kv_cache_dtype`           | `""`              | KV-cache dtype.                                                                                                                                                                                               |
 | `cross_layers_blocks`      | `null`            | Resolved physical cache-block grouping, `KVCacheLayout.is_block_outermost`, from the pinned layout API. Capture it in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs).                                    |
 | `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager participates in layout.                                                                                                                                                |
-| `connector`                | `"NixlConnector"` | Engine-side connector name. Cannot be empty.                                                                                                                                                                  |
+| `connector`                | `"NixlConnector"` | Engine-side connector name; requires a nonempty string.                                                                                                                                                      |
 | `kv_role`                  | `""`              | Engine-side KV-role semantics, for example `kv_both`.                                                                                                                                                         |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`. Retain resolved class and mode in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs).                                                             |
 | `speculative_config`       | `""`              | Stable speculative-decoding configuration name, or `disabled`.                                                                                                                                                |
@@ -187,11 +173,7 @@ Router finalisation reads the live sidecars, requires complete matching contract
 runs/deployment/fleet.json
 ```
 
-The development/schema example is:
-
-[config/engine-attestation.example.json](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json)
-
-The document declares:
+The [attestation example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares:
 
 ```json
 {
@@ -204,20 +186,10 @@ The document declares:
 
 Run one sidecar beside every contracted engine and configure the engine's `attestation_url`.
 
-At sidecar startup, Narwhal reads:
-
-- `/version`
-- `process_start_time_seconds`
-
-Those process-identity values are added to both `contract` and `sources`, then the complete response is hashed into `attestation_digest`.
+At startup, `narwhal-attest` reads `/version` and `process_start_time_seconds`, adds both values to `contract` and `sources`, then hashes the complete response into `attestation_digest`.
 
 If either identity value changes later, both sidecar routes return HTTP 503.
 
-After an engine process changes:
-
-1. verify the engine HTTP endpoints,
-2. restart the sidecar through its configured process manager.
-
-The new sidecar instance then binds to the new process identity.
+After an engine process changes, verify its HTTP endpoints and restart the sidecar through its configured process manager so the new instance binds to the new process identity.
 
 `narwhal-check` verifies attested fields and process start time before opening the NIXL handshake or running produce/consume probes. A mismatch stops preflight before live KV transfer.

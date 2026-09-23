@@ -80,13 +80,7 @@ Every running engine later verifies its resolved cache layout against its repres
 
 ### 17.2 Retained budget evidence
 
-The representative stores a mode-0600:
-
-```text
-runs/fabric-*/budget.json
-```
-
-containing:
+The representative writes mode-0600 `runs/fabric-*/budget.json` containing:
 
 - input hash
 - runtime-layout hash
@@ -164,7 +158,7 @@ Running-engine KV probes and concurrent-capacity tests provide later acceptance 
 | `--graceful-timeout` | `serving.graceful_timeout_s` | Replaces Uvicorn shutdown drain time.                  |
 | `--resume`           | `recovery.resume`            | Forces resume on. A configured `true` remains enabled. |
 
-The following are CLI-only and have no fleet-config equivalent:
+Configure the bind address, port, log level, journal path, and warm standby through CLI flags:
 
 - `--host`
 - `--port`
@@ -178,21 +172,7 @@ The [CLI reference](../CLI-Reference.md) defines their defaults and validation.
 
 ## 19. Request journal
 
-Narwhal writes request timing records to:
-
-```text
-journal.jsonl
-```
-
-beside `profiles.path`.
-
-Use:
-
-```text
-narwhal-serve --journal
-```
-
-to select another path.
+Narwhal writes request timing records to `journal.jsonl` beside `profiles.path`. Use `narwhal-serve --journal PATH` to select another path.
 
 The [request-journal reference](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) defines the record format.
 
@@ -211,7 +191,7 @@ Live fleet files belong under:
 - ignored `runs/`
 - a gitignored `config/fleet.*.json` path
 
-Do not publish real host allocations, deployment credentials, runtime evidence, or private launch records.
+Keep real host allocations, deployment credentials, runtime evidence, and launch records in ignored private paths.
 
 ---
 

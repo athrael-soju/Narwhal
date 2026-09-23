@@ -2,9 +2,7 @@
 
 ## 4. Request admission and bounded serving
 
-Narwhal can operate with direct dispatch or with bounded admission waiting, per-phase concurrency limits, and retries.
-
-Without bounded-serving settings, admitted work is sent directly to phase dispatch and each request receives one prefill/decode attempt.
+By default, Narwhal dispatches admitted requests directly with one prefill and decode attempt. Bounded-serving settings add admission waiting, per-phase concurrency limits, and retries.
 
 ### 4.1 Global admission
 
@@ -19,11 +17,11 @@ Predictive admission returns HTTP 429 when the least expensive prefill path exce
 
 Backlog-driven refusals include `Retry-After` with the projected wait.
 
-If a prompt cannot meet TTFT even with no backlog, Narwhal returns an error envelope directing the caller to shorten the prompt or increase the TTFT target.
+For a prompt whose projected TTFT exceeds the target at zero backlog, Narwhal returns an error envelope directing the caller to shorten the prompt or increase the TTFT target.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
-The loader rejects any admission override above `serving.max_connections`, because admission beyond the dispatch pool would otherwise be possible.
+The loader rejects admission overrides above `serving.max_connections`, keeping admission within the dispatch pool.
 
 ### 4.2 Waiting, phase concurrency, and retries
 
@@ -173,17 +171,15 @@ the overall request deadline becomes the only stream bound.
 
 Breaker verification applies `engine.first_token_timeout_s` independently to each complete prefill and decode verification leg.
 
-`engine.chars_per_token` feeds the quadratic prefill estimate when exact tokenisation is unavailable. Profile this ratio for every dialect that can fall back to character-based estimation.
+`engine.chars_per_token` feeds the quadratic prefill estimate during character-based fallback. Profile this ratio for every dialect that uses that fallback.
 
 ---
 
 ## 7. Role control
 
-The controller can operate in advisory mode or apply role movements directly.
-
 | Field                                       | Default | Meaning                                                                                                                                   |
 | ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `controller.advisory`                       | `false` | Records proposed role splits and reasons without changing roles.                                                                          |
+| `controller.advisory`                       | `false` | Records proposed role splits and reasons while retaining the current roles.                                                             |
 | `controller.monitor_interval_s`             | `1.0`   | Delay between monitor passes. Positive.                                                                                                   |
 | `controller.monitor_failure_limit`          | `5`     | Consecutive passes with any monitoring-stage failure before degraded state stops new admission. At least 1.                               |
 | `controller.min_prefill`                    | `1`     | Minimum live prefill engines preserved by controller moves. At least 1.                                                                   |
@@ -197,7 +193,7 @@ The controller can operate in advisory mode or apply role movements directly.
 | `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a D-to-P candidate. `0` disables the guard.                                                    |
 | `controller.flip_history`                   | `1000`  | Maximum retained role-change records exposed by `/narwhal/state`. At least 1.                                                             |
 
-`recovery.health.min_samples` cannot exceed:
+Set `recovery.health.min_samples` at or below:
 
 ```text
 floor(recovery.health.window_s / controller.monitor_interval_s)
@@ -324,7 +320,7 @@ A first-token timeout or prefill-to-decode recovery move resets the consolidatio
 
 Moves toward decode, including emergency floor restoration, may proceed while evidence is still accumulating.
 
-Predictive admission refusals contribute to offered demand and attainment misses without resetting the evidence window.
+Predictive admission refusals count toward offered demand and attainment misses while the evidence window continues accumulating.
 
 State and metrics expose:
 
@@ -343,8 +339,8 @@ State and metrics expose:
 | `controller.reactive.demand_floor`                  | `0.5`   | Minimum accepted demand signal. Positive.                                                                                                                                    |
 | `controller.reactive.movement_margin`               | `0.05`  | Required reduction in worst projected SLO ratio before movement. Range `[0, 1)`.                                                                                             |
 | `controller.reactive.step_s`                        | `5.0`   | Minimum interval between scheduled adjacent-split evaluations. A projected prefill TTFT breach may trigger one guarded D-to-P evaluation between scheduled passes. Positive. |
-| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for D-to-P consolidation and short horizon for the rising-demand test. Positive and no greater than `evidence_max_span_s`.              |
-| `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic. Positive, at least `evidence_span_s`, and no greater than `window_s`.                                                        |
+| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for D-to-P consolidation and short horizon for the rising-demand test. Positive and at most `evidence_max_span_s`.                        |
+| `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic. Positive, at least `evidence_span_s`, and at most `window_s`.                                                                  |
 | `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before D-to-P consolidation. At least 1.                                                                                            |
 | `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand. Finite and nonnegative.                                                                                 |
 | `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on live/profile decode correction. Positive.                                                                                                                     |

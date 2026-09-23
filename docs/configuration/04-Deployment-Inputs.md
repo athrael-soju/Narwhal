@@ -2,10 +2,7 @@
 
 ## 12. Deployment inputs and generated artifacts
 
-Deployment discovery derives the host inventory, SSH trust store, fleet, launch records, and source index from:
-
-- the supplied `.env`
-- remote inspection
+Deployment discovery derives the host inventory, SSH trust store, fleet, launch records, and source index from the supplied `.env` and remote inspection.
 
 [Launch policy](../deploy/01-Discover.md#confirm-launch-policy) defines defaults and environment overrides.
 
@@ -28,10 +25,7 @@ runs/discovery/<run>/
 
 The same directory retains observations and command logs.
 
-Reuse saved inputs only after loading both:
-
-- `.env`
-- `config/deployment.env`
+Load `.env` and `config/deployment.env` before reusing saved discovery inputs.
 
 Engine inspection in [Deploy](../deploy/03-Validate-Engines.md#inspect-every-engine-host) checks current host, image, and model configuration before launch.
 
@@ -57,13 +51,7 @@ Prepare deployment inputs with:
 python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 ```
 
-`prepare` packages the selected revision as:
-
-```text
-source.bundle
-```
-
-and verifies it by cloning the bundle locally into a fresh checkout.
+`prepare` packages the selected revision as `source.bundle`, then verifies it by cloning the bundle into a fresh local checkout.
 
 `install` copies that bundle to each selected host. Each remote checkout clones from it and verifies the checkout revision against the role file before installation.
 
@@ -130,7 +118,7 @@ An empty override for a required field is an error against that field.
 
 Fleet endpoint references and engine API-key references select variables by name.
 
-Variables whose names contain `SSH`, plus access variables referenced by the host inventory, are rejected from role export. Other values come from the explicit role field set.
+The explicit role field set supplies export values. Variable names containing `SSH` and access variables referenced by the host inventory trigger a role-export error.
 
 Management destinations, passwords, SSH identities, and host keys remain in the workstation's private access files.
 
@@ -194,11 +182,7 @@ The `router` role appears once. Engine roles are named `engine-<n>` and map to t
 
 Colocated roles belong to one host entry.
 
-The example inventory is:
-
-[config/hosts.example.json](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json)
-
-It assigns `router` and `engine-1` to one machine and `engine-2` to another.
+The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.
 
 Keep destination values and credentials in workstation `.env`; the inventory stores variable names only.
 

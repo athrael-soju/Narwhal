@@ -56,7 +56,7 @@ Client latency, controller pressure, request deadlines, and liveness checks cont
 
 The peer-relative test suppresses ejection during fleet-wide slowdowns.
 
-A nonempty window that closes without enough samples is marked `undersampled`. Its residuals are discarded, while the baseline and probation state continue into the next window.
+A window with at least one observation and fewer than `recovery.health.min_samples` closes as `undersampled`. Narwhal discards its residuals and carries the baseline and probation state into the next window.
 
 `/narwhal/state` and `narwhal_health_windows_*_total` report scored and undersampled windows.
 
@@ -103,7 +103,7 @@ Contracted resume and automatic takeover require:
 
 An unknown handoff schema or version aborts startup.
 
-If a handoff is schema-valid but cannot be applied to a contracted fleet, the fleet remains held for a managed wave.
+When a schema-valid handoff fails the contracted fleet's resume checks, Narwhal holds the fleet for a managed wave.
 
 Successful resume restores:
 
@@ -177,7 +177,7 @@ The `profiles` object selects the profile store and decode-fit acceptance limits
 
 | Field                          | Default | Meaning                                                                                                                   |
 | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `profiles.max_decode_fit_mape` | `0.05`  | Maximum accepted in-sample decode-fit error. Positive, finite, and no greater than `controller.reactive.movement_margin`. |
+| `profiles.max_decode_fit_mape` | `0.05`  | Maximum accepted in-sample decode-fit error. Positive, finite, and at most `controller.reactive.movement_margin`.            |
 | `profiles.max_decode_cv_mape`  | `0.13`  | Maximum accepted leave-one-out cross-validation error. Positive and finite.                                               |
 
 The default decode-fit limit equals the default movement margin.
