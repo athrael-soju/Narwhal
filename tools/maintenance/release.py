@@ -9,6 +9,8 @@ import os
 import re
 import subprocess
 import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REPOSITORY = "athrael-soju/Narwhal"
@@ -142,6 +144,31 @@ def verify_assets(assets: list[dict], files: dict[str, Path]) -> set[str]:
     return existing
 
 
+def pypi_status(root: Path, dist: Path) -> str:
+    """Return whether PyPI has the exact wheel and source archive for this release."""
+    value = validate(root)
+    files = {path.name: path for path in dist.iterdir() if path.is_file()}
+    expected = {f"narwhal_inference-{value}-py3-none-any.whl", f"narwhal_inference-{value}.tar.gz"}
+    if set(files) != expected:
+        raise ValueError("Expected exactly the versioned wheel and source archive")
+    url = f"https://pypi.org/pypi/narwhal-inference/{value}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            release = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return "missing"
+        raise
+    uploaded = {file["filename"]: file for file in release["urls"]}
+    if not set(uploaded) <= expected or any(
+        uploaded[name]["digests"]["sha256"] != hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in files.items()
+        if name in uploaded
+    ):
+        raise ValueError(f"PyPI version {value} contains different distribution files")
+    return "matching" if set(uploaded) == expected else "partial"
+
+
 def release_by_tag(tag: str) -> dict | None:
     pages = json.loads(
         command("gh", "api", "--paginate", "--slurp", f"repos/{REPOSITORY}/releases")
@@ -233,7 +260,7 @@ def check_title(title: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["check", "candidate", "publish", "title"])
+    parser.add_argument("action", choices=["check", "candidate", "publish", "pypi-status", "title"])
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--tag")
     parser.add_argument("--dist", type=Path, default=Path("dist"))
@@ -251,6 +278,11 @@ def main() -> None:
                 output.write(f"release={'true' if selected else 'false'}\n")
                 if selected:
                     output.write(f"version={selected[0]}\n")
+        elif args.action == "pypi-status":
+            status = pypi_status(root, args.dist)
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                output.write(f"status={status}\n")
+            print(f"PyPI release status: {status}")
         else:
             publish(root, args.dist)
     except (ValueError, subprocess.CalledProcessError) as error:

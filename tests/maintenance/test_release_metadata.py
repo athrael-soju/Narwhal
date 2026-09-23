@@ -1,7 +1,11 @@
 """Keep package and citation versions aligned for release preparation."""
 
+import hashlib
+import io
+import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +15,7 @@ from tools.maintenance.release import (
     REPOSITORY,
     api,
     candidate,
+    pypi_status,
     release_by_tag,
     release_pr,
     version,
@@ -18,6 +23,60 @@ from tools.maintenance.release import (
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_pypi_status_accepts_only_identical_distributions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / "dist"
+            dist.mkdir()
+            wheel = dist / "narwhal_inference-0.3.0-py3-none-any.whl"
+            source = dist / "narwhal_inference-0.3.0.tar.gz"
+            wheel.write_bytes(b"wheel")
+            source.write_bytes(b"source")
+            files = [
+                {
+                    "filename": path.name,
+                    "digests": {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+                }
+                for path in (wheel, source)
+            ]
+            with mock.patch("tools.maintenance.release.validate", return_value="0.3.0"):
+                with mock.patch(
+                    "tools.maintenance.release.urllib.request.urlopen",
+                    return_value=io.BytesIO(json.dumps({"urls": files}).encode()),
+                ):
+                    self.assertEqual(pypi_status(root, dist), "matching")
+                with mock.patch(
+                    "tools.maintenance.release.urllib.request.urlopen",
+                    return_value=io.BytesIO(json.dumps({"urls": files[:1]}).encode()),
+                ):
+                    self.assertEqual(pypi_status(root, dist), "partial")
+                files[0]["digests"]["sha256"] = "0" * 64
+                with (
+                    mock.patch(
+                        "tools.maintenance.release.urllib.request.urlopen",
+                        return_value=io.BytesIO(json.dumps({"urls": files}).encode()),
+                    ),
+                    self.assertRaisesRegex(ValueError, "different distribution files"),
+                ):
+                    pypi_status(root, dist)
+
+    def test_pypi_status_allows_a_new_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / "dist"
+            dist.mkdir()
+            for name in (
+                "narwhal_inference-0.3.0-py3-none-any.whl",
+                "narwhal_inference-0.3.0.tar.gz",
+            ):
+                (dist / name).write_bytes(b"artifact")
+            missing = urllib.error.HTTPError("https://pypi.org/", 404, "Not Found", {}, None)
+            with (
+                mock.patch("tools.maintenance.release.validate", return_value="0.3.0"),
+                mock.patch("tools.maintenance.release.urllib.request.urlopen", side_effect=missing),
+            ):
+                self.assertEqual(pypi_status(root, dist), "missing")
+
     def test_published_release_is_found_in_release_list(self):
         published = {"tag_name": "v0.1.0", "draft": False, "assets": []}
         with mock.patch(

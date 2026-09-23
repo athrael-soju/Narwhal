@@ -44,6 +44,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Install from PyPI: Install-from-PyPI.md
   - Deploy a fleet:
       - Overview: Deploy.md
       - A. Discover the fleet: deploy/01-Discover.md
