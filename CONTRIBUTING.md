@@ -124,7 +124,7 @@ Update the docs when a config field, route, journal field, metric, CLI flag or o
 
 Configure the `narwhal-inference` project on PyPI with a GitHub trusted publisher: owner `athrael-soju`, repository `Narwhal`, workflow `release.yml`, and environment `pypi`. The release job requests an OIDC token after the GitHub release artifacts pass the package and installed-wheel checks. Its PyPI check compares both artifact hashes before a retry; an existing version with different bytes stops the release.
 
-Check the latest PyPI version before preparing a release. When PyPI already has the version release-please would choose, set a higher version with a single `Release-As` footer in the preceding squash commit. Check that the generated release PR agrees on the package, citation, manifest and changelog versions before merge. The release workflow publishes the reviewed wheel and source archive to GitHub and PyPI after that release PR is merged.
+Check the latest PyPI version before preparing a release. When the target differs from the conventional commit bump, set it with a single `Release-As` footer in the preceding squash commit. Check that the generated release PR agrees on the package, citation, manifest and changelog versions before merge. The release workflow publishes the reviewed wheel and source archive to GitHub and PyPI after that release PR is merged.
 
 ## Documentation publishing
 
