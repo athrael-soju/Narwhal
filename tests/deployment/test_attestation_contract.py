@@ -409,7 +409,7 @@ class AttestationContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "fleet.local.json"
-            raw = json.loads((ROOT / "config/fleet.stub.json").read_text())
+            raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
             identity = EngineIdentity(contract.vllm_version, 100.0)
@@ -440,7 +440,7 @@ class AttestationContractTests(unittest.TestCase):
     def test_router_finalization_requires_all_live_sidecars_to_agree(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "fleet.local.json"
-            raw = json.loads((ROOT / "config/fleet.stub.json").read_text())
+            raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
             identity = EngineIdentity(contract.vllm_version, 100.0)

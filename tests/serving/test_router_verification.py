@@ -156,13 +156,13 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         """Rejected and expired requests leave the queue before returning 429 and 504."""
         with patch.object(self.router, "max_concurrent", 0):
             response = await self.router.serve(
-                "/v1/completions", {"model": "stub", "prompt": "x"}, {}
+                "/v1/completions", {"model": self.cfg.model, "prompt": "x"}, {}
             )
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["retry-after"], "1")
         with patch.object(self.router.admission_queue, "acquire", side_effect=QueueExpired()):
             response = await self.router.serve(
-                "/v1/completions", {"model": "stub", "prompt": "x"}, {}
+                "/v1/completions", {"model": self.cfg.model, "prompt": "x"}, {}
             )
         self.assertEqual(response.status_code, 504)
         self.assertFalse(self.router.monitor.waiting)
@@ -181,7 +181,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.router.admission_queue, "acquire", side_effect=QueueExpired()),
         ):
             response = await self.router.serve(
-                "/v1/completions", {"model": "stub", "prompt": "x"}, {}
+                "/v1/completions", {"model": self.cfg.model, "prompt": "x"}, {}
             )
         self.assertEqual(response.status_code, 504)
         note.assert_called_once()
@@ -196,7 +196,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             ),
             self.assertRaisesRegex(ValueError, "queue failed"),
         ):
-            await self.router.serve("/v1/completions", {"model": "stub", "prompt": "x"}, {})
+            await self.router.serve("/v1/completions", {"model": self.cfg.model, "prompt": "x"}, {})
         self.assertFalse(self.router.monitor.waiting)
         self.assertEqual(self.router.inflight, 0)
         self.assertEqual(self.router.failed, 1)

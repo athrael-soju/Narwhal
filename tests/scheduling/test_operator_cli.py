@@ -29,5 +29,5 @@ class OperatorCliTests(unittest.TestCase):
                     redirect_stderr(io.StringIO()),
                     self.assertRaises(SystemExit),
                 ):
-                    probe.main(["--fleet", str(ROOT / "config/fleet.stub.json"), *options])
+                    probe.main(["--fleet", str(ROOT / "tests/data/fleet.json"), *options])
             run.assert_not_awaited()

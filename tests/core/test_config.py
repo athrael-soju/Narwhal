@@ -20,13 +20,13 @@ from tests.fixtures import ROOT
 
 
 class ConfigTests(unittest.TestCase):
-    """Each invalid field is checked against an otherwise valid stub configuration."""
+    """Each invalid field is checked against a valid fleet configuration."""
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.path = Path(folder.name) / "fleet.json"
-        self.raw = json.loads((ROOT / "config/fleet.stub.json").read_text())
+        self.raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
 
     def load(self, raw):
         """Write one candidate config through the public loader."""
@@ -44,7 +44,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_save_load_preserves_effective_configuration(self):
         """Serialization preserves policies, optional fields and credential references."""
-        for source in ("config/fleet.stub.json", "config/fleet.example.json"):
+        for source in ("tests/data/fleet.json", "config/fleet.example.json"):
             with self.subTest(source=source):
                 cfg = FleetConfig.load(ROOT / source)
                 cfg.serving = ServingPolicy(max_attempts=2, handoff_timeout_s=5)
@@ -394,8 +394,8 @@ class ConfigTests(unittest.TestCase):
     def test_check_cli_uses_native_fleet_config(self):
         """Preflight loads the native fleet document and rejects retired source selectors."""
         with patch.object(check, "run", new=AsyncMock(return_value=0)) as run:
-            self.assertEqual(check.main(["--fleet", str(ROOT / "config/fleet.stub.json")]), 0)
-        self.assertEqual(run.await_args.args[0].model, "stub")
+            self.assertEqual(check.main(["--fleet", str(ROOT / "tests/data/fleet.json")]), 0)
+        self.assertEqual(run.await_args.args[0].model, "test-model")
 
         for option in ("--preset", "--from-fleet-json", "--write"):
             with (

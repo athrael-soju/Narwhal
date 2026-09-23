@@ -68,7 +68,7 @@ jobs:
           python "$source_root/tools/maintenance/check_installed.py" \
             --expected-version "$EXPECTED_VERSION" --source-root "$source_root"
 
-      - name: Build docs and run tests from the source distribution
+      - name: Build docs and run unit tests from the source distribution
         if: matrix.python == '3.12'
         run: |
           archive_dir=$(mktemp -d)
