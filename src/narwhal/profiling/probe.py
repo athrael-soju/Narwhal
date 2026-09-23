@@ -260,11 +260,6 @@ async def _one_decode_stream(
                 ids = token_ids(choices)
                 if ids is None:
                     raise RuntimeError("decode probe SSE event lacks exact token IDs")
-                if len(ids) > 1:
-                    raise RuntimeError(
-                        f"decode probe received {len(ids)} token IDs in one SSE event; "
-                        "individual token intervals cannot be recovered"
-                    )
                 if any(choice.get("finish_reason") is not None for choice in choices):
                     if choices[0]["finish_reason"] != "length":
                         raise RuntimeError("decode probe stopped before its forced token limit")
@@ -273,23 +268,26 @@ async def _one_decode_stream(
                     finished = True
                 if not ids:
                     continue
-                if mine >= tokens:
+                if mine + len(ids) > tokens:
                     raise RuntimeError("decode probe exceeded its forced token limit")
                 now = time.monotonic()
                 if mine == 0:
                     state["resident"] += input_len
                     state["requests"] += 1
                     state["epoch"] += 1
-                mine += 1
-                state["resident"] += 1
+                mine += len(ids)
+                state["resident"] += len(ids)
                 if (
-                    last is not None
+                    len(ids) == 1
+                    and last is not None
                     and last_epoch == state["epoch"]
                     and state["requests"] == state["cohort"]
                     and now > last
                 ):
                     samples.append((float(state["requests"]), float(state["resident"]), now - last))
-                last = now
+                # vLLM can bundle final token IDs even with stream_interval=1.
+                # Keep exact token counts, but discard gaps around that event.
+                last = now if len(ids) == 1 else None
                 last_epoch = state["epoch"]
         if not done or not finished or mine != tokens:
             raise RuntimeError(

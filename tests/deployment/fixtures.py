@@ -64,6 +64,7 @@ def launcher_inputs(root):
             ROOT / "tools/deployment/cache_capture_hook.py"
         ),
         "NARWHAL_ENGINE_PORT": "8000",
+        "NARWHAL_ATTEST_PORT": "8010",
         "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600",
         "NARWHAL_UCX_TCP_PORT_RANGE": "39000-39999",
         "NARWHAL_NODE_1_IP": "192.0.2.11",

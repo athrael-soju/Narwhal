@@ -17,6 +17,13 @@ class EngineLaunchTests(unittest.TestCase):
         )
         self.assertEqual(record["vllm_args"], ["--tensor-parallel-size", "2"])
         self.assertEqual(record["transfer"]["devices"], [])
+        self.assertEqual(record["transfer"]["gpu_tls"], "rocm")
+
+    def test_gpu_transport_matches_runtime(self):
+        document = launch_document()
+        document["engines"]["engine-1"]["transfer"]["gpu_tls"] = "cuda_copy"
+        with self.assertRaisesRegex(ValueError, "gpu_tls is incompatible"):
+            selected_launch(document, "engine-1", {"NARWHAL_FABRIC_INTERFACE": "fabric0"})
 
     def test_allocation_rejects_duplicate_devices_and_tp_overallocation(self):
         for changes in (
@@ -36,7 +43,10 @@ class EngineLaunchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RDMA device mappings"):
             selected_launch(document, "engine-1", {})
         transfer["devices"] = ["/dev/infiniband/rdma_cm", "/dev/infiniband/uverbs0"]
-        self.assertEqual(selected_launch(document, "engine-1", {})["transfer"], transfer)
+        self.assertEqual(
+            selected_launch(document, "engine-1", {})["transfer"],
+            {**transfer, "gpu_tls": "rocm"},
+        )
 
     def test_management_variable_cannot_be_resolved_into_launch_record(self):
         document = launch_document()

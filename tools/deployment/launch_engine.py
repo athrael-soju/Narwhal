@@ -7,10 +7,14 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 VALUE_OPTIONS = {
     "--max-model-len",
@@ -152,15 +156,28 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
     side_port = int(env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"])
-    if any(not 1 <= p <= 65535 for p in (port, side_port)) or port == side_port:
-        raise ValueError("engine and NIXL ports must be distinct valid TCP ports")
+    attest_port = int(env["NARWHAL_ATTEST_PORT"])
+    if (
+        any(not 1 <= p <= 65535 for p in (port, side_port, attest_port))
+        or len({port, side_port, attest_port}) != 3
+    ):
+        raise ValueError("engine, attestation and NIXL ports must be distinct valid TCP ports")
     source = env[f"NARWHAL_NODE_{node}_IP"]
     endpoint = urlsplit(env[f"NARWHAL_NODE_{node}_URL"])
     if endpoint.scheme != "http" or endpoint.port != port or not endpoint.hostname:
         raise ValueError("the engine URL must select HTTP and NARWHAL_ENGINE_PORT")
     values = dict(runtime.get("environment", {}))
     values.update(record["environment"])
-    gpu_transport = "rocm" if record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES" else "cuda"
+    gpu_transport = record["transfer"].get(
+        "gpu_tls", "rocm" if record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES" else "cuda"
+    )
+    allowed_gpu_tls = (
+        {"rocm"}
+        if record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES"
+        else {"cuda", "cuda_copy"}
+    )
+    if gpu_transport not in allowed_gpu_tls:
+        raise ValueError(f"{role}: transfer.gpu_tls is incompatible with the GPU runtime")
     net_transport = "tcp" if record["transfer"]["transport"] == "ucx_tcp" else "rc"
     values.update(
         {
@@ -233,6 +250,23 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         json.dumps(connector),
         *runtime.get("extra_args", []),
     ]
+    shared = record.get("shared_device")
+    if shared is not None:
+        if (
+            record["gpu_visibility_env"] != "CUDA_VISIBLE_DEVICES"
+            or len(record["gpu_ids"]) != 1
+            or record["tensor_parallel_size"] != 1
+        ):
+            raise ValueError(f"{role}: shared allocation requires one CUDA GPU and TP=1")
+        memory_args = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
+        if len(memory_args) != 1 or memory_args[0] + 1 >= len(args):
+            raise ValueError(f"{role}: shared GPU launch requires one vLLM memory setting")
+        try:
+            budget_matches = float(args[memory_args[0] + 1]) == shared["gpu_memory_utilization"]
+        except (ValueError, TypeError):
+            budget_matches = False
+        if not budget_matches:
+            raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
     return {
         "role": role,
         "image": image,
@@ -243,6 +277,10 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         "connector": connector,
         "expected_packages": runtime["expected_packages"],
         "endpoint": endpoint.geturl(),
+        "attestation_port": attest_port,
+        "side_channel_port": side_port,
+        "ucx_tls": values["UCX_TLS"],
+        **({"shared_device": shared} if shared is not None else {}),
         "revision": env["NARWHAL_DEPLOYMENT_REVISION"],
     }, values
 
@@ -280,7 +318,7 @@ def prepare(output: Path, env: dict[str, str]) -> None:
     print(f"Prepared {record['role']}; review launch.json and run the image check.")
 
 
-def docker(command: list[str], run: Path, log: str) -> str:
+def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
     result = subprocess.run(["docker", *command], capture_output=True, text=True)
     with (run / log).open("a") as output:
         output.write(
@@ -289,7 +327,7 @@ def docker(command: list[str], run: Path, log: str) -> str:
         output.write(result.stdout + result.stderr)
     if result.returncode:
         raise ValueError(f"Docker command failed; inspect {log}")
-    return result.stdout.strip()
+    return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
 
 def load(run: Path) -> dict:
@@ -804,6 +842,155 @@ def start(run: Path, plan: dict) -> None:
     print("Container started; follow its logs and verify the HTTP endpoints.")
 
 
+def gpu_memory(gpu_uuid: str) -> dict[str, int]:
+    """Read live device pressure before advancing a shared-GPU startup."""
+    executable = shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
+    result = subprocess.run(
+        [
+            executable,
+            "--query-gpu=uuid,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode:
+        raise ValueError(f"GPU memory inspection failed: {result.stderr.strip()}")
+    for line in result.stdout.splitlines():
+        fields = [item.strip() for item in line.split(",")]
+        if len(fields) == 3 and fields[0] == gpu_uuid:
+            used, total = map(int, fields[1:])
+            if not 0 <= used <= total or total == 0:
+                break
+            return {"used_mib": used, "total_mib": total}
+    raise ValueError(f"GPU memory inspection did not find usable device {gpu_uuid}")
+
+
+def validate_shared_runs(runs: list[Path]) -> list[tuple[Path, dict]]:
+    """Check a complete colocated startup before creating its first container."""
+    if not 2 <= len(runs) <= 8 or len(set(runs)) != len(runs):
+        raise ValueError("shared GPU start requires two to eight distinct launch directories")
+    selected = [(run, load(run)) for run in runs]
+    group = selected[0][1].get("shared_device")
+    if not group:
+        raise ValueError("shared GPU start requires a declared device allocation")
+    allowance = Decimal(str(group["device_allowance"]))
+    total = Decimal(0)
+    ports: dict[int, str] = {}
+    roles: set[str] = set()
+    for run, plan in selected:
+        require_checked(run, plan)
+        shared = plan.get("shared_device")
+        if not shared or any(
+            shared[key] != group[key] for key in ("group", "gpu_uuid", "device_allowance")
+        ):
+            raise ValueError(f"{plan['role']}: shared GPU identity or allowance differs")
+        role = plan["role"]
+        if role in roles:
+            raise ValueError(f"{role}: duplicate engine role in shared GPU start")
+        roles.add(role)
+        total += Decimal(str(shared["gpu_memory_utilization"]))
+        for label, port in (
+            ("engine", urlsplit(plan["endpoint"]).port),
+            ("attestation", plan["attestation_port"]),
+            ("NIXL", plan["side_channel_port"]),
+        ):
+            if port in ports:
+                raise ValueError(f"{role} {label} port {port} collides with {ports[port]}")
+            ports[port] = f"{role} {label}"
+        if (run / "shared-start.json").exists() or (run / "container.id").exists():
+            raise ValueError(f"{role}: launch directory already has a startup record or container")
+    if total > allowance:
+        raise ValueError(f"shared GPU budgets total {total} above allowance {allowance}")
+    return selected
+
+
+def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
+    deadline = time.monotonic() + seconds
+    url = plan["endpoint"].rstrip("/") + "/health"
+    while time.monotonic() < deadline:
+        state = json.loads(
+            docker(["inspect", "--format", "{{json .State}}", cid], run, "launch.log")
+        )
+        if not state.get("Running"):
+            logs = docker(["logs", "--tail", "80", cid], run, "launch.log", include_stderr=True)
+            raise ValueError(
+                f"{plan['role']}: container exited {state.get('ExitCode')}: {logs[-2000:]}"
+            )
+        try:
+            with urlopen(url, timeout=2) as response:
+                if response.status == 200:
+                    return
+        except (OSError, ValueError):
+            pass
+        time.sleep(2)
+    raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
+
+
+def start_shared(runs: list[Path], ready_seconds: int) -> None:
+    selected = validate_shared_runs(runs)
+    gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
+    for run, plan in selected:
+        role = plan["role"]
+        shared = plan["shared_device"]
+        before = gpu_memory(gpu_uuid)
+        budget_mib = Decimal(str(shared["gpu_memory_utilization"])) * before["total_mib"]
+        record = {
+            "role": role,
+            "shared_device": shared,
+            "ucx_tls": plan["ucx_tls"],
+            "plan_sha256": digest(run / "launch.json"),
+            "gpu_before": before,
+            "budget_mib": float(budget_mib),
+        }
+        try:
+            if Decimal(before["total_mib"] - before["used_mib"]) < budget_mib:
+                raise ValueError(
+                    f"{role}: free GPU memory is below its {budget_mib} MiB allocation"
+                )
+            start(run, plan)
+            cid = (run / "container.id").read_text().strip()
+            wait_ready(run, plan, cid, ready_seconds)
+            state = json.loads(
+                docker(["inspect", "--format", "{{json .State}}", cid], run, "launch.log")
+            )
+            command = json.loads(
+                docker(["inspect", "--format", "{{json .Config.Cmd}}", cid], run, "launch.log")
+            )
+            image_id = docker(["inspect", "--format", "{{.Image}}", cid], run, "launch.log")
+            checked = json.loads((run / "checked.json").read_text())
+            if (
+                not state.get("Running")
+                or type(state.get("Pid")) is not int
+                or state["Pid"] < 1
+                or command != plan["args"]
+                or image_id != checked["image_id"]
+            ):
+                raise ValueError(f"{role}: live process, image or arguments differ from plan")
+            record.update(
+                status="running",
+                container_id=cid,
+                process_id=state["Pid"],
+                image_id=image_id,
+                vllm_args=command,
+                gpu_after=gpu_memory(gpu_uuid),
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            record.update(status="failed", error=str(error))
+            try:
+                record["gpu_after"] = gpu_memory(gpu_uuid)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as inspection_error:
+                record["gpu_after_error"] = str(inspection_error)
+            write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+            raise ValueError(
+                f"{role}: shared GPU start failed at {before['used_mib']}/"
+                f"{before['total_mib']} MiB used, {budget_mib} MiB budget: {error}"
+            ) from error
+        write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+        print(f"{role}: ready on {gpu_uuid}; {record['gpu_after']['used_mib']} MiB used")
+
+
 def capture_cache(run: Path, plan: dict) -> None:
     """Retain the cache pages emitted by this live serving process."""
     require_checked(run, plan)
@@ -867,11 +1054,18 @@ def main(argv: list[str] | None = None) -> int:
     source = registration.add_mutually_exclusive_group(required=True)
     source.add_argument("--startup-log", type=Path)
     source.add_argument("--runtime-layout", type=Path)
+    shared = sub.add_parser("start-shared")
+    shared.add_argument("--run", type=Path, action="append", required=True)
+    shared.add_argument("--ready-seconds", type=int, default=180)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
         if args.command == "prepare":
             prepare(args.out, dict(os.environ))
+        elif args.command == "start-shared":
+            if args.ready_seconds < 1:
+                raise ValueError("--ready-seconds must be positive")
+            start_shared([run.resolve() for run in args.run], args.ready_seconds)
         elif args.command == "_cache-probe":
             runtime_cache_probe(args.plan)
         elif args.command == "_model-dimensions":

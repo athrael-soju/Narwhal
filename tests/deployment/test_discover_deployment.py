@@ -283,6 +283,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_colocated_engines_require_disjoint_allocations(self):
         env = environment(Path("/synthetic"))
         env["NARWHAL_NODE_2_SSH"] = env["NARWHAL_NODE_1_SSH"]
+        env["NARWHAL_NODE_2_ENGINE_PORT"] = "8002"
+        env["NARWHAL_NODE_2_ATTEST_PORT"] = "8012"
+        env["NARWHAL_NODE_2_NIXL_SIDE_CHANNEL_PORT"] = "5558"
         hosts = derive_hosts(env)
         observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
         with self.assertRaisesRegex(ValueError, "GPU_IDS"):
@@ -306,6 +309,7 @@ class DiscoveryTests(unittest.TestCase):
                 env[f"NARWHAL_NODE_{node}_SSH"] = env["NARWHAL_NODE_1_SSH"]
                 env[f"NARWHAL_NODE_{node}_ENGINE_PORT"] = str(8000 + node)
                 env[f"NARWHAL_NODE_{node}_ATTEST_PORT"] = str(8010 + node)
+                env[f"NARWHAL_NODE_{node}_NIXL_SIDE_CHANNEL_PORT"] = str(5557 + node)
             env.update(
                 NARWHAL_SHARED_GPU_ALLOWANCE="0.9",
                 NARWHAL_NODE_1_GPU_IDS="GPU-0",
@@ -339,9 +343,60 @@ class DiscoveryTests(unittest.TestCase):
             loaded.save(root / "roundtrip.json")
             self.assertEqual(FleetConfig.load(root / "roundtrip.json"), loaded)
 
+    def test_four_colocated_engines_fit_one_declared_allowance(self):
+        env = environment(Path("/synthetic"))
+        for node in (1, 2, 3, 4):
+            env[f"NARWHAL_NODE_{node}_SSH"] = env["NARWHAL_NODE_1_SSH"]
+            env[f"NARWHAL_NODE_{node}_GPU_IDS"] = "GPU-0"
+            env[f"NARWHAL_NODE_{node}_GPU_MEMORY_UTILIZATION"] = "0.2"
+            env[f"NARWHAL_NODE_{node}_ENGINE_PORT"] = str(8000 + node)
+            env[f"NARWHAL_NODE_{node}_ATTEST_PORT"] = str(8010 + node)
+            env[f"NARWHAL_NODE_{node}_NIXL_SIDE_CHANNEL_PORT"] = str(5557 + node)
+        env["NARWHAL_SHARED_GPU_ALLOWANCE"] = "0.9"
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": cuda_observation() for i in range(1, 5)}
+        fleet, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+        self.assertEqual(len(fleet["engines"]), 4)
+        self.assertEqual(len(launches["engines"]), 4)
+        self.assertEqual(
+            [engine["shared_device"]["gpu_memory_utilization"] for engine in fleet["engines"]],
+            [0.2] * 4,
+        )
+        for role in launches["engines"]:
+            selected_launch(launches, role, {})
+        changed = {**env, "NARWHAL_NODE_4_NIXL_SIDE_CHANNEL_PORT": "8001"}
+        with self.assertRaisesRegex(ValueError, "collides with engine-1 ENGINE_PORT"):
+            build_records(hosts, changed, observations, Path("/synthetic"))
+
+    def test_eight_colocated_engines_roundtrip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            for node in range(1, 9):
+                env[f"NARWHAL_NODE_{node}_SSH"] = env["NARWHAL_NODE_1_SSH"]
+                env[f"NARWHAL_NODE_{node}_GPU_IDS"] = "GPU-0"
+                env[f"NARWHAL_NODE_{node}_GPU_MEMORY_UTILIZATION"] = "0.1"
+                env[f"NARWHAL_NODE_{node}_ENGINE_PORT"] = str(8000 + node)
+                env[f"NARWHAL_NODE_{node}_ATTEST_PORT"] = str(8010 + node)
+                env[f"NARWHAL_NODE_{node}_NIXL_SIDE_CHANNEL_PORT"] = str(5557 + node)
+            env["NARWHAL_SHARED_GPU_ALLOWANCE"] = "0.9"
+            hosts = derive_hosts(env)
+            observations = {f"engine-{i}": cuda_observation() for i in range(1, 9)}
+            fleet, launches, _, derived = build_records(hosts, env, observations, root)
+            self.assertEqual(len(fleet["engines"]), 8)
+            self.assertEqual(len(launches["engines"]), 8)
+            selected_launch(launches, "engine-8", {})
+            path = root / "fleet.json"
+            path.write_text(json.dumps(fleet))
+            with patch.dict("os.environ", derived):
+                self.assertEqual(len(FleetConfig.load(path).engines), 8)
+
     def test_shared_gpu_allocation_rejects_identity_and_budget_errors(self):
         env = environment(Path("/synthetic"))
         env["NARWHAL_NODE_2_SSH"] = env["NARWHAL_NODE_1_SSH"]
+        env["NARWHAL_NODE_2_ENGINE_PORT"] = "8002"
+        env["NARWHAL_NODE_2_ATTEST_PORT"] = "8012"
+        env["NARWHAL_NODE_2_NIXL_SIDE_CHANNEL_PORT"] = "5558"
         env.update(
             NARWHAL_SHARED_GPU_ALLOWANCE="0.8",
             NARWHAL_NODE_1_GPU_IDS="0",
