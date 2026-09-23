@@ -1,8 +1,8 @@
 # `narwhal-profile`
 
-`narwhal-profile` measures every selected engine and writes the resulting profile store to `profiles.path` from the fleet config. Raw observations are written beside the store with the profile path suffix replaced by `.samples.json`.
+`narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config. It writes raw observations beside the store, replacing the profile path suffix with `.samples.json`.
 
-Use a different output path for each run when previous profiling evidence must remain available. Existing destinations require `--overwrite`, and symlink destinations are rejected.
+The profiler rejects symlink destinations and requires `--overwrite` to replace existing files. Give each run a new output path to retain prior profiles and samples.
 
 ## Selection, refitting, and output
 
@@ -13,7 +13,7 @@ Use a different output path for each run when previous profiling evidence must r
 | `--refit-samples PATH` | omitted     | Refit TTFT from a saved `.samples.json` file while retaining its decode measurements. Requires `--out` and a complete fleet selection.                                  |
 | `--out PATH`           | omitted     | Fresh profile path for `--refit-samples`; the command writes a matching `.samples.json` sidecar.                                                                        |
 | `--limits PATH`        | omitted     | Generated per-engine `max_num_seqs` limits from deployment preparation. The profiler bounds each decode cohort before probing.                                          |
-| `--overwrite`          | false       | Starts a new profile/sample pair. Existing destinations are replaced when the first engine completes. With `--only`, the new store contains only the selected profiles. |
+| `--overwrite`          | false       | Replaces existing profile and sample files when the first engine completes; with `--only`, the new store contains the selected profiles.                              |
 
 ## Prefill and decode sweeps
 
@@ -25,19 +25,17 @@ Use a different output path for each run when previous profiling evidence must r
 | `--decode-tokens N`         | `64`                                      | Tokens per decode stream. Minimum 3. Larger cohorts may require more tokens to overlap.                                                                                                                      |
 | `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length. The fit uses each length's median and retains every raw timing. Minimum 3.                                                                                                   |
 
-## Profiling acceptance conditions
+## Profiling sweep stop conditions
 
 Before each completion, the profiler verifies that the actual tokenised input plus the requested output fits the engine.
 
 A profiling run aborts when any of these conditions occurs:
 
-- every `--only` value is absent from the configured engines;
-- an engine fails `/health`;
-- `/tokenize` omits a valid `max_model_len`;
-- the live engine limit leaves too few sweep points;
+- the `--only` selection matches zero configured engines;
+- `/health` fails its HTTP 200 check;
+- the `/tokenize` response fails `max_model_len` validation;
+- engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels;
 - the representative prefill fit exceeds 20% mean error;
 - the representative prefill fit exceeds 50% worst-point error.
 
-A successful run ends with:
-
-`wrote N profile(s) to PATH`
+A completed sweep prints `wrote N profile(s) to PATH`; a refit prints `refitted N profile(s) to PATH`.

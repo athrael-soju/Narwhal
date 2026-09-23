@@ -1,6 +1,6 @@
 # `narwhal-attest`
 
-`narwhal-attest` runs an HTTP attestation sidecar for one engine. Start the sidecar after vLLM. It reads the engine identity and stops when either the engine version or the engine process start time changes.
+Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serves its attestation over HTTP, and stops when the engine version or process start time changes.
 
 | Option                | Default     | Contract                                                |
 | --------------------- | ----------- | ------------------------------------------------------- |
