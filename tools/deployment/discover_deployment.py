@@ -12,6 +12,7 @@ import shlex
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -277,12 +278,49 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
     return list(groups.values())
 
 
+def memory_fraction(raw: str, field: str) -> Decimal:
+    try:
+        fraction = Decimal(raw)
+    except InvalidOperation as error:
+        raise ValueError(f"{field} must be a fraction above 0 and at most 1") from error
+    if not fraction.is_finite() or not 0 < fraction <= 1:
+        raise ValueError(f"{field} must be a fraction above 0 and at most 1")
+    return fraction
+
+
+def bind_memory_budget(args: list[str], budget: Decimal, role: str) -> list[str]:
+    positions = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
+    if len(positions) > 1:
+        raise ValueError(f"{role}: duplicate --gpu-memory-utilization")
+    if positions:
+        index = positions[0]
+        if index + 1 >= len(args) or memory_fraction(args[index + 1], role) != budget:
+            raise ValueError(f"{role}: --gpu-memory-utilization must equal the declared budget")
+    else:
+        args.extend(["--gpu-memory-utilization", str(budget)])
+    return args
+
+
 def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
     """Bind detected devices and image metadata to environment-selected deployment policy."""
     launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
+    if env.get("NARWHAL_SHARED_GPU_ALLOWANCE") and not any(
+        sum(role.startswith("engine-") for role in host.roles) > 1 for host in hosts
+    ):
+        raise ValueError("NARWHAL_SHARED_GPU_ALLOWANCE requires colocated engine roles")
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()
+        allowance_raw = env.get("NARWHAL_SHARED_GPU_ALLOWANCE", "") if len(roles) > 1 else ""
+        allowance = (
+            memory_fraction(allowance_raw, "NARWHAL_SHARED_GPU_ALLOWANCE")
+            if allowance_raw
+            else None
+        )
+        if allowance is not None and len(roles) not in (2, 3):
+            raise ValueError(f"{host.id}: shared GPU policy requires two or three engines")
+        shared_uuid = None
+        shared_total = Decimal(0)
         for role in roles:
             node = int(role.split("-")[1])
             observed = observations[role]
@@ -297,11 +335,42 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             selected = [g for g in observed["gpus"] if g["id"] in ids or g.get("uuid") in ids]
             if len(selected) != len(ids) or len(set(ids)) != len(ids):
                 raise ValueError(f"{role}: GPU_IDS must select distinct detected GPUs")
-            physical = {g["id"] for g in selected}
-            if allocated & physical:
+            physical = {g.get("uuid", g["id"]) for g in selected}
+            if allocated & physical and allowance is None:
                 raise ValueError(f"{role}: colocated GPU allocations overlap")
             allocated |= physical
+            shared_device = None
+            if allowance is None and env.get(f"NARWHAL_NODE_{node}_GPU_MEMORY_UTILIZATION"):
+                raise ValueError(f"{role}: GPU memory budget requires shared GPU policy")
+            if allowance is not None:
+                if (
+                    observed["runtime"] != "cuda"
+                    or len(selected) != 1
+                    or not selected[0].get("uuid")
+                ):
+                    raise ValueError(
+                        f"{role}: shared GPU policy requires one detected CUDA GPU UUID"
+                    )
+                uuid = selected[0]["uuid"]
+                if shared_uuid is not None and uuid != shared_uuid:
+                    raise ValueError(
+                        f"{role}: shared GPU roles select different physical GPU identities"
+                    )
+                shared_uuid = uuid
+                field = f"NARWHAL_NODE_{node}_GPU_MEMORY_UTILIZATION"
+                if not env.get(field):
+                    raise ValueError(f"{role}: set {field} for shared GPU allocation")
+                budget = memory_fraction(env[field], field)
+                shared_total += budget
+                shared_device = {
+                    "group": f"{host.id}:{uuid}",
+                    "gpu_uuid": uuid,
+                    "device_allowance": float(allowance),
+                    "gpu_memory_utilization": float(budget),
+                }
             tp = int(value(env, node, "TENSOR_PARALLEL_SIZE", str(len(selected))))
+            if not 1 <= tp <= len(selected):
+                raise ValueError(f"{role}: tensor parallel size must fit the selected GPUs")
             products = {g["name"] for g in selected}
             if len(products) != 1:
                 raise ValueError(f"{role}: allocated GPUs must share one product")
@@ -323,7 +392,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                             "--max-num-seqs",
                             "8",
                             "--gpu-memory-utilization",
-                            "0.9",
+                            str(budget) if shared_device else "0.9",
                             "--enforce-eager",
                         ]
                     ),
@@ -331,6 +400,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             )
             if not isinstance(args, list):
                 raise ValueError(f"{role}: ENGINE_ARGS must be a JSON array")
+            if shared_device:
+                args = bind_memory_budget(args, budget, role)
             if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
                 args.append("--trust-remote-code")
             environment = dict(observed["image_environment"])
@@ -381,6 +452,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 },
                 "runtime": runtime,
             }
+            if shared_device:
+                launches[role]["shared_device"] = shared_device
             for field, content in (
                 ("ENGINE_IMAGE", observed["image_id"]),
                 ("MODEL_CONFIG_SHA256", observed["model_sha256"]),
@@ -397,6 +470,13 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                     "attestation_url": "${NARWHAL_NODE_" + str(node) + "_ATTESTATION_URL}",
                     "role": "decode",
                 }
+            )
+            if shared_device:
+                engines[-1]["shared_device"] = shared_device
+        if allowance is not None and shared_total > allowance:
+            raise ValueError(
+                f"{host.id}: shared GPU budgets total {shared_total} "
+                f"above device allowance {allowance}"
             )
     if len(shapes) != 1 or len(engines) < 2:
         raise ValueError(

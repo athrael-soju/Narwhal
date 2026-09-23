@@ -76,6 +76,10 @@ Keep all generated `config/` files together. To reuse an inspected fleet, reload
 
 With one engine role on a GPU host, discovery allocates every detected GPU and sets tensor parallelism to that count. With several engine roles on one host, declare disjoint `NARWHAL_NODE_<n>_GPU_IDS` lists.
 
+For two or three CUDA engines sharing one physical GPU, set `NARWHAL_SHARED_GPU_ALLOWANCE` to a fraction above zero and at most one. Set each role's `NARWHAL_NODE_<n>_GPU_IDS` to the same detected GPU index or UUID and `NARWHAL_NODE_<n>_GPU_MEMORY_UTILIZATION` to its vLLM memory fraction. Discovery requires a detected UUID for each selection, checks that all roles resolve to the same physical GPU, and rejects budgets whose sum exceeds the allowance. For example, two roles may each use `0.4` under an allowance of `0.9`. The allowance leaves capacity outside the declared vLLM budgets; it is a configured limit, not a measurement of free VRAM.
+
+The generated launch record retains each role's GPU UUID, group, allowance, and budget and binds the budget to `--gpu-memory-utilization`. The fleet record retains the same allocation for later profile and scheduling checks. A shared allocation requires unique engine, attestation, and NIXL side-channel ports for every process. Discovery does not start engines or validate local KV handoff; those gates follow the RTX 5090 qualification.
+
 All replicas must have matching accelerator product and TP shape. Engine 1 initially belongs to the prefill pool; the remaining engines start in decode. Profiles are written to `runs/profiles.json` in the installed checkout.
 
 Default serving policy:
