@@ -1,0 +1,51 @@
+{
+  "schema": "narwhal.engine-launch",
+  "schema_version": 1,
+  "engines": {
+    "engine-1": {
+      "accelerator": "<accelerator-model>",
+      "gpu_ids": [
+        "0",
+        "1"
+      ],
+      "tensor_parallel_size": 2,
+      "gpu_visibility_env": "ROCR_VISIBLE_DEVICES",
+      "accelerator_devices": [
+        "/dev/kfd",
+        "/dev/dri/renderD128",
+        "/dev/dri/renderD129"
+      ],
+      "network_mode": "host",
+      "transfer": {
+        "transport": "ucx_tcp",
+        "net_devices": "${NARWHAL_FABRIC_INTERFACE}",
+        "devices": []
+      },
+      "sources": {
+        "allocation": "<approved replica allocation or existing launcher definition>",
+        "devices": "<container device mappings matched to the selected GPUs>",
+        "transfer": "<approved UCX network selection and transport device mappings>",
+        "runtime": "<package versions, library paths and model flags from the pinned image>"
+      },
+      "runtime": {
+        "expected_packages": {
+          "vllm": "<image-vllm-version>",
+          "nixl": "<image-nixl-version>"
+        },
+        "model_dtype": "bfloat16",
+        "kv_cache_dtype": "auto",
+        "block_size": 128,
+        "environment": {},
+        "extra_args": [
+          "--max-model-len",
+          "16384",
+          "--max-num-seqs",
+          "8",
+          "--gpu-memory-utilization",
+          "0.9",
+          "--enforce-eager"
+        ]
+      }
+    }
+  }
+}

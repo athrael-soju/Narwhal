@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import math
+import statistics
+
+MAX_PREFILL_FIT_MAPE = 0.20
+MAX_PREFILL_POINT_ERROR = 0.50
 
 
 def _solve3(a: list[list[float]], b: list[float]) -> list[float]:
@@ -62,6 +66,33 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
             best, best_error = coefficients, error
     a, b, c = best
     return a / scale / scale, b / scale, c
+
+
+def fit_prefill_samples(
+    samples: list[tuple[float, float]],
+) -> tuple[tuple[float, float, float], list[tuple[float, float]], float]:
+    """Fit one median per exact input length and reject poor representative fits."""
+    if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
+        raise ValueError("prefill samples must be finite and nonnegative")
+    groups: dict[float, list[float]] = {}
+    for length, elapsed in samples:
+        groups.setdefault(length, []).append(elapsed)
+    representatives = [
+        (length, statistics.median(times)) for length, times in sorted(groups.items())
+    ]
+    coefficients = fit_quadratic(representatives)
+    a, b, c = coefficients
+    errors = [
+        abs(a * length * length + b * length + c - elapsed) / max(elapsed, 1e-9)
+        for length, elapsed in representatives
+    ]
+    mape = statistics.mean(errors)
+    if mape > MAX_PREFILL_FIT_MAPE or max(errors) > MAX_PREFILL_POINT_ERROR:
+        raise ValueError(
+            f"prefill median fit error {mape:.1%}, worst point {max(errors):.1%}; "
+            "inspect the retained per-length measurements before using this profile"
+        )
+    return coefficients, representatives, mape
 
 
 def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, float, float]:

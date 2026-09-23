@@ -12,6 +12,6 @@ narwhal-check --help
 
 The version printed by `pip show` identifies the installed router. Record that version with the fleet configuration, engine image, and profiles used for a deployment. Pin the approved version when installing on another router host.
 
-Narwhal's wheel supplies the router commands. A production fleet also needs separately provisioned vLLM engines with compatible KV transfer, engine attestation, a fleet configuration, and measured profiles. Follow the [deployment guide](https://athrael-soju.github.io/Narwhal/Deploy/) to qualify those inputs before serving requests.
+Narwhal's wheel supplies the router commands. A production fleet also needs separately provisioned vLLM engines with compatible KV transfer, engine attestation, a fleet configuration, and measured profiles. Follow [Deploy a fleet](Deploy.md) to qualify those inputs before serving requests.
 
 The repository checkout carries the CPU engine stubs, deployment helpers, and `make` targets. Run `make setup` in that checkout to install Narwhal and its development dependencies into `.venv`.

@@ -6,10 +6,8 @@ services:
     network_mode: host
     restart: always
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
-      # Startup writes both target groups before Compose launches Prometheus.
-      - ../../runs/observability/targets:/etc/prometheus/targets:ro
+      # Startup stages readable configs and targets before Compose launches services.
+      - ../../runs/observability/mounts/prometheus:/etc/prometheus:ro
       - prom-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -24,10 +22,10 @@ services:
       GF_SERVER_HTTP_ADDR: "${NARWHAL_GRAFANA_BIND_ADDRESS:-127.0.0.1}"
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      NARWHAL_PROMETHEUS_URL: "http://${NARWHAL_PROMETHEUS_LISTEN_ADDRESS:-127.0.0.1:9090}"
+      NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL:-http://127.0.0.1:9090}"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../grafana-narwhal.json:/var/lib/grafana/dashboards/narwhal.json:ro
+      - ../../runs/observability/mounts/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ../../runs/observability/mounts/grafana-dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
 
 volumes:

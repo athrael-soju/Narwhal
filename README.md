@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/athrael-soju/Narwhal/tree/main/docs">Documentation</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
   <a href="https://athrael-soju.github.io/Narwhal/Deploy/">Deployment</a> |
   <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/">API reference</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
@@ -20,7 +20,7 @@
 
 ## About
 
-Narwhal routes disaggregated LLM inference across vLLM engines, reallocating prefill and decode roles as demand changes while model weights stay loaded.
+Narwhal is a disaggregated LLM inference framework, which reallocates prefill and decode roles as demand changes while model weights stay loaded.
 
 Narwhal provides:
 
@@ -34,11 +34,17 @@ Narwhal provides:
 
 ## Architecture
 
-The controller prices adjacent fleet splits from request demand, resident work, and measured engine profiles. Role floors, cooldowns, and health checks govern moves; new requests follow the resulting split while resident requests complete on their assigned engines.
+On regular controller passes, Narwhal prices the current and adjacent prefill/decode splits from measured engine curves, offered demand, and resident work, moving an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
 
 ![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
 See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
+
+## Benchmark snapshot
+
+AlPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal, Dynamo Planner, and Ray Serve LLM.
+
+![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
 
 ## Install from PyPI
 
@@ -51,7 +57,7 @@ python -m pip install narwhal-inference
 narwhal-check --help
 ```
 
-The [PyPI installation guide](https://github.com/athrael-soju/Narwhal/blob/main/docs/Install-from-PyPI.md) covers version checks and the fleet inputs needed after installation. A production deployment also uses an approved source checkout for host preparation and engine launch.
+The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers version checks and the fleet inputs needed after installation. A production deployment also uses an approved source checkout for host preparation and engine launch.
 
 ## Deploy a fleet
 

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # The distribution name differs from the import package.
 name = "narwhal-inference"
-version = "0.1.0"
+version = "0.2.0"
 description = "Adaptive hot-swap disaggregation for LLM inference"
 readme = "README.md"
 authors = [{ name = "Athrael Soju" }]
@@ -47,16 +47,18 @@ dev = [
   "build>=1.2",
   "twine>=5",
 ]
+docs = [
+  "mkdocs-material==9.7.7",
+]
 
 [project.scripts]
 narwhal-check = "narwhal.diagnostics.check:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe:main"
-narwhal-canary = "narwhal.diagnostics.canary:main"
 
 [project.urls]
-Documentation = "https://github.com/athrael-soju/Narwhal/tree/main/docs"
+Documentation = "https://athrael-soju.github.io/Narwhal/"
 Repository = "https://github.com/athrael-soju/Narwhal"
 Issues = "https://github.com/athrael-soju/Narwhal/issues"
 
@@ -74,6 +76,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101"
 # Standalone drivers adjust sys.path and may contain long evidence lines.
 # Harnesses use assertions, fixed seeds, and fake credentials.
 "tools/*.py" = ["E402", "E731", "D", "S"]
+"tests/*.py" = ["D", "E731", "S"]
 
 [tool.mypy]
 python_version = "3.11"

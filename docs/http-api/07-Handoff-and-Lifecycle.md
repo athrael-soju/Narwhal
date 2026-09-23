@@ -1,0 +1,160 @@
+# HA handoff and engine lifecycle
+
+## HA handoff
+
+### `GET /narwhal/handoff`
+
+Expose `/narwhal/handoff` on the trusted control network for standby polling and operator inspection. A standby copies current roles, counters, lifecycle state, and demand risk from the active router before takeover.
+
+### Handoff fields
+
+| Field               | Meaning                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `schema`            | `narwhal.handoff`                                                                                          |
+| `schema_version`    | Handoff schema version; this release writes `1`                                                            |
+| `at`                | Unix wall-clock timestamp                                                                                  |
+| `run`               | Request-journal run ID of the writing process                                                              |
+| `model`             | Configured served model                                                                                    |
+| `epoch`             | Lease epoch; zero when HA fencing is disabled                                                              |
+| `holder`            | Unique lease-holder token; empty when HA fencing is disabled                                               |
+| `engines`           | Sorted configured engine IDs                                                                               |
+| `roles`             | Engine ID mapped to `prefill` or `decode`                                                                  |
+| `ejected`           | Engines currently excluded by the breaker                                                                  |
+| `inference_sources` | Suspect engines mapped to producer IDs required for verification; empty producer ID requests a local probe |
+| `counters`          | `served`, `failed`, `unserved`, `refused`, `rejected`, `cancelled` totals                                  |
+| `lifecycle`         | Durable drain, validation, wave state, restart policy, and accepted process starts                         |
+| `demand_risk`       | Latest consolidation-risk event, or `null`                                                                 |
+
+`demand_risk` contains:
+
+- `kind`
+- elapsed `age_s`
+- per-kind counts
+
+A receiving router reanchors `age_s` to its own clock and begins gathering new arrival evidence.
+
+Package and Git provenance are stored in the request-journal header.
+
+### Restored and process-local state
+
+A handoff restores these persisted totals:
+
+- `served`
+- `failed`
+- `unserved`
+- `refused`
+- `rejected`
+- `cancelled`
+
+The replacement process starts fresh process-local state for:
+
+- resident tracking
+- flip history
+- role-change counters
+- controller-decision counters
+- latency histograms
+- floor history
+- monitoring-failure counters
+
+Narwhal writes the current handoff to `recovery.state_path`; `narwhal-serve --resume` loads it after a process restart. A warm standby polls `/narwhal/handoff`, retains a lease-validated snapshot, and applies it when it takes control.
+
+---
+
+## Lifecycle API
+
+### `GET /narwhal/lifecycle`
+
+The response uses `narwhal.lifecycle` schema version `1`.
+
+`router.controls_fleet` distinguishes:
+
+- active lease holder
+- standby router
+- fenced router
+
+Each engine record exposes:
+
+- `state`
+- `draining`
+- scheduler eligibility in `accepts_new`
+- `ready_to_stop`
+- resident prefill count
+- resident decode count
+- deadline
+- wave ID
+- old process-start timestamp
+- new process-start timestamp
+- validation checks
+- error state
+
+The wave record reports:
+
+- whether router-wide readiness has been withdrawn
+- whether every wave member is safe for the external supervisor to stop
+
+Top-level `engine_restart_policy` contains the configured restart policy.
+
+`process_starts` maps engine IDs to the last accepted process-start timestamps.
+
+Top-level `error` carries the rejected action's message on non-2xx responses and an empty string on success.
+
+---
+
+## Draining engines
+
+### `POST /narwhal/lifecycle/drain`
+
+Narwhal starts a lifecycle drain for one engine or the whole fleet as a wave.
+
+Narwhal removes every target from placement before recording process identity.
+
+A whole-fleet drain also withdraws router `/ready`.
+
+Example:
+
+```json
+{
+  "engines": ["e0"],
+  "deadline_s": 300
+}
+```
+
+Failure semantics:
+
+|  HTTP | Meaning                                                                   |
+| ----: | ------------------------------------------------------------------------- |
+| `409` | Unsafe lifecycle request shape                                            |
+| `503` | Process-identity capture failed; repeat the drain request to capture identity while the target stays held out of placement |
+
+---
+
+## Readmitting engines
+
+### `POST /narwhal/lifecycle/readmit`
+
+Send the engine ID to readmit:
+
+```json
+{
+  "engines": ["e0"]
+}
+```
+
+Narwhal runs these checks before releasing the candidate's lifecycle hold:
+
+1. health
+2. process-bound attestation
+3. configured model
+4. direct generation
+5. role-compatible KV transfer
+6. final health
+
+For a planned restart, Narwhal requires a process start newer than the drain record before releasing the hold. After a transient breaker ejection, it can validate and readmit the running process.
+
+HTTP `409` leaves candidates that fail validation blocked.
+
+### Whole-wave restart policy
+
+With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the wave after every replacement passes validation with a newer start.
+
+See [Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) for the external-supervisor restart sequence and whole-wave requirements.

@@ -12,7 +12,9 @@ from urllib.parse import urlsplit
 
 from narwhal.config.environment import resolve_endpoint
 
-DEFAULT_TARGETS_DIR = Path(__file__).parents[2] / "runs" / "observability" / "targets"
+DEFAULT_TARGETS_DIR = (
+    Path(__file__).parents[2] / "runs" / "observability" / "mounts" / "prometheus" / "targets"
+)
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ def build_targets(fleet: dict[str, object], router_url: str) -> TargetContract:
 def _write_json(path: Path, value: object) -> None:
     """Replace one discovery document after its complete contents reach disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o755)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w") as output:
