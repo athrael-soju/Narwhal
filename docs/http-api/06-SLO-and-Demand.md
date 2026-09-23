@@ -115,12 +115,7 @@ decode_pressure_recovery
 
 See [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control) for movement and confirmation gates.
 
-Consolidation checks retain full-precision demand through:
-
-- source-pressure evaluation
-- movement gating
-
-Rounded state and journal values are presentation values only.
+The controller carries full-precision demand into source-pressure and movement-gate checks, then rounds the corresponding values when it writes state and journal records.
 
 Every move is constrained by:
 

@@ -4,9 +4,7 @@
 
 ### `GET /narwhal/handoff`
 
-Returns a fresh control-plane handoff document.
-
-The endpoint contains state required for standby takeover and operator tooling and should be exposed only on the trusted control network.
+Expose `/narwhal/handoff` on the trusted control network for standby polling and operator inspection. A standby copies current roles, counters, lifecycle state, and demand risk from the active router before takeover.
 
 ### Handoff fields
 
@@ -140,9 +138,7 @@ Failure semantics:
 |  HTTP | Meaning                                                                   |
 | ----: | ------------------------------------------------------------------------- |
 | `409` | Unsafe lifecycle request shape                                            |
-| `503` | Narwhal could not capture process identity; the drain hold remains active |
-
-The hold is deliberately retained after process-identity failure so the affected engine is not silently returned to placement.
+| `503` | Process-identity capture failed; repeat the drain request to capture identity while the target stays held out of placement |
 
 ---
 
@@ -167,9 +163,7 @@ Narwhal runs these checks before releasing the candidate's lifecycle hold:
 5. role-compatible KV transfer
 6. final health
 
-For a planned restart, the engine's process start must be newer than the process start captured during drain.
-
-Breaker recovery may reuse the existing process identity because a transient failure may eject a process that did not restart.
+For a planned restart, Narwhal requires a process start newer than the drain record before releasing the hold. After a transient breaker ejection, it can validate and readmit the running process.
 
 HTTP `409` leaves candidates that fail validation blocked.
 

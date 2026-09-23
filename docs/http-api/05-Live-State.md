@@ -145,9 +145,7 @@ The controller moves healthy decode capacity into prefill until:
 
 Aggregate mode treats an initial zero-prefill pool as its baseline.
 
-`below_floor.active` remains false until the fleet has reached the configured prefill floor at least once.
-
-`below_floor.since` uses the process monotonic clock and is `null` outside an active breach.
+After prefill first reaches `min_prefill`, Narwhal records the process-monotonic time in `below_floor.since` on each later drop, marks `active`, and clears both fields when the pool recovers.
 
 While a breach is active, `below_floor.cumulative_s` includes the open interval.
 

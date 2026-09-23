@@ -18,15 +18,7 @@
 | Scheduler finds zero placement-eligible engines                              | `503` | `backend_unavailable`, `Retry-After: 1`                          |
 | Router is standby, fenced, in whole-wave maintenance, or monitoring-degraded | `503` | Retryable refusal, `Retry-After: 1`; `/ready` reports the reason |
 
-Set:
-
-```text
-admission: open
-```
-
-to disable predictive refusal.
-
-Concurrency limits remain active.
+Set `admission: open` to send placed requests directly to prefill under the HTTP retention, queue, and phase-concurrency limits.
 
 ### Admission counters
 
