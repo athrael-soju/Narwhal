@@ -1,6 +1,6 @@
 name: Bug report
 description: Something the router, a gate, or a harness did wrong
-labels: ["correctness"]
+labels: ["bug"]
 body:
   - type: textarea
     id: what
