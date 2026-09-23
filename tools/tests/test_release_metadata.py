@@ -45,6 +45,11 @@ class ReleaseMetadataTests(unittest.TestCase):
                     return_value=io.BytesIO(json.dumps({"urls": files}).encode()),
                 ):
                     self.assertEqual(pypi_status(root, dist), "matching")
+                with mock.patch(
+                    "tools.release.urllib.request.urlopen",
+                    return_value=io.BytesIO(json.dumps({"urls": files[:1]}).encode()),
+                ):
+                    self.assertEqual(pypi_status(root, dist), "partial")
                 files[0]["digests"]["sha256"] = "0" * 64
                 with (
                     mock.patch(

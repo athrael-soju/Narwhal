@@ -160,12 +160,13 @@ def pypi_status(root: Path, dist: Path) -> str:
             return "missing"
         raise
     uploaded = {file["filename"]: file for file in release["urls"]}
-    if set(uploaded) != expected or any(
+    if not set(uploaded) <= expected or any(
         uploaded[name]["digests"]["sha256"] != hashlib.sha256(path.read_bytes()).hexdigest()
         for name, path in files.items()
+        if name in uploaded
     ):
         raise ValueError(f"PyPI version {value} contains different distribution files")
-    return "matching"
+    return "matching" if set(uploaded) == expected else "partial"
 
 
 def release_by_tag(tag: str) -> dict | None:

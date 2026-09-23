@@ -152,8 +152,10 @@ jobs:
           name: release-distributions
           path: dist
       - name: Publish the verified distributions to PyPI
-        if: needs.publish.outputs.pypi_status == 'missing'
+        if: needs.publish.outputs.pypi_status != 'matching'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          skip-existing: ${{ needs.publish.outputs.pypi_status == 'partial' }}
 
   release-pr:
     needs: [inspect, publish, pypi]
