@@ -59,7 +59,7 @@ The example observability setup binds Grafana to `127.0.0.1:3000` and Prometheus
 
 Fleet JSON owns model names, hardware shape, SLOs, profiles, and engine endpoints. Engine launch credentials belong to the engine launcher. Public client authentication belongs at ingress.
 
-Engine `url` and `attestation_url` values support environment substitution only when the complete JSON value is a single reference:
+Engine `url` and `attestation_url` values resolve environment references when the entire JSON value contains one reference:
 
 ```json
 {
@@ -71,7 +71,7 @@ The loader requires a populated referenced variable and reports the URL field pa
 
 The loader rejects partial and default-syntax `${...}` references and resolved values containing another reference. It leaves shell-style strings such as `$NAME` and non-endpoint JSON fields literal.
 
-`FleetConfig.save()` writes resolved URLs. Save that output only to an ignored fleet path.
+`FleetConfig.save()` writes resolved URLs, so save its output to an ignored fleet path.
 
 ---
 

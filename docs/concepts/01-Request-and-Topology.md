@@ -46,7 +46,7 @@ Every retry obtains fresh KV ownership.
 | -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Aggregated           | Every engine executes prefill and decode with local KV        | Long prefills occupy the same scheduler as decode batches                                    |
 | Static disaggregated | Separate fixed prefill and decode pools                       | Operator must manually change pool membership                                                 |
-| Adaptive cold-swap   | Engines can move between pools by draining and relaunching    | Capacity is unavailable during drain, restart, weight load, peer registration, and validation |
+| Adaptive cold-swap   | Engines move between pools by draining and relaunching        | Restart, weight load, peer registration, and validation delay the new capacity               |
 | Adaptive hot-swap    | Dual-capability engines form logical prefill and decode pools | Scheduler changes the role label while weights remain resident                                |
 
 ### Aggregated serving

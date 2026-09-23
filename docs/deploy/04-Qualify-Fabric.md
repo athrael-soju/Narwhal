@@ -228,13 +228,13 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
 
 This test measures one-way RDMA writes between host-memory buffers. Reverse source and destination and repeat. For multi-rail deployments, test every selected HCA port and retain every report; later live NIXL probes determine how the connector uses the rails.
 
-## Complete the matrix and reuse only valid evidence
+## Complete the matrix and match retained evidence
 
 For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs. The live KV-transfer gate tests local handoff.
 
 Retain source role, destination role, source revision, source and reverse routes, transport, utility version, exact command, budget signature, sample path, and exit status for every edge.
 
-A corrected budget may be compared against an existing sample only when host assignment, both routes, interfaces, transport, utility version, and measurement parameters still match. Recreate the current link fingerprint and run:
+When host assignment, both routes, interfaces, transport, utility version, and measurement parameters match the retained sample, recreate the current link fingerprint and compare it with the corrected budget:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
@@ -245,9 +245,9 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
   --out "$CURRENT_EDGE_PREFIX.comparison.json"
 ```
 
-RDMA samples use `.txt`. For legacy samples collected before `record-edge`, reconstruct the original link record only when exact original routes, interfaces, transport, utility version, and command can be proven. Otherwise collect a new directed sample.
+Recalculate the budget from a new `cache-layout.json` when the runtime layout changes, and collect a new directed sample when host assignment, routes, interfaces, transport, utility version, or measurement parameters change.
 
-Recalculate from the new `cache-layout.json` when the runtime layout changes, and rerun the directed bandwidth test when its route or transport changes.
+RDMA samples use `.txt`. For a legacy sample collected before `record-edge`, reconstruct its link record from verified original routes, interfaces, transport, utility version, and command; collect a new directed sample when those inputs cannot be verified.
 
 A link below its source budget keeps the remaining engines idle while you inspect link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic. After fixing the cause, sample that directed link again; launch the engines when every edge in the matrix passes.
 

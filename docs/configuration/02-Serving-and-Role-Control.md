@@ -31,7 +31,7 @@ The loader rejects admission overrides above `serving.max_connections`, keeping 
 | `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline. Must be positive when queueing is enabled.                                                                                                     |
 | `serving.prefill_concurrency` | `0`        | Resident prefill requests per engine. Queueing requires a positive measured value.                                                                                                                              |
 | `serving.decode_concurrency`  | `0`        | Resident decode requests per engine. Queueing requires a positive measured value.                                                                                                                               |
-| `serving.handoff_timeout_s`   | `0.0`      | Maximum KV-handoff age measured from the start of the prefill HTTP request. Queueing or retry requires a positive value below the verified backend lease. At `0`, only the request deadline limits handoff age. |
+| `serving.handoff_timeout_s`   | `0.0`      | Caps KV-handoff age from the start of the prefill HTTP request; queueing or retry requires a positive cap below the verified backend lease. At `0`, the original request deadline supplies the cap.          |
 | `serving.max_attempts`        | `1`        | Maximum complete prefill/decode attempts per original request. Range 1 to 3.                                                                                                                                    |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling. Full jitter samples from zero to this ceiling.                                                                                                                             |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling. At least the base value.                                                                                                                                                               |
@@ -157,7 +157,7 @@ Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the f
 
 After the first token, `engine.decode_read_timeout_s` bounds the silent gap between transport chunks. Partial SSE lines and metadata chunks reset that timer.
 
-With:
+Set `engine.decode_read_timeout_s` to `0` to use the overall request deadline as the stream bound after the first token:
 
 ```json
 {
@@ -166,8 +166,6 @@ With:
   }
 }
 ```
-
-the overall request deadline becomes the only stream bound.
 
 Breaker verification applies `engine.first_token_timeout_s` independently to each complete prefill and decode verification leg.
 

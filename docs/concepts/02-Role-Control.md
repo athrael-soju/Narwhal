@@ -68,13 +68,13 @@ Moves preserve `controller.min_prefill` and `controller.min_decode` whenever eno
 
 `controller.thresholds.cooldown_s` limits moves toward decode.
 
-`controller.thresholds.dwell_s` prevents a recently moved engine from immediately moving back.
+`controller.thresholds.dwell_s` keeps a recently moved engine in its new role for the configured interval.
 
-`controller.thresholds.flip_resident_guard` prevents a decode-to-prefill move until the lightest eligible decode donor owns no more than the configured number of resident streams.
+`controller.thresholds.flip_resident_guard` requires the lightest eligible decode donor's resident stream count to be at or below the configured ceiling before a decode-to-prefill move.
 
 Narwhal applies role changes to new placements while existing requests continue on their assigned engines.
 
-Draining or recovering engines remain excluded from placement through lifecycle holds.
+Lifecycle holds remove draining and recovering engines from placement.
 
 Urgent decode-to-prefill evaluation still enforces:
 
