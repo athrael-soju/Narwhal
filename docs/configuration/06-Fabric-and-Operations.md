@@ -2,34 +2,9 @@
 
 ## 17. Fabric workload qualification
 
-During `prepare`, Narwhal snapshots:
+`prepare` writes a snapshot of `tools/deployment/fabric_budget.py` for each engine host, stores its SHA-256 in the manifest and engine role environment, and packages the selected application revision in `source.bundle`. `install` checks the transferred snapshot before copying it to `runs/deployment-tools/`.
 
-```text
-tools/deployment/fabric_budget.py
-```
-
-into the files prepared for each engine host.
-
-Its SHA-256 is stored in:
-
-- the deployment manifest
-- the engine role environment
-
-`install` verifies the transferred helper before placing it under:
-
-```text
-runs/deployment-tools/
-```
-
-The approved application bundle retains the selected application revision.
-
-Record that revision together with:
-
-```text
-NARWHAL_FABRIC_BUDGET_SHA256
-```
-
-Creating a new preparation directory captures a changed helper without modifying older prepared runs.
+Start a new preparation directory when the helper changes so each run retains its source bundle, helper snapshot, and recorded digest.
 
 ### 17.1 Calculate the workload budget
 
@@ -103,9 +78,7 @@ The captured layout retains:
 - application revision
 - launch-plan hash
 
-The serving capture records cache pages after model loading and memory profiling while the representative continues to HTTP startup.
-
-That loaded model and its cache geometry become the basis for later attestation and workload trials.
+After model loading and memory profiling, the representative captures its cache pages and continues to HTTP startup. Attestation and workload trials use that running model and its recorded cache geometry.
 
 ### 17.3 Uniform-cache options
 

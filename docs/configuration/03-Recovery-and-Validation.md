@@ -90,9 +90,7 @@ Under `whole_wave`, an ejection or identity failure holds the fleet until an ope
 | `recovery.resume`            | `false`             | Applies a compatible handoff file at startup.                            |
 | `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative.                     |
 
-With a saved handoff, the router resumes from `recovery.state_path`.
-
-Without a handoff, startup uses the split declared in fleet configuration.
+At first startup, the router uses the split declared in the fleet configuration. On restart with resume enabled, it loads a compatible handoff from `recovery.state_path`.
 
 An uncontracted development fleet also falls back to the configured split if the saved engine set differs from the current one.
 

@@ -59,14 +59,14 @@ Discovery adds one fleet record per engine.
 
 `.env.example` shows the two-engine minimum and the shared fabric interface.
 
-Both:
+Store site-specific fleet files under either ignored path:
 
 ```text
 config/fleet.json
 config/fleet.*.json
 ```
 
-are ignored by Git. The repository tracks only the example and stub configurations.
+The repository tracks the example and stub configurations.
 
 After loading `.env`, invoke profiling, preflight, and serving with:
 

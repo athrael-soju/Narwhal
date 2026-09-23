@@ -69,7 +69,7 @@ Engine `url` and `attestation_url` values support environment substitution only 
 
 The loader requires a populated referenced variable and reports the URL field path and variable name when that check fails.
 
-The loader expands a complete `${VARIABLE}` reference in an engine URL field and treats other JSON fields literally. It rejects shell expressions, default syntax, partial interpolation, and recursive references in URL fields.
+The loader rejects partial and default-syntax `${...}` references and resolved values containing another reference. It leaves shell-style strings such as `$NAME` and non-endpoint JSON fields literal.
 
 `FleetConfig.save()` writes resolved URLs. Save that output only to an ignored fleet path.
 
@@ -124,13 +124,7 @@ Lifecycle drain and readmission require every contract field. If a required cont
 
 ### 3.1 Hardware block
 
-`hardware` records the accelerator identity and tensor-parallel shape.
-
-Engine-host inspection in [Deploy](../deploy/03-Validate-Engines.md#inspect-every-engine-host) discovers accelerator vendor and product. Set `hardware.accelerator` to that observed product name.
-
-Set `hardware.accelerators_per_engine` and `hardware.tensor_parallel` to positive counts, with tensor parallelism at or below the replica's accelerator allocation.
-
-The external launcher sets vLLM TP size. Set `hardware.tensor_parallel` to that positive launch value and `hardware.accelerators_per_engine` to the replica's positive allocated accelerator count, with TP at or below the allocation.
+The [engine-host inspection](../deploy/03-Validate-Engines.md#inspect-every-engine-host) identifies the accelerator vendor and product; set `hardware.accelerator` to the observed product name. Set `hardware.accelerators_per_engine` to the replica's allocated accelerator count and `hardware.tensor_parallel` to the external launcher's vLLM TP size. Both counts must be positive, with TP at or below the allocation.
 
 Verify the running shape through attestation, profiles, transfer tests, and deployment load.
 

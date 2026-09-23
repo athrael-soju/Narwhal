@@ -188,9 +188,7 @@ Keep destination values and credentials in workstation `.env`; the inventory sto
 
 SSH destinations may be aliases or `user@management-host`.
 
-If `password_env` is present, password authentication is enabled and the named variable must be nonempty.
-
-Without `password_env`, OpenSSH key or agent authentication is used.
+OpenSSH uses key or agent authentication by default. Setting `password_env` selects password authentication and requires a populated named variable.
 
 All roles on one physical host share that host's access record.
 
@@ -209,13 +207,7 @@ to validate:
 - required access variables
 - distinct destination entries
 
-Deployment is grouped by host ID. A physical machine has one inventory entry containing all of its roles.
-
-Discovery performs the same grouping when SSH destinations match.
-
-`check-access` establishes one verified connection per host.
-
-`shell --role <role>` resolves the physical host through the inventory.
+Put every role on a physical machine in one inventory entry. Discovery groups matching SSH destinations under one host ID. `check-access` verifies one connection to that host, and `shell --role <role>` resolves it from the inventory.
 
 ### 13.2 Known-hosts handling
 
