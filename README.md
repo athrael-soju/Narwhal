@@ -19,7 +19,7 @@
 
 ## About
 
-Narwhal is a disaggregated LLM inference framework with adaptive prefill/decode scheduling, which reallocates running vLLM engines between prefill and decode as demand changes while weights remain loaded on every engine.
+Narwhal is a disaggregated LLM inference framework, which reallocates prefill and decode roles as demand changes while model weights stay loaded.
 
 Narwhal provides:
 
@@ -47,7 +47,7 @@ The infographic compares Narwhal, Dynamo Planner and Ray Serve LLM on two Kimi-K
 
 ## Deploy a fleet
 
-Follow [Deploy a fleet](docs/Deploy.md) from your management workstation. The guide derives deployment configuration from your private `.env` and host inspection to prepare the remote router and GPU engine hosts, launch vLLM with NIXL, and verify a model completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, then inspect the running fleet through Prometheus and Grafana.
+From a management workstation, [Deploy a fleet](docs/Deploy.md) uses the private `.env` and host inspection to prepare router and GPU engine hosts, launch vLLM with NIXL, and verify a completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, and inspect the fleet through Prometheus and Grafana.
 
 ## Documentation
 

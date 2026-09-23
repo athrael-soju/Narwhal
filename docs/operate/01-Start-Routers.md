@@ -2,7 +2,7 @@
 
 ## 1. Production boundary
 
-The deployment platform provisions GPUs and containers. Narwhal begins at request admission and controls the fleet from there.
+Site automation provisions GPU hosts and engine processes; Narwhal admits requests and places them on the running fleet.
 
 | Component         | Responsibility                                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -12,12 +12,6 @@ The deployment platform provisions GPUs and containers. Narwhal begins at reques
 | Engine supervisor | Engine and attestation-sidecar start/stop, resource limits, restart policy, and log retention                        |
 | Shared storage    | Provide one coherent lease domain to both router hosts                                                               |
 | Monitoring        | Scrape metrics, retain journals, and page according to site policy                                                   |
-
-Each production fleet therefore has three independent control layers:
-
-1. ingress identifies and routes the client request;
-2. the active Narwhal router decides whether and where the request may execute;
-3. engine supervisors control the processes Narwhal places work onto.
 
 ## 2. Keep one deployment set
 
@@ -30,7 +24,7 @@ A router pair must run one coherent deployment set under one release identifier:
 
 Install that set on both router hosts.
 
-Router replacements and rolling upgrades depend on compatible handoff contracts. Inspect the installed build before changing either router:
+Before replacing or upgrading either router, inspect the installed build's handoff contracts:
 
 ```bash
 narwhal-check --print-contract-versions

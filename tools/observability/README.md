@@ -1,6 +1,6 @@
 # Observability asset contracts
 
-The pinned Compose project supplies Prometheus, Grafana, Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. [Set up observability](../../docs/Observability.md) owns listener selection, startup, verification, access and recovery procedures.
+The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
 ## Dashboard
 

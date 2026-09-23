@@ -30,7 +30,7 @@ If validation enters `blocked`, repair the engine and call:
 
 The router clears the ejection after every recovery gate passes.
 
-For `whole_wave`, use the complete-wave procedure below. Fleets configured for `whole_wave` require complete-wave readmission.
+For `whole_wave`, use the complete-wave procedure below for drain and readmission.
 
 ### Planned restart of one engine
 
@@ -73,7 +73,7 @@ and:
 
 Stop every engine process tree through the external supervisor.
 
-Before restarting the wave, verify that accelerator memory belongs only to the current worker.
+Before restarting the wave, verify that accelerator memory allocations belong to the intended worker processes.
 
 Launch every engine from the same immutable image and launch contract. Start a fresh attestation sidecar for every engine process, then submit whole-wave readmission.
 

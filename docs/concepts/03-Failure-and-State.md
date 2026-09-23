@@ -13,7 +13,7 @@ A monitor pass executes several operational stages independently:
 - telemetry;
 - handoff persistence.
 
-A failure in one stage does not abort the remaining stages. Narwhal records the stage error, increments the relevant counters, and continues the pass.
+Narwhal records a stage error, increments the relevant counters, and continues the remaining stages of the monitor pass.
 
 Any pass containing at least one stage exception increments the consecutive monitor-failure streak.
 
@@ -34,8 +34,6 @@ Monitoring remains active while the router is degraded. One fully successful pas
 Restarting the router starts with fresh monitor-failure counters.
 
 ## Engine failure handling
-
-Narwhal separates data-plane resource limits, failure classification, verification, liveness, and readmission.
 
 ### Connection pools
 
@@ -64,7 +62,7 @@ When a streak reaches `recovery.eject_after`, the response depends on the class.
 | First-token deadline, mid-stream silence, or invalid stream termination | `stream`           | Pause new requests and probe prefill/decode |
 | HTTP 408 or 429                                                         | `overload`         | Run a health probe                          |
 | Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and probe prefill/decode |
-| Prefill response without a readable KV handoff                          | `kv_handoff`       | Pause new requests and probe prefill/decode |
+| Unreadable KV handoff from prefill                                        | `kv_handoff`       | Pause new requests and probe prefill/decode |
 
 An inconclusive inference-probe leg leaves the verification hold active. The monitor schedules another probe while admission sends new work to eligible peers.
 
@@ -90,9 +88,7 @@ consecutive silent sweeps.
 
 Performance-drift and temporary-quarantine holds preserve the last eligible engine. A confirmed failure can remove it. When serving capacity is exhausted, `/ready` and new completion requests return HTTP 503 while recovery probes continue.
 
-### Which successes clear which failures
-
-Different successful responses clear different failure evidence.
+### Clearing failure evidence
 
 | Successful response                        | Failure evidence cleared                     |
 | ------------------------------------------ | -------------------------------------------- |
@@ -111,9 +107,7 @@ A successful inference probe also clears the separate inference-verification hol
 
 ## Readmission and drains
 
-An engine returning to placement must satisfy the runtime contract again.
-
-Before readmission, Narwhal verifies:
+Before returning an engine to placement, Narwhal verifies:
 
 - health;
 - attestation;
@@ -130,7 +124,7 @@ Operator drains survive:
 - router resume;
 - standby takeover.
 
-Only successful readmission clears an operator drain.
+Successful readmission clears an operator drain.
 
 ## Serving saturation and retries
 
@@ -142,9 +136,7 @@ Each retry acquires fresh KV ownership.
 
 ## Durable control-plane state
 
-The active router persists enough state for restart and standby takeover.
-
-On every monitor pass, it writes a versioned handoff containing:
+On every monitor pass, the active router writes a versioned handoff containing:
 
 - engine roles;
 - ejections;
@@ -156,7 +148,7 @@ On every monitor pass, it writes a versioned handoff containing:
 
 ### Resume validation
 
-`narwhal-serve --resume` applies a saved handoff only when both of these match the configured fleet:
+`narwhal-serve --resume` applies a saved handoff when both of these match the configured fleet:
 
 - handoff schema;
 - engine set.
@@ -177,7 +169,7 @@ If a write fails, Narwhal removes its temporary file and leaves the previous des
 
 ### Warm standby and lease ownership
 
-A warm standby follows the active router’s handoff but does not serve traffic until it acquires the shared lease.
+A warm standby follows the active router's handoff and waits to serve traffic until it acquires the shared lease.
 
 The previous lease holder fences itself before its local lease expires.
 

@@ -2,7 +2,7 @@
 
 ## Runtime contract
 
-Every engine in a Narwhal fleet must implement the same runtime contract. An engine must:
+Each engine implements the same runtime contract:
 
 - expose the configured inference-engine dialect;
 - produce and consume compatible KV cache;
@@ -13,11 +13,7 @@ Every engine in a Narwhal fleet must implement the same runtime contract. An eng
 
 For vLLM engines with effective `kv_both` behaviour, an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
 
-These requirements make role reassignment possible without changing the model image or rebuilding the serving topology.
-
 ## How a request executes
-
-An OpenAI-compatible completion request passes through admission, prefill placement, KV ownership, decode placement, and streaming.
 
 1. **Admission**
    The router receives the request and assigns one of the available serving seats.
@@ -46,8 +42,6 @@ Every retry obtains fresh KV ownership.
 
 ## Fleet topology
 
-Narwhal supports four deployment patterns. They differ mainly in how prefill and decode capacity are allocated and what it costs to change that allocation.
-
 | Topology             | Role assignment                                               | Cost of changing the split                                                                    |
 | -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Aggregated           | Every engine performs both prefill and decode                 | No explicit reallocation; both phases contend on each engine                                  |
@@ -59,9 +53,7 @@ Narwhal supports four deployment patterns. They differ mainly in how prefill and
 
 ![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
 
-Each engine performs both phases, so KV remains local. Long prefills and occupied decode batches compete for the same scheduler.
-
-This avoids transfer between separate pools but couples the two phases inside each replica.
+Each engine performs prefill and decode with local KV, so long prefills and occupied decode batches compete for its scheduler.
 
 ### Static disaggregation
 
@@ -84,13 +76,13 @@ A cold-swap:
 5. completes health validation;
 6. returns the engine to service.
 
-A changed split is useful only when the traffic shift persists long enough to offset that restart interval.
+Cold-swap pays the drain and restart interval before the new split serves traffic, so the traffic shift must persist long enough to use that capacity.
 
 ### Adaptive hot-swap
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
 
-Hot-swap changes only the scheduler role assigned to an eligible dual-capability engine. Model weights stay resident and KV paths already connect eligible peers.
+Hot-swap reassigns the scheduler role of an eligible dual-capability engine while model weights stay resident and KV paths continue connecting eligible peers.
 
 Narwhal constrains these moves with:
 
@@ -100,5 +92,3 @@ Narwhal constrains these moves with:
 - minimum role floors;
 - resident-work guards;
 - health and lifecycle exclusions.
-
-These controls prevent short-lived pressure changes from repeatedly moving capacity between phases.

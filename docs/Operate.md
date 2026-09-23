@@ -1,6 +1,6 @@
 # Narwhal Production Operations
 
-Narwhal controls admission and placement for one model fleet through one active router. Each fleet runs a router pair against a shared lease domain. The lease grants admission authority to one router and fences its peer as standby.
+A router pair shares one lease domain for each model fleet. The lease gives one router admission and placement authority while its peer remains on standby.
 
 ```text
 clients
@@ -36,6 +36,4 @@ For a new or replaced production deployment:
 12. Run router failover through the production load balancer.
 13. Open client admission.
 
-Use [Troubleshoot a fleet](Troubleshoot.md) for failure procedures.
-
-Use [Measure a fleet](Measure.md) for production evidence and deployment validation.
+Use [Troubleshoot a fleet](Troubleshoot.md) for failure procedures and [Measure a fleet](Measure.md) for production evidence and deployment validation.

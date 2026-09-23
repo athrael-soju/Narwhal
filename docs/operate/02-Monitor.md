@@ -65,12 +65,7 @@ A replacement router must run the same release, apply the same lifecycle rules, 
 
 ## 6. Monitor placement and control
 
-Use [Set up observability](../Observability.md) to:
-
-1. generate engine scrape targets;
-2. start Prometheus and Grafana;
-3. verify metric collection;
-4. open the dashboard through an SSH tunnel.
+Follow [Set up observability](../Observability.md) to generate engine scrape targets, start Prometheus and Grafana, verify collection, and open the dashboard through an SSH tunnel.
 
 Choose router and engine scopes using the [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard).
 
@@ -103,4 +98,4 @@ Configure thresholds for:
 
 Use request journals for per-request placement and timing analysis.
 
-Use metrics for process-level summaries. Interpret counters within their reset behaviour and state-retention windows.
+Use metrics for process-level summaries within their counter-reset behaviour and state-retention windows.

@@ -1,8 +1,6 @@
 # Core concepts
 
-Narwhal manages a fleet of dual-capability inference engines serving one model. Its defining capability is role reallocation: an engine can move between logical prefill and decode pools without reloading model weights.
-
-The scheduler changes how resident engine capacity is used. Engines remain loaded, KV transfer paths remain available, and existing requests retain their placements while new work follows the current role assignment.
+Narwhal assigns prefill and decode roles across dual-capability engines serving one model. A role move changes placement for new requests while model weights, KV paths, and resident requests stay on their engines.
 
 ## Concepts
 

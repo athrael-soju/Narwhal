@@ -38,7 +38,7 @@ The router also keeps `/ready` at HTTP 503 when the handoff has an incompatible 
 
 Keep client traffic stopped while restoring a compatible router release and state set.
 
-If the compatible state cannot be restored, start one router from its configured opening roles during a maintenance window.
+When handoff recovery fails, start one router from its configured opening roles during a maintenance window.
 
 Before admitting traffic, verify that the previous router process is stopped or fenced.
 
@@ -56,6 +56,13 @@ narwhal-check --print-contract-versions
 
 Restore configuration, profiles, and a handoff version that the rollback build can read.
 
+For a rollback that starts from configured opening roles and resets cumulative counters, configure:
+
+```yaml
+recovery:
+  resume: false
+```
+
 Before serving traffic, verify that fleet control belongs either to the rollback router or to its fenced HA peer.
 
 Start the rollback build and check:
@@ -67,14 +74,5 @@ Start the rollback build and check:
 - one completion request.
 
 Return it to service after those checks pass. Restore its standby after the active router is stable.
-
-Older builds can load handoffs that declare a supported schema version.
-
-To discard resumed runtime state, start from configured opening roles, and reset cumulative counters, configure:
-
-```yaml
-recovery:
-  resume: false
-```
 
 Run the [post-recovery drills](../Troubleshoot.md#after-recovery) after the router returns to service.

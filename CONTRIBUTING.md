@@ -37,7 +37,7 @@ The CI jobs use the repository's CPU fixtures and a standard read-only GitHub to
 
 Run `make coverage` when line or branch evidence is needed across the unit suite and CPU drills. Reports, subprocess data and logs go under a new `runs/coverage/run-*` directory. Select a new output directory with `COVERAGE_ARGS='--out runs/coverage/review'`. The HTML report annotates each source file; JSON records the suite contexts.
 
-Coverage measures package and tool code; the HTML report renders executable source branches inline for reviewers. Each new test should assert a named failure or invariant. Tests live under `tests/` by component, with shared CPU profiles and fleets in `tests/fixtures.py`.
+Place tests under `tests/` by component, assert a named failure or invariant, and reuse the CPU profiles and fleets in `tests/fixtures.py`.
 
 CPU checks use local stubs, temporary files and synthetic credentials. Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, launch a representative per runtime group, qualify directed links, attest the live engines, profile and preflight the fleet, then run routed load through the private path with observability.
 
@@ -76,8 +76,6 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 
 Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
 
-The scheduler estimates load from request activity, while the runtime monitoring loop checks whether the engines are healthy.
-
 Keep package initializers light and cross-package imports explicit. Use `TYPE_CHECKING` for type-only imports across the serving/runtime boundary.
 
 Because config models already import scheduling definitions and serving policy, those modules must stay independent of router construction to avoid circular imports.
@@ -114,8 +112,7 @@ Describe the problem, the resulting behaviour, and how you checked it. Link the 
 
 Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The prefix determines the release impact.
 
-Bring the branch up to date with `main` and run `make check` locally before merge. Documentation changes also require `make docs-build`.
-Install the documentation extra with `.venv/bin/pip install -e '.[docs]'` before building the site.
+Bring the branch up to date with `main` and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
 
 A maintainer reviews the PR and local check results, then squash-merges it using the PR title. Branch protection requires a PR and blocks force pushes; GitHub deletes each branch at squash-merge.
 

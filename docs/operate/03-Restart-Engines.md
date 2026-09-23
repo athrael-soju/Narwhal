@@ -59,7 +59,7 @@ Narwhal runs the readmission gates in this sequence:
 6. role-permitted KV transfer;
 7. final health.
 
-One failed gate keeps the engine blocked. The API returns HTTP 409 and identifies the failed gate.
+A failed gate keeps the engine blocked and returns HTTP 409 with the gate name.
 
 ### 7.4 Recover an unplanned ejection
 
@@ -150,17 +150,7 @@ If identity collection reaches an engine that is already stopped:
 
 ## 9. Detect process replacement
 
-Contracted fleets verify process identity after each successful liveness sample.
-
-Narwhal compares:
-
-- `/version`;
-- `process_start_time_seconds`;
-- process-bound attestation;
-
-against the accepted identity.
-
-A difference triggers recovery.
+After each successful liveness sample, Narwhal compares the running engine's `/version`, `process_start_time_seconds`, and process-bound attestation with its accepted identity, starting recovery when a value changes.
 
 The handoff stores:
 
