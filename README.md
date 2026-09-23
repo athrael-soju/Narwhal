@@ -54,22 +54,25 @@ Install the router commands on Linux with Python 3.11 or newer:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install narwhal-inference
+python -m pip show narwhal-inference
 narwhal-check --help
 ```
 
-The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers version checks and the fleet inputs needed after installation. A production deployment also uses an approved source checkout for host preparation and engine launch.
+The wheel installs `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
 ## Deploy a fleet
 
-From a management workstation, [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) uses the private `.env` and host inspection to prepare router and GPU engine hosts, launch vLLM with NIXL, and verify a completion through Narwhal. Measure the workload through the private SSH route, reconcile the results, and inspect the fleet through Prometheus and Grafana.
+From a management workstation, an operator follows [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) to inspect the target hardware and model, install an approved source revision, validate the running vLLM processes and KV paths, then profile and preflight before routing traffic. The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
 
-## Documentation
+## Reference
 
 - [Architecture and scheduling](https://athrael-soju.github.io/Narwhal/Core-Concepts/)
 - [Fleet configuration](https://athrael-soju.github.io/Narwhal/Configuration/)
+- [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/)
 - [HTTP API](https://athrael-soju.github.io/Narwhal/HTTP-API/)
 - [Fleet measurement](https://athrael-soju.github.io/Narwhal/Measure/)
-- [Ingress, monitoring and maintenance](https://athrael-soju.github.io/Narwhal/Operate/)
+- [Prometheus and Grafana](https://athrael-soju.github.io/Narwhal/Observability/)
+- [Ingress and maintenance](https://athrael-soju.github.io/Narwhal/Operate/)
 - [Troubleshooting](https://athrael-soju.github.io/Narwhal/Troubleshoot/)
 
 ## Contributing
