@@ -4,13 +4,13 @@
 
 ### Primary router failed
 
-Query private `/ready` on both routers and confirm exactly one `/narwhal/lifecycle` document reports `router.controls_fleet: true` and direct load-balancer traffic to that router.
+Query `/ready` and `/narwhal/lifecycle` on both routers, then direct load-balancer traffic to the single lease holder reporting `router.controls_fleet: true` when its `/ready` returns HTTP 200.
 
-Compare the active router with the failed primary:
+Check the active router against the last persisted handoff:
 
-- the active router's lease epoch must be greater;
-- its roles must match the last handoff;
-- its cumulative counters must match the last handoff.
+- its lease epoch exceeds the failed primary's last epoch;
+- its roles match the last handoff;
+- its cumulative counters match the last handoff.
 
 Restart the old primary as a standby:
 
