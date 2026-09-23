@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any
@@ -43,6 +44,7 @@ _DECODE_BOUNDS = (
 
 
 _OPTIONAL_DEFAULTS: dict[str, Any] = {
+    "generation_digest": None,
     "kv_capacity_tokens": None,
     "tpot_request_slope": 0.0,
     "decode_min_requests": None,
@@ -67,6 +69,11 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
     iid = raw.get("iid")
     if not isinstance(iid, str) or not iid:
         raise ValueError(f"{where}: iid must be a nonempty string")
+    generation = raw.get("generation_digest")
+    if generation is not None and (
+        not isinstance(generation, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", generation) is None
+    ):
+        raise ValueError(f"{where}: generation_digest must be a sha256 digest")
     values: dict[str, float] = {}
     for name in _FLOAT_FIELDS:
         value = raw.get(name, _OPTIONAL_DEFAULTS.get(name))
@@ -124,6 +131,7 @@ class Profile:
     ttft_c: float
     tpot_slope: float
     tpot_intercept: float
+    generation_digest: str | None = None
     kv_capacity_tokens: int | None = None
     tpot_request_slope: float = 0.0
     decode_min_requests: int | None = None

@@ -71,7 +71,8 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * the per-length medians used for the TTFT fit;
 * decode intervals;
 * cell medians;
-* fitted profiles.
+* fitted profiles;
+* the verified attestation response or process identity that binds each fit to its engine generation.
 
 The sample sidecar retains raw prefill measurements and the fit error when a TTFT fit fails, and keeps completed engine data if a later engine fails. `--overwrite` creates a new output pair for the selected engines.
 
@@ -101,7 +102,7 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The command requires saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted prefill curves and copied measured decode coefficients, preserving the original pair.
+The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted prefill curves and copied measured decode coefficients, preserving the original pair. Earlier sample files require a fresh sweep against the current engine processes.
 
 After refitting:
 

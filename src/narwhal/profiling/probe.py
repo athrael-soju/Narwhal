@@ -28,6 +28,7 @@ from .fitting import (
     fit_decode_plane,
     fit_prefill_samples,
 )
+from .generation import read_generation
 from .model import Profile
 from .store import ProfileStore
 
@@ -521,6 +522,8 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             raise ValueError(f"{iid}: saved profile evidence is invalid") from exc
         if old.iid != iid:
             raise ValueError(f"{iid}: saved profile identity differs from the fleet")
+        if old.generation_digest is None or not isinstance(row.get("generation_evidence"), dict):
+            raise ValueError(f"{iid}: saved samples lack generation evidence; reprofile the engine")
         (a, b, c), representatives, error = fit_prefill_samples(samples)
         updated = replace(old, ttft_a=a, ttft_b=b, ttft_c=c)
         row.update(
@@ -614,6 +617,13 @@ async def run(
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
             try:
+                generation = await read_generation(
+                    spec,
+                    cfg.engine_contract,
+                    timeout_s=cfg.health_timeout_s,
+                    headers=cfg.engine_headers(),
+                )
+                engine_evidence["generation_evidence"] = generation.document
                 profile = await profile_instance(
                     client,
                     spec.iid,
@@ -625,7 +635,16 @@ async def run(
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
                 )
-            except (ValueError, RuntimeError) as exc:
+                current = await read_generation(
+                    spec,
+                    cfg.engine_contract,
+                    timeout_s=cfg.health_timeout_s,
+                    headers=cfg.engine_headers(),
+                )
+                if generation.digest != current.digest:
+                    raise ValueError(f"{spec.iid}: engine generation changed during profiling")
+                profile = replace(profile, generation_digest=generation.digest)
+            except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 engine_evidence["error"] = str(exc)
                 evidence_rows[spec.iid] = engine_evidence
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)

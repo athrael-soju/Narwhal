@@ -252,6 +252,11 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 store = stack.enter_context(
                     patch.object(check, "gate_profile", return_value="store")
                 )
+                stack.enter_context(
+                    patch.object(
+                        check, "gate_profile_generation", new=AsyncMock(return_value=set())
+                    )
+                )
                 slo = stack.enter_context(patch.object(check, "gate_slo"))
                 report = Report()
                 self.assertEqual(
@@ -304,6 +309,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(check, f"gate_{name}", new=AsyncMock(return_value=value))
                 )
             stack.enter_context(patch.object(check, "gate_profile"))
+            stack.enter_context(
+                patch.object(check, "gate_profile_generation", new=AsyncMock(return_value=set()))
+            )
             stack.enter_context(patch.object(check, "gate_slo"))
             self.assertEqual(await check.run(self.cfg, False, True, report=report), 1)
         client.aclose.assert_awaited_once()
