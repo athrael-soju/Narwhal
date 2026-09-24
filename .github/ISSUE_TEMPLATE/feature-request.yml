@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a change to Narwhal behaviour or operator workflow
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the workload, operator action, or failure that prompts this request.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Desired behaviour
+      description: Describe the result you need and any constraints that affect it.
+    validations:
+      required: true
+  - type: textarea
+    id: current-path
+    attributes:
+      label: Current path
+      description: Describe how you handle this today, if applicable.
