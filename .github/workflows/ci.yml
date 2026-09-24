@@ -4,6 +4,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch: {}
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,6 +13,7 @@ permissions:
   contents: read
 jobs:
   checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,6 +32,7 @@ jobs:
         run: python tools/maintenance/release.py check --release
 
   unit:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -48,6 +51,7 @@ jobs:
       - run: make unit VENV_PYTHON=python
 
   package:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -87,7 +91,7 @@ jobs:
           make test VENV_PYTHON=python
 
   gates:
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     needs: [checks, unit, package]
     runs-on: ubuntu-latest
     timeout-minutes: 1
