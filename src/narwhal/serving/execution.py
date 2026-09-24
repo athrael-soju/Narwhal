@@ -217,11 +217,22 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     kind = "expired" if expired else state.phase
     if isinstance(exc, NoEngine):
         kind = "backend_unavailable" if state.attempts else "no_schedulable_engines"
+    if isinstance(exc, NoEngine):
+        public_detail = "Engine capacity is unavailable"
+    elif isinstance(exc, RequestExpired | QueueExpired | HandoffExpired):
+        public_detail = "Request deadline expired"
+    elif isinstance(exc, ResponseLimitExceeded):
+        public_detail = "Response exceeds the configured limit"
+    elif isinstance(exc, ValueError):
+        public_detail = "Invalid non-streaming upstream response"
+    else:
+        public_detail = "Upstream request failed"
     state.finish("expired" if expired else "failed", error=detail, status=status)
+    state.outcome["public_error"] = public_detail
     return JSONResponse(
         status_code=status,
         headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
-        content={"error": {"message": detail, "type": kind, "code": kind}},
+        content={"error": {"message": public_detail, "type": kind, "code": kind}},
     )
 
 
@@ -277,7 +288,7 @@ async def serve_request(
             status_code=state.outcome["status"],
             content={
                 "error": {
-                    "message": state.outcome["error"],
+                    "message": state.outcome["public_error"],
                     "type": state.phase,
                 }
             },
@@ -442,7 +453,7 @@ async def run_decode(
                 + json.dumps(
                     {
                         "error": {
-                            "message": state.outcome["error"],
+                            "message": state.outcome["public_error"],
                             "type": state.phase,
                             "code": state.terminal,
                         }
