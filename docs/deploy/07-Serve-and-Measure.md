@@ -67,6 +67,8 @@ Grafana is available at:
 http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator
 ```
 
+Use **Change theme** in Grafana's user menu to select Dark or Light.
+
 Point the workload client at `$NARWHAL_TRIAL_URL`. The trial therefore includes SSH network and encryption overhead in the measured client path.
 
 The helper targets `127.0.0.1` on the router and writes a log under `runs/access-<id>/`. If a workstation port is occupied, change its local `--forward` value and the corresponding client URL; keep the remote service port.

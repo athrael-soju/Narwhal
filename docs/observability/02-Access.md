@@ -22,6 +22,8 @@ Open:
 
 Grafana permits anonymous Viewer access through the local tunnel.
 
+Select **Change theme** from Grafana's user menu to switch between Dark and Light. Append `?theme=dark` to the dashboard URL to request Dark for that visit. Signed-in users can save a theme under **Profile** > **Preferences**.
+
 If a deployment exposes Prometheus or Grafana through another route, apply that deployment's existing ingress, authentication, and TLS policy.
 
 The [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) documents router and engine scope selection.
