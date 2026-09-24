@@ -82,8 +82,8 @@ def _ports_free(selected: list[tuple[Path, dict]]) -> None:
             plan["side_channel_port"],
         ):
             for family, address in (
-                (socket.AF_INET, "0.0.0.0"),
-                (socket.AF_INET6, "::"),
+                (socket.AF_INET, "127.0.0.1"),
+                (socket.AF_INET6, "::1"),
             ):
                 try:
                     with socket.socket(family, socket.SOCK_STREAM) as listener:
