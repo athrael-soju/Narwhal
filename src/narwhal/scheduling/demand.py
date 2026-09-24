@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from statistics import median
 
+from ..profiling.model import Profile
 from ..types import Role
 from .monitor import InstanceMonitor
 from .scheduler import GlobalScheduler
@@ -160,32 +161,58 @@ class DemandModel:
         window semantics, including the `last_demand` update.
         """
         window = horizon_s if horizon_s is not None else window_s
+        profiles = tuple(
+            row
+            for iid in self.monitor.instances
+            if (row := self.scheduler.profiles.get(iid)) is not None
+        )
+        priced = self.price_profiles(
+            now,
+            window_s=window_s,
+            step_s=step_s,
+            profiles=profiles,
+            horizon_s=window,
+            estimates=estimates,
+            correction=correction,
+        )
+        if horizon_s is None:
+            self.last_demand = priced
+        return priced.prefill_engines, priced.decode_engines
+
+    def resident_demand(self, now: float, window_s: float) -> float:
+        """Return the observed decode occupancy in engine equivalents."""
+        residents = list(self.residency.rows(now - window_s))
+        count = sum(row.count for row in residents)
+        return sum(row.value * row.count for row in residents) / count if count else 0.0
+
+    def price_profiles(
+        self,
+        now: float,
+        *,
+        window_s: float,
+        step_s: float,
+        profiles: tuple[Profile, ...],
+        horizon_s: float | None = None,
+        estimates: OutputEstimates | None = None,
+        correction: float | None = None,
+    ) -> Demand:
+        """Price one window against a particular measured role-mix profile set."""
+        window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
         h0 = now - window
-        arrivals = list(self.arrivals.rows(h0))
-        expected = list(self.expected_decode.rows(h0))
         prefill = 0.0
-        for row in arrivals:
-            cost = self.scheduler.profiles.mean_prefill_time(row.value, iids=self.monitor.instances)
-            if cost is not None:
+        demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
+        for row in self.arrivals.rows(h0):
+            if profiles and all(p.covers_prefill(row.value) for p in profiles):
+                cost = sum(p.prefill_time(row.value) for p in profiles) / len(profiles)
                 prefill += cost * row.count / span
-        residents = list(self.residency.rows(now - window_s))
-        resident_count = sum(row.count for row in residents)
-        resident_decode = (
-            sum(row.value * row.count for row in residents) / resident_count
-            if resident_count
-            else 0.0
-        )
+            else:
+                demand_complete = False
         expected_decode = 0.0
-        demand_complete = (
-            len(self.scheduler.profiles) > 0
-            and not self.unsized_pending
-            and not self.unsized.count(h0)
-        )
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
         capacities: dict[tuple[int, int], float | None] = {}
-        for expected_row in expected:
+        for expected_row in self.expected_decode.rows(h0):
             input_len, wanted_len = expected_row.value
             # A merged shape may contain several output buckets. Price its full
             # cap; no learned ratio can safely stand for all of those requests.
@@ -199,28 +226,29 @@ class DemandModel:
                 continue
             key = (input_len, output_len)
             if key not in capacities:
-                capacities[key] = self.scheduler.profiles.mean_decode_rps(
-                    self.scheduler.slo.tpot_s,
-                    input_len + output_len / 2.0,
-                    output_len,
-                    correction=correction,
-                    iids=self.monitor.instances,
-                )
+                context = input_len + output_len / 2.0
+                values = [
+                    p.decode_rps(
+                        self.scheduler.slo.tpot_s,
+                        context,
+                        output_len,
+                        correction=correction,
+                    )
+                    for p in profiles
+                ]
+                capacities[key] = sum(values) / len(values) if values else None
             capacity = capacities[key]
             if not capacity:
                 demand_complete = False
                 continue
             expected_decode += expected_row.count / (span * capacity)
-        decode = max(resident_decode, expected_decode)
-        if horizon_s is None:
-            self.last_demand = Demand(
-                prefill_engines=prefill,
-                decode_engines=decode,
-                arrivals=self.arrival_count(now - window_s),
-                output_observations=self.observed_decode.count(now - 4 * window_s),
-                complete=demand_complete,
-            )
-        return prefill, decode
+        return Demand(
+            prefill_engines=prefill,
+            decode_engines=max(self.resident_demand(now, window_s), expected_decode),
+            arrivals=self.arrival_count(now - window_s),
+            output_observations=self.observed_decode.count(now - 4 * window_s),
+            complete=demand_complete,
+        )
 
     @staticmethod
     def _shape_bucket(tokens: int) -> int:

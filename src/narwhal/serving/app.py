@@ -116,8 +116,8 @@ def create_app(
             )
         generation_failures = []
         for spec in cfg.engines:
-            profile = router.profiles.get(spec.iid)
-            if profile is None:
+            profiles = router.profiles.profiles_for_engine(spec.iid)
+            if not profiles:
                 continue
             try:
                 generation = await read_generation(
@@ -132,9 +132,10 @@ def create_app(
                     f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission"
                 )
                 continue
-            problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
-            if problem:
-                generation_failures.append(problem)
+            for profile in profiles:
+                problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
+                if problem and problem not in generation_failures:
+                    generation_failures.append(problem)
         if generation_failures:
             raise RuntimeError("; ".join(generation_failures))
         watch = None

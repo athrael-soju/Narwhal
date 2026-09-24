@@ -31,6 +31,7 @@ from ..profiling.generation import generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
 from ..profiling.probe import engine_context_limit, make_prompt
 from ..profiling.store import ProfileStore
+from ..types import Role
 
 PROBE_PROMPT = "benchmark " * 64
 
@@ -541,6 +542,25 @@ async def gate_consume(
             evidence.append(record)
 
 
+def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
+    groups = {
+        spec.iid: spec.shared_device.group for spec in cfg.engines if spec.shared_device is not None
+    }
+    if groups:
+        roles = {spec.iid: spec.role for spec in cfg.engines}
+        mixes = {
+            group: (
+                sum(
+                    role is Role.PREFILL for iid, role in roles.items() if groups.get(iid) == group
+                ),
+                sum(role is Role.DECODE for iid, role in roles.items() if groups.get(iid) == group),
+            )
+            for group in set(groups.values())
+        }
+        store.bind_role_mix(groups, mixes.__getitem__, roles.__getitem__)
+    return store
+
+
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     """Check the store binds the fleet and meets the decode error policy.
 
@@ -548,7 +568,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     inside the fleet's profile-validation error limits.
     """
     print("profile")
-    store = ProfileStore(cfg.profiles_path)
+    store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
     for spec in cfg.engines:
         p = store.get(spec.iid)
@@ -590,8 +610,8 @@ async def gate_profile_generation(
     """Fence profiles whose measured engine generation differs from the live one."""
     unsafe: set[str] = set()
     for spec in cfg.engines:
-        profile = store.get(spec.iid)
-        if profile is None or spec.iid not in live:
+        profiles = store.profiles_for_engine(spec.iid)
+        if not profiles or spec.iid not in live:
             continue
         try:
             generation = await read_generation(
@@ -605,11 +625,19 @@ async def gate_profile_generation(
             rep.fail(f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission")
             unsafe.add(spec.iid)
             continue
-        problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
-        if problem:
+        problems = [
+            problem
+            for profile in profiles
+            if (
+                problem := generation_problem(
+                    spec.iid, profile.generation_digest, generation.digest
+                )
+            )
+        ]
+        for problem in dict.fromkeys(problems):
             rep.fail(problem)
             unsafe.add(spec.iid)
-        else:
+        if not problems:
             rep.ok(f"{spec.iid} profile generation {generation.digest}")
     return unsafe
 
