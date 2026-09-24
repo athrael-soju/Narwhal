@@ -104,7 +104,7 @@ Site automation owns host credentials, source distribution, network configuratio
 
 ## Issues
 
-Apply the existing labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug report template selects `bug`; assign labels to blank issues when opening them.
+Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug report template selects `bug`; blank issues receive `triage`, which maintainers replace with the applicable label.
 
 Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
