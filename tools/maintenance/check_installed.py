@@ -161,6 +161,8 @@ def main(argv=None):
             packaged.read_bytes()
             == (args.source_root / "tools" / "deployment" / f"{name}.py").read_bytes()
         ), name
+    native = importlib.import_module("narwhal.deployment.native_engine")
+    assert Path(native.__file__).resolve().is_relative_to(Path(deployment).resolve())
     monitoring = importlib.resources.files("narwhal.observability")
     for name in ("compose.yml", *FILES):
         assert (
@@ -181,6 +183,7 @@ def main(argv=None):
     expected_entries = {
         "narwhal-attest",
         "narwhal-check",
+        "narwhal-engine",
         "narwhal-observe",
         "narwhal-profile",
         "narwhal-serve",

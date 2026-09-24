@@ -57,6 +57,7 @@ narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe:main"
 narwhal-observe = "narwhal.observability.start:main"
+narwhal-engine = "narwhal.deployment.launch_engine:main"
 
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"

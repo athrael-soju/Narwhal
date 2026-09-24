@@ -33,6 +33,54 @@ IMAGE_CHECK_OUTPUT = (
 
 
 class EngineLauncherTests(unittest.TestCase):
+    def test_native_backend_uses_existing_engine_plan_without_an_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            run = root / "launch"
+            prepare(run, env, backend="native")
+            plan = load(run)
+            self.assertEqual(plan["backend"], "native")
+            model_arg = plan["args"][plan["args"].index("--model") + 1]
+            self.assertEqual(model_arg, env["NARWHAL_MODEL_DIR"])
+            self.assertEqual(plan["connector"]["kv_connector"], "NixlConnector")
+            self.assertFalse(plan["common"])
+            output = (
+                '{"vllm": "0.29.0", "nixl": "1.0.0"}\n'
+                "NARWHAL_TOKENIZER_READY=1\n"
+                'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
+            )
+            with (
+                patch("tools.deployment.launch_engine.docker") as docker,
+                patch("tools.deployment.launch_engine.subprocess.run") as invoke,
+            ):
+                invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
+                check(run, plan)
+                docker.assert_not_called()
+                self.assertEqual(invoke.call_args.args[0][0], sys.executable)
+            checked = json.loads((run / "checked.json").read_text())
+            self.assertEqual(checked["backend"], "native")
+            self.assertNotIn("image_id", checked)
+
+    def test_native_check_rejects_model_file_changed_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            model = root / "model" / "weights.gguf"
+            model.write_bytes(b"first")
+            env["NARWHAL_MODEL_PATH"] = str(model)
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            run = root / "launch"
+            prepare(run, env, backend="native")
+            model.write_bytes(b"changed")
+            with patch("tools.deployment.launch_engine.subprocess.run") as invoke:
+                with self.assertRaisesRegex(ValueError, "model file changed"):
+                    check(run, load(run))
+                invoke.assert_not_called()
+
     def test_plan_supplies_model_devices_ports_and_connector_without_access_credentials(self):
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
