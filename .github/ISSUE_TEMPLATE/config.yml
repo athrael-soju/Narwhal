@@ -1,1 +1,8 @@
 blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/athrael-soju/Narwhal/security/advisories/new
+    about: Send security reports privately through GitHub advisories.
+  - name: Ask a question
+    url: https://github.com/athrael-soju/Narwhal/discussions
+    about: Use Discussions for setup and usage questions.

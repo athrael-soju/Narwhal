@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.profiling import probe
+from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
 from tests.fixtures import fleet, invalid_token_choices, profile
 
@@ -320,12 +321,24 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(probe.httpx, "AsyncClient", return_value=client),
                 patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                    ),
+                ),
                 patch.object(probe, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(await probe.run(cfg, {"e0"}, limits_path=limits_path), 0)
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), 1)
+            self.assertEqual(
+                ProfileStore(cfg.profiles_path).get("e0").generation_digest,
+                "sha256:" + "a" * 64,
+            )
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
+            self.assertEqual(saved["engines"]["e0"]["generation_evidence"], {"engine": {}})
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
@@ -345,6 +358,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(probe.httpx, "AsyncClient", return_value=client),
                 patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                    ),
+                ),
                 patch.object(probe, "probe_prefill", AsyncMock(return_value=bad)),
                 patch.object(probe, "probe_decode", AsyncMock()) as decode,
                 redirect_stdout(io.StringIO()),
@@ -356,6 +376,32 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertEqual(saved["engines"]["e0"]["prefill"], [list(row) for row in bad])
             self.assertIn("prefill median fit error", saved["engines"]["e0"]["error"])
+
+    async def test_run_discards_fit_when_engine_restarts_during_sweep(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "new.json"
+            client = httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            )
+            generations = (
+                GenerationEvidence("sha256:" + "a" * 64, {"engine": {"start": 100}}),
+                GenerationEvidence("sha256:" + "b" * 64, {"engine": {"start": 101}}),
+            )
+            with (
+                patch.object(probe.httpx, "AsyncClient", return_value=client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(probe, "profile_instance", AsyncMock(return_value=profile("e0"))),
+                patch.object(probe, "read_generation", AsyncMock(side_effect=generations)),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(
+                    ValueError, "e0: engine generation changed during profiling"
+                ),
+            ):
+                await probe.run(cfg, {"e0"})
+            self.assertFalse(cfg.profiles_path.exists())
+            saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
+            self.assertIn("generation changed", saved["engines"]["e0"]["error"])
 
     def test_saved_prefill_refit_preserves_decode_and_original_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -377,7 +423,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             original = {
                 "method_version": 1,
                 "engines": {
-                    iid: {"prefill": raw, "profile": asdict(profile(iid))} for iid in ("e0", "e3")
+                    iid: {
+                        "prefill": raw,
+                        "profile": asdict(profile(iid, generation_digest="sha256:" + "a" * 64)),
+                        "generation_evidence": {"engine": {}},
+                    }
+                    for iid in ("e0", "e3")
                 },
             }
             source.write_text(json.dumps(original))
@@ -405,6 +456,15 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
             with self.assertRaises(FileExistsError):
                 probe.refit_saved_prefill(source, output, {"e0", "e3"})
+
+            legacy = root / "legacy.samples.json"
+            legacy_record = json.loads(source.read_text())
+            for row in legacy_record["engines"].values():
+                row["profile"].pop("generation_digest")
+                row.pop("generation_evidence")
+            legacy.write_text(json.dumps(legacy_record))
+            with self.assertRaisesRegex(ValueError, "e0: saved samples lack generation evidence"):
+                probe.refit_saved_prefill(legacy, root / "legacy-refit.json", {"e0", "e3"})
 
     def test_kv_capacity_uses_the_smallest_reported_rank(self):
         """The physical bound follows the smallest rank capacity."""

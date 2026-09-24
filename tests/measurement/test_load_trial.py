@@ -45,6 +45,36 @@ def sse(*, count=3, input_tokens=8, done=True, usage=True):
 
 
 class StreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_drain_preserves_idle_timeout_and_state_error(self):
+        def handler(request):
+            if request.url.path != "/narwhal/state":
+                return httpx.Response(404)
+            return httpx.Response(200, json=IDLE)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            observed = await trial.poll_drain(client, "http://test", 1)
+            self.assertEqual(observed["condition"], "idle")
+            self.assertEqual(observed["polls"], 1)
+            self.assertEqual(await trial.drain(client, "http://test", 1), IDLE)
+
+        busy = IDLE | {"admission": IDLE["admission"] | {"inflight": 1}}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=busy))
+        ) as client:
+            observed = await trial.poll_drain(client, "http://test", 0.01, 0.001)
+            self.assertEqual(observed["condition"], "timeout")
+            self.assertGreaterEqual(observed["polls"], 1)
+            with self.assertRaisesRegex(ValueError, "Router drain deadline"):
+                await trial.drain(client, "http://test", 0.01)
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503))
+        ) as client:
+            observed = await trial.poll_drain(client, "http://test", 1)
+            self.assertEqual(observed["condition"], "state_error")
+            with self.assertRaisesRegex(ValueError, "Router drain state error"):
+                await trial.drain(client, "http://test", 1)
+
     async def request(self, content, *, status=200, clock=None):
         def handler(request):
             self.assertEqual(request.headers["x-request-id"], "trial-0")
@@ -166,6 +196,32 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(trial.body_for(workload, 0)["prompt"]), 8192)
             self.assertEqual(trial.body_for(workload, 0), trial.body_for(workload, 0))
             self.assertNotEqual(trial.body_for(workload, 0), trial.body_for(workload, 1))
+
+    async def test_prepare_uses_prompt_ids_when_model_output_repeats(self):
+        def handler(request):
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "test-model"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "prompt_token_ids": [11, 12, 13],
+                            "token_ids": [7] * 32,
+                            "finish_reason": "length",
+                        }
+                    ]
+                },
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(
+                out=Path(directory), input_tokens=8192, output_tokens=128, seed=1729
+            )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                await trial.prepare(client, "http://test", args)
+            workload = trial.load_workload(args.out / "workload.json")
+            self.assertEqual(workload["token_pool"], [11, 12, 13])
 
 
 class AccountingTests(unittest.TestCase):

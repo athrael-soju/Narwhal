@@ -12,6 +12,7 @@ Narwhal returns live scheduler and router state as `narwhal.state` schema versio
 | ----------------------- | ------------------------------------------------------------------------------------ |
 | `schema`                | `narwhal.state`                                                                      |
 | `schema_version`        | State schema version; this release writes `1`                                        |
+| `journal_run`           | Current router process ID used by request journal rows                              |
 | `served`                | Completed requests; preserved across resume and takeover                             |
 | `failed`                | Requests ending in error; preserved across resume and takeover                       |
 | `offered`               | Completion arrivals in the current process                                           |

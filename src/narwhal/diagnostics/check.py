@@ -21,6 +21,7 @@ from ..engines.connector import PrefillResult
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.validation import can_consume, can_produce, validation_pairs
+from ..profiling.generation import generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
 from ..profiling.store import ProfileStore
 
@@ -440,6 +441,40 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     return store
 
 
+async def gate_profile_generation(
+    cfg: FleetConfig,
+    store: ProfileStore,
+    live: set[str],
+    rep: Report,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> set[str]:
+    """Fence profiles whose measured engine generation differs from the live one."""
+    unsafe: set[str] = set()
+    for spec in cfg.engines:
+        profile = store.get(spec.iid)
+        if profile is None or spec.iid not in live:
+            continue
+        try:
+            generation = await read_generation(
+                spec,
+                cfg.engine_contract,
+                timeout_s=cfg.health_timeout_s,
+                headers=cfg.engine_headers(),
+                transport=transport,
+            )
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            rep.fail(f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission")
+            unsafe.add(spec.iid)
+            continue
+        problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
+        if problem:
+            rep.fail(problem)
+            unsafe.add(spec.iid)
+        else:
+            rep.ok(f"{spec.iid} profile generation {generation.digest}")
+    return unsafe
+
+
 def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
     """Check that each profile can meet the configured latency targets.
 
@@ -494,8 +529,11 @@ async def run(
     try:
         live = await gate_reach(cfg, client, rep)
         incompatible = await gate_contract(cfg, live, rep)
+        store = gate_profile(cfg, rep)
+        stale = await gate_profile_generation(cfg, store, live, rep)
+        incompatible.update(stale)
         incompatible.update(await gate_model(cfg, live, rep))
-        pace_store = ProfileStore(cfg.profiles_path) if cfg.profiles_path.exists() else None
+        pace_store = store if not stale else None
         slow = await gate_pace(cfg, live, rep, pace_store)
         await gate_tokenize(cfg, live, client, rep)
         if skip_kv:
@@ -508,7 +546,6 @@ async def run(
         else:
             handoffs = await gate_produce(cfg, live, client, rep)
             await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
-        store = gate_profile(cfg, rep)
         gate_slo(cfg, store, rep)
     finally:
         await client.aclose()

@@ -49,6 +49,7 @@ class ProfileStoreTests(unittest.TestCase):
             ("decode_max_requests", True),
             ("decode_min_kv_tokens", 100_001),
             ("kv_capacity_tokens", 10),
+            ("generation_digest", "sha256:invalid"),
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 Profile(**{**base, field: value})

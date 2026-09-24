@@ -428,6 +428,7 @@ class StateOut(BaseModel):
 
     schema_id: Literal["narwhal.state"] = Field(alias="schema")
     schema_version: Literal[1]
+    journal_run: str = ""
     served: int
     offered: int = 0
     unsized_offered: int = 0

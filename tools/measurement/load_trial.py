@@ -195,17 +195,39 @@ def idle(state: dict) -> bool:
     )
 
 
-async def drain(client, base, timeout):
+async def poll_drain(client, base, timeout, poll_s=1):
     deadline = time.monotonic() + timeout
+    result = {"condition": "timeout", "polls": 0}
     while True:
-        response = await client.get(base + "/narwhal/state")
-        response.raise_for_status()
-        state = response.json()
-        if idle(state):
-            return state
+        try:
+            response = await client.get(
+                base + "/narwhal/state",
+                timeout=min(10.0, max(0.1, deadline - time.monotonic())),
+            )
+            response.raise_for_status()
+            state = response.json()
+            result["polls"] += 1
+            result["last_state"] = state
+            if idle(state):
+                result["condition"] = "idle"
+                break
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+            result["condition"] = "state_error"
+            result["error"] = str(error)
+            break
         if time.monotonic() >= deadline:
-            raise ValueError("Router drain deadline: inspect admission and resident work")
-        await asyncio.sleep(1)
+            break
+        await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+    return result
+
+
+async def drain(client, base, timeout):
+    result = await poll_drain(client, base, timeout)
+    if result["condition"] == "idle":
+        return result["last_state"]
+    if result["condition"] == "state_error":
+        raise ValueError(f"Router drain state error: {result['error']}")
+    raise ValueError("Router drain deadline: inspect admission and resident work")
 
 
 def summary(rows, args, elapsed):
@@ -268,9 +290,22 @@ async def prepare(client, base, args):
     )
     response.raise_for_status()
     seed = response.json()
-    ids = token_ids(event_choices(seed))
-    if ids is None or len(ids) != 32 or seed.get("error"):
+    choices = event_choices(seed)
+    generated_ids = token_ids(choices)
+    if generated_ids is None or len(generated_ids) != 32 or seed.get("error"):
         raise ValueError("Seed completion must return 32 identified output tokens")
+    prompt_ids = choices[0].get("prompt_token_ids") if len(choices) == 1 else None
+    if (
+        isinstance(prompt_ids, list)
+        and prompt_ids
+        and all(type(value) is int and value >= 0 for value in prompt_ids)
+        and len(set(prompt_ids)) > 1
+    ):
+        pool = prompt_ids
+    else:
+        pool = list(generated_ids)
+    if len(set(pool)) < 2:
+        raise ValueError("Seed response has no diverse token IDs for the workload")
     private_json(args.out / "seed-response.json", seed)
     private_json(
         args.out / "workload.json",
@@ -281,7 +316,7 @@ async def prepare(client, base, args):
             "input_tokens": args.input_tokens,
             "output_tokens": args.output_tokens,
             "seed": args.seed,
-            "token_pool": list(ids),
+            "token_pool": list(pool),
             "seed_prompt": SEED_PROMPT,
             "recipe": "Python random.Random(seed + sequence).choice(token_pool) per input token",
         },
@@ -291,6 +326,8 @@ async def prepare(client, base, args):
 async def run_trial(client, base, args):
     run_id = getattr(args, "run_id", uuid.uuid4().hex)
     workload = load_workload(args.workload)
+    if getattr(args, "expected_model", None) and workload["model"] != args.expected_model:
+        raise ValueError("Workload model differs from --expected-model")
     private_json(args.out / "workload.json", workload)
     private_json(args.out / "state-before.json", await drain(client, base, args.timeout))
     warmup = await request_one(
@@ -379,6 +416,7 @@ def main(argv=None):
         "--api-key-env", help="environment variable containing ingress bearer token"
     )
     parser.add_argument("--workload", type=Path)
+    parser.add_argument("--expected-model", help="require the workload to name this served model")
     parser.add_argument("--input-tokens", type=int, default=8192)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=1729)

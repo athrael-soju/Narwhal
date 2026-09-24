@@ -232,6 +232,17 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.terminal_rows()), 1)
         self.assert_released()
 
+    async def test_upstream_trace_stays_in_journal(self):
+        trace = "Traceback (most recent call last): /private/engine.py: token=secret-value"
+        self.decode_frames.append({"error": {"message": trace}})
+        client = self.client()
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["error"]["message"], "Upstream request failed")
+        self.assertNotIn(trace, response.text)
+        self.assertIn(trace, self.terminal_rows()[-1]["error"])
+        self.assert_released()
+
     async def test_output_started_prevents_retry_after_decode_failure(self):
         """A decode error after the first token ends the stream and records one failed request."""
         self.cfg.serving = ServingPolicy(max_attempts=3, handoff_timeout_s=5)
@@ -244,7 +255,9 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         first = json.loads(response.text.splitlines()[0].removeprefix("data: "))
         self.assertEqual(first["choices"][0]["text"], "x")
-        self.assertIn("decode failed", response.text)
+        self.assertIn("Upstream request failed", response.text)
+        self.assertNotIn("decode failed", response.text)
+        self.assertIn("decode failed", self.terminal_rows()[-1]["error"])
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.router.failed, 1)
         self.assertEqual(len(self.terminal_rows()), 1)
