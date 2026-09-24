@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -15,6 +16,7 @@ from tools.maintenance.release import (
     REPOSITORY,
     api,
     candidate,
+    candidate_ref,
     pypi_status,
     release_by_tag,
     release_pr,
@@ -102,6 +104,66 @@ class ReleaseMetadataTests(unittest.TestCase):
             mock.patch("tools.maintenance.release.validate", return_value="0.1.0"),
         ):
             self.assertEqual(candidate(Path(".")), ("0.1.0", None))
+
+    def test_dispatch_candidate_validates_merged_commit_before_checkout(self):
+        sha = "a" * 40
+        files = {
+            "pyproject.toml": '[project]\nversion = "0.3.0"\n',
+            "CITATION.cff": 'version: "0.3.0"\n',
+            ".release-please-manifest.json": '{".": "0.3.0"}',
+            "CHANGELOG.md": "## 0.3.0\n\nRelease notes.\n",
+        }
+        pr = {
+            "number": 46,
+            "merged_at": "2026-09-24T00:00:00Z",
+            "merge_commit_sha": sha,
+            "base": {"ref": "main"},
+            "head": {"ref": RELEASE_BRANCH, "repo": {"full_name": REPOSITORY}},
+            "labels": [{"name": "autorelease: pending"}],
+        }
+
+        def git(*args):
+            if args == ("git", "cat-file", "-t", sha):
+                return "commit"
+            if args == ("git", "merge-base", "--is-ancestor", sha, "origin/main"):
+                return ""
+            if args[:2] == ("git", "show"):
+                return files[args[2].split(":", 1)[1]]
+            self.fail(f"Unexpected command: {args}")
+
+        with (
+            mock.patch("tools.maintenance.release.command", side_effect=git) as command,
+            mock.patch("tools.maintenance.release.api", return_value=[pr]),
+        ):
+            self.assertEqual(candidate_ref(sha), ("0.3.0", 46))
+        self.assertIn(
+            mock.call("git", "merge-base", "--is-ancestor", sha, "origin/main"),
+            command.call_args_list,
+        )
+
+    def test_dispatch_candidate_rejects_unmerged_commit_before_reading_files(self):
+        sha = "b" * 40
+
+        def git(*args):
+            if args == ("git", "cat-file", "-t", sha):
+                return "commit"
+            if args == ("git", "merge-base", "--is-ancestor", sha, "origin/main"):
+                raise subprocess.CalledProcessError(1, args)
+            self.fail(f"Unexpected command: {args}")
+
+        with (
+            mock.patch("tools.maintenance.release.command", side_effect=git),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            candidate_ref(sha)
+
+    def test_dispatch_candidate_requires_full_sha_before_git_access(self):
+        with (
+            mock.patch("tools.maintenance.release.command") as command,
+            self.assertRaisesRegex(ValueError, "full commit SHA"),
+        ):
+            candidate_ref("feature/unreviewed")
+        command.assert_not_called()
 
     def test_repository_api_uses_endpoint_without_trailing_slash(self):
         with mock.patch(
