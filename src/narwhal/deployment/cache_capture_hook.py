@@ -24,7 +24,8 @@ if os.environ.get("NARWHAL_CAPTURE_CACHE") == "1":
             plan_path = Path(os.environ["NARWHAL_CACHE_PLAN"])
             plan_data = plan_path.read_bytes()
             plan = json.loads(plan_data)
-            if digest(Path("/model/config.json")) != plan["model_config_sha256"]:
+            model_config = Path(plan.get("model_config_path", "/model/config.json"))
+            if digest(model_config) != plan["model_config_sha256"]:
                 raise ValueError("model config differs from the checked serving plan")
             if digest(Path(__file__).with_name("launch_engine.py")) != plan["launcher_sha256"]:
                 raise ValueError("cache hook launcher differs from the checked serving plan")

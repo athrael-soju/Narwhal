@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from decimal import Decimal
@@ -24,6 +25,9 @@ VALUE_OPTIONS = {
     "--max-num-seqs",
     "--reasoning-parser",
     "--attention-backend",
+    "--tokenizer",
+    "--hf-config-path",
+    "--load-format",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -133,6 +137,10 @@ def requires_ds_conv_state_layout(model_dir: Path) -> bool:
         return True
     if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
         return True
+    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
+        "layer_types", []
+    ):
+        return True
     return any(
         isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
         for layer in text_model.get("layer_types", [])
@@ -145,15 +153,22 @@ def write_private(path: Path, data: str) -> None:
         stream.write(data)
 
 
-def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[str, str]]:
+def build(
+    record: dict, env: dict[str, str], output: Path, *, backend: str = "container"
+) -> tuple[dict, dict[str, str]]:
+    """Resolve one engine record into the same vLLM contract for either launch backend."""
+    if backend not in {"container", "native"}:
+        raise ValueError(f"unsupported engine launch backend: {backend}")
     runtime = record["runtime"]
     validate_runtime(runtime)
     role = record["role"]
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("select an engine role")
     node = role.split("-")[1]
-    image = env["NARWHAL_ENGINE_IMAGE"]
-    if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", image):
+    image = env["NARWHAL_ENGINE_IMAGE"] if backend == "container" else ""
+    if backend == "container" and not re.fullmatch(
+        r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", image
+    ):
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
     side_port = int(env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"])
@@ -192,12 +207,24 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
     if env.get("NARWHAL_ENGINE_API_KEY"):
         values["VLLM_API_KEY"] = env["NARWHAL_ENGINE_API_KEY"]
     if any(any(c in value for c in "\r\n\0") for value in values.values()):
-        raise ValueError("container environment values must fit one line")
-    values["PYTHONPATH"] = "/narwhal-hooks" + (
+        raise ValueError("engine environment values must fit one line")
+    hook_root = "/narwhal-hooks" if backend == "container" else str(output / "hook")
+    values["PYTHONPATH"] = hook_root + (
         ":" + values["PYTHONPATH"] if values.get("PYTHONPATH") else ""
     )
     model_dir = str(Path(env["NARWHAL_MODEL_DIR"]).resolve())
-    if "," in model_dir or "," in str(output):
+    model_ref = (
+        os.path.abspath(env.get("NARWHAL_MODEL_PATH", model_dir))
+        if backend == "native"
+        else "/model"
+    )
+    if (
+        backend == "native"
+        and model_ref.endswith(".gguf")
+        and not runtime["expected_packages"].get("vllm-gguf-plugin")
+    ):
+        raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
+    if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     common = [
         "--network",
@@ -215,12 +242,15 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         "--mount",
         f"type=bind,src={output / 'hook'},dst=/narwhal-hooks,readonly",
     ]
-    for device in record["accelerator_devices"] + record["transfer"]["devices"]:
-        common.extend(["--device", device])
-    if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
-        common.extend(["--gpus", "all"])
+    if backend == "container":
+        for device in record["accelerator_devices"] + record["transfer"]["devices"]:
+            common.extend(["--device", device])
+        if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
+            common.extend(["--gpus", "all"])
+        else:
+            common.extend(["--security-opt", "seccomp=unconfined"])
     else:
-        common.extend(["--security-opt", "seccomp=unconfined"])
+        common = []
     connector = {
         "kv_connector": "NixlConnector",
         "kv_role": "kv_both",
@@ -231,7 +261,7 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         "-m",
         "vllm.entrypoints.openai.api_server",
         "--model",
-        "/model",
+        model_ref,
         "--served-model-name",
         env["NARWHAL_ENGINE_MODEL_NAME"],
         "--host",
@@ -268,7 +298,7 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
             budget_matches = False
         if not budget_matches:
             raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
-    return {
+    plan = {
         "role": role,
         "image": image,
         "model_dir": model_dir,
@@ -283,13 +313,28 @@ def build(record: dict, env: dict[str, str], output: Path) -> tuple[dict, dict[s
         "ucx_tls": values["UCX_TLS"],
         **({"shared_device": shared} if shared is not None else {}),
         "revision": env["NARWHAL_DEPLOYMENT_REVISION"],
-    }, values
+    }
+    if backend == "native":
+        model_revision = env.get("NARWHAL_MODEL_REVISION", "")
+        if not re.fullmatch(r"[0-9a-f]{40}|sha256:[0-9a-f]{64}", model_revision):
+            raise ValueError(
+                "NARWHAL_MODEL_REVISION must be a 40-character commit or SHA-256 digest"
+            )
+        plan.update(
+            backend="native",
+            model_path=model_ref,
+            model_config_path=f"{model_dir}/config.json",
+            model_revision=model_revision,
+            python_executable=sys.executable,
+        )
+    return plan, values
 
 
-def prepare(output: Path, env: dict[str, str]) -> None:
+def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
+    """Pin model, hook and launch inputs before starting an engine."""
     source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
     record = json.loads(source.read_text())
-    plan, values = build(record, env, output.resolve())
+    plan, values = build(record, env, output.resolve(), backend=backend)
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
     hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
@@ -301,22 +346,24 @@ def prepare(output: Path, env: dict[str, str]) -> None:
     (output / "hook").mkdir(mode=0o700)
     write_private(output / "hook/sitecustomize.py", hook_source.read_text())
     write_private(output / "hook/launch_engine.py", Path(__file__).read_text())
-    write_private(
-        output / "container.env", "".join(f"{k}={v}\n" for k, v in sorted(values.items()))
-    )
+    env_file = "container.env" if backend == "container" else "engine.env"
+    write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
     plan.update(
-        env_sha256=digest(output / "container.env"),
+        env_sha256=digest(output / env_file),
         launch_sha256=digest(source),
         launcher_sha256=digest(Path(__file__)),
         cache_capture_sha256=hook_sha,
         model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
+    if backend == "native" and Path(plan["model_path"]).is_file():
+        plan["model_sha256"] = digest(Path(plan["model_path"]))
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
     for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):
         (output / "hook" / name).chmod(0o644)
     (output / "hook").chmod(0o755)
-    print(f"Prepared {record['role']}; review launch.json and run the image check.")
+    check_name = "image" if backend == "container" else "native runtime"
+    print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
 
 
 def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
@@ -331,30 +378,78 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
 
+def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str], log: str) -> str:
+    """Inspect the checked vLLM environment through its selected backend."""
+    if plan.get("backend") != "native":
+        return docker(
+            [
+                "run",
+                "--rm",
+                *plan["common"],
+                "--entrypoint",
+                "python3",
+                plan["image"],
+                "-c",
+                script,
+                *arguments,
+            ],
+            run,
+            log,
+        )
+    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    result = subprocess.run(
+        [plan["python_executable"], "-c", script, *arguments],
+        env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    write_private(run / log, result.stdout + "\nSTDERR\n" + result.stderr)
+    if result.returncode:
+        raise ValueError(
+            f"native runtime inspection exited {result.returncode}: {result.stderr[-1000:]}"
+        )
+    return result.stdout
+
+
 def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
-    if digest(run / "container.env") != plan["env_sha256"]:
-        raise ValueError("container environment changed; prepare a fresh launch directory")
+    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
+    if digest(run / env_file) != plan["env_sha256"]:
+        raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan
 
 
 def check(run: Path, plan: dict) -> None:
+    """Check the pinned runtime, connector and tokenizer for the selected backend."""
+    native = plan.get("backend") == "native"
+    env_file = "engine.env" if native else "container.env"
     if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
     if (
         ds_required
-        and "VLLM_SSM_CONV_STATE_LAYOUT=DS" not in (run / "container.env").read_text().splitlines()
+        and "VLLM_SSM_CONV_STATE_LAYOUT=DS" not in (run / env_file).read_text().splitlines()
     ):
         raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
-    inspection = json.loads(docker(["image", "inspect", plan["image"]], run, "image-check.log"))[0]
-    expected = plan["image"]
-    if expected.startswith("sha256:"):
-        matches = inspection["Id"] == expected
+    if native:
+        model_path = Path(plan["model_path"])
+        if not model_path.exists():
+            raise ValueError(f"native model path is missing: {model_path}")
+        if plan.get("model_sha256") and digest(model_path) != plan["model_sha256"]:
+            raise ValueError("native model file changed after launch preparation")
+        inspection = None
     else:
-        matches = expected in inspection.get("RepoDigests", [])
-    if not matches:
-        raise ValueError("local image identity differs from the launch plan")
+        inspection = json.loads(
+            docker(["image", "inspect", plan["image"]], run, "image-check.log")
+        )[0]
+        expected = plan["image"]
+        if expected.startswith("sha256:"):
+            matches = inspection["Id"] == expected
+        else:
+            matches = expected in inspection.get("RepoDigests", [])
+        if not matches:
+            raise ValueError("local image identity differs from the launch plan")
     script = """import importlib.metadata as m, json
 expected = json.loads(__import__('sys').argv[1])
 observed = {name: m.version(name) for name in expected}
@@ -370,31 +465,53 @@ if json.loads(__import__('sys').argv[4]):
     from vllm.model_executor.layers.mamba.mamba_utils import get_conv_state_layout
     assert get_conv_state_layout() == 'DS', 'NIXL convolutional state requires DS layout'
 tokenizer = AutoTokenizer.from_pretrained(
-    '/model', trust_remote_code=json.loads(__import__('sys').argv[3]), local_files_only=True
+    __import__('sys').argv[5],
+    trust_remote_code=json.loads(__import__('sys').argv[3]),
+    local_files_only=True
 )
 assert tokenizer is not None, 'checkpoint tokenizer did not initialise'
 print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__}))
 print('NARWHAL_TOKENIZER_READY=1')
 print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
-    output = docker(
-        [
-            "run",
-            "--rm",
-            *plan["common"],
-            "--entrypoint",
-            "python3",
-            plan["image"],
-            "-c",
-            script,
-            json.dumps(plan["expected_packages"]),
-            json.dumps(plan["connector"]),
-            json.dumps("--trust-remote-code" in plan["args"]),
-            json.dumps(ds_required),
-        ],
-        run,
-        "image-check.log",
-    )
+    arguments = [
+        "-c",
+        script,
+        json.dumps(plan["expected_packages"]),
+        json.dumps(plan["connector"]),
+        json.dumps("--trust-remote-code" in plan["args"]),
+        json.dumps(ds_required),
+        plan["model_dir"] if native else "/model",
+    ]
+    if native:
+        values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
+        result = subprocess.run(
+            [plan["python_executable"], *arguments],
+            env={**os.environ, **values},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        write_private(run / "runtime-check.log", result.stdout + "\nSTDERR\n" + result.stderr)
+        if result.returncode:
+            raise ValueError(
+                f"native runtime check exited {result.returncode}: {result.stderr[-1000:]}"
+            )
+        output = result.stdout
+    else:
+        output = docker(
+            [
+                "run",
+                "--rm",
+                *plan["common"],
+                "--entrypoint",
+                "python3",
+                plan["image"],
+                *arguments,
+            ],
+            run,
+            "image-check.log",
+        )
     prefix = "NARWHAL_IMAGE_RUNTIME="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -407,25 +524,38 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     if not isinstance(api_version, str) or not api_version.strip():
         raise ValueError("image check returned an invalid API version; inspect image-check.log")
     marker = run / "checked.json"
-    value = json.dumps(
-        {
-            "plan_sha256": digest(run / "launch.json"),
-            "image_id": inspection["Id"],
-            "vllm_api_version": api_version,
-        }
-    )
+    evidence = {
+        "plan_sha256": digest(run / "launch.json"),
+        "vllm_api_version": api_version,
+    }
+    if native:
+        evidence.update(
+            backend="native",
+            python_executable=plan["python_executable"],
+            expected_packages=plan["expected_packages"],
+        )
+    else:
+        assert inspection is not None
+        evidence["image_id"] = inspection["Id"]
+    value = json.dumps(evidence)
     if marker.exists():
         if marker.read_text() != value:
             raise ValueError("image check changed; prepare a fresh launch directory")
     else:
         write_private(marker, value)
-    print("Image identity, package pins, connector import and tokenizer passed.")
+    print("Runtime identity, package pins, connector import and tokenizer passed.")
 
 
 def require_checked(run: Path, plan: dict) -> None:
     checked = json.loads((run / "checked.json").read_text())
     if checked["plan_sha256"] != digest(run / "launch.json"):
-        raise ValueError("launch plan changed after its image check")
+        raise ValueError("launch plan changed after its runtime check")
+    if plan.get("backend") == "native" and (
+        checked.get("backend") != "native"
+        or checked.get("python_executable") != plan["python_executable"]
+        or checked.get("expected_packages") != plan["expected_packages"]
+    ):
+        raise ValueError("native runtime check differs from the launch plan")
 
 
 def cache_groups(groups: list) -> list[dict]:
@@ -466,7 +596,8 @@ def runtime_config(plan: dict) -> Any:
     from vllm.engine.arg_utils import EngineArgs  # type: ignore[import-not-found]
     from vllm.utils.argparse_utils import FlexibleArgumentParser  # type: ignore[import-not-found]
 
-    if digest(Path("/model/config.json")) != plan["model_config_sha256"]:
+    model_config = Path(plan.get("model_config_path", "/model/config.json"))
+    if digest(model_config) != plan["model_config_sha256"]:
         raise ValueError("model config changed since launch preparation")
     # EngineArgs owns the model options; HTTP listener options belong to the API server.
     arguments = list(plan["args"][2:])
@@ -642,21 +773,7 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
     'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
 }))
 """
-    output = docker(
-        [
-            "run",
-            "--rm",
-            *plan["common"],
-            "--entrypoint",
-            "python3",
-            plan["image"],
-            "-c",
-            script,
-            name,
-        ],
-        run,
-        "cache-registration.log",
-    )
+    output = run_runtime_script(run, plan, script, [name], "cache-registration.log")
     prefix = "NARWHAL_CACHE_REGISTRATION="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -728,21 +845,7 @@ print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
     'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
 }))
 """
-    output = docker(
-        [
-            "run",
-            "--rm",
-            *plan["common"],
-            "--entrypoint",
-            "python3",
-            plan["image"],
-            "-c",
-            script,
-            json.dumps(connector),
-        ],
-        run,
-        "handshake-policy.log",
-    )
+    output = run_runtime_script(run, plan, script, [json.dumps(connector)], "handshake-policy.log")
     prefix = "NARWHAL_HANDSHAKE_POLICY="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -868,8 +971,12 @@ def gpu_memory(gpu_uuid: str) -> dict[str, int]:
     raise ValueError(f"GPU memory inspection did not find usable device {gpu_uuid}")
 
 
-def validate_shared_runs(runs: list[Path]) -> list[tuple[Path, dict]]:
-    """Check a complete colocated startup before creating its first container."""
+def validate_shared_runs(
+    runs: list[Path], *, backend: str = "container"
+) -> list[tuple[Path, dict]]:
+    """Check every budget and port before starting a colocated engine."""
+    if backend not in {"container", "native"}:
+        raise ValueError(f"unsupported engine launch backend: {backend}")
     if not 2 <= len(runs) <= 8 or len(set(runs)) != len(runs):
         raise ValueError("shared GPU start requires two to eight distinct launch directories")
     selected = [(run, load(run)) for run in runs]
@@ -881,7 +988,20 @@ def validate_shared_runs(runs: list[Path]) -> list[tuple[Path, dict]]:
     ports: dict[int, str] = {}
     roles: set[str] = set()
     for run, plan in selected:
-        require_checked(run, plan)
+        if (plan.get("backend") or "container") != backend:
+            raise ValueError(f"{plan['role']}: launch backend differs from requested startup")
+        if backend == "container":
+            require_checked(run, plan)
+        else:
+            checked = json.loads((run / "checked.json").read_text())
+            if (
+                checked.get("backend") != "native"
+                or checked.get("plan_sha256") != digest(run / "launch.json")
+                or checked.get("python_executable") != plan["python_executable"]
+            ):
+                raise ValueError(
+                    f"{plan['role']}: native runtime check differs from the launch plan"
+                )
         shared = plan.get("shared_device")
         if not shared or any(
             shared[key] != group[key] for key in ("group", "gpu_uuid", "device_allowance")
@@ -900,8 +1020,11 @@ def validate_shared_runs(runs: list[Path]) -> list[tuple[Path, dict]]:
             if port in ports:
                 raise ValueError(f"{role} {label} port {port} collides with {ports[port]}")
             ports[port] = f"{role} {label}"
-        if (run / "shared-start.json").exists() or (run / "container.id").exists():
-            raise ValueError(f"{role}: launch directory already has a startup record or container")
+        if any(
+            (run / name).exists()
+            for name in ("shared-start.json", "container.id", "native-process.json")
+        ):
+            raise ValueError(f"{role}: launch directory already has a startup record or engine")
     if total > allowance:
         raise ValueError(f"shared GPU budgets total {total} above allowance {allowance}")
     return selected
@@ -1034,7 +1157,9 @@ def capture_cache(run: Path, plan: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("prepare").add_argument("--out", type=Path, required=True)
+    preparation = sub.add_parser("prepare")
+    preparation.add_argument("--out", type=Path, required=True)
+    preparation.add_argument("--backend", choices=("container", "native"), default="container")
     sub.add_parser("_cache-probe", help=argparse.SUPPRESS).add_argument(
         "--plan", type=Path, required=True
     )
@@ -1058,15 +1183,27 @@ def main(argv: list[str] | None = None) -> int:
     shared = sub.add_parser("start-shared")
     shared.add_argument("--run", type=Path, action="append", required=True)
     shared.add_argument("--ready-seconds", type=int, default=180)
+    shared.add_argument("--backend", choices=("container", "native"), default="container")
+    sub.add_parser("stop-native").add_argument("--run", type=Path, required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
         if args.command == "prepare":
-            prepare(args.out, dict(os.environ))
+            prepare(args.out, dict(os.environ), backend=args.backend)
         elif args.command == "start-shared":
             if args.ready_seconds < 1:
                 raise ValueError("--ready-seconds must be positive")
-            start_shared([run.resolve() for run in args.run], args.ready_seconds)
+            runs = [run.resolve() for run in args.run]
+            if args.backend == "native":
+                from narwhal.deployment.native_engine import start_shared as start_native_shared
+
+                start_native_shared(runs, args.ready_seconds)
+            else:
+                start_shared(runs, args.ready_seconds)
+        elif args.command == "stop-native":
+            from narwhal.deployment.native_engine import stop as stop_native
+
+            stop_native(args.run.resolve())
         elif args.command == "_cache-probe":
             runtime_cache_probe(args.plan)
         elif args.command == "_model-dimensions":
@@ -1074,6 +1211,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             run = args.run.resolve()
             plan = load(run)
+            if plan.get("backend") == "native" and args.command not in {
+                "check",
+                "cache-registration",
+                "handshake-policy",
+            }:
+                raise ValueError(
+                    f"{args.command} is container-only; use native shared start or stop"
+                )
             if args.command == "cache-registration":
                 registration_layout(
                     run,

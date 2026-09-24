@@ -95,7 +95,6 @@ class EngineContract:
     def missing(self) -> list[str]:
         """List undeclared compatibility fields in the engine contract."""
         optional = {
-            "image_digest",
             "nixl_version",
             "nixl_connector_version",
             "model_architecture",

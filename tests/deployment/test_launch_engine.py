@@ -33,6 +33,96 @@ IMAGE_CHECK_OUTPUT = (
 
 
 class EngineLauncherTests(unittest.TestCase):
+    def test_native_backend_uses_existing_engine_plan_without_an_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            run = root / "launch"
+            prepare(run, env, backend="native")
+            plan = load(run)
+            self.assertEqual(plan["backend"], "native")
+            model_arg = plan["args"][plan["args"].index("--model") + 1]
+            self.assertEqual(model_arg, env["NARWHAL_MODEL_DIR"])
+            self.assertEqual(plan["connector"]["kv_connector"], "NixlConnector")
+            self.assertFalse(plan["common"])
+            output = (
+                '{"vllm": "0.29.0", "nixl": "1.0.0"}\n'
+                "NARWHAL_TOKENIZER_READY=1\n"
+                'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
+            )
+            with (
+                patch("tools.deployment.launch_engine.docker") as docker,
+                patch("tools.deployment.launch_engine.subprocess.run") as invoke,
+            ):
+                invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
+                check(run, plan)
+                docker.assert_not_called()
+                self.assertEqual(invoke.call_args.args[0][0], sys.executable)
+            checked = json.loads((run / "checked.json").read_text())
+            self.assertEqual(checked["backend"], "native")
+            self.assertNotIn("image_id", checked)
+
+    def test_native_check_rejects_model_file_changed_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            model = root / "model" / "weights.gguf"
+            model.write_bytes(b"first")
+            env["NARWHAL_MODEL_PATH"] = str(model)
+            record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+            record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+            Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            run = root / "launch"
+            prepare(run, env, backend="native")
+            model.write_bytes(b"changed")
+            with patch("tools.deployment.launch_engine.subprocess.run") as invoke:
+                with self.assertRaisesRegex(ValueError, "model file changed"):
+                    check(run, load(run))
+                invoke.assert_not_called()
+
+    def test_native_gguf_keeps_snapshot_path_for_sidecar_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            blobs = root / "blobs"
+            blobs.mkdir()
+            weights = blobs / "weights"
+            weights.write_bytes(b"gguf")
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            model = snapshot / "weights.gguf"
+            model.symlink_to(weights)
+            (snapshot / "mmproj-F16.gguf").write_bytes(b"projector")
+            env["NARWHAL_MODEL_PATH"] = str(model)
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+            record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+            Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+            plan, _ = build(record, env, root / "launch", backend="native")
+            self.assertEqual(plan["model_path"], str(model))
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
+
+    def test_qwen_linear_convolution_requires_ds_layout(self):
+        from tools.deployment.launch_engine import requires_ds_conv_state_layout
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "text_config": {
+                            "linear_conv_kernel_dim": 4,
+                            "layer_types": ["linear_attention", "full_attention"],
+                        }
+                    }
+                )
+            )
+            self.assertTrue(requires_ds_conv_state_layout(root))
+
     def test_plan_supplies_model_devices_ports_and_connector_without_access_credentials(self):
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
