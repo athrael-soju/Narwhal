@@ -136,15 +136,20 @@ async def request_one(client, base, body, rid, scheduled, timeout, clock=time.mo
                     if len(choices) > 1 or any(c.get("index", 0) != 0 for c in choices):
                         raise ValueError("multiple_choices")
                     ids = token_ids(choices)
-                    if ids is None or len(ids) > 1:
-                        raise ValueError("requires_one_identified_token_per_event")
+                    if ids is None:
+                        row["invalid_token_event"] = {
+                            "choice_keys": [sorted(choice) for choice in choices],
+                        }
+                        raise ValueError("requires_identified_tokens_per_event")
                     if ids:
                         if finished:
                             raise ValueError("tokens_after_finish")
                         last = clock()
                         if first is None:
                             first = last
-                        row["output_tokens"] += 1
+                        row["output_tokens"] += len(ids)
+                        if len(ids) > 1:
+                            row["batched_token_events"] = row.get("batched_token_events", 0) + 1
                         if row["output_tokens"] > body["max_tokens"]:
                             raise ValueError("output_exceeds_requested_length")
                     for choice in choices:

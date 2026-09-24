@@ -116,13 +116,25 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(row["ttft_s"])
         self.assertIsNone(row["tpot_s"])
 
-    async def test_truncation_wrong_usage_and_batched_tokens_fail_validation(self):
+    async def test_batched_token_event_counts_all_identified_tokens(self):
+        content = sse().replace(
+            'data: {"choices": [{"index": 0, "token_ids": [0], "text": ""}]}\n\n'
+            'data: {"choices": [{"index": 0, "token_ids": [1], "text": ""}]}\n\n',
+            'data: {"choices": [{"index": 0, "token_ids": [0, 1], "text": ""}]}\n\n',
+        )
+        times = iter([0.0, 2.0, 2.04, 2.1])
+        row = await self.request(content, clock=lambda: next(times))
+        self.assertEqual(row["outcome"], "completed")
+        self.assertEqual(row["output_tokens"], 3)
+        self.assertEqual(row["batched_token_events"], 1)
+        self.assertAlmostEqual(row["tpot_s"], 0.02)
+
+    async def test_truncation_and_wrong_usage_fail_validation(self):
         samples = [
             sse(done=False),
             sse(usage=False),
             sse(input_tokens=9),
             sse(count=2),
-            sse().replace('"token_ids": [0]', '"token_ids": [0, 1]'),
             sse().replace('"token_ids": [0]', '"token_ids": [true]'),
             'data: {"error": {"message": "engine failure"}}\n\n',
             "data: broken-json\n\n",
