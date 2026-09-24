@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: narwhal
+    folder: ""
+    type: file
+    allowUiUpdates: false
+    # Poll to pick up changes through Docker bind mounts.
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

@@ -30,7 +30,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 ## Dashboard maintenance
 
-`make observe` stages `tools/observability/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
+`narwhal-observe` and `make observe` stage the single source dashboard at `src/narwhal/observability/grafana-narwhal.json` to `~/.local/share/narwhal/observability/mounts/grafana-dashboards/narwhal.json` by default. Set `NARWHAL_OBSERVABILITY_DATA_DIR` to another absolute persistent directory when required. Grafana polls that directory mount every 30 seconds and rejects UI edits to the provisioned dashboard. Restage after changing the source:
 
 ```bash
 make observe

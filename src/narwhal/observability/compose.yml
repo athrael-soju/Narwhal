@@ -1,0 +1,34 @@
+# Run the canonical Prometheus and Grafana project from an installed Narwhal.
+# Host networking lets Prometheus reach the configured engine addresses.
+name: narwhal-observability
+services:
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    network_mode: host
+    restart: always
+    volumes:
+      # Startup stages readable configs and targets before Compose launches services.
+      - ${NARWHAL_OBSERVABILITY_DATA_DIR:?}/mounts/prometheus:/etc/prometheus:ro
+      - prom-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=${NARWHAL_PROMETHEUS_LISTEN_ADDRESS:-127.0.0.1:9090}
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    network_mode: host
+    restart: always
+    environment:
+      GF_SERVER_HTTP_ADDR: "${NARWHAL_GRAFANA_BIND_ADDRESS:-127.0.0.1}"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL:-http://127.0.0.1:9090}"
+    volumes:
+      - ${NARWHAL_OBSERVABILITY_DATA_DIR:?}/mounts/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ${NARWHAL_OBSERVABILITY_DATA_DIR:?}/mounts/grafana-dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prom-data:
+  grafana-data:

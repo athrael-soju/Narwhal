@@ -10,8 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.config import FleetConfig
+from narwhal.observability import make_targets
 from tests.fixtures import ROOT
-from tools.observability import make_targets
 
 
 class TargetGenerationTests(unittest.TestCase):

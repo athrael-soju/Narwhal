@@ -13,6 +13,8 @@ import httpx
 
 import narwhal
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.observability.artifacts import FILES, stage_artifacts
+from narwhal.observability.make_targets import TargetContract
 from narwhal.serving.app import create_app
 
 
@@ -61,6 +63,19 @@ def main(argv=None):
         resources.joinpath("fleet.example.json").read_bytes()
         == (args.source_root / "config/fleet.example.json").read_bytes()
     )
+    monitoring = importlib.resources.files("narwhal.observability")
+    for name in ("compose.yml", *FILES):
+        assert (
+            monitoring.joinpath(name).read_bytes()
+            == (args.source_root / "tools" / "observability" / name).read_bytes()
+        ), name
+    with tempfile.TemporaryDirectory() as folder:
+        mounts = Path(folder) / "mounts"
+        stage_artifacts(TargetContract("127.0.0.1:8000", (("e0", "127.0.0.1:8002"),)), mounts)
+        for name in FILES.values():
+            assert (mounts / name).is_file(), name
+        for name in ("router.json", "engines.json"):
+            assert (mounts / "prometheus" / "targets" / name).is_file(), name
     entries = sorted(
         (entry for entry in distribution.entry_points if entry.group == "console_scripts"),
         key=lambda entry: entry.name,
@@ -68,6 +83,7 @@ def main(argv=None):
     expected_entries = {
         "narwhal-attest",
         "narwhal-check",
+        "narwhal-observe",
         "narwhal-profile",
         "narwhal-serve",
     }
