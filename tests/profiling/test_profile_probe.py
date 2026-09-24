@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -15,6 +15,7 @@ import httpx
 from narwhal.profiling import probe
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
+from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 
 
@@ -41,6 +42,69 @@ def token(index, *, finish=None):
 
 class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     """HTTP fixtures exercise measurement validation with controlled token arrivals."""
+
+    async def test_colocated_load_records_completed_peer_traffic(self):
+        """A mix label is backed by requests to both neighbouring engine roles."""
+        calls = []
+
+        async def answer(request):
+            if request.url.path == "/v1/completions":
+                calls.append(request.url.host)
+                body = json.loads(request.content)
+                return httpx.Response(
+                    200, json={"usage": {"completion_tokens": body["max_tokens"]}}
+                )
+            raise AssertionError(request.url.path)
+
+        workload = probe.ColocatedWorkload(40.0, 40.0, 256, 512, 8)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            load = probe.NeighbourLoad(
+                client,
+                [("p", "http://prefill", Role.PREFILL), ("d", "http://decode", Role.DECODE)],
+                "stub",
+                probe.VllmDialect(),
+                3.8,
+                workload,
+            )
+            with (
+                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+            ):
+                await load.start()
+            await probe.asyncio.sleep(0.08)
+            measured = await load.stop()
+        self.assertIn("prefill", calls)
+        self.assertIn("decode", calls)
+        self.assertGreater(measured["prefill_rps"], 0)
+        self.assertGreater(measured["decode_rps"], 0)
+        self.assertLess(measured["completed_prefill"] + measured["completed_decode"], len(calls))
+
+    async def test_merge_keeps_both_measured_role_mixes(self):
+        """Separate profiling runs retain distinct rows for one engine."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = [root / "one.json", root / "two.json"]
+            for path, mix in zip(sources, ((1, 2), (2, 1)), strict=True):
+                row = replace(
+                    profile("e0"),
+                    colocated_group="gpu-0",
+                    colocated_target_role="prefill",
+                    colocated_prefill_engines=mix[0],
+                    colocated_decode_engines=mix[1],
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+                ProfileStore(path, load=False).put(row)
+                path.with_suffix(".samples.json").write_text(
+                    json.dumps({"engines": {"e0": {"profile": asdict(row)}}})
+                )
+            output = root / "merged.json"
+            self.assertEqual(probe.merge_profiles(sources, output, {"e0"}), 0)
+            merged = ProfileStore(output)
+            merged.bind_role_mix({"e0": "gpu-0"}, lambda group: (1, 2), lambda iid: Role.PREFILL)
+            self.assertEqual(merged.profiles_for_split(["e0"], 1, 2)[0].colocated_group, "gpu-0")
+            self.assertEqual(merged.profiles_for_split(["e0"], 2, 1)[0].colocated_group, "gpu-0")
+            self.assertEqual(len(merged.all_profiles()), 2)
 
     async def test_prompt_uses_the_engine_count_after_resizing(self):
         """Prompt resizing records the measured count used as the fit axis."""
@@ -260,6 +324,23 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     client, "http://e", "stub", concurrency=(1,), input_lens=(10,), tokens=2
                 )
 
+    async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
+        """Catch-up tokens cannot make an interrupted decoder appear faster."""
+
+        async def burst(client, url, model, prompt, input_len, state, observed, tokens, dialect):
+            observed.extend(
+                (1.0, float(input_len + index), gap) for index, gap in enumerate((0.01, 0.01, 0.07))
+            )
+
+        with (
+            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 128))),
+            patch.object(probe, "_one_decode_stream", side_effect=burst),
+        ):
+            samples = await probe.probe_decode(
+                None, "http://e", "stub", concurrency=(1,), input_lens=(128,), tokens=4
+            )
+        self.assertAlmostEqual(samples[0][2], 0.03)
+
     async def test_profile_fits_axes_and_retains_raw_evidence(self):
         """Profile construction carries measured bounds and fit errors into the store row."""
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
@@ -343,6 +424,37 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
             self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 12288)
+
+    async def test_run_rejects_decode_fit_outside_policy(self):
+        """An unstable colocated fit leaves raw evidence but no usable profile."""
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "unstable.json"
+            client = httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            )
+            with (
+                patch.object(probe.httpx, "AsyncClient", return_value=client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                    ),
+                ),
+                patch.object(
+                    probe,
+                    "profile_instance",
+                    AsyncMock(return_value=replace(profile("e0"), decode_fit_mape=0.5)),
+                ),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(RuntimeError, "profile rejected"),
+            ):
+                await probe.run(cfg, {"e0"})
+            self.assertFalse(cfg.profiles_path.exists())
+            saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
+            self.assertIn("profile rejected", saved["engines"]["e0"]["error"])
 
     async def test_run_retains_prefill_samples_when_fit_fails(self):
         with tempfile.TemporaryDirectory() as folder:

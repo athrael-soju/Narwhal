@@ -3,12 +3,13 @@
 import json
 import tempfile
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from narwhal.contracts import PROFILES, versioned
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
+from narwhal.types import Role
 from tests.fixtures import profile
 
 
@@ -84,3 +85,58 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual(row.max_tokens(1, batch_requests=17), 0)
         self.assertEqual(row.max_tokens(0.001, batch_requests=1), 0)
         self.assertLessEqual(row.max_tokens(100, batch_requests=1), 100_000)
+
+    def test_workload_domain_and_colocated_load_are_persisted(self):
+        row = replace(
+            profile(),
+            prefill_min_tokens=128,
+            prefill_max_tokens=1024,
+            decode_min_output_tokens=1,
+            decode_max_output_tokens=16,
+            colocated_group="gpu-0",
+            colocated_target_role="prefill",
+            colocated_prefill_engines=2,
+            colocated_decode_engines=1,
+            colocated_prefill_rps=3.0,
+            colocated_decode_rps=1.0,
+        )
+        store = ProfileStore(self.path)
+        store.put(row)
+        restored = ProfileStore(self.path)
+        restored.bind_role_mix({row.iid: "gpu-0"}, lambda group: (2, 1), lambda iid: Role.PREFILL)
+        self.assertEqual(restored.get(row.iid), row)
+        self.assertIsNone(restored.mean_prefill_time(64))
+        self.assertIsNotNone(restored.mean_prefill_time(256))
+        self.assertEqual(row.decode_rps(1, 256, 32), 0)
+        with self.assertRaisesRegex(ValueError, "colocated role mix"):
+            replace(row, colocated_decode_rps=None)
+
+    def test_colocated_variants_require_the_exact_role_mix(self):
+        base = profile("e0", ttft_b=0.001)
+        one_prefill = replace(
+            base,
+            colocated_group="gpu-0",
+            colocated_target_role="prefill",
+            colocated_prefill_engines=1,
+            colocated_decode_engines=2,
+            colocated_prefill_rps=1.0,
+            colocated_decode_rps=2.0,
+        )
+        two_prefill = replace(
+            one_prefill,
+            ttft_b=0.003,
+            colocated_prefill_engines=2,
+            colocated_decode_engines=1,
+        )
+        store = ProfileStore(self.path)
+        store.put(base)
+        store.put(one_prefill)
+        store.put(two_prefill)
+        restored = ProfileStore(self.path)
+        mix = (1, 2)
+        restored.bind_role_mix({"e0": "gpu-0"}, lambda group: mix, lambda iid: Role.PREFILL)
+        self.assertEqual(restored.get("e0"), one_prefill)
+        self.assertEqual(restored.profiles_for_split(["e0"], 2, 1), (two_prefill,))
+        self.assertEqual(restored.profiles_for_split(["e0"], 3, 0), ())
+        mix = (2, 1)
+        self.assertEqual(restored.get("e0"), two_prefill)

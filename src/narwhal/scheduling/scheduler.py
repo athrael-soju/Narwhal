@@ -379,6 +379,33 @@ class GlobalScheduler:
         indicator = 0.0 if inst.prefill else 1.0
         return (indicator, float(inst.decode_tokens()))
 
+    def planned_donor(
+        self,
+        target: Role,
+        *,
+        candidate: Instance | None = None,
+        bypass_dwell: bool = False,
+    ) -> tuple[Instance | None, str]:
+        """Resolve the donor used by a score and the subsequent role change."""
+        source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
+        pool = [
+            inst
+            for inst in self.live_instances(source)
+            if inst.iid not in self.pinned and (candidate is None or inst is candidate)
+        ]
+        if not pool:
+            return None, "pins or nominated engine exclude every source candidate"
+        if self.th.dwell_s > 0.0 and not bypass_dwell:
+            now = self._clock()
+            pool = [
+                inst
+                for inst in pool
+                if now - self._last_flip.get(inst.iid, float("-inf")) >= self.th.dwell_s
+            ]
+            if not pool:
+                return None, "source engine dwell has not elapsed"
+        return min(pool, key=self.flip_cost), ""
+
     def flip(
         self,
         target: Role,
@@ -441,24 +468,12 @@ class GlobalScheduler:
             by, decision_details=decision_details
         ):
             return None
-        pool = [
-            i for i in live if i.iid not in self.pinned and (candidate is None or i is candidate)
-        ]
-        if not pool:
-            blocked("pins or nominated engine exclude every source candidate")
+        chosen, donor_block = self.planned_donor(
+            target, candidate=candidate, bypass_dwell=bypass_dwell
+        )
+        if chosen is None:
+            blocked(donor_block)
             return None
-        if self.th.dwell_s > 0.0 and not bypass_dwell:
-            rested = [
-                i
-                for i in pool
-                if now - self._last_flip.get(i.iid, float("-inf")) >= self.th.dwell_s
-            ]
-            if not rested:
-                blocked("source engine dwell has not elapsed")
-                return None
-            pool = rested
-
-        chosen = min(pool, key=self.flip_cost)
         if (
             target is Role.PREFILL
             and self.th.flip_resident_guard > 0

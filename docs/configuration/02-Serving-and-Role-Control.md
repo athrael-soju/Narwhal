@@ -352,7 +352,7 @@ Consolidation is blocked when short-horizon demand exceeds long-horizon demand b
 1 + controller.reactive.demand_rise_tolerance
 ```
 
-Demand pricing uses the mean profile across configured engines.
+Demand pricing uses the profiles selected for each configured engine's role and shared-device mix. A proposed split without a measured variant is ineligible.
 
 Decode profiles model active requests and resident KV tokens as separate inputs. Recent token intervals apply a bounded correction to the profile estimate.
 

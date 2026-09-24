@@ -18,6 +18,12 @@ Compare the effective sweep with every checked serving plan. A shorter context o
 
 Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic. Keep the sample sidecar.
 
+## Profile engines sharing one GPU
+
+For a shared-device group, measure each engine in every role and group split that the controller may select. Use a fleet snapshot with the intended roles, run `narwhal-profile --only IID --colocated`, and give each snapshot a separate `profiles.path`. The `--neighbour-prefill-rps`, `--neighbour-decode-rps`, and neighbour token-length options set offered work on the other engines during the target sweep. Choose those inputs from the load to be supported and retain the recorded completed neighbour work; a declared rate alone is not a measurement. Merge at least two individual stores with `narwhal-profile --fleet runs/deployment/fleet.json --out runs/deployment/profiles.json --merge PATH --merge PATH` and include every measured variant needed by the deployed fleet.
+
+The saved row identifies the shared-device group, prefill/decode engine counts, target role, observed neighbour rates, and the current engine generation. Narwhal selects the matching row for each live and proposed split. A missing row, changed process generation, invalid fit, or request outside the sweep domain holds the role change. After a process restart, remeasure that engine's variants before admitting it to the router.
+
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
 Narwhal records the verified attestation and process start with each engine's samples, then checks the resulting generation digest at preflight and router startup. After a restart or runtime change, profile the affected engine process again, assemble a fleet-wide store, and rerun preflight.

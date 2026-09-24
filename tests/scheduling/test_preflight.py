@@ -31,6 +31,7 @@ from narwhal.engines.client import EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
+from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
 from tests.fixtures import fleet, profile
 
@@ -580,6 +581,40 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.failed), 2)
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
+
+    async def test_stale_candidate_role_profile_fails_generation_gate(self):
+        """A valid current mix cannot admit a stale candidate mix after a restart."""
+        live_digest = "sha256:" + "a" * 64
+        stale_digest = "sha256:" + "b" * 64
+        base = replace(
+            profile("e0"),
+            generation_digest=live_digest,
+            colocated_group="gpu",
+            colocated_target_role="prefill",
+            colocated_prefill_engines=1,
+            colocated_decode_engines=2,
+            colocated_prefill_rps=1.0,
+            colocated_decode_rps=2.0,
+        )
+        store = ProfileStore(self.cfg.profiles_path, load=False)
+        store.put(base)
+        store.put(
+            replace(
+                base,
+                generation_digest=stale_digest,
+                colocated_prefill_engines=2,
+                colocated_decode_engines=1,
+            )
+        )
+        with patch.object(
+            check,
+            "read_generation",
+            new=AsyncMock(return_value=GenerationEvidence(live_digest, {})),
+        ):
+            report = Report()
+            unsafe = await check.gate_profile_generation(self.cfg, store, {"e0"}, report)
+        self.assertEqual(unsafe, {"e0"})
+        self.assertTrue(any("profile generation differs" in failure for failure in report.failed))
 
     def test_slo_gate_rejects_targets_below_profile_floors(self):
         """The profile's fixed decode and single-token prefill costs bound feasible SLOs."""

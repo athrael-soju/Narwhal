@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -22,6 +23,7 @@ from ..engines.dialect import EngineDialect, VllmDialect
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import event_choices, event_object, token_ids
 from ..provenance import stamp
+from ..types import Role
 from .fitting import (
     decode_cross_validation_mape,
     decode_mape,
@@ -29,7 +31,7 @@ from .fitting import (
     fit_prefill_samples,
 )
 from .generation import read_generation
-from .model import Profile
+from .model import Profile, decode_evidence_problems
 from .store import ProfileStore
 
 # Candidate lengths are bounded by each live engine's reported context limit.
@@ -313,6 +315,7 @@ async def probe_decode(
     *,
     evidence: list[dict[str, object]] | None = None,
     max_model_len: int | None = None,
+    repeats: int = 1,
 ) -> list[tuple[float, float, float]]:
     """Measure decode gaps across input-length and concurrency combinations."""
     dialect = dialect or VllmDialect()
@@ -325,41 +328,57 @@ async def probe_decode(
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
         for c in concurrency:
-            state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": c}
-            observed: list[tuple[float, float, float]] = []
-            tasks = [
-                asyncio.create_task(
-                    _one_decode_stream(
-                        client, url, model, prompt, input_len, state, observed, tokens, dialect
+            replicates: list[tuple[float, float, float]] = []
+            for repeat in range(repeats):
+                state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": c}
+                observed: list[tuple[float, float, float]] = []
+                tasks = [
+                    asyncio.create_task(
+                        _one_decode_stream(
+                            client, url, model, prompt, input_len, state, observed, tokens, dialect
+                        )
+                    )
+                    for _ in range(c)
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if len(observed) < 2 * c:
+                    raise RuntimeError(
+                        f"decode probe has insufficient complete-cohort intervals: "
+                        f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}"
+                    )
+                if evidence is not None:
+                    evidence.append(
+                        {
+                            "input_tokens": input_len,
+                            "concurrency": c,
+                            "repeat": repeat,
+                            "intervals": observed,
+                        }
+                    )
+                replicates.append(
+                    (
+                        statistics.median(s[0] for s in observed),
+                        statistics.median(s[1] for s in observed),
+                        # Under colocated load, stalled tokens can arrive in a
+                        # burst. Mean gap retains the total service time;
+                        # median gap can report only the catch-up burst.
+                        statistics.mean(s[2] for s in observed),
                     )
                 )
-                for _ in range(c)
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-            if len(observed) < 2 * c:
-                raise RuntimeError(
-                    f"decode probe has insufficient complete-cohort intervals: "
-                    f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}"
-                )
-            if evidence is not None:
-                evidence.append(
-                    {"input_tokens": input_len, "concurrency": c, "intervals": observed}
-                )
-            if observed:
-                gap = statistics.median(s[2] for s in observed)
-                requests = statistics.median(s[0] for s in observed)
-                batch = statistics.median(s[1] for s in observed)
-                samples.append((requests, batch, gap))
-                print(
-                    f"    decode  isl={input_len:<6} c={c:<3} "
-                    f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "
-                    f"-> {gap * 1000:6.2f} ms/token"
-                )
+            requests, batch, gap = (
+                statistics.median(row[i] for row in replicates) for i in range(3)
+            )
+            samples.append((requests, batch, gap))
+            print(
+                f"    decode  isl={input_len:<6} c={c:<3} "
+                f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "
+                f"-> {gap * 1000:6.2f} ms/token"
+            )
     return samples
 
 
@@ -410,6 +429,7 @@ async def profile_instance(
         s.decode_input_lens,
         evidence=decode_intervals,
         max_model_len=max_model_len,
+        repeats=s.decode_repeats,
     )
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
@@ -431,6 +451,10 @@ async def profile_instance(
         decode_max_kv_tokens=max(1, math.floor(max(row[1] for row in decode))),
         decode_fit_mape=decode_mape(decode, coefficients),
         decode_cv_mape=decode_cross_validation_mape(decode),
+        prefill_min_tokens=math.floor(min(row[0] for row in prefill)),
+        prefill_max_tokens=math.ceil(max(row[0] for row in prefill)),
+        decode_min_output_tokens=1,
+        decode_max_output_tokens=s.decode_tokens,
     )
 
 
@@ -443,6 +467,123 @@ class Sweep:
     decode_tokens: int = DECODE_TOKENS
     prefill_repeats: int = PREFILL_REPEATS
     decode_input_lens: tuple[int, ...] = DECODE_INPUT_LENS
+    decode_repeats: int = 1
+
+
+@dataclass(frozen=True)
+class ColocatedWorkload:
+    """Explicit offered traffic for each neighbour of a profiled engine."""
+
+    prefill_rps: float
+    decode_rps: float
+    prefill_tokens: int
+    decode_input_tokens: int
+    decode_output_tokens: int
+
+
+class NeighbourLoad:
+    """Pace direct completion requests on the other engines in one GPU group."""
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        peers: list[tuple[str, str, Role]],
+        model: str,
+        dialect: EngineDialect,
+        chars_per_token: float,
+        workload: ColocatedWorkload,
+    ) -> None:
+        self.client = client
+        self.peers = peers
+        self.model = model
+        self.dialect = dialect
+        self.chars_per_token = chars_per_token
+        self.workload = workload
+        self.tasks: list[asyncio.Task[None]] = []
+        self.counts = {Role.PREFILL: 0, Role.DECODE: 0}
+        self.errors: list[str] = []
+        self.started = 0.0
+
+    async def start(self) -> None:
+        """Tokenize each peer's request shape before starting the timed load."""
+        jobs = []
+        for index, (iid, url, role) in enumerate(self.peers):
+            rate = self.workload.prefill_rps if role is Role.PREFILL else self.workload.decode_rps
+            target = (
+                self.workload.prefill_tokens
+                if role is Role.PREFILL
+                else self.workload.decode_input_tokens
+            )
+            output = 1 if role is Role.PREFILL else self.workload.decode_output_tokens
+            prompt, count = await make_prompt(
+                self.client, url, self.model, target, self.dialect, self.chars_per_token
+            )
+            limit = await engine_context_limit(self.client, url, self.model, self.dialect)
+            if count + output > limit:
+                raise ValueError(f"neighbour {iid}: {count}+{output} exceeds max_model_len {limit}")
+            jobs.append((iid, url, role, rate, prompt, output, index / len(self.peers) / rate))
+        self.started = time.monotonic()
+        self.tasks = [asyncio.create_task(self._serve(*job)) for job in jobs]
+        # Observe a full period before fitting the target. Reset counters so
+        # stored rates describe only the same interval as the latency sweep.
+        await asyncio.sleep(max(1.0 / job[3] for job in jobs))
+        if self.errors:
+            for task in self.tasks:
+                task.cancel()
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            raise RuntimeError("neighbour load failed during warmup: " + "; ".join(self.errors))
+        self.counts = {Role.PREFILL: 0, Role.DECODE: 0}
+        self.started = time.monotonic()
+
+    async def _serve(
+        self, iid: str, url: str, role: Role, rate: float, prompt: str, output: int, phase_s: float
+    ) -> None:
+        interval = 1.0 / rate
+        next_at = self.started + phase_s
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "max_tokens": output,
+            "temperature": 0.0,
+            "stream": False,
+            **self.dialect.decode_probe_extras(output),
+        }
+        while True:
+            await asyncio.sleep(max(0.0, next_at - time.monotonic()))
+            try:
+                response = await self.client.post(f"{url}/v1/completions", json=body)
+                response.raise_for_status()
+                result = response.json()
+                if (
+                    result.get("error")
+                    or result.get("usage", {}).get("completion_tokens") != output
+                ):
+                    raise RuntimeError("incomplete neighbour completion")
+                self.counts[role] += 1
+            except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+                self.errors.append(f"{iid}: {exc}")
+                return
+            next_at = max(next_at + interval, time.monotonic())
+
+    async def stop(self) -> dict[str, float | int]:
+        """Return achieved per-role request rates and fail closed on peer errors."""
+        elapsed = max(time.monotonic() - self.started, 1e-9)
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.errors:
+            raise RuntimeError("neighbour load failed: " + "; ".join(self.errors))
+        if any(self.counts[role] == 0 for role in Role if any(p[2] is role for p in self.peers)):
+            raise RuntimeError("neighbour load produced no completed requests")
+        return {
+            "elapsed_s": elapsed,
+            "offered_prefill_rps_per_peer": self.workload.prefill_rps,
+            "offered_decode_rps_per_peer": self.workload.decode_rps,
+            "completed_prefill": self.counts[Role.PREFILL],
+            "completed_decode": self.counts[Role.DECODE],
+            "prefill_rps": self.counts[Role.PREFILL] / elapsed,
+            "decode_rps": self.counts[Role.DECODE] / elapsed,
+        }
 
 
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
@@ -543,6 +684,64 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
     return 0
 
 
+def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str]) -> int:
+    """Combine separately measured role mixes, retaining source sidecars."""
+    sidecar_path = output_path.with_suffix(".samples.json")
+    for path in (output_path, sidecar_path):
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"output exists: {path}; choose a fresh profile path")
+    store = ProfileStore(output_path, load=False)
+    records = []
+    profiles: list[Profile] = []
+    seen: set[tuple[str, str | None, int | None, int | None, str | None]] = set()
+    for source in sources:
+        source_store = ProfileStore(source)
+        samples = source.with_suffix(".samples.json")
+        if not samples.is_file():
+            raise FileNotFoundError(f"missing source measurement sidecar: {samples}")
+        record = json.loads(samples.read_text())
+        if not isinstance(record, dict) or not isinstance(record.get("engines"), dict):
+            raise ValueError(f"invalid source measurement sidecar: {samples}")
+        rows = source_store.all_profiles()
+        if not rows:
+            raise ValueError(f"empty source profiles: {source}")
+        for row in rows:
+            if row.iid not in engine_ids:
+                raise ValueError(f"{source}: profile {row.iid} is outside the fleet")
+            evidence = record["engines"].get(row.iid)
+            if not isinstance(evidence, dict) or evidence.get("profile") != asdict(row):
+                raise ValueError(
+                    f"{samples}: profile {row.iid} lacks matching measurement evidence"
+                )
+            key = (
+                row.iid,
+                row.colocated_group,
+                row.colocated_prefill_engines,
+                row.colocated_decode_engines,
+                row.colocated_target_role,
+            )
+            if key in seen:
+                raise ValueError(f"duplicate measured profile variant: {key}")
+            seen.add(key)
+            profiles.append(row)
+        records.append(
+            {
+                "profiles": str(source),
+                "profiles_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "samples": str(samples),
+                "samples_sha256": hashlib.sha256(samples.read_bytes()).hexdigest(),
+            }
+        )
+    missing = engine_ids - {row.iid for row in profiles}
+    if missing:
+        raise ValueError(f"merged profiles miss fleet engines: {', '.join(sorted(missing))}")
+    for row in profiles:
+        store.put(row)
+    sidecar_path.write_text(json.dumps({"method_version": 3, "sources": records}, indent=2) + "\n")
+    print(f"merged {len(seen)} measured profiles to {output_path}")
+    return 0
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -550,6 +749,7 @@ async def run(
     *,
     overwrite: bool = False,
     limits_path: Path | None = None,
+    colocated_workload: ColocatedWorkload | None = None,
 ) -> int:
     """Profile selected healthy engines and write the store."""
     store = ProfileStore(cfg.profiles_path, load=False)
@@ -583,7 +783,7 @@ async def run(
         "sweep": asdict(sweep or Sweep()),
         "engines": evidence_rows,
     }
-    connections = max((sweep or Sweep()).decode_concurrency)
+    connections = max((sweep or Sweep()).decode_concurrency) + len(cfg.engines)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(300.0, connect=10.0),
         limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
@@ -614,6 +814,24 @@ async def run(
             }
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
+            neighbour_load = None
+            group = spec.shared_device.group if spec.shared_device is not None else None
+            if colocated_workload is not None:
+                if group is None:
+                    raise ValueError(f"{spec.iid}: --colocated requires a shared_device group")
+                peers = [
+                    (peer.iid, peer.url, peer.role)
+                    for peer in cfg.engines
+                    if peer.iid != spec.iid
+                    and peer.shared_device is not None
+                    and peer.shared_device.group == group
+                ]
+                if not peers:
+                    raise ValueError(f"{spec.iid}: no neighbours in shared_device group {group}")
+                neighbour_load = NeighbourLoad(
+                    client, peers, cfg.model, dialect, cfg.chars_per_token, colocated_workload
+                )
+                await neighbour_load.start()
             try:
                 generation = await read_generation(
                     spec,
@@ -633,6 +851,30 @@ async def run(
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
                 )
+                if neighbour_load is not None:
+                    measured = await neighbour_load.stop()
+                    prefill_engines = sum(
+                        peer.shared_device is not None
+                        and peer.shared_device.group == group
+                        and peer.role is Role.PREFILL
+                        for peer in cfg.engines
+                    )
+                    decode_engines = sum(
+                        peer.shared_device is not None
+                        and peer.shared_device.group == group
+                        and peer.role is Role.DECODE
+                        for peer in cfg.engines
+                    )
+                    engine_evidence["colocated_load"] = measured
+                    profile = replace(
+                        profile,
+                        colocated_group=group,
+                        colocated_target_role=spec.role.value,
+                        colocated_prefill_engines=prefill_engines,
+                        colocated_decode_engines=decode_engines,
+                        colocated_prefill_rps=float(measured["prefill_rps"]),
+                        colocated_decode_rps=float(measured["decode_rps"]),
+                    )
                 current = await read_generation(
                     spec,
                     cfg.engine_contract,
@@ -642,7 +884,18 @@ async def run(
                 if generation.digest != current.digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")
                 profile = replace(profile, generation_digest=generation.digest)
+                problems = decode_evidence_problems(
+                    profile,
+                    max_fit_mape=cfg.profile_validation.max_decode_fit_mape,
+                    max_cv_mape=cfg.profile_validation.max_decode_cv_mape,
+                )
+                if problems:
+                    raise RuntimeError("profile rejected: " + "; ".join(problems))
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+                if neighbour_load is not None and neighbour_load.tasks:
+                    for task in neighbour_load.tasks:
+                        task.cancel()
+                    await asyncio.gather(*neighbour_load.tasks, return_exceptions=True)
                 engine_evidence["error"] = str(exc)
                 evidence_rows[spec.iid] = engine_evidence
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -691,6 +944,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
     ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")
+    ap.add_argument(
+        "--merge", type=Path, action="append", default=[], help="profile store to merge; repeatable"
+    )
     ap.add_argument("--out", type=Path, help="fresh profile path for --refit-samples")
     ap.add_argument(
         "--limits",
@@ -717,7 +973,16 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated prompt lengths for the decode sweep",
     )
     ap.add_argument("--decode-tokens", type=int, default=DECODE_TOKENS)
+    ap.add_argument("--decode-repeats", type=int, default=1)
     ap.add_argument("--prefill-repeats", type=int, default=PREFILL_REPEATS)
+    ap.add_argument(
+        "--colocated", action="store_true", help="run measured traffic on GPU neighbours"
+    )
+    ap.add_argument("--neighbour-prefill-rps", type=float)
+    ap.add_argument("--neighbour-decode-rps", type=float)
+    ap.add_argument("--neighbour-prefill-tokens", type=int)
+    ap.add_argument("--neighbour-decode-input-tokens", type=int)
+    ap.add_argument("--neighbour-decode-output-tokens", type=int)
     args = ap.parse_args(argv)
     cfg = FleetConfig.load(args.fleet)
     if any(
@@ -734,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             decode_input_lens=tuple(int(x) for x in args.decode_input_lens.split(",") if x.strip()),
             decode_tokens=args.decode_tokens,
+            decode_repeats=args.decode_repeats,
             prefill_repeats=args.prefill_repeats,
         )
     except ValueError:
@@ -751,12 +1017,37 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("profile lengths must be positive")
     if any(value < 1 for value in sweep.decode_concurrency):
         ap.error("decode concurrency must be at least 1")
-    if sweep.decode_tokens < 3 or sweep.prefill_repeats < 3:
+    if sweep.decode_tokens < 3 or sweep.prefill_repeats < 3 or sweep.decode_repeats < 1:
         ap.error(
             "--decode-tokens needs at least 3 (two intervals need three tokens); "
-            "--prefill-repeats at least 3 for a repeat median"
+            "--prefill-repeats at least 3 for a repeat median; --decode-repeats at least 1"
         )
+    neighbour_values = (
+        args.neighbour_prefill_rps,
+        args.neighbour_decode_rps,
+        args.neighbour_prefill_tokens,
+        args.neighbour_decode_input_tokens,
+        args.neighbour_decode_output_tokens,
+    )
+    if args.colocated:
+        if any(
+            value is None or not math.isfinite(value) or value <= 0 for value in neighbour_values
+        ):
+            ap.error("--colocated requires positive neighbour rates and token lengths")
+        if any(type(value) is not int for value in neighbour_values[2:]):
+            ap.error("neighbour token lengths must be integers")
+        colocated_workload = ColocatedWorkload(*neighbour_values)
+    else:
+        if any(value is not None for value in neighbour_values):
+            ap.error("neighbour load options require --colocated")
+        colocated_workload = None
     try:
+        if args.merge:
+            if args.refit_samples is not None or args.out is None or args.only or args.overwrite:
+                ap.error("--merge requires --out and cannot combine with refit, only, or overwrite")
+            if len(args.merge) < 2:
+                ap.error("--merge needs at least two measured profile stores")
+            return merge_profiles(args.merge, args.out, {engine.iid for engine in cfg.engines})
         if args.refit_samples is not None or args.out is not None:
             if args.refit_samples is None or args.out is None or args.only:
                 ap.error("--refit-samples requires --out and a complete fleet selection")
@@ -770,6 +1061,7 @@ def main(argv: list[str] | None = None) -> int:
                 sweep,
                 overwrite=args.overwrite,
                 limits_path=args.limits,
+                colocated_workload=colocated_workload,
             )
         )
     except (OSError, ValueError, RuntimeError) as exc:

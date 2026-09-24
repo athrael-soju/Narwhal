@@ -82,6 +82,28 @@ class NarwhalRouter:
         )
         for spec in cfg.engines:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
+        shared_groups = {
+            spec.iid: spec.shared_device.group
+            for spec in cfg.engines
+            if spec.shared_device is not None
+        }
+        if shared_groups:
+            self.profiles.bind_role_mix(
+                shared_groups,
+                lambda group: (
+                    sum(
+                        inst.role is Role.PREFILL
+                        for iid, inst in self.monitor.instances.items()
+                        if shared_groups.get(iid) == group
+                    ),
+                    sum(
+                        inst.role is Role.DECODE
+                        for iid, inst in self.monitor.instances.items()
+                        if shared_groups.get(iid) == group
+                    ),
+                ),
+                lambda iid: self.monitor.instances[iid].role,
+            )
         self.scheduler = GlobalScheduler(
             self.monitor,
             self.profiles,
