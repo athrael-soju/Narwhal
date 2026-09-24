@@ -2,6 +2,7 @@
   --narwhal-aqua: #45d2d5;
   --narwhal-aqua-dark: #167f83;
   --narwhal-ink: #191919;
+  --narwhal-graphite: #30343b;
   --narwhal-ice: #edfafa;
   --md-primary-fg-color: var(--narwhal-aqua-dark);
   --md-primary-fg-color--light: var(--narwhal-aqua);
@@ -89,7 +90,7 @@
 }
 
 .md-typeset table:not([class]) th {
-  background: var(--narwhal-ink);
+  background: var(--narwhal-graphite);
   border-bottom: 3px solid var(--narwhal-aqua);
   color: white;
   font-size: 0.7rem;
@@ -170,16 +171,7 @@
 }
 
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
-  background: white;
-  color: var(--narwhal-ink);
-}
-
-[data-md-color-scheme="slate"] .md-typeset table:not([class]) th + th {
-  border-left-color: #dceff0;
-}
-
-[data-md-color-scheme="slate"] .md-typeset table:not([class]) th a {
-  color: var(--narwhal-aqua-dark);
+  background: var(--narwhal-ink);
 }
 
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
@@ -199,7 +191,7 @@
 }
 
 [data-md-color-scheme="slate"] .narwhal-hero {
-  background: #172528;
+  background: var(--md-default-bg-color);
   border-color: #3c6970;
 }
 
