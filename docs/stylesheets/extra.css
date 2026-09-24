@@ -169,6 +169,19 @@
   box-shadow: 0 0.25rem 0.8rem rgb(0 0 0 / 18%);
 }
 
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: white;
+  color: var(--narwhal-ink);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th + th {
+  border-left-color: #dceff0;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th a {
+  color: var(--narwhal-aqua-dark);
+}
+
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
   border-bottom-color: #35454b;
 }
@@ -191,7 +204,7 @@
 }
 
 [data-md-color-scheme="slate"] .narwhal-hero img {
-  filter: invert(1) hue-rotate(180deg);
+  filter: url("#narwhal-hero-dark");
 }
 
 .md-footer-meta {
