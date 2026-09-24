@@ -29,7 +29,7 @@ python3 -m venv .venv
 
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
 
-CI runs on pull requests and pushes to `main`, and maintainers can start it manually. It runs `make check` on GitHub-hosted runners, the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
+Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <branch>` when the branch needs a remote check. Release automation also dispatches it for release PRs. The suite runs `make check` on GitHub-hosted runners, the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
 
 The CI jobs use synthetic test inputs and a standard read-only GitHub token. For a narrower pass, `make test` runs the unit suite.
 
@@ -122,7 +122,7 @@ Use `docs:` for documentation changes. Release Please includes each `docs:` squa
 
 Bring the branch up to date with `main` and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
 
-A maintainer reviews the PR and check results, then squash-merges it using the PR title. The `main` ruleset requires the aggregate CI check and PR title check, requires a PR, and blocks force pushes. GitHub deletes each branch at squash-merge.
+A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
 
 Address review comments on the same branch and rerun the relevant checks after editing.
 
