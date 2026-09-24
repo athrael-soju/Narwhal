@@ -10,6 +10,14 @@
   --md-typeset-a-color: var(--narwhal-aqua-dark);
 }
 
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--narwhal-aqua);
+  --md-primary-fg-color--light: #8ce9ea;
+  --md-primary-fg-color--dark: var(--narwhal-aqua-dark);
+  --md-accent-fg-color: #75e0e2;
+  --md-typeset-a-color: #75e0e2;
+}
+
 .md-header {
   background: var(--narwhal-ink);
   border-bottom: 3px solid var(--narwhal-aqua);
@@ -145,6 +153,45 @@
   font-size: 1.05rem;
   margin: 0;
   padding: 1rem 1.25rem 1.2rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2,
+[data-md-color-scheme="slate"] .md-typeset h3,
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td:first-child,
+[data-md-color-scheme="slate"] .narwhal-hero__copy {
+  color: #edfafa;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  background: #252b32;
+  border-color: #3c6970;
+  box-shadow: 0 0.25rem 0.8rem rgb(0 0 0 / 18%);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
+  border-bottom-color: #35454b;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td + td {
+  border-left-color: #35454b;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) tbody tr:nth-child(even) {
+  background: #2c353c;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) tbody tr:hover {
+  background: #294348;
+}
+
+[data-md-color-scheme="slate"] .narwhal-hero {
+  background: #172528;
+  border-color: #3c6970;
+}
+
+[data-md-color-scheme="slate"] .narwhal-hero img {
+  filter: invert(1) hue-rotate(180deg);
 }
 
 .md-footer-meta {
