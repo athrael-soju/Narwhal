@@ -1,12 +1,8 @@
-# Gate E: Expand the fleet and attest the exact live processes
+# Gate E: Attest the live engine processes
 
-## Finalise router inventory and start remaining engines
+## Confirm router inventory
 
-On the router, edit `runs/deployment/fleet.json` with model, engine IDs, initial role split, engine URLs, attestation URLs, SLO values, and a fresh profile path. Endpoint references resolve through `.env.router`.
-
-For each non-representative engine, run the same `prepare`, `check`, `start`, HTTP probe, and `capture-cache` sequence used for representatives. Separate physical hosts may proceed concurrently. Serialise overlapping GPU allocations.
-
-Compare each role's live cache layout with its representative before attestation. Keep every successful `ENGINE_RUN` and container ID. Capture logs before removing any container created by the attempt.
+On the router, confirm that `runs/deployment/fleet.json` names the running engines, their URLs and attestation URLs, the model, initial roles, SLO values, and profile path; `.env.router` resolves the endpoint references. Capture each engine's attestation contract against its Gate C `ENGINE_RUN` and `cache-layout.json`, retaining the container ID and logs with that process record.
 
 ## Capture attestation inputs
 
@@ -213,4 +209,4 @@ The command reads every live engine and sidecar, verifies process identity and f
 
 A contract mismatch identifies the affected engine input. Correct that engine, restart its sidecar against the checked process, and rerun finalisation. Keep all engines and sidecars running through profiling, preflight, and trial.
 
-Continue with [Gate F: Characterise performance and run the live KV contract](06-Profile-and-Preflight.md).
+Continue with [Gate F: Profile once and run the live KV contract](06-Profile-and-Preflight.md).

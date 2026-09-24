@@ -26,9 +26,11 @@ Refused and failed scored requests remain in the SLO denominator.
 
 Narwhal includes empty-text and reasoning-only token IDs in output length and computes TPOT for requests with at least two identified tokens. Retain the stream-accounting rule with each result set and use the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to compare runs with the same denominator and terminal classes.
 
-## 2. Create an idle-fleet latency profile
+## 2. Reuse or create an idle-fleet latency profile
 
-Reserve the production engine shape, warm the model with prefix caching disabled, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
+Gate F binds the retained `profiles.json` and `profiles.samples.json` pair to attested engine generations; measurement runs against those processes and runtime reuse the pair and its passing preflight.
+
+For a new engine process or runtime, reserve the production engine shape, warm the model with prefix caching disabled, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
 
 ```bash
 narwhal-profile \

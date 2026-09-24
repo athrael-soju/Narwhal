@@ -57,10 +57,10 @@ nav:
       - Overview: Deploy.md
       - A. Discover the fleet: deploy/01-Discover.md
       - B. Install Narwhal: deploy/02-Install.md
-      - C. Validate engines: deploy/03-Validate-Engines.md
+      - C. Validate and start engines: deploy/03-Validate-Engines.md
       - D. Qualify fabric: deploy/04-Qualify-Fabric.md
-      - E. Attest engines: deploy/05-Attest.md
-      - F. Profile and preflight: deploy/06-Profile-and-Preflight.md
+      - E. Attest live engines: deploy/05-Attest.md
+      - F. Profile once and preflight: deploy/06-Profile-and-Preflight.md
       - G. Serve and measure: deploy/07-Serve-and-Measure.md
   - Deployment operations:
       - Measure a fleet:

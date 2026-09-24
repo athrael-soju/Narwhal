@@ -80,7 +80,7 @@ Record router role assignment, workstation hostname, source revision, and local-
 Run the capacity trial and retain its evidence in this order:
 
 1. Create a deployment identifier and assemble the deployment evidence set defined by [Measure a fleet](../Measure.md).
-2. Attach the passing full preflight mesh for the current processes, fleet, profiles, and targets. Repeat preflight whenever any one changes.
+2. Attach Gate F's passing preflight to the deployment evidence.
 3. Retain monitoring startup output and successful Prometheus scrape evidence for router and engines.
 4. Run the initial synthetic workload from the workstation through `$NARWHAL_TRIAL_URL`: 200-request runs at 0.5 and 1 request/s, 8,192 input tokens, 128 output tokens. Retain workload definition, request-level records, and summaries. Treat 2 s TTFT, 33.3 ms TPOT, and 95% attainment as candidate thresholds until measured performance and service requirements define acceptance. Capture client CPU, memory, network, and scheduler behaviour so workstation or SSH-path saturation can be separated from serving saturation.
 5. Drain resident work. Reconcile every offer against client and router terminal classes. Query engine, request, token, role, and pool-load series through Grafana's provisioned data source. Then run the post-load KV ring.

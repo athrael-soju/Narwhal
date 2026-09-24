@@ -6,7 +6,7 @@ Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s`
 
 A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
 
-Run preflight after changing either SLO:
+After changing an SLO, run `narwhal-check` against the edited fleet to test the target with saved profiles and live handoffs:
 
 ```bash
 narwhal-check --fleet config/fleet.production.json
@@ -17,12 +17,6 @@ narwhal-check --fleet config/fleet.production.json
 With at least three successful probes, the pace gate compares each engine with the fleet median under a `1.5x` slowdown limit. For one or two successful probes, it requires a saved prefill profile and exact `usage.prompt_tokens` for each engine to apply the same limit.
 
 ## 6. Freeze the deployment under test
-
-Run preflight against the final fleet before sending measured traffic:
-
-```bash
-narwhal-check --fleet config/fleet.production.json
-```
 
 Before the load test, assign a deployment identifier and attach the exact:
 

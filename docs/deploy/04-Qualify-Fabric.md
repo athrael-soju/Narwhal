@@ -1,6 +1,6 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Keep representatives idle while measuring each directed link against a budget derived from their resolved cache layout.
+Keep the running fleet idle while measuring each directed link against a budget derived from its source group's resolved cache layout.
 
 ## Build the source budget
 
@@ -249,6 +249,6 @@ Recalculate the budget from a new `cache-layout.json` when the runtime layout ch
 
 RDMA samples use `.txt`. For a legacy sample collected before `record-edge`, reconstruct its link record from verified original routes, interfaces, transport, utility version, and command; collect a new directed sample when those inputs cannot be verified.
 
-A link below its source budget keeps the remaining engines idle while you inspect link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic. After fixing the cause, sample that directed link again; launch the engines when every edge in the matrix passes.
+A link below its source budget keeps the running fleet idle while you inspect link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic. After fixing the cause, sample that directed link again.
 
-Continue with [Gate E: Expand the fleet and attest the exact live processes](05-Attest.md).
+Continue with [Gate E: Attest the live engine processes](05-Attest.md).

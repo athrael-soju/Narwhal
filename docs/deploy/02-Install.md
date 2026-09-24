@@ -69,4 +69,4 @@ Recovery rules:
 - `.install-lock`: remove only after proving the owning installer has exited.
 - Preserve existing deployments during recovery.
 
-Continue with [Gate C: Prove each host and one engine per cache class](03-Validate-Engines.md).
+Continue with [Gate C: Validate and start every engine](03-Validate-Engines.md).

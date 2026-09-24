@@ -1,6 +1,6 @@
 # Narwhal fleet deployment runbook
 
-From a management workstation, inspect the target hardware and model, install the approved source revision, and validate each engine's runtime contract. Measure each required directed KV path against the running cache geometry, verify live peer transfer, then run a workload through the router over the private management path.
+Discovery records the hardware, model, and launch inputs before installation places the approved revision on each host. Start every engine from its checked plan, capture its live cache, and measure the directed fabric paths while traffic is idle. Attest and profile those processes, then start the router after preflight passes.
 
 Prometheus and Grafana run on the router host for the initial trial.
 
@@ -23,10 +23,9 @@ Compare each engine allocation with the GPU inventory collected on that engine h
 ### Concurrency rules
 
 - After installation, keep one shell per physical engine host and inspect hosts concurrently.
-- Start one serving representative for each distinct cache configuration. Representatives on different hosts may load concurrently.
-- Measure fabric one directed edge at a time.
-- After fabric qualification, start and attest remaining engines with disjoint GPU allocations concurrently.
-- Serialise colocated roles that share GPUs.
+- Start engines with disjoint GPU allocations concurrently and capture each live cache layout. Serialise roles that share GPUs.
+- Measure fabric one directed edge at a time while all engines remain idle.
+- Attest the running engines concurrently after fabric qualification.
 
 ### Deployment record
 
@@ -49,11 +48,21 @@ Follow each gate in order. Record its result before entering the next gate.
 
 1. [Gate A: Freeze inputs and discover the real deployment](deploy/01-Discover.md)
 2. [Gate B: Package and install the approved revision](deploy/02-Install.md)
-3. [Gate C: Prove each host and one engine per cache class](deploy/03-Validate-Engines.md)
+3. [Gate C: Validate and start every engine](deploy/03-Validate-Engines.md)
 4. [Gate D: Prove the transfer fabric against the serving cache](deploy/04-Qualify-Fabric.md)
-5. [Gate E: Expand the fleet and attest the exact live processes](deploy/05-Attest.md)
-6. [Gate F: Characterise performance and run the live KV contract](deploy/06-Profile-and-Preflight.md)
+5. [Gate E: Attest the live engine processes](deploy/05-Attest.md)
+6. [Gate F: Profile once and run the live KV contract](deploy/06-Profile-and-Preflight.md)
 7. [Gate G: Start the service and validate capacity through the private path](deploy/07-Serve-and-Measure.md)
+
+Repeat work when its measured input changes:
+
+| Change | Work to repeat |
+| ------ | -------------- |
+| Offered rate or request count within the profiled workload range | Run the next trial point after router drain. Keep the engine profiles, fabric samples, and full preflight. |
+| SLO or first-token deadline | `narwhal-check` tests the revised limits against saved profiles and live handoffs before the router loads the edited fleet. |
+| Router restart with the same fleet document | Narwhal matches each saved profile to its live engine generation before the restarted router accepts traffic. |
+| Engine process with the same launch plan | Capture its live cache and attestation, profile the new generation, and run full preflight. Recalculate its fabric budget when the captured geometry changes. |
+| Fabric route, host assignment, or transport | Measure the affected directed links against the source budget, then exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index
 
@@ -63,9 +72,8 @@ Follow each gate in order. Record its result before entering the next gate.
 | Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | Correct preparation input and create a new prepared run. Resume dependency installation only after host cause is fixed.                                                         | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths and ports.   | Restore device exposure or artifacts; resolve listener ownership; for checkpoint mismatch repair the differing file and repeat discovery.                                       | Engine role env and launch record; discovery checkpoint manifests and `model_tree_sha256`; `ENGINE_RUN`, image-check and HTTP captures. |
 | Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget.                                     | Diagnose route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, concurrent traffic. Re-sample only after root cause is identified. | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix.                                       |
-| Fleet expansion            | Qualified host/fabric state, pinned image and packages, cache shape, device allocation.                                    | Repeat the checked launch procedure for the affected role.                                                                                                                      | Fleet config, role env, launch record, helper digests, container ID/logs, HTTP captures.                                                |
 | Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint. | Inspect the bound capture and source; restart only affected process or sidecar as required, then rerun finalisation.                                                            | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before/after attestation.                                            |
-| Profiling                  | Idle engines, unchanged runtime, generated sequence limits, prompt lengths and concurrency.                                | Correct the failing engine or sweep; write new samples to a fresh profile path. Restart means reprofile.                                                                        | Fleet config, profiling limits, profile and sample files.                                                                               |
+| Profiling                  | Idle engines, unchanged runtime, generated sequence limits, prompt lengths and concurrency.                                | Correct the failing engine or sweep; write new samples to a fresh profile path. The saved fits serve later trials against the same engine processes.                             | Fleet config, profiling limits, profile and sample files.                                                                               |
 | Preflight                  | Current processes, profiles, fleet contract and SLOs.                                                                      | Follow the reported engine, transfer leg, or budget into the matching troubleshooting path.                                                                                     | Router environment, fleet config, private check output.                                                                                 |
 | Router                     | Bind address, model, engine count and role split.                                                                          | Inspect listener ownership, address family, router error, or upstream engine error.                                                                                             | Router env, fleet config, endpoint captures.                                                                                            |
 | Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime/cache policy, workload and thresholds.        | Resolve local port conflicts, remote listeners, scrape failures, client saturation or scheduler lag; reconcile records before attributing an SLO miss to serving capacity.      | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state/network snapshots.                |
