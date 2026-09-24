@@ -231,10 +231,6 @@ Keep representative containers running through fabric qualification, attestation
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" capture-cache --run "$ENGINE_RUN"
-umask 077
-mkdir -p runs
-export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
-test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 ```
 
 `capture-cache` checks running container identity, image, source and plan hashes, and every TP rank before writing `cache-layout.json`. The serving process remains live.

@@ -1,8 +1,8 @@
 # Gate F: Characterise performance and run the live KV contract
 
-## Profile idle engines
+## Measure engine service curves
 
-Reserve the real engines and keep them otherwise idle. From the router:
+Reserve the attested engines for the sweep. From the router:
 
 ```bash
 .venv/bin/narwhal-profile \
@@ -20,9 +20,23 @@ Prefill profiling measures one-token latency versus input length. Decode profili
 
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
-Narwhal records the verified attestation and process start with each engine's samples, then checks the resulting generation digest at preflight and router startup. After a restart or runtime change, profile the affected engine process again, assemble a fleet-wide store, and rerun preflight.
+The profiler stores each engine's curves with its verified attestation and process start. Preflight and router startup compare that digest with the live engine. An SLO or router setting change uses the existing curves with preflight against the revised fleet document.
 
-Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed engine shape. Keep TPOT above the measured per-token floor.
+After a failed sweep or an engine replacement, reuse the saved profile pair with the same sweep options and a fresh output path:
+
+```bash
+.venv/bin/narwhal-profile \
+  --fleet runs/deployment/fleet.json \
+  --limits runs/deployment/profiling-limits.json \
+  --prefill-lens 256,512,1024,2048,4096,8192,12288 \
+  --decode-input-lens 512,4096,8192 \
+  --reuse runs/profiles.json \
+  --out runs/profiles-recovered.json
+```
+
+The command checks each saved row against the live engine generation, context limit, sequence limit, and effective sweep. It measures engines with missing or changed rows and writes a complete profile and sample pair. Set `profiles.path` to the new file, then run preflight. Keep the source pair with the deployment record.
+
+Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and the profile samples for the deployed engine shape. Keep TPOT above the measured per-token floor.
 
 ## Run preflight
 
@@ -32,7 +46,7 @@ From the router:
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
-Run preflight with the fleet document and profiles planned for the trial.
+Run the full preflight mesh with the fleet document, profiles, and SLO targets planned for the trial. A fleet or target edit requires preflight against the revised document.
 
 | Gate       | What must pass                                                                                                                                                                                              |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

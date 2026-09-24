@@ -2,15 +2,11 @@
 
 ## 5. Set production SLOs
 
-Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured latency distribution.
+Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured profile samples. The subsequent workload trial supplies client-path latency distributions for acceptance or a revised target.
 
 A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
 
-Run preflight after changing either SLO:
-
-```bash
-narwhal-check --fleet config/fleet.production.json
-```
+Use the final targets in the preflight at deployment freeze below. Changing either target keeps the measured engine profiles valid while the engine generations and workload domain stay the same.
 
 ### Pace gate
 
@@ -18,11 +14,13 @@ With at least three successful probes, the pace gate compares each engine with t
 
 ## 6. Freeze the deployment under test
 
-Run preflight against the final fleet before sending measured traffic:
+For a standalone measurement, run the full preflight against the final fleet before sending measured traffic:
 
 ```bash
 narwhal-check --fleet config/fleet.production.json
 ```
+
+The initial deployment uses the [Gate F preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) when the engine processes, profile path, fleet document, and targets match. After changing an input, run preflight against its final value.
 
 Before the load test, assign a deployment identifier and attach the exact:
 

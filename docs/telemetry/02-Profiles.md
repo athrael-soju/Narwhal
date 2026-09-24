@@ -26,7 +26,7 @@ profiles.json: profile n4: tpot_slope must be positive
 
 Build one profile store whose `iid` set matches the configured fleet; validation reports any missing or extra engine IDs.
 
-When profiling engines independently with `narwhal-profile --only`, combine their measured rows into one fleet-wide profile store before preflight or router startup.
+`narwhal-profile --reuse <saved-store> --out <fresh-store>` checks saved rows against the live fleet, measures missing or changed engines, and writes the complete store required by preflight and router startup. A standalone `--only` sweep contains its selected engines.
 
 ### Profile fields
 

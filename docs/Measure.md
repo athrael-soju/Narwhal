@@ -2,6 +2,8 @@
 
 Bind each production result to a deployment identifier that records the model, engine build, hardware shape, topology, workload, cache policy, and TTFT/TPOT targets used in the run.
 
+[Gate F](deploy/06-Profile-and-Preflight.md) produces the engine profiles and final preflight for an initial deployment. Attach those artifacts to the load trial while the engine processes and fleet inputs match.
+
 ## Measurement sequence
 
 1. [Measurement contract and profiling](measure/01-Profile.md)

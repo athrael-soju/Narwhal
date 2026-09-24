@@ -2,11 +2,11 @@
 
 ## Finalise router inventory and start remaining engines
 
-On the router, edit `runs/deployment/fleet.json` with model, engine IDs, initial role split, engine URLs, attestation URLs, SLO values, and a fresh profile path. Endpoint references resolve through `.env.router`.
+On the router, review the generated model, engine IDs, initial role split, engine URLs, and attestation URLs in `runs/deployment/fleet.json` against the checked launches. Endpoint references resolve through `.env.router`. Select an unused profile path for Gate F; calibrate the initial SLO values from the measurements there.
 
-For each non-representative engine, run the same `prepare`, `check`, `start`, HTTP probe, and `capture-cache` sequence used for representatives. Separate physical hosts may proceed concurrently. Serialise overlapping GPU allocations.
+For each engine still awaiting launch, follow [Gate C's checked launch and live HTTP sequence](03-Validate-Engines.md#prepare-check-and-start-each-representative), then [capture its live cache geometry](03-Validate-Engines.md#capture-actual-cache-geometry). Use a new `ENGINE_RUN` for that role. Separate physical hosts may proceed concurrently. Serialise overlapping GPU allocations. Keep the representatives from Gate C running.
 
-Compare each role's live cache layout with its representative before attestation. Keep every successful `ENGINE_RUN` and container ID. Capture logs before removing any container created by the attempt.
+Keep every successful `ENGINE_RUN` and container ID. Capture logs before removing any container created by the attempt.
 
 ## Capture attestation inputs
 
@@ -38,17 +38,17 @@ The fields are `head_size`, `kv_heads`, `hidden_layers`, and `model_architecture
 
 Retain these values with `use_mla`, model-config hash, image identity, application revision, and serving plan hash. The command reads plan and launcher from the live container, checks their hashes against `launch.json`, and records private logs. Run it on every engine.
 
-Capture physical cache grouping:
+Register physical cache grouping from the live cache capture:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
-  --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
+  --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 cat "$ENGINE_RUN/cache-registration.json"
 ```
 
-For vLLM v0.29.0 layouts, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`; `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The generated record retains `cross_layers_blocks`, layout name, enum source hash, startup-log hash, checked plan hash, and image identity. The startup log must contain exactly one resolved layout line of the form `Using <layout> KV cache layout.`
+For vLLM v0.29.0 layouts, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`; `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The generated record retains `cross_layers_blocks`, layout name, enum source hash, live cache-layout hash, checked plan hash, and image identity. The startup log remains available for diagnosis. The launcher writes one `cache-registration.json` per launch directory.
 
-Compare live layout with the representative:
+For each additional engine in a cache group, compare its registered layout with that group's representative:
 
 ```bash
 export REPRESENTATIVE_LAYOUT='<layout name from representative cache-layout.json>'
@@ -64,13 +64,6 @@ if actual != expected:
     raise SystemExit(f"Resolved layout {actual} differs from representative {expected}.")
 print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
-```
-
-When `cache-layout.json` supplies the representative's resolved layout, register that capture:
-
-```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
-  --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
 A matching group signature and resolved layout allow the representative's page geometry to remain the group's fabric basis. A differing layout requires its own serving capture, budget, and edge comparisons.
@@ -146,13 +139,13 @@ Generate the role-specific document:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
-Before sidecar start, reconfirm engine `/health`, `/version`, and `process_start_time_seconds` to identify the process being attested.
-
 Start the sidecar:
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
+
+`serve` checks the recorded container and binds the sidecar to the current engine identity. The check below verifies that identity against the attestation document from the router.
 
 Discovery has already placed the role's attestation URL in the router fleet. Verify `/health` and `/v1/attestation` from the router over the trusted control network.
 

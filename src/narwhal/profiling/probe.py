@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,14 @@ DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
 PREFILL_REPEATS = 3
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
+
+
+def sweep_document(sweep: Sweep) -> dict:
+    """Represent tuple sweep axes as they appear in the saved JSON sidecar."""
+    return {
+        name: list(value) if isinstance(value, tuple) else value
+        for name, value in asdict(sweep).items()
+    }
 
 
 def parse_kv_capacity(metrics: str) -> int | None:
@@ -545,6 +554,53 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
     return 0
 
 
+def load_reusable_profiles(
+    path: Path, cfg: FleetConfig, sweep: Sweep
+) -> tuple[ProfileStore, dict[str, dict], dict[str, str]]:
+    """Load completed samples whose saved profile rows match the source store."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"reuse source must be a regular profile file: {path}")
+    samples_path = path.with_suffix(".samples.json")
+    if not samples_path.is_file() or samples_path.is_symlink():
+        raise ValueError(f"reuse source needs its sample sidecar: {samples_path}")
+    source = ProfileStore(path)
+    record = json.loads(samples_path.read_text())
+    if (
+        not isinstance(record, dict)
+        or record.get("method_version") != 2
+        or record.get("model") != cfg.model
+        or record.get("sweep") != sweep_document(sweep)
+        or not isinstance(record.get("engines"), dict)
+    ):
+        raise ValueError(
+            f"reuse source has a different model, sweep, or sample format: {samples_path}"
+        )
+    engine_ids = {spec.iid for spec in cfg.engines}
+    rows = record["engines"]
+    _, extra = source.engine_set_diff(engine_ids)
+    if set(rows) - engine_ids or extra:
+        raise ValueError("reuse source contains engines outside the fleet")
+    for iid, saved in rows.items():
+        if not isinstance(saved, dict):
+            raise ValueError(f"{iid}: reuse sample row must be an object")
+        measured = source.get(iid)
+        if measured is None:
+            continue
+        if (
+            saved.get("profile") != asdict(measured)
+            or not isinstance(saved.get("generation_evidence"), dict)
+            or measured.generation_digest is None
+        ):
+            raise ValueError(f"{iid}: reuse profile and generation evidence differ")
+    if any(source.get(iid) is not None and iid not in rows for iid in engine_ids):
+        raise ValueError("reuse source lacks samples for a saved profile")
+    digests = {
+        "profiles_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "samples_sha256": hashlib.sha256(samples_path.read_bytes()).hexdigest(),
+    }
+    return source, rows, digests
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -552,9 +608,12 @@ async def run(
     *,
     overwrite: bool = False,
     limits_path: Path | None = None,
+    output_path: Path | None = None,
+    reuse_path: Path | None = None,
 ) -> int:
     """Profile selected healthy engines and write the store."""
-    store = ProfileStore(cfg.profiles_path, load=False)
+    path = output_path or cfg.profiles_path
+    store = ProfileStore(path, load=False)
     evidence_path = store.path.with_suffix(".samples.json")
     if store.path == evidence_path or (
         store.path.exists() and evidence_path.exists() and store.path.samefile(evidence_path)
@@ -574,24 +633,38 @@ async def run(
         if limits_path is not None
         else {}
     )
+    chosen_sweep = sweep or Sweep()
+    source: ProfileStore | None = None
+    reusable_rows: dict[str, dict] = {}
+    reuse_digests: dict[str, str] = {}
+    if reuse_path is not None:
+        if overwrite:
+            raise ValueError("reuse writes a fresh output pair; omit --overwrite")
+        if reuse_path.resolve() == path.resolve():
+            raise ValueError("reuse source and output must have different paths")
+        source, reusable_rows, reuse_digests = load_reusable_profiles(reuse_path, cfg, chosen_sweep)
 
-    print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
+    action = "checking" if source is not None else "profiling"
+    count = len(cfg.engines) if source is not None else len(targets)
+    print(f"{action} {count} instance(s) against model {cfg.model}")
     dialect = lookup_dialect(cfg.dialect)
     evidence_rows: dict[str, object] = {}
     measurement_record = {
         "method_version": 2,
         **stamp(),
         "model": cfg.model,
-        "sweep": asdict(sweep or Sweep()),
+        "sweep": sweep_document(chosen_sweep),
         "engines": evidence_rows,
     }
+    if reuse_path is not None:
+        measurement_record["reuse_source"] = {"path": str(reuse_path), **reuse_digests}
     connections = max((sweep or Sweep()).decode_concurrency)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(300.0, connect=10.0),
         limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
         headers=cfg.engine_headers(),
     ) as client:
-        for spec in targets:
+        for spec in cfg.engines if source is not None else targets:
             r = await client.get(f"{spec.url}{dialect.health_path}", timeout=10.0)
             if r.status_code != 200:
                 print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
@@ -612,7 +685,7 @@ async def run(
             )
             engine_evidence: dict[str, object] = {
                 "max_model_len": max_model_len,
-                "sweep": asdict(engine_sweep),
+                "sweep": sweep_document(engine_sweep),
             }
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
@@ -624,6 +697,30 @@ async def run(
                     headers=cfg.engine_headers(),
                 )
                 engine_evidence["generation_evidence"] = generation.document
+                saved = source.get(spec.iid) if source is not None else None
+                saved_evidence = reusable_rows.get(spec.iid)
+                if (
+                    saved is not None
+                    and spec.iid not in (only or set())
+                    and saved.generation_digest == generation.digest
+                    and saved_evidence is not None
+                    and saved_evidence.get("max_model_len") == max_model_len
+                    and saved_evidence.get("sweep") == sweep_document(engine_sweep)
+                    and saved_evidence.get("max_num_seqs") == max_num_seqs
+                ):
+                    evidence_rows[spec.iid] = saved_evidence
+                    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+                    first = len(evidence_rows) == 1
+                    if first and not overwrite:
+                        with store.path.open("x", encoding="utf-8"):
+                            pass
+                    with evidence_path.open(
+                        "w" if overwrite or not first else "x", encoding="utf-8"
+                    ) as output:
+                        output.write(json.dumps(measurement_record, indent=2) + "\n")
+                    store.put(saved)
+                    print(f"  {spec.iid}: reused matching generation and sweep")
+                    continue
                 profile = await profile_instance(
                     client,
                     spec.iid,
@@ -683,7 +780,7 @@ async def run(
             )
             fit_error = profile.decode_fit_mape if profile.decode_fit_mape is not None else 0.0
             print(f"         decode fit MAPE {fit_error:.1%}; cross-validation {cv}")
-    print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
+    print(f"wrote {len(store)} profile(s) to {path}")
     return 0
 
 
@@ -692,8 +789,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
+    ap.add_argument("--reuse", type=Path, help="reuse matching live rows from a saved profile pair")
     ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")
-    ap.add_argument("--out", type=Path, help="fresh profile path for --refit-samples")
+    ap.add_argument("--out", type=Path, help="fresh profile path for a sweep or refit")
     ap.add_argument(
         "--limits",
         type=Path,
@@ -725,7 +823,10 @@ def main(argv: list[str] | None = None) -> int:
     if any(
         path.resolve() == Path(args.fleet).resolve()
         or (path.exists() and path.samefile(args.fleet))
-        for path in (cfg.profiles_path, cfg.profiles_path.with_suffix(".samples.json"))
+        for path in (
+            args.out or cfg.profiles_path,
+            (args.out or cfg.profiles_path).with_suffix(".samples.json"),
+        )
     ):
         ap.error("profile outputs must not replace the fleet config")
     try:
@@ -759,12 +860,14 @@ def main(argv: list[str] | None = None) -> int:
             "--prefill-repeats at least 3 for a repeat median"
         )
     try:
-        if args.refit_samples is not None or args.out is not None:
-            if args.refit_samples is None or args.out is None or args.only:
+        if args.refit_samples is not None:
+            if args.out is None or args.only or args.reuse is not None:
                 ap.error("--refit-samples requires --out and a complete fleet selection")
             return refit_saved_prefill(
                 args.refit_samples, args.out, {engine.iid for engine in cfg.engines}
             )
+        if args.reuse is not None and args.out is None:
+            ap.error("--reuse requires --out for a fresh profile pair")
         return asyncio.run(
             run(
                 cfg,
@@ -772,6 +875,8 @@ def main(argv: list[str] | None = None) -> int:
                 sweep,
                 overwrite=args.overwrite,
                 limits_path=args.limits,
+                output_path=args.out,
+                reuse_path=args.reuse,
             )
         )
     except (OSError, ValueError, RuntimeError) as exc:

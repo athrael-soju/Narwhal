@@ -1,12 +1,21 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Keep representatives idle while measuring each directed link against a budget derived from their resolved cache layout.
+Keep representatives running and idle while measuring each directed link against a budget derived from their resolved cache layout. Start and stop only the temporary fabric test listeners for each edge.
 
 ## Build the source budget
 
 The initial trial assumes one remote handoff per second, 1,024 prompt tokens per handoff, burst size one, one-second transfer budget, and 25% bandwidth headroom. Apply the full handoff rate independently to every candidate directed edge.
 
-Calculate:
+In each representative's engine shell, create its fabric evidence directory and verify the installed calculator:
+
+```bash
+umask 077
+mkdir -p runs
+export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
+test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
+```
+
+Calculate the source budget from that representative's live cache capture:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \

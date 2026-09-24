@@ -393,6 +393,129 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("generation changed", saved["engines"]["e0"]["error"])
 
+    async def test_reuse_profiles_only_measures_changed_generation(self):
+        """A fresh fleet store keeps measured rows bound to unchanged live processes."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cfg = fleet(root)
+            source = root / "initial.json"
+            cfg.profiles_path = source
+            starts = {"e0": "a", "e3": "a"}
+            client_class = httpx.AsyncClient
+
+            def new_client(**kwargs):
+                return client_class(
+                    transport=httpx.MockTransport(lambda request: httpx.Response(200))
+                )
+
+            async def generation(spec, *args, **kwargs):
+                return GenerationEvidence(
+                    "sha256:" + starts[spec.iid] * 64, {"engine": {"start": starts[spec.iid]}}
+                )
+
+            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+                evidence["prefill"] = [[256, 0.1]]
+                return profile(iid)
+
+            with (
+                patch.object(probe.httpx, "AsyncClient", side_effect=new_client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(probe, "read_generation", side_effect=generation),
+                patch.object(probe, "profile_instance", side_effect=measured) as profiler,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(await probe.run(cfg, None), 0)
+                self.assertEqual(profiler.call_count, 2)
+                starts["e3"] = "b"
+                output = root / "updated.json"
+                profiler.reset_mock()
+                self.assertEqual(
+                    await probe.run(cfg, None, reuse_path=source, output_path=output), 0
+                )
+                self.assertEqual(profiler.call_count, 1)
+                self.assertEqual(profiler.call_args.args[1], "e3")
+            saved = ProfileStore(output)
+            self.assertEqual(saved.get("e0").generation_digest, "sha256:" + "a" * 64)
+            self.assertEqual(saved.get("e3").generation_digest, "sha256:" + "b" * 64)
+            evidence = json.loads(output.with_suffix(".samples.json").read_text())
+            self.assertEqual(set(evidence["engines"]), {"e0", "e3"})
+            self.assertEqual(
+                evidence["engines"]["e0"]["generation_evidence"]["engine"]["start"], "a"
+            )
+            self.assertEqual(evidence["reuse_source"]["path"], str(source))
+
+    async def test_reuse_profiles_recovers_completed_rows_after_later_failure(self):
+        """A failed late engine leaves earlier measurements available for the next run."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cfg = fleet(root)
+            source = root / "partial.json"
+            cfg.profiles_path = source
+            client_class = httpx.AsyncClient
+
+            def new_client(**kwargs):
+                return client_class(
+                    transport=httpx.MockTransport(lambda request: httpx.Response(200))
+                )
+
+            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+                if iid == "e3" and failing:
+                    raise RuntimeError("late engine failed")
+                evidence["prefill"] = [[256, 0.1]]
+                return profile(iid)
+
+            failing = True
+            with (
+                patch.object(probe.httpx, "AsyncClient", side_effect=new_client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                    ),
+                ),
+                patch.object(probe, "profile_instance", side_effect=measured) as profiler,
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "late engine failed"):
+                    await probe.run(cfg, None)
+                self.assertEqual(ProfileStore(source).engine_set_diff({"e0"}), ([], []))
+                failing = False
+                profiler.reset_mock()
+                output = root / "complete.json"
+                self.assertEqual(
+                    await probe.run(cfg, None, reuse_path=source, output_path=output), 0
+                )
+                self.assertEqual(profiler.call_count, 1)
+                self.assertEqual(profiler.call_args.args[1], "e3")
+            self.assertEqual(ProfileStore(output).engine_set_diff({"e0", "e3"}), ([], []))
+
+    def test_reuse_rejects_sidecar_profile_mismatch(self):
+        """Saved coefficients require matching raw evidence before reuse."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cfg = fleet(root)
+            source = root / "saved.json"
+            ProfileStore(source).put(profile("e0", generation_digest="sha256:" + "a" * 64))
+            source.with_suffix(".samples.json").write_text(
+                json.dumps(
+                    {
+                        "method_version": 2,
+                        "model": cfg.model,
+                        "sweep": probe.sweep_document(probe.Sweep()),
+                        "engines": {
+                            "e0": {
+                                "profile": asdict(profile("e0")),
+                                "generation_evidence": {},
+                            }
+                        },
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "profile and generation evidence differ"):
+                probe.load_reusable_profiles(source, cfg, probe.Sweep())
+
     def test_saved_prefill_refit_preserves_decode_and_original_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

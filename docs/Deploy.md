@@ -4,6 +4,8 @@ From a management workstation, inspect the target hardware and model, install th
 
 Prometheus and Grafana run on the router host for the initial trial.
 
+Each engine stays live from its checked launch through attestation and the load trial. Gate D measures the fabric while the representatives started in Gate C remain idle.
+
 ## Operating model
 
 A fleet serves one model with a compatible KV layout across vLLM engines using NIXL with effective `kv_both` behaviour. Every eligible KV producer must be able to transfer to every eligible consumer. Exactly one controller is active for the fleet.
@@ -55,6 +57,18 @@ Follow each gate in order. Record its result before entering the next gate.
 6. [Gate F: Characterise performance and run the live KV contract](deploy/06-Profile-and-Preflight.md)
 7. [Gate G: Start the service and validate capacity through the private path](deploy/07-Serve-and-Measure.md)
 
+### Reuse completed work
+
+| Changed input or state                                      | Work to repeat before serving traffic                                                                                                                                                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Workload rate with the same shape and targets               | Drain resident work, then run the next rate against the same processes, profiles, and preflight.                                                                                     |
+| TTFT/TPOT target or router-only fleet setting               | Run preflight against the final fleet document. Keep profiles bound to the same engine processes.                                                                                    |
+| Engine process or runtime configuration                     | Attest the changed process, run `narwhal-profile --reuse` into a fresh fleet store, then run preflight. The profiler measures changed generations and carries forward matching rows. |
+| Cache geometry or fabric budget                             | Capture the changed serving layout, recalculate its group budget, and compare retained directed samples when their route and test fingerprints still match.                          |
+| Host route, interface, transport, or fabric test parameters | Measure the affected directed edges again, then run preflight against the live fleet.                                                                                                |
+
+The profile digest includes each engine's process start. A router restart, new load rate, revised SLO, or valid fabric comparison leaves that digest unchanged. [Gate F](deploy/06-Profile-and-Preflight.md) explains the profile-store constraint when one engine changes.
+
 ## Evidence and recovery index
 
 | Gate                       | Inputs that define the gate                                                                                                | Typical correction path                                                                                                                                                         | Evidence to retain                                                                                                                      |
@@ -65,7 +79,7 @@ Follow each gate in order. Record its result before entering the next gate.
 | Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget.                                     | Diagnose route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, concurrent traffic. Re-sample only after root cause is identified. | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix.                                       |
 | Fleet expansion            | Qualified host/fabric state, pinned image and packages, cache shape, device allocation.                                    | Repeat the checked launch procedure for the affected role.                                                                                                                      | Fleet config, role env, launch record, helper digests, container ID/logs, HTTP captures.                                                |
 | Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint. | Inspect the bound capture and source; restart only affected process or sidecar as required, then rerun finalisation.                                                            | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before/after attestation.                                            |
-| Profiling                  | Idle engines, unchanged runtime, generated sequence limits, prompt lengths and concurrency.                                | Correct the failing engine or sweep; write new samples to a fresh profile path. Restart means reprofile.                                                                        | Fleet config, profiling limits, profile and sample files.                                                                               |
+| Profiling                  | Idle engines, stable runtime, generated sequence limits, prompt lengths and concurrency.                                   | Correct the affected engine or sweep, use the saved pair with `--reuse` and a fresh output path when the requested sweep still matches.                                         | Fleet config, profiling limits, profile and sample files.                                                                               |
 | Preflight                  | Current processes, profiles, fleet contract and SLOs.                                                                      | Follow the reported engine, transfer leg, or budget into the matching troubleshooting path.                                                                                     | Router environment, fleet config, private check output.                                                                                 |
 | Router                     | Bind address, model, engine count and role split.                                                                          | Inspect listener ownership, address family, router error, or upstream engine error.                                                                                             | Router env, fleet config, endpoint captures.                                                                                            |
 | Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime/cache policy, workload and thresholds.        | Resolve local port conflicts, remote listeners, scrape failures, client saturation or scheduler lag; reconcile records before attributing an SLO miss to serving capacity.      | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state/network snapshots.                |

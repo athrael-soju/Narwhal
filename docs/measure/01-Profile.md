@@ -1,5 +1,7 @@
 # Measurement contract and profiling
 
+For the initial deployment, [Gate F](../deploy/06-Profile-and-Preflight.md) produces the profile pair used throughout this measurement sequence. Keep its engine processes and profile path for the workload trial. The sweep guidance below applies when choosing that initial sweep or measuring a different engine generation or workload domain.
+
 ## 1. Define the measurement contract
 
 Record router-journal and deployment-client latency separately because they use these request boundaries:
@@ -26,9 +28,9 @@ Refused and failed scored requests remain in the SLO denominator.
 
 Narwhal includes empty-text and reasoning-only token IDs in output length and computes TPOT for requests with at least two identified tokens. Retain the stream-accounting rule with each result set and use the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to compare runs with the same denominator and terminal classes.
 
-## 2. Create an idle-fleet latency profile
+## 2. Choose the idle-fleet latency sweep
 
-Reserve the production engine shape, warm the model with prefix caching disabled, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
+Reserve the production engine shape and warm the model with prefix caching disabled. For a standalone measurement outside the deployment runbook, sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
 
 ```bash
 narwhal-profile \
