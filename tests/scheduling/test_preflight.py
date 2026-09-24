@@ -1,10 +1,12 @@
 """Check preflight gate results and permitted KV-transfer pairs."""
 
 import io
+import json
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -224,6 +226,37 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(report.failed), 1)
                 self.assertEqual(calls, ["/v1/completions"])
 
+    async def test_pace_adapts_a_context_overflow_using_the_live_tokenizer(self):
+        """A 4096-token engine can serve the pace probe with one output token."""
+        prompts = []
+
+        def handle(request):
+            body = json.loads(request.content)
+            if request.url.path == "/tokenize":
+                return httpx.Response(
+                    200,
+                    json={"count": len(body["prompt"].split()) + 1, "max_model_len": 4096},
+                )
+            prompts.append(body["prompt"])
+            if len(body["prompt"].split()) + 2 > 4096:
+                return httpx.Response(400, json={"error": {"message": "context overflow"}})
+            return httpx.Response(
+                200, json={"usage": {"prompt_tokens": len(body["prompt"].split()) + 1}}
+            )
+
+        report = Report()
+        slow = await gate_pace(
+            self.cfg,
+            {"e0"},
+            report,
+            repeats=1,
+            transport=httpx.MockTransport(handle),
+        )
+        self.assertEqual(slow, set())
+        self.assertEqual(report.failed, [])
+        self.assertEqual(len(prompts), 2)
+        self.assertLess(len(prompts[1]), len(prompts[0]))
+
     async def test_orchestration_gates_transfer_and_preserves_configuration(self):
         """After preflight passes, KV transfer checks use the requested topology."""
         for blocked in (None, "contract", "model", "pace", "skip"):
@@ -345,6 +378,191 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             self.cfg, {"e0", "e3"}, {"e0": result, "e3": result}, client, report, mesh=False
         )
         self.assertEqual(len(report.failed), 2)
+
+    async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {
+                "kv_transfer_params": {
+                    "remote_engine_id": "engine",
+                    "remote_block_ids": [0],
+                    "remote_host": "192.0.2.1",
+                    "remote_port": 5701,
+                    "transfer_mode": "pull",
+                }
+            },
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+
+        async def output(*args, **kwargs):
+            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+
+        client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
+
+        def snapshot(iid, *, start=100.0, transfers=0.0):
+            return {
+                "iid": iid,
+                "vllm_version": "0.29.0",
+                "process_start_time_seconds": start,
+                "attestation_digest": "sha256:attested",
+                "nixl_transfer_count": transfers,
+                "nixl_transfer_seconds_sum": transfers * 0.2,
+            }
+
+        pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
+        src, dst = pair[0]
+        with (
+            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(
+                check,
+                "_pair_snapshot",
+                new=AsyncMock(
+                    side_effect=[
+                        snapshot(src),
+                        snapshot(dst),
+                        snapshot(src),
+                        snapshot(dst, transfers=1.0),
+                    ]
+                ),
+            ),
+        ):
+            report = Report()
+            await gate_consume(
+                self.cfg,
+                {src, dst},
+                {src: result, dst: result},
+                client,
+                report,
+                True,
+                evidence=report.pairs,
+            )
+        self.assertEqual(report.failed, [])
+        self.assertEqual(report.pairs[0]["status"], "passed")
+        self.assertEqual(report.pairs[0]["nixl_transfer_seconds"], 0.2)
+        self.assertEqual(report.pairs[0]["remote_port"], 5701)
+
+        with (
+            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(
+                check,
+                "_pair_snapshot",
+                new=AsyncMock(
+                    side_effect=[
+                        snapshot(src),
+                        snapshot(dst),
+                        snapshot(src, start=101.0),
+                        snapshot(dst, transfers=1.0),
+                    ]
+                ),
+            ),
+        ):
+            report = Report()
+            await gate_consume(
+                self.cfg,
+                {src, dst},
+                {src: result, dst: result},
+                client,
+                report,
+                True,
+                evidence=report.pairs,
+            )
+        self.assertEqual(report.pairs[0]["status"], "failed")
+        self.assertIn("process or attestation changed", report.failed[0])
+
+    async def test_directed_kv_evidence_reports_side_channel_and_layout_failures(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "engine", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+        src, dst = self.cfg.engines[0].iid, self.cfg.engines[1].iid
+        for detail in ("NIXL side channel connection refused", "incompatible cache layout"):
+
+            async def failed(*args, failure_detail=detail, **kwargs):
+                raise EngineError("decode", self.cfg.engines[1].url, 503, failure_detail)
+                yield ""
+
+            client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=failed)
+            with (
+                patch.object(check, "validation_pairs", return_value=[(src, dst)]),
+                patch.object(check, "_pair_snapshot", new=AsyncMock(return_value={"iid": src})),
+            ):
+                report = Report()
+                await gate_consume(
+                    self.cfg,
+                    {src, dst},
+                    {src: result, dst: result},
+                    client,
+                    report,
+                    True,
+                    evidence=report.pairs,
+                )
+            self.assertEqual(report.pairs[0]["status"], "failed")
+            self.assertIn(detail, report.failed[0])
+
+    async def test_saved_directed_kv_evidence_expires_on_process_restart(self):
+        fleet_path = self.cfg.profiles_path.parent / "fleet.json"
+        fleet_path.write_text("{}")
+        evidence_path = fleet_path.parent / "kv-evidence.json"
+
+        def snapshot(iid, start=100.0):
+            return {
+                "iid": iid,
+                "vllm_version": "0.29.0",
+                "process_start_time_seconds": start,
+                "attestation_digest": "sha256:attested",
+            }
+
+        pairs = check.validation_pairs(self.cfg.engines, mesh=True)
+        rows = [
+            {
+                "producer": src,
+                "consumer": dst,
+                "status": "passed",
+                "producer_before": snapshot(src),
+                "producer_after": snapshot(src),
+                "consumer_before": snapshot(dst),
+                "consumer_after": snapshot(dst),
+                "output_tokens": 3,
+                "nixl_transfer_count_delta": 1,
+                "nixl_transfer_seconds": 0.2,
+            }
+            for src, dst in pairs
+        ]
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "schema": "narwhal.directed-kv-evidence",
+                    "schema_version": 1,
+                    "status": "passed",
+                    "failed": [],
+                    "skipped": [],
+                    "fleet_sha256": sha256(fleet_path.read_bytes()).hexdigest(),
+                    "profile_sha256": sha256(self.cfg.profiles_path.read_bytes()).hexdigest(),
+                    "contract_fingerprint": self.cfg.engine_contract.fingerprint(),
+                    "expected_pairs": [list(pair) for pair in pairs],
+                    "repeats": 1,
+                    "pairs": rows,
+                }
+            )
+        )
+        with patch.object(
+            check, "_pair_snapshot", new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid))
+        ):
+            self.assertEqual(
+                await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path), []
+            )
+        with patch.object(
+            check,
+            "_pair_snapshot",
+            new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid, start=101.0)),
+        ):
+            failures = await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path)
+        self.assertTrue(any("changed since KV qualification" in failure for failure in failures))
 
     def test_pairs_respect_role_sets_and_cover_consumers(self):
         """Ring construction covers permitted consumers with eligible producers."""
