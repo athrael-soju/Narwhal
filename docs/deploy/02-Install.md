@@ -20,6 +20,8 @@ Preparation also snapshots:
 - `tools/deployment/launch_engine.py`;
 - `tools/deployment/cache_capture_hook.py`.
 
+These checkout paths resolve to the same source files packaged under `narwhal.deployment`. The multi-host installer snapshots their bytes and hashes as before; an installed workstation workflow imports the package directly.
+
 These are installed under `runs/deployment-tools/` on engine hosts. The role environment exports each path and SHA-256 through `NARWHAL_FABRIC_BUDGET_TOOL` / `NARWHAL_FABRIC_BUDGET_SHA256`, `NARWHAL_ENGINE_LAUNCHER` / `NARWHAL_ENGINE_LAUNCHER_SHA256`, and `NARWHAL_CACHE_CAPTURE_HOOK` / `NARWHAL_CACHE_CAPTURE_HOOK_SHA256`.
 
 Preparation writes a mode-0600 manifest with the approved revision, role-to-host mapping, input hashes, a unique install path under `~/Narwhal-deploy/`, and SHA-256 hashes of the source bundle, helper snapshots, and role files. Later SSH operations revalidate the prepared directory against this manifest and read management credentials from the workstation environment.

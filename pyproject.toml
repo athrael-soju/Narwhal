@@ -86,6 +86,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101"
 # Harnesses use assertions, fixed seeds, and fake credentials.
 "tools/*.py" = ["E402", "E731", "D", "S"]
 "tests/*.py" = ["D", "E731", "S"]
+# These installed modules retain the standalone deployment scripts' existing
+# docstring and subprocess baseline while their import and launch paths move.
+"src/narwhal/deployment/*.py" = ["D101", "D103", "S"]
 
 [tool.mypy]
 python_version = "3.11"
