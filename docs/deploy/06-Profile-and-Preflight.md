@@ -26,7 +26,7 @@ Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed e
 
 ## Calibrate the first-token deadline
 
-Choose input targets spanning the served context range, including its longest admitted input. On an idle representative fleet, size crossed-handoff prompts with the live tokenizer and collect first-token times for every role-permitted producer-consumer path:
+On the idle fleet named by `--fleet`, choose input targets spanning the served context range, including its longest admitted input. `narwhal-check` sizes prompts with the producer's live tokenizer and measures the first token on every role-permitted crossed path:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
@@ -34,11 +34,11 @@ Choose input targets spanning the served context range, including its longest ad
   --first-token-observation-s 12
 ```
 
-Replace the example lengths and 12-second observation bound with the fleet's context range and a bound inside `serving.request_timeout_s`. The observation bound lets preflight identify a working transfer beyond the configured serving deadline. Serving still enforces `engine.first_token_timeout_s`, and `serving.request_timeout_s` still bounds the full client request.
+Set the observation bound between `engine.first_token_timeout_s` and `serving.request_timeout_s`. Preflight times completed transfers through that bound and flags handoffs over the serving deadline; the router applies the configured first-token and request deadlines to client traffic.
 
-For each length and permitted path, retain at least 100 working first-token samples. Compute nearest-rank p99 and set `engine.first_token_timeout_s` above `max(observed maximum, 1.2 × p99) + 0.5 seconds` across those groups. Check the resulting bound against the TTFT target after measured prefill; a bound that exhausts that target calls for a different SLO or engine path. Keep the fleet document, command, preflight output, engine process identities, and profile store together so the deadline can be traced to its samples.
+For each length and path, retain at least 100 completed first-token samples, take nearest-rank p99, then set `engine.first_token_timeout_s` above `max(observed maximum, 1.2 × p99) + 0.5 seconds` across those groups. If the selected bound plus measured prefill exhausts the TTFT target, change the SLO or engine path before serving. Keep the fleet document, command, preflight output, engine process identities, and profile store with the samples used to set the deadline.
 
-An engine error or observation-window expiry fails the gate. Compute latency distributions from completed transfers after correcting the path. For an observation expiry, a second run with a larger bound inside the request deadline can expose a slow transfer or establish a higher observation ceiling. Rerun calibration after changes to the model, engine runtime, KV transport, or served context range.
+An engine error or observation expiry fails the gate; inspect that path and rerun it before calculating the completed-sample distribution. For an observation expiry, increase the bound within the request deadline for one diagnostic run: a completed handoff yields its latency, while another expiry establishes a higher observation ceiling. Recalibrate after changes to the model, engine runtime, KV transport, or served context range.
 
 ## Run preflight
 

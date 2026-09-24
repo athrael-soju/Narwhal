@@ -34,7 +34,7 @@ PROBE_PROMPT = "benchmark " * 64
 
 @dataclass
 class Report:
-    """Print gate outcomes and collect failures and skips."""
+    """Print gate outcomes and collect failures, skips, and warnings."""
 
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
@@ -367,6 +367,7 @@ async def gate_consume(
 
     Ring mode covers each eligible producer and consumer with a peer. Mesh mode
     covers every eligible ordered pair. Repeat each pair the requested number of times.
+    The observation window can extend the configured serving deadline.
     """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
@@ -501,7 +502,7 @@ async def _check_transfer(
         rep.fail(f"{label} transfer failed: {type(exc).__name__}: {exc}")
         return None
     if not tokens or first_token_s is None:
-        rep.fail(f"{label} accepted the handoff and produced no tokens")
+        rep.fail(f"{label} accepted the handoff; decode emitted 0 generated tokens")
         return None
     elif first_token_s > cfg.first_token_timeout_s:
         rep.fail(
@@ -635,8 +636,8 @@ async def run(
             "matches the packaged default; "
             "calibrate from crossed-handoff first-token samples over the served context range"
         )
-    # Consume observes beyond the serving deadline when TTFT provides room;
-    # other probes use the configured serving bounds.
+    # Consume may extend the first-token observation; serving retains the
+    # configured deadline.
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,

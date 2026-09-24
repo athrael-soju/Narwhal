@@ -149,11 +149,11 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
 | `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                               |
 
-Size `engine.first_token_timeout_s` from crossed-handoff first-token samples at the context lengths the fleet serves. The packaged `2.5` seconds is a bootstrap value; `narwhal-check` and `narwhal-serve` warn when the configured value matches it. [Gate F](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) gives the calibration procedure and retained evidence.
+When `engine.first_token_timeout_s` equals the packaged `2.5` seconds, `narwhal-check` and `narwhal-serve` warn; follow [Gate F](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) to calibrate it.
 
 | Bound | Class | Source of the value |
 | --- | --- | --- |
-| `serving.request_timeout_s` | Fleet measurement | Longest admitted output, queue policy, and measured decode pace. This remains the end-to-end bound. |
+| `serving.request_timeout_s` | Fleet measurement | Longest admitted output, queue policy, and measured decode pace. |
 | `serving.prefill_timeout_s` | Fleet measurement | Longest served input and expected prefill concurrency. |
 | `engine.first_token_timeout_s` | Fleet measurement | Crossed-handoff first-token samples by context length and permitted path. |
 | `engine.decode_read_timeout_s` | Fleet measurement | Measured decode pace and acceptable transport-chunk gap before declaring a stall. |
