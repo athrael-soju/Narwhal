@@ -29,7 +29,8 @@ Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed e
 From the router:
 
 ```bash
-.venv/bin/narwhal-check --fleet runs/deployment/fleet.json
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
+  --evidence-out runs/deployment/directed-kv-evidence.json
 ```
 
 Run preflight with the fleet document and profiles planned for the trial.
@@ -47,6 +48,8 @@ Run preflight with the fleet document and profiles planned for the trial.
 | `slo`      | Configured TTFT/TPOT targets are feasible against measured profiles.                                                                                                                                        |
 
 By default every eligible producer-consumer pair is exercised. `--ring` tests the configured maintenance ring. `--repeats` is for intermittent transfer diagnosis.
+
+Keep the evidence with the engine startup logs. Check it again immediately before a trial with `narwhal-check --fleet runs/deployment/fleet.json --verify-evidence runs/deployment/directed-kv-evidence.json`. A changed process or profile requires a fresh profile and full mesh.
 
 Start the router after every required gate passes.
 
