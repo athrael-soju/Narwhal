@@ -11,6 +11,7 @@ import httpx
 import uvicorn
 
 from .config import FleetConfig
+from .config.model import DEFAULT_FIRST_TOKEN_TIMEOUT_S
 from .serving.app import create_app
 
 # Map uvicorn's trace level to logging's DEBUG.
@@ -127,6 +128,12 @@ def serve(argv: list[str] | None = None) -> int:
         return 2
 
     cfg = FleetConfig.load(args.fleet)
+    if cfg.first_token_timeout_s == DEFAULT_FIRST_TOKEN_TIMEOUT_S:
+        logging.getLogger(__name__).warning(
+            "engine.first_token_timeout_s=%gs matches the packaged default; "
+            "calibrate from crossed-handoff first-token samples over the served context range",
+            DEFAULT_FIRST_TOKEN_TIMEOUT_S,
+        )
     if args.max_concurrent is not None and args.max_concurrent > cfg.max_connections:
         ap.error(
             f"--max-concurrent {args.max_concurrent} exceeds the fleet's "

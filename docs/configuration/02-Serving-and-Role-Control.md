@@ -149,7 +149,20 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
 | `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                               |
 
-Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range.
+Size `engine.first_token_timeout_s` from crossed-handoff first-token samples at the context lengths the fleet serves. The packaged `2.5` seconds is a bootstrap value; `narwhal-check` and `narwhal-serve` warn when the configured value matches it. [Gate F](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) gives the calibration procedure and retained evidence.
+
+| Bound | Class | Source of the value |
+| --- | --- | --- |
+| `serving.request_timeout_s` | Fleet measurement | Longest admitted output, queue policy, and measured decode pace. This remains the end-to-end bound. |
+| `serving.prefill_timeout_s` | Fleet measurement | Longest served input and expected prefill concurrency. |
+| `engine.first_token_timeout_s` | Fleet measurement | Crossed-handoff first-token samples by context length and permitted path. |
+| `engine.decode_read_timeout_s` | Fleet measurement | Measured decode pace and acceptable transport-chunk gap before declaring a stall. |
+| `engine.tokenize_timeout_s` | Fleet measurement | Tokenizer response samples on the deployed engine and network path; timeout causes character-ratio fallback. |
+| `engine.connect_timeout_s`, `engine.health_timeout_s` | Site policy, checked on the fleet | Connection and health-probe latency under the site's network and recovery budget. |
+| `engine.pool_timeout_s` | Fleet measurement | Pool size, admitted concurrency, and measured connection wait. |
+| `serving.queue_timeout_s`, `serving.handoff_timeout_s` | Fleet policy and measurement | Queue budget and verified backend KV lease. |
+| `serving.retry_base_s`, `serving.retry_cap_s`, `recovery.readmit_every`, `recovery.liveness_every`, `recovery.failure_quarantine_s` | Site policy | Recovery cadence and failure budget. |
+| `serving.graceful_timeout_s` | Site policy | Shutdown drain budget for admitted streams. |
 
 `serving.request_timeout_s` bounds the entire request, including decode streaming.
 

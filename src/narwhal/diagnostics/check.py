@@ -8,21 +8,25 @@ import contextlib
 import json
 import math
 import sys
+import time
 from dataclasses import dataclass, field
 from importlib import resources
 
 import httpx
 
 from ..config import FleetConfig
+from ..config.model import DEFAULT_FIRST_TOKEN_TIMEOUT_S
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
-from ..engines.client import EngineClient, EngineError
+from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
 from ..engines.connector import PrefillResult
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
+from ..engines.stream import sse_token_bearing, sse_token_count, sse_token_ids
 from ..engines.validation import can_consume, can_produce, validation_pairs
 from ..profiling.generation import generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
+from ..profiling.probe import make_prompt
 from ..profiling.store import ProfileStore
 
 PROBE_PROMPT = "benchmark " * 64
@@ -34,6 +38,7 @@ class Report:
 
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def ok(self, msg: str) -> None:
         """Print a passing gate result."""
@@ -48,6 +53,11 @@ class Report:
         """Print and record a skipped gate result."""
         print(f"  SKIP  {msg}")
         self.skipped.append(msg)
+
+    def warn(self, msg: str) -> None:
+        """Print a configuration diagnostic while retaining the gate verdict."""
+        print(f"  WARN  {msg}")
+        self.warnings.append(msg)
 
 
 async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set[str]:
@@ -350,6 +360,8 @@ async def gate_consume(
     rep: Report,
     mesh: bool,
     repeats: int = 1,
+    observation_s: float | None = None,
+    input_tokens: tuple[int, ...] = (),
 ) -> None:
     """Probe role-permitted transfers between distinct engines.
 
@@ -370,36 +382,140 @@ async def gate_consume(
         excluded = sorted(set(ids) - set(consumers)) + sorted(set(ids) - set(producers))
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
+    if not pairs:
+        rep.skip("consume: role pins yield zero eligible crossed pairs")
+        return
 
-    body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 4, "temperature": 0.0}
-    pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
-    seen: set[tuple[str, str]] = set()
-    for src, dst in pairs:
-        try:
-            params = await client.prefill(by_id[src].url, "/v1/completions", body, {})
-            tokens = 0
-            async for line in client.decode(
-                by_id[dst].url,
-                "/v1/completions",
-                body,
-                {},
-                params,
-                first_token_timeout_s=cfg.first_token_timeout_s,
-            ):
-                from ..engines.stream import sse_token_count
+    observation_s = observation_s or min(
+        cfg.request_timeout_s, max(cfg.first_token_timeout_s, cfg.slo.ttft_s)
+    )
+    prompts: list[tuple[str, int | None, int | None]] = [(PROBE_PROMPT, None, None)]
+    if input_tokens:
+        if client.dialect.tokenize_path is None:
+            rep.fail(
+                f"handoff input sizing requires an exact tokenizer route for {client.dialect.name}"
+            )
+            return
+        prompts = []
+        async with httpx.AsyncClient(headers=cfg.engine_headers()) as sizing_client:
+            for requested_tokens in input_tokens:
+                try:
+                    prompt, sized_tokens = await make_prompt(
+                        sizing_client,
+                        by_id[producers[0]].url,
+                        cfg.model,
+                        requested_tokens,
+                        client.dialect,
+                        cfg.chars_per_token,
+                    )
+                except (RuntimeError, httpx.HTTPError) as exc:
+                    rep.fail(f"handoff prompt {requested_tokens} tokens: {exc}")
+                    return
+                prompts.append((prompt, requested_tokens, sized_tokens))
+    for prompt, target_tokens, sized in prompts:
+        body = {"model": cfg.model, "prompt": prompt, "max_tokens": 4, "temperature": 0.0}
+        if target_tokens is not None:
+            rep.ok(f"handoff prompt target {target_tokens} tokens, sized {sized} tokens")
+        for src, dst in pairs:
+            timings: list[float] = []
+            for sample in range(max(1, repeats)):
+                timing = await _check_transfer(
+                    cfg,
+                    client,
+                    rep,
+                    by_id[src].url,
+                    by_id[dst].url,
+                    src,
+                    dst,
+                    body,
+                    observation_s,
+                    sample + 1,
+                )
+                if timing is not None:
+                    timings.append(timing)
+            if timings:
+                ordered = sorted(timings)
+                scope = f"{sized} input tokens" if sized is not None else "default probe prompt"
+                summary = (
+                    f"{src} -> {dst}, {scope}: {len(ordered)}/{max(1, repeats)} "
+                    f"working handoffs, max first token {ordered[-1]:.3f}s"
+                )
+                if len(ordered) >= 100 and len(ordered) == max(1, repeats):
+                    summary += (
+                        f", nearest-rank p99 {ordered[math.ceil(0.99 * len(ordered)) - 1]:.3f}s"
+                    )
+                rep.ok(summary)
 
-                tokens += sse_token_count(line)
-        except EngineError as exc:
-            rep.fail(f"{src} -> {dst}: {exc}")
-            continue
-        except Exception as exc:
-            rep.fail(f"{src} -> {dst}: {type(exc).__name__}: {exc}")
-            continue
-        if not tokens:
-            rep.fail(f"{src} -> {dst} accepted the handoff and produced no tokens")
-        elif (src, dst) not in seen:
-            seen.add((src, dst))
-            rep.ok(f"{src} -> {dst} moved KV and produced {tokens} tokens")
+
+async def _check_transfer(
+    cfg: FleetConfig,
+    client: EngineClient,
+    rep: Report,
+    src_url: str,
+    dst_url: str,
+    src: str,
+    dst: str,
+    body: dict[str, object],
+    observation_s: float,
+    sample: int,
+) -> float | None:
+    """Measure one fresh crossed handoff with an independent observation bound."""
+    label = f"{src} -> {dst} sample {sample}"
+    prefill_start = time.monotonic()
+    try:
+        params = await client.prefill(src_url, "/v1/completions", body, {})
+    except EngineError as exc:
+        rep.fail(f"{label} prefill leg: {exc}")
+        return None
+    prefill_s = time.monotonic() - prefill_start
+    decode_start = time.monotonic()
+    first_token_s = None
+    tokens = 0
+    try:
+        async for line in client.decode(
+            dst_url,
+            "/v1/completions",
+            body,
+            {},
+            params,
+            first_token_timeout_s=observation_s,
+        ):
+            count = sse_token_count(line)
+            if not count and client.dialect.token_ids:
+                ids = sse_token_ids(line)
+                count = len(ids) if ids else 0
+            if first_token_s is None and sse_token_bearing(line, client.dialect):
+                first_token_s = time.monotonic() - decode_start
+            tokens += count
+    except EngineError as exc:
+        if exc.status == 504 and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
+            rep.fail(
+                f"{label} first token exceeded {observation_s:g}s observation window "
+                f"(configured deadline {cfg.first_token_timeout_s:g}s); "
+                "inspect the path or repeat with a wider observation bound"
+            )
+        else:
+            rep.fail(f"{label} transfer failed after {prefill_s:.3f}s prefill: {exc}")
+        return None
+    except Exception as exc:
+        rep.fail(f"{label} transfer failed: {type(exc).__name__}: {exc}")
+        return None
+    if not tokens or first_token_s is None:
+        rep.fail(f"{label} accepted the handoff and produced no tokens")
+        return None
+    elif first_token_s > cfg.first_token_timeout_s:
+        rep.fail(
+            f"{label} moved KV and produced {tokens} tokens; first token {first_token_s:.3f}s "
+            f"exceeded configured {cfg.first_token_timeout_s:g}s deadline "
+            f"(prefill {prefill_s:.3f}s). Calibrate engine.first_token_timeout_s"
+        )
+    else:
+        rep.ok(
+            f"{label} moved KV and produced {tokens} tokens "
+            f"(prefill {prefill_s:.3f}s, first token {first_token_s:.3f}s; "
+            f"deadline {cfg.first_token_timeout_s:g}s)"
+        )
+    return first_token_s
 
 
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
@@ -506,12 +622,21 @@ async def run(
     repeats: int = 1,
     *,
     report: Report | None = None,
+    first_token_observation_s: float | None = None,
+    handoff_input_tokens: tuple[int, ...] = (),
 ) -> int:
     """Run every preflight gate and return a process exit code."""
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
-    # Use serving timeouts so preflight exercises the recorded configuration.
+    if cfg.first_token_timeout_s == DEFAULT_FIRST_TOKEN_TIMEOUT_S:
+        rep.warn(
+            f"engine.first_token_timeout_s={DEFAULT_FIRST_TOKEN_TIMEOUT_S:g}s "
+            "matches the packaged default; "
+            "calibrate from crossed-handoff first-token samples over the served context range"
+        )
+    # Consume observes beyond the serving deadline when TTFT provides room;
+    # other probes use the configured serving bounds.
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,
@@ -545,7 +670,17 @@ async def run(
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")
         else:
             handoffs = await gate_produce(cfg, live, client, rep)
-            await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
+            await gate_consume(
+                cfg,
+                live,
+                handoffs,
+                client,
+                rep,
+                mesh,
+                repeats,
+                observation_s=first_token_observation_s,
+                input_tokens=handoff_input_tokens,
+            )
         gate_slo(cfg, store, rep)
     finally:
         await client.aclose()
@@ -569,6 +704,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repeats", type=int, default=1, help="KV transfer probes per pair")
     ap.add_argument("--no-kv", action="store_true", help="skip the two KV gates")
     ap.add_argument(
+        "--first-token-observation-s",
+        type=float,
+        help="preflight first-token observation bound (default: larger of configured "
+        "deadline and TTFT target, capped by request timeout)",
+    )
+    ap.add_argument(
+        "--handoff-input-tokens",
+        type=str,
+        help="comma-separated input token targets for crossed-handoff calibration",
+    )
+    ap.add_argument(
         "--print-example-config",
         action="store_true",
         help="print the annotated example fleet config and exit",
@@ -591,7 +737,33 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("give --fleet")
         return 2
     cfg = FleetConfig.load(args.fleet)
-    return asyncio.run(run(cfg, not args.ring, args.no_kv, args.repeats))
+    if args.first_token_observation_s is not None and (
+        not math.isfinite(args.first_token_observation_s)
+        or args.first_token_observation_s < cfg.first_token_timeout_s
+        or args.first_token_observation_s > cfg.request_timeout_s
+    ):
+        ap.error(
+            "--first-token-observation-s must be finite and between the configured "
+            "first-token and request deadlines"
+        )
+    handoff_input_tokens: tuple[int, ...] = ()
+    if args.handoff_input_tokens:
+        try:
+            handoff_input_tokens = tuple(int(part) for part in args.handoff_input_tokens.split(","))
+        except ValueError:
+            ap.error("--handoff-input-tokens requires comma-separated positive integers")
+        if any(n < 1 for n in handoff_input_tokens):
+            ap.error("--handoff-input-tokens requires comma-separated positive integers")
+    return asyncio.run(
+        run(
+            cfg,
+            not args.ring,
+            args.no_kv,
+            args.repeats,
+            first_token_observation_s=args.first_token_observation_s,
+            handoff_input_tokens=handoff_input_tokens,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from ..serving.policy import ServingPolicy
 from ..types import Role
 from .environment import resolve_endpoint
 from .model import (
+    DEFAULT_FIRST_TOKEN_TIMEOUT_S,
     EngineContract,
     EngineSpec,
     FleetConfig,
@@ -460,7 +461,7 @@ def load(path: str | Path) -> FleetConfig:
         first_token_timeout_s=_read_float(
             problems,
             "engine.first_token_timeout_s",
-            engine_raw.get("first_token_timeout_s", 2.5),
+            engine_raw.get("first_token_timeout_s", DEFAULT_FIRST_TOKEN_TIMEOUT_S),
         ),
         state_path=Path(
             _read_str(

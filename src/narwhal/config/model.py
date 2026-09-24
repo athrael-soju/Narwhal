@@ -13,6 +13,8 @@ from ..scheduling.control import SLO, Thresholds
 from ..serving.policy import ServingPolicy
 from ..types import Role
 
+DEFAULT_FIRST_TOKEN_TIMEOUT_S = 2.5
+
 
 @dataclass
 class EngineSpec:
@@ -219,7 +221,7 @@ class FleetConfig:
     # budget. 0 disables the bound, leaving only the request deadline.
     decode_read_timeout_s: float = 60.0
     # Set above the measured crossed-handoff p99 for the served context range.
-    first_token_timeout_s: float = 2.5
+    first_token_timeout_s: float = DEFAULT_FIRST_TOKEN_TIMEOUT_S
     # Hold a failed engine out of placement while health checks catch up.
     failure_quarantine_s: float = 0.0
     # Predictive admission returns 429 when every placement exceeds the TTFT

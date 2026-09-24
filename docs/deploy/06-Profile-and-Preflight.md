@@ -24,6 +24,22 @@ Narwhal records the verified attestation and process start with each engine's sa
 
 Set `slo.ttft_s` and `slo.tpot_s` from light-load measurements on the deployed engine shape. Keep TPOT above the measured per-token floor.
 
+## Calibrate the first-token deadline
+
+Choose input targets spanning the served context range, including its longest admitted input. On an idle representative fleet, size crossed-handoff prompts with the live tokenizer and collect first-token times for every role-permitted producer-consumer path:
+
+```bash
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
+  --handoff-input-tokens 256,4096,8192 --repeats 100 \
+  --first-token-observation-s 12
+```
+
+Replace the example lengths and 12-second observation bound with the fleet's context range and a bound inside `serving.request_timeout_s`. The observation bound lets preflight identify a working transfer beyond the configured serving deadline. Serving still enforces `engine.first_token_timeout_s`, and `serving.request_timeout_s` still bounds the full client request.
+
+For each length and permitted path, retain at least 100 working first-token samples. Compute nearest-rank p99 and set `engine.first_token_timeout_s` above `max(observed maximum, 1.2 × p99) + 0.5 seconds` across those groups. Check the resulting bound against the TTFT target after measured prefill; a bound that exhausts that target calls for a different SLO or engine path. Keep the fleet document, command, preflight output, engine process identities, and profile store together so the deadline can be traced to its samples.
+
+An engine error or observation-window expiry fails the gate. Compute latency distributions from completed transfers after correcting the path. For an observation expiry, a second run with a larger bound inside the request deadline can expose a slow transfer or establish a higher observation ceiling. Rerun calibration after changes to the model, engine runtime, KV transport, or served context range.
+
 ## Run preflight
 
 From the router:

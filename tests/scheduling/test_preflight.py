@@ -1,5 +1,6 @@
 """Check preflight gate results and permitted KV-transfer pairs."""
 
+import asyncio
 import io
 import tempfile
 import unittest
@@ -25,7 +26,7 @@ from narwhal.diagnostics.check import (
     gate_tokenize,
 )
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
-from narwhal.engines.client import EngineError
+from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
@@ -266,6 +267,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     0,
                 )
                 client.aclose.assert_awaited_once()
+                self.assertIn("matches the packaged default", report.warnings[0])
                 store.assert_called_once_with(self.cfg, report)
                 slo.assert_called_once_with(self.cfg, "store", report)
                 self.assertEqual(
@@ -273,7 +275,15 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 )
                 if blocked is None:
                     calls["consume"].assert_awaited_once_with(
-                        self.cfg, {"e0", "e3"}, {"e0": "descriptor"}, client, report, False, 3
+                        self.cfg,
+                        {"e0", "e3"},
+                        {"e0": "descriptor"},
+                        client,
+                        report,
+                        False,
+                        3,
+                        observation_s=None,
+                        input_tokens=(),
                     )
                     self.assertEqual(report.skipped, [])
                 else:
@@ -340,11 +350,118 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         client.prefill = AsyncMock(return_value=result)
         client.decode = empty
+        client.dialect = VllmDialect()
         report = Report()
         await gate_consume(
             self.cfg, {"e0", "e3"}, {"e0": result, "e3": result}, client, report, mesh=False
         )
         self.assertEqual(len(report.failed), 2)
+
+    async def test_slow_working_handoff_reports_deadline_violation(self):
+        """A token beyond the serving deadline proves transfer success and deadline failure."""
+        cfg = replace(
+            self.cfg,
+            engines=[replace(spec, pin=True) for spec in self.cfg.engines],
+            first_token_timeout_s=0.01,
+            slo=replace(self.cfg.slo, ttft_s=0.1),
+        )
+        result = NixlConnector().prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+        budgets = []
+
+        async def slow_decode(*args, **kwargs):
+            budgets.append(kwargs["first_token_timeout_s"])
+            await asyncio.sleep(0.03)
+            yield 'data: {"choices":[{"text":"x"}]}'
+            yield "data: [DONE]"
+
+        client = SimpleNamespace(
+            prefill=AsyncMock(return_value=result), decode=slow_decode, dialect=VllmDialect()
+        )
+        report = Report()
+        await gate_consume(
+            cfg, {"e0", "e3"}, {"e0": result, "e3": result}, client, report, mesh=False
+        )
+        self.assertEqual(budgets, [0.1])
+        self.assertEqual(len(report.failed), 1)
+        self.assertIn("moved KV", report.failed[0])
+        self.assertIn("exceeded configured 0.01s deadline", report.failed[0])
+
+    async def test_stalled_handoff_reaches_observation_ceiling(self):
+        """Observation expiry reports its ceiling and an operator action."""
+        cfg = replace(
+            self.cfg,
+            engines=[replace(spec, pin=True) for spec in self.cfg.engines],
+            first_token_timeout_s=0.01,
+            slo=replace(self.cfg.slo, ttft_s=0.1),
+        )
+        result = NixlConnector().prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+        budgets = []
+
+        async def stalled_decode(*args, **kwargs):
+            budgets.append(kwargs["first_token_timeout_s"])
+            raise EngineError("decode", "http://e", 504, FIRST_OUTPUT_DETAIL)
+            yield ""  # pragma: no cover
+
+        client = SimpleNamespace(
+            prefill=AsyncMock(return_value=result), decode=stalled_decode, dialect=VllmDialect()
+        )
+        report = Report()
+        await gate_consume(
+            cfg, {"e0", "e3"}, {"e0": result, "e3": result}, client, report, mesh=False
+        )
+        self.assertEqual(budgets, [0.1])
+        self.assertEqual(len(report.failed), 1)
+        self.assertIn("0.1s observation window", report.failed[0])
+        self.assertIn("repeat with a wider observation bound", report.failed[0])
+
+    async def test_handoff_calibration_sizes_each_requested_context(self):
+        """Calibration sends the sized prompt through each fresh crossed handoff."""
+        cfg = replace(
+            self.cfg,
+            engines=[replace(spec, pin=True) for spec in self.cfg.engines],
+        )
+        result = NixlConnector().prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+
+        async def decode(*args, **kwargs):
+            yield 'data: {"choices":[{"text":"x"}]}'
+            yield "data: [DONE]"
+
+        client = SimpleNamespace(
+            prefill=AsyncMock(return_value=result), decode=decode, dialect=VllmDialect()
+        )
+        report = Report()
+        with patch.object(
+            check, "make_prompt", new=AsyncMock(side_effect=[("short", 256), ("long", 8192)])
+        ) as sized:
+            await gate_consume(
+                cfg,
+                {"e0", "e3"},
+                {"e0": result, "e3": result},
+                client,
+                report,
+                mesh=False,
+                input_tokens=(256, 8192),
+            )
+        self.assertEqual(
+            [call.args[2]["prompt"] for call in client.prefill.await_args_list], ["short", "long"]
+        )
+        self.assertEqual([call.args[3] for call in sized.await_args_list], [256, 8192])
+        self.assertEqual(report.failed, [])
 
     def test_pairs_respect_role_sets_and_cover_consumers(self):
         """Ring construction covers permitted consumers with eligible producers."""
