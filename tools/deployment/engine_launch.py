@@ -35,9 +35,14 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
     visibility = entry.get("gpu_visibility_env")
     if visibility not in {"ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"}:
         raise ValueError(f"{role}: select the ROCm or CUDA GPU visibility variable")
-    transfer = entry.get("transfer", {})
+    transfer = dict(entry.get("transfer", {}))
     if transfer.get("transport") not in {"ucx_tcp", "ucx_rdma"}:
         raise ValueError(f"{role}: declare ucx_tcp or ucx_rdma transfer")
+    gpu_tls = transfer.get("gpu_tls", "cuda" if visibility == "CUDA_VISIBLE_DEVICES" else "rocm")
+    allowed_gpu_tls = {"cuda", "cuda_copy"} if visibility == "CUDA_VISIBLE_DEVICES" else {"rocm"}
+    if gpu_tls not in allowed_gpu_tls:
+        raise ValueError(f"{role}: transfer.gpu_tls is incompatible with the GPU runtime")
+    transfer["gpu_tls"] = gpu_tls
     net = transfer.get("net_devices", "")
     if not isinstance(net, str):
         raise ValueError(f"{role}: transfer.net_devices must name the UCX devices")
@@ -111,6 +116,7 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
             matches = False
         if not matches:
             raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
+    entry["transfer"] = transfer
     entry["environment"] = {visibility: ",".join(devices), "UCX_NET_DEVICES": net}
     entry["vllm_args"] = ["--tensor-parallel-size", str(tp)]
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}

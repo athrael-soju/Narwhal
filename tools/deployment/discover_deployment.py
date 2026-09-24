@@ -301,6 +301,22 @@ def bind_memory_budget(args: list[str], budget: Decimal, role: str) -> list[str]
     return args
 
 
+def validate_host_ports(roles: list[str], env: dict[str, str]) -> None:
+    """Reserve each colocated engine's HTTP, attestation and NIXL listener."""
+    used: dict[int, str] = {}
+    for role in roles:
+        node = int(role.split("-")[1])
+        for field in ("ENGINE_PORT", "ATTEST_PORT", "NIXL_SIDE_CHANNEL_PORT"):
+            raw = value(env, node, field)
+            if not raw.isdecimal() or not 1 <= int(raw) <= 65535:
+                raise ValueError(f"{role}: {field} must contain a valid TCP port")
+            port = int(raw)
+            owner = f"{role} {field}"
+            if port in used:
+                raise ValueError(f"{owner} collides with {used[port]} on TCP port {port}")
+            used[port] = owner
+
+
 def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
     """Bind detected devices and image metadata to environment-selected deployment policy."""
     launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
@@ -310,6 +326,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
         raise ValueError("NARWHAL_SHARED_GPU_ALLOWANCE requires colocated engine roles")
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
+        if roles:
+            validate_host_ports(roles, env)
         allocated: set[str] = set()
         allowance_raw = env.get("NARWHAL_SHARED_GPU_ALLOWANCE", "") if len(roles) > 1 else ""
         allowance = (
@@ -317,8 +335,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             if allowance_raw
             else None
         )
-        if allowance is not None and len(roles) not in (2, 3):
-            raise ValueError(f"{host.id}: shared GPU policy requires two or three engines")
+        if allowance is not None and not 2 <= len(roles) <= 8:
+            raise ValueError(f"{host.id}: shared GPU policy requires two to eight engines")
         shared_uuid = None
         shared_total = Decimal(0)
         for role in roles:
@@ -430,6 +448,14 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             transport = value(env, node, "TRANSFER_TRANSPORT", "ucx_tcp")
             net = value(env, node, "TRANSFER_NET_DEVICES", value(env, node, "FABRIC_INTERFACE"))
             devices = json.loads(value(env, node, "TRANSFER_DEVICES", "[]"))
+            default_gpu_tls = (
+                "cuda_copy"
+                if shared_device
+                else "cuda"
+                if observed["runtime"] == "cuda"
+                else "rocm"
+            )
+            gpu_tls = value(env, node, "GPU_TLS", default_gpu_tls)
             sources[role] = {
                 "inspection": str(out / f"{role}.json"),
                 "policy": "workstation .env and documented discovery defaults",
@@ -443,7 +469,12 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 else "CUDA_VISIBLE_DEVICES",
                 "accelerator_devices": observed["common_devices"] + [g["device"] for g in selected],
                 "network_mode": "host",
-                "transfer": {"transport": transport, "net_devices": net, "devices": devices},
+                "transfer": {
+                    "transport": transport,
+                    "net_devices": net,
+                    "devices": devices,
+                    "gpu_tls": gpu_tls,
+                },
                 "sources": {
                     "allocation": sources[role]["inspection"],
                     "devices": sources[role]["inspection"],

@@ -89,9 +89,13 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
     for name in ("ttft_a", "ttft_b", "ttft_c", "tpot_intercept", "tpot_request_slope"):
         if values[name] < 0:
             raise ValueError(f"{where}: {name} must be nonnegative")
-    # A zero slope prices infinite decode capacity into every placement.
-    if values["tpot_slope"] <= 0:
-        raise ValueError(f"{where}: tpot_slope must be positive")
+    if values["tpot_slope"] < 0:
+        raise ValueError(f"{where}: tpot_slope must be nonnegative")
+    # A measured flat decode plane is safe only inside an explicit request/KV domain.
+    if values["tpot_slope"] == 0 and not all(
+        name in values for name in ("decode_max_requests", "decode_max_kv_tokens")
+    ):
+        raise ValueError(f"{where}: zero tpot_slope requires measured decode bounds")
     for name in _OPTIONAL_FLOAT_FIELDS:
         if name in values and values[name] < 0:
             raise ValueError(f"{where}: {name} must be nonnegative")

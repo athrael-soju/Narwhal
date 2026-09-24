@@ -310,8 +310,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         identities = {(a.gpu_uuid, a.device_allowance) for _, a in members}
         if len(identities) != 1:
             problems.append(f"shared_device group {group}: GPU identity or allowance differs")
-        if len(members) not in (2, 3):
-            problems.append(f"shared_device group {group}: requires two or three engines")
+        if not 2 <= len(members) <= 8:
+            problems.append(f"shared_device group {group}: requires two to eight engines")
         if (
             sum(a.gpu_memory_utilization for _, a in members)
             > members[0][1].device_allowance + 1e-12

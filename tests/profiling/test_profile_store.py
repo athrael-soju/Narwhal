@@ -42,7 +42,7 @@ class ProfileStoreTests(unittest.TestCase):
             ("ttft_a", True),
             ("ttft_b", float("inf")),
             ("ttft_c", -1),
-            ("tpot_slope", 0),
+            ("tpot_slope", -0.001),
             ("decode_cv_mape", None),
             ("decode_fit_mape", -1),
             ("decode_min_requests", 17),
@@ -52,6 +52,13 @@ class ProfileStoreTests(unittest.TestCase):
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 Profile(**{**base, field: value})
+
+    def test_flat_decode_fit_stays_inside_measured_request_and_kv_limits(self):
+        flat = profile(tpot_slope=0, tpot_request_slope=0, tpot_intercept=0.013)
+        self.assertEqual(flat.max_tokens(0.125), 100_000)
+        self.assertEqual(flat.decode_request_limit(10_000), 10)
+        with self.assertRaisesRegex(ValueError, "zero tpot_slope requires measured decode bounds"):
+            profile(tpot_slope=0, decode_max_requests=None)
 
     def test_store_rejects_duplicate_unknown_and_incomplete_rows(self):
         """A current profile store names malformed rows before exposing any profile."""

@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,9 @@ from tools.deployment.launch_engine import (
     load,
     prepare,
     start,
+    start_shared,
     validate_runtime,
+    validate_shared_runs,
 )
 
 IMAGE_CHECK_OUTPUT = (
@@ -58,6 +61,40 @@ class EngineLauncherTests(unittest.TestCase):
         spec["environment"]["VLLM_NIXL_SKIP_COMPATIBILITY_CHECK"] = "1"
         with self.assertRaises(ValueError):
             validate_runtime(spec)
+
+    def test_launch_ports_and_shared_budget_are_bound_to_plan(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            for name in ("NARWHAL_ATTEST_PORT", "NARWHAL_NIXL_SIDE_CHANNEL_PORT"):
+                changed = {**env, name: env["NARWHAL_ENGINE_PORT"]}
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "distinct"):
+                    build(record, changed, Path(folder) / "launch")
+            record["gpu_visibility_env"] = "CUDA_VISIBLE_DEVICES"
+            record["gpu_ids"] = ["GPU-0"]
+            record["tensor_parallel_size"] = 1
+            record["environment"] = {"CUDA_VISIBLE_DEVICES": "GPU-0", "UCX_NET_DEVICES": "fabric0"}
+            record["transfer"]["gpu_tls"] = "cuda"
+            record["shared_device"] = {
+                "group": "node-1:GPU-0",
+                "gpu_uuid": "GPU-0",
+                "device_allowance": 0.9,
+                "gpu_memory_utilization": 0.4,
+            }
+            record["runtime"]["extra_args"].extend(["--gpu-memory-utilization", "0.4"])
+            plan, _ = build(record, env, Path(folder) / "launch")
+            self.assertEqual(plan["shared_device"], record["shared_device"])
+            self.assertEqual(plan["ucx_tls"], "tcp,sm,self,cuda")
+            self.assertEqual(plan["attestation_port"], 8010)
+            self.assertEqual(plan["side_channel_port"], 5600)
+            self.assertIn("0.4", plan["args"])
+            record["runtime"]["extra_args"][-1] = "0.5"
+            with self.assertRaisesRegex(ValueError, "differs from shared GPU budget"):
+                build(record, env, Path(folder) / "launch")
+            record["runtime"]["extra_args"][-1] = "0.4"
+            record["transfer"]["gpu_tls"] = "cuda_copy"
+            plan, values = build(record, env, Path(folder) / "launch")
+            self.assertEqual(plan["ucx_tls"], "tcp,sm,self,cuda_copy")
+            self.assertEqual(values["UCX_TLS"], plan["ucx_tls"])
 
     def test_image_check_rejects_missing_custom_code_flag_before_container_work(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -340,3 +377,167 @@ class EngineLauncherTests(unittest.TestCase):
             ):
                 check(run, plan)
             self.assertFalse((run / "checked.json").exists())
+
+
+class SharedEngineStartTests(unittest.TestCase):
+    def fixture(self, root: Path, count: int = 2):
+        selected = []
+        for number in range(1, count + 1):
+            run = root / f"engine-{number}"
+            run.mkdir()
+            (run / "launch.json").write_text("{}")
+            (run / "checked.json").write_text(json.dumps({"image_id": "sha256:test"}))
+            selected.append(
+                (
+                    run,
+                    {
+                        "role": f"engine-{number}",
+                        "endpoint": f"http://127.0.0.1:{8000 + number}",
+                        "attestation_port": 8100 + number,
+                        "side_channel_port": 5600 + number,
+                        "args": ["--gpu-memory-utilization", "0.2"],
+                        "ucx_tls": "tcp,sm,self,cuda_copy",
+                        "shared_device": {
+                            "group": "kimchi:GPU-test",
+                            "gpu_uuid": "GPU-test",
+                            "device_allowance": 0.9,
+                            "gpu_memory_utilization": 0.2,
+                        },
+                    },
+                )
+            )
+        return selected
+
+    def test_preflight_checks_ports_and_total_budget_before_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected = self.fixture(Path(folder), 4)
+            plans = dict(selected)
+            with (
+                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
+                patch("tools.deployment.launch_engine.require_checked"),
+            ):
+                self.assertEqual(validate_shared_runs([run for run, _ in selected]), selected)
+                selected[3][1]["side_channel_port"] = 8001
+                with self.assertRaisesRegex(ValueError, "collides"):
+                    validate_shared_runs([run for run, _ in selected])
+                selected[3][1]["side_channel_port"] = 5604
+                selected[3][1]["shared_device"]["gpu_memory_utilization"] = 0.4
+                with self.assertRaisesRegex(ValueError, "above allowance"):
+                    validate_shared_runs([run for run, _ in selected])
+
+    def test_eight_shared_launches_fit_allowance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected = self.fixture(Path(folder), 8)
+            for _, plan in selected:
+                plan["shared_device"]["gpu_memory_utilization"] = 0.1
+            plans = dict(selected)
+            with (
+                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
+                patch("tools.deployment.launch_engine.require_checked"),
+            ):
+                self.assertEqual(validate_shared_runs([run for run, _ in selected]), selected)
+
+    def test_sequential_start_records_live_process_and_memory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected = self.fixture(Path(folder))
+            events = []
+            readings = iter((1000, 6100, 6100, 11200))
+
+            def memory(uuid):
+                self.assertEqual(uuid, "GPU-test")
+                return {"used_mib": next(readings), "total_mib": 30000}
+
+            def start_container(run, plan):
+                events.append(("start", plan["role"]))
+                (run / "container.id").write_text("c" * 64)
+
+            def ready(run, plan, cid, seconds):
+                events.append(("ready", plan["role"]))
+                self.assertEqual(cid, "c" * 64)
+
+            def inspect(command, run, log):
+                if command[2] == "{{json .State}}":
+                    return json.dumps({"Running": True, "Pid": 1234})
+                if command[2] == "{{json .Config.Cmd}}":
+                    return json.dumps(dict(selected)[run]["args"])
+                return "sha256:test"
+
+            with (
+                patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
+                patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
+                patch("tools.deployment.launch_engine.start", side_effect=start_container),
+                patch("tools.deployment.launch_engine.wait_ready", side_effect=ready),
+                patch("tools.deployment.launch_engine.docker", side_effect=inspect),
+            ):
+                start_shared([run for run, _ in selected], 30)
+            self.assertEqual(
+                events,
+                [
+                    ("start", "engine-1"),
+                    ("ready", "engine-1"),
+                    ("start", "engine-2"),
+                    ("ready", "engine-2"),
+                ],
+            )
+            for run, plan in selected:
+                record = json.loads((run / "shared-start.json").read_text())
+                self.assertEqual(record["status"], "running")
+                self.assertEqual(record["process_id"], 1234)
+                self.assertEqual(record["image_id"], "sha256:test")
+                self.assertEqual(record["vllm_args"], plan["args"])
+                self.assertEqual(record["budget_mib"], 6000)
+
+    def test_pressure_failure_preserves_original_cause_if_sensor_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected = self.fixture(Path(folder))
+            readings = iter((1000, 6100, 29000))
+            started = []
+
+            def memory(uuid):
+                try:
+                    used = next(readings)
+                except StopIteration as error:
+                    raise ValueError("sensor offline") from error
+                return {"used_mib": used, "total_mib": 30000}
+
+            def start_container(run, plan):
+                started.append(plan["role"])
+                (run / "container.id").write_text("c" * 64)
+
+            def inspect(command, run, log):
+                if command[2] == "{{json .State}}":
+                    return json.dumps({"Running": True, "Pid": 1234})
+                if command[2] == "{{json .Config.Cmd}}":
+                    return json.dumps(dict(selected)[run]["args"])
+                return "sha256:test"
+
+            with (
+                patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
+                patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
+                patch("tools.deployment.launch_engine.start", side_effect=start_container),
+                patch("tools.deployment.launch_engine.wait_ready"),
+                patch("tools.deployment.launch_engine.docker", side_effect=inspect),
+                self.assertRaisesRegex(ValueError, "engine-2:.*29000/30000.*free GPU memory"),
+            ):
+                start_shared([run for run, _ in selected], 30)
+            self.assertEqual(started, ["engine-1"])
+            failure = json.loads((selected[1][0] / "shared-start.json").read_text())
+            self.assertEqual(failure["status"], "failed")
+            self.assertIn("free GPU memory", failure["error"])
+            self.assertEqual(failure["gpu_before"]["used_mib"], 29000)
+            self.assertEqual(failure["gpu_after_error"], "sensor offline")
+
+    def test_docker_log_reader_keeps_stderr(self):
+        from tools.deployment.launch_engine import docker
+
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch(
+                "tools.deployment.launch_engine.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0, "", "CUDA IPC failed\n"),
+            ),
+        ):
+            self.assertEqual(
+                docker(["logs", "container"], Path(folder), "launch.log", include_stderr=True),
+                "CUDA IPC failed",
+            )

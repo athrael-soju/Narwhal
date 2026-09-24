@@ -207,6 +207,16 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.measure(frames), [(1.0, 12.0, 0.25), (1.0, 13.0, 0.25)])
         self.assertEqual(await self.measure(frames, cohort=2), [])
 
+    async def test_bundled_terminal_tokens_keep_counts_without_false_intervals(self):
+        """A bundled final event preserves completion while its timing is discarded."""
+        frames = [
+            token(0),
+            token(1),
+            {"choices": [{"text": "xx", "token_ids": [2, 3], "finish_reason": "length"}]},
+            "[DONE]",
+        ]
+        self.assertEqual(await self.measure(frames, tokens=4), [(1.0, 12.0, 0.25)])
+
     async def test_invalid_token_identity_aborts_the_profile(self):
         """Profiling rejects unidentified output and releases the active cohort counters."""
         for choice in invalid_token_choices():
@@ -224,7 +234,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             ([token(0), {"error": "failed"}], "returned an error"),
             ([token(0), {"choices": [1]}], "invalid choices"),
             ([{"choices": [{"text": "x"}]}], "exact token IDs"),
-            ([{"choices": [{"text": "xx", "token_ids": [1, 2]}]}], "one SSE event"),
+            ([{"choices": [{"text": "xxxx", "token_ids": [1, 2, 3, 4]}]}], "exceeded"),
             ([token(0, finish="stop")], "forced token limit"),
             ([token(0, finish="length")], "terminal token count"),
         ):
