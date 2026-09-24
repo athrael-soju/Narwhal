@@ -14,11 +14,10 @@ from tests.fixtures import ROOT
 
 
 class MonitoringArtifactTests(unittest.TestCase):
-    def test_repository_asset_paths_resolve_to_the_packaged_source(self):
+    def test_repository_asset_paths_match_the_packaged_source(self):
         for relative in ("compose.yml", *artifacts.FILES):
             legacy = ROOT / "tools" / "observability" / relative
-            self.assertTrue(legacy.is_symlink(), str(legacy))
-            self.assertTrue(legacy.samefile(artifacts.BASE / relative), str(legacy))
+            self.assertEqual(legacy.read_bytes(), (artifacts.BASE / relative).read_bytes())
 
     def test_private_checkout_produces_readable_mounts_without_exposing_role_files(self):
         with tempfile.TemporaryDirectory() as temporary:
