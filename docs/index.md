@@ -2,22 +2,6 @@
 
 From a management workstation, Narwhal inspects a role-free fleet, derives its configuration, prepares the remote engines, and verifies routed inference over the private deployment path.
 
-<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="0" height="0">
-  <filter id="narwhal-hero-dark" color-interpolation-filters="sRGB">
-    <feColorMatrix in="SourceGraphic" type="matrix" values="
-      -0.187588 -0.631059 -0.063706 0 1
-      -0.185087 -0.622645 -0.062856 0 1
-      -0.178417 -0.600207 -0.060591 0 1
-      0 0 0 1 0" result="graphite" />
-    <feColorMatrix in="SourceGraphic" type="matrix" values="
-      1 0 0 0 0
-      0 1 0 0 0
-      0 0 1 0 0
-      -2.4 2.4 0 0 -0.2" result="cyan" />
-    <feComposite in="cyan" in2="graphite" operator="over" />
-  </filter>
-</svg>
-
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="Narwhal, adaptive disaggregated inference on a role-free fleet">
 </div>

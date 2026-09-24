@@ -18,7 +18,6 @@
 
 [data-md-color-scheme="slate"] {
   --narwhal-dark-surface: #1d2d35;
-  --narwhal-dark-surface-raised: #263941;
   --narwhal-dark-border: #3b545b;
   --md-default-bg-color: #17242b;
   --md-default-fg-color: #dce7e8;
@@ -231,13 +230,8 @@
 }
 
 [data-md-color-scheme="slate"] .narwhal-hero {
-  background: var(--narwhal-dark-surface-raised);
-  border-color: var(--narwhal-dark-border);
-  box-shadow: 0 1rem 3rem rgb(2 14 18 / 20%);
-}
-
-[data-md-color-scheme="slate"] .narwhal-hero img {
-  filter: url("#narwhal-hero-dark");
+  border-color: #75cfd1;
+  box-shadow: 0 0.7rem 2.2rem rgb(2 14 18 / 22%);
 }
 
 .md-footer-meta {
