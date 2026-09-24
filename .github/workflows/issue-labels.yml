@@ -1,0 +1,21 @@
+name: issue-labels
+on:
+  issues:
+    types: [opened, unlabeled]
+permissions:
+  issues: write
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign triage when an issue has no labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          count=$(gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER/labels" --jq 'length')
+          if [ "$count" -eq 0 ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$GH_REPO" --add-label triage
+          fi
