@@ -12,7 +12,7 @@ Start monitoring with:
 - `curl`;
 - network reachability from the router host to every engine metrics endpoint.
 
-Run the commands from the deployed checkout inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells), which loads `runs/deployment/.env.router` and activates the installed Python environment. `make observe` uses the project environment created by `make setup`.
+Run the commands from the installed router-role shell with the fleet and router URL set. A repository checkout can use `make observe`, which calls the same packaged implementation.
 
 ## Configure the monitored deployment
 
@@ -23,17 +23,19 @@ export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 
-`make observe` reads `NARWHAL_FLEET` for engine IDs and metrics URLs, resolving [environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) with variables loaded by the router-role shell before it writes discovery targets. Set `NARWHAL_ROUTER_URL` to an origin Prometheus can reach from the router host, directly or through a stable local tunnel.
+`narwhal-observe` reads `NARWHAL_FLEET` for engine IDs and metrics URLs, resolving [environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) with variables loaded by the router-role shell before it writes discovery targets. Set `NARWHAL_ROUTER_URL` to an origin Prometheus can reach from the router host, directly or through a stable local tunnel.
+
+One Compose project, `narwhal-observability`, owns the monitoring stack. Grafana listens on port 3000 and Prometheus on port 9090 by default. Set `NARWHAL_OBSERVABILITY_DATA_DIR` to an absolute persistent directory if the default `~/.local/share/narwhal/observability` is unsuitable. The data directory outlives the checkout.
 
 ## Start Prometheus and Grafana
 
 Run:
 
 ```bash
-make observe
+narwhal-observe
 ```
 
-`make observe` starts monitoring in this order:
+`narwhal-observe` starts monitoring in this order:
 
 1. Generates Prometheus discovery for the router and configured engines.
 2. Checks ownership of the monitoring listeners.
@@ -82,7 +84,7 @@ Prometheus `/targets` provides the corresponding discovery state and scrape erro
 
 ## Staged monitoring files
 
-Narwhal stages monitoring configuration under `runs/observability/mounts/`, whose parent directory uses mode `0700`.
+Narwhal stages monitoring configuration under `$NARWHAL_OBSERVABILITY_DATA_DIR/mounts/` (by default `~/.local/share/narwhal/observability/mounts/`), whose parent directory uses mode `0700`.
 
 Files mounted into the containers are staged with permissions that allow the Prometheus and Grafana service users to read them:
 
@@ -97,6 +99,8 @@ grafana-provisioning
 grafana-dashboards
 ```
 
-Running `make observe` again regenerates the staged files and repairs their permissions before Compose updates the monitoring services.
+Running `narwhal-observe` again regenerates the staged files and repairs their permissions before Compose updates the monitoring services.
+
+The dashboard JSON in `src/narwhal/observability/grafana-narwhal.json` is authoritative. The legacy `tools/observability/grafana-narwhal.json` path resolves to that same file in a source checkout. Grafana rejects UI edits to the provisioned dashboard and polls the staged copy every 30 seconds.
 
 Open the [workstation dashboard route](02-Access.md) after the scrape targets pass.

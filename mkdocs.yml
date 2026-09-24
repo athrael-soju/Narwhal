@@ -94,6 +94,7 @@ nav:
           - narwhal-serve: cli/Serve.md
           - narwhal-profile: cli/Profile.md
           - narwhal-check: cli/Check.md
+          - narwhal-observe: cli/Observe.md
       - HTTP API:
           - Overview: HTTP-API.md
           - Completion requests: http-api/01-Requests.md

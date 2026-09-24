@@ -1,1 +1,1 @@
-"""Router metrics and request journals."""
+"""Canonical Prometheus and Grafana stack for Narwhal deployments."""

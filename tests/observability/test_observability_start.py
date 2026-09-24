@@ -6,12 +6,13 @@ import io
 import json
 import unittest
 import urllib.error
+import urllib.parse
 from collections.abc import Callable
 from contextlib import redirect_stderr
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
-from tools.observability import start as observe
+from narwhal.observability import start as observe
 
 
 def _container(
@@ -265,6 +266,27 @@ class ReadinessTests(unittest.TestCase):
 
         return get
 
+    def _activity_get(
+        self, *, served: int, prompt_tokens: int, missing_cache: bool = False
+    ) -> Callable[[str, float], tuple[int, str]]:
+        def get(url: str, timeout_s: float) -> tuple[int, str]:
+            del timeout_s
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["query"][0]
+            if "narwhal_served_total" in query:
+                rows = [{"metric": {}, "value": [123, str(served)]}]
+            elif "vllm:kv_cache_usage_perc" in query:
+                ids = ["e0"] if missing_cache else ["e0", "e1"]
+                rows = [{"metric": {"iid": iid}, "value": [123, "0.2"]} for iid in ids]
+            elif "vllm:prompt_tokens_total" in query:
+                rows = [{"metric": {"iid": "e0"}, "value": [123, str(prompt_tokens)]}]
+            else:
+                raise AssertionError(query)
+            return 200, json.dumps(
+                {"status": "success", "data": {"resultType": "vector", "result": rows}}
+            )
+
+        return get
+
     def test_versioned_health_accepts_the_launched_containers(self) -> None:
         stack = FakeStack(
             {
@@ -303,6 +325,49 @@ class ReadinessTests(unittest.TestCase):
                 self.services[0],
                 self.contract,
                 self._collection_get(readiness=[]),
+            )
+
+    def test_post_request_activity_requires_new_router_and_engine_samples(self) -> None:
+        before = observe.activity_snapshot(
+            self.services[0], self.contract, get=self._activity_get(served=2, prompt_tokens=10)
+        )
+        after = observe.wait_activity(
+            self.services[0],
+            self.contract,
+            before,
+            get=self._activity_get(served=3, prompt_tokens=74),
+        )
+        self.assertEqual(after.served - before.served, 1)
+        self.assertEqual(after.prompt_total() - before.prompt_total(), 64)
+
+    def test_activity_rejects_missing_engine_telemetry(self) -> None:
+        with self.assertRaisesRegex(observe.StartupError, "expected.*e0.*e1"):
+            observe.activity_snapshot(
+                self.services[0],
+                self.contract,
+                get=self._activity_get(served=2, prompt_tokens=10, missing_cache=True),
+            )
+
+    def test_activity_rejects_router_only_progress(self) -> None:
+        before = observe.ActivitySample(2, (("e0", 10.0), ("e1", 0.0)))
+        now = 0.0
+
+        def clock() -> float:
+            return now
+
+        def sleep(seconds: float) -> None:
+            nonlocal now
+            now += seconds
+
+        with self.assertRaisesRegex(observe.StartupError, "did not appear"):
+            observe.wait_activity(
+                self.services[0],
+                self.contract,
+                before,
+                get=self._activity_get(served=3, prompt_tokens=10),
+                timeout_s=1,
+                clock=clock,
+                sleep=sleep,
             )
 
     def test_dashboard_rejects_an_empty_router_selection(self) -> None:
@@ -350,7 +415,7 @@ class ReadinessTests(unittest.TestCase):
                 {},
                 stack,
                 self.contract,
-                target_writer=lambda contract: calls.append("targets"),
+                target_writer=lambda contract, root: calls.append("targets"),
             )
         self.assertEqual(calls, ["listeners", "targets", "up"])
 
@@ -392,11 +457,25 @@ class ReadinessTests(unittest.TestCase):
         datasource = (observe.BASE / "grafana/provisioning/datasources/prometheus.yml").read_text()
         self.assertIn(f"image: {observe.PROMETHEUS_IMAGE}", compose)
         self.assertIn(f"image: {observe.GRAFANA_IMAGE}", compose)
+        self.assertIn("name: narwhal-observability", compose)
+        self.assertIn("${NARWHAL_OBSERVABILITY_DATA_DIR:?}/mounts", compose)
+        provider = (observe.BASE / "grafana/provisioning/dashboards/narwhal.yml").read_text()
+        self.assertIn("allowUiUpdates: false", provider)
         self.assertIn(
             'NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL',
             compose,
         )
         self.assertIn("url: $NARWHAL_PROMETHEUS_URL", datasource)
+
+    def test_default_monitoring_data_dir_is_outside_the_checkout(self) -> None:
+        stack = observe.ComposeStack(
+            lambda command, **kwargs: CompletedProcess(command, 0, "", ""), {}
+        )
+        self.assertEqual(
+            stack._compose_env["NARWHAL_OBSERVABILITY_DATA_DIR"],
+            str(observe.DEFAULT_DATA_DIR),
+        )
+        self.assertFalse(observe.DEFAULT_DATA_DIR.is_relative_to(observe.BASE.parents[2]))
 
     def test_wildcard_prometheus_bind_uses_loopback_for_grafana(self) -> None:
         for bind, expected in (

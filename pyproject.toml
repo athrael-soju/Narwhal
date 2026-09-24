@@ -56,6 +56,7 @@ narwhal-check = "narwhal.diagnostics.check:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe:main"
+narwhal-observe = "narwhal.observability.start:main"
 
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"
@@ -64,6 +65,14 @@ Issues = "https://github.com/athrael-soju/Narwhal/issues"
 
 [tool.setuptools.package-data]
 narwhal = ["py.typed", "fleet.example.json"]
+"narwhal.observability" = [
+  "compose.yml",
+  "grafana-narwhal.json",
+  "prometheus-alerts.yml",
+  "prometheus.yml",
+  "grafana/provisioning/dashboards/narwhal.yml",
+  "grafana/provisioning/datasources/prometheus.yml",
+]
 
 [tool.ruff]
 line-length = 100

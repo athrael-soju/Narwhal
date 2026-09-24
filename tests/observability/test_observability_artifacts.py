@@ -8,11 +8,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.observability import artifacts
-from tools.observability.make_targets import TargetContract
+from narwhal.observability import artifacts
+from narwhal.observability.make_targets import TargetContract
+from tests.fixtures import ROOT
 
 
 class MonitoringArtifactTests(unittest.TestCase):
+    def test_repository_asset_paths_match_the_packaged_source(self):
+        for relative in ("compose.yml", *artifacts.FILES):
+            legacy = ROOT / "tools" / "observability" / relative
+            self.assertEqual(legacy.read_bytes(), (artifacts.BASE / relative).read_bytes())
+
     def test_private_checkout_produces_readable_mounts_without_exposing_role_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = Path(temporary)

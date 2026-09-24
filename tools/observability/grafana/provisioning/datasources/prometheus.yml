@@ -1,7 +1,1 @@
-apiVersion: 1
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: $NARWHAL_PROMETHEUS_URL
-    isDefault: true
+../../../../../src/narwhal/observability/grafana/provisioning/datasources/prometheus.yml

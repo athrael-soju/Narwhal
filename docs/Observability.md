@@ -1,6 +1,6 @@
 # Set up observability
 
-`make observe` builds scrape targets from the deployed fleet's engine IDs and metrics endpoints, then starts Prometheus `3.14.0` for router and engine metrics and alert evaluation and Grafana `13.2.1` with the provisioned **Narwhal Orchestrator** dashboard.
+`narwhal-observe` builds scrape targets from the deployed fleet's engine IDs and metrics endpoints, then starts Prometheus `3.14.0` for router and engine metrics and alert evaluation and Grafana `13.2.1` with the provisioned **Narwhal Orchestrator** dashboard. `make observe` calls the same installed implementation from a repository checkout.
 
 ## Monitoring tasks
 

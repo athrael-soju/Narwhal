@@ -12,4 +12,4 @@ recursive-include deploy *.cfg
 recursive-include tools *.py *.json *.yml *.md
 recursive-include tests *.py
 include tests/data/fleet.json
-recursive-include src/narwhal py.typed *.json
+recursive-include src/narwhal py.typed *.json *.yml
