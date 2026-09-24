@@ -39,7 +39,7 @@ The CI jobs use synthetic test inputs and a standard read-only GitHub token. For
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, launch a representative per runtime group, qualify directed links, attest the live engines, profile and preflight the fleet, then run routed load through the private path with observability.
+Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, start each checked engine, qualify directed links against the live cache, attest and profile those processes, then run preflight and routed load through the private path.
 
 ## Behaviour changes
 

@@ -1,4 +1,4 @@
-# Gate C: Prove each host and one engine per cache class
+# Gate C: Validate and start every engine
 
 ## Inspect every engine host
 
@@ -119,9 +119,9 @@ for signature, roles in sorted(groups.items()):
 PY_CACHE_GROUPS
 ```
 
-The signature covers immutable image ID, model-config hash, accelerator product, TP size, GPU visibility environment, pinned runtime packages, cache policy, model arguments, image environment, and transfer transport. GPU indices, addresses, and device paths may differ if accelerator product and TP shape match. Every distinct signature needs one serving representative and one workload budget.
+The signature groups engines by image ID, model-config hash, accelerator product, TP size, GPU visibility policy, runtime packages, cache policy, model arguments, image environment, and transport. Start every engine and capture its cache layout; Gate D uses one representative layout per matching group to calculate the fabric budget. GPU indices, addresses, and device paths can differ when accelerator product and TP shape match.
 
-## Prepare, check, and start each representative
+## Prepare, check, and start each engine
 
 The launcher runs:
 
@@ -131,7 +131,7 @@ python3 -m vllm.entrypoints.openai.api_server
 
 inside `NARWHAL_ENGINE_IMAGE`, mounting `NARWHAL_MODEL_DIR` read-only at `/model`, exposing configured devices, and applying the selected TP allocation.
 
-On engine 1 and on each additional cache-group representative:
+In every engine-role shell, using disjoint GPU allocations for concurrent launches:
 
 ```bash
 umask 077
@@ -225,7 +225,7 @@ PY_ENGINE
 
 The probe binds the running endpoint to the checked image by verifying `/health`, exact `/version`, configured model, `process_start_time_seconds`, and one deterministic completion. Treat API-version mismatch first as endpoint ownership; compare the endpoint with the recorded image and container ID. Response captures are immutable, so use new filenames or a new launch directory after repair.
 
-Keep representative containers running through fabric qualification, attestation, profiling, preflight, and the workload trial.
+Leave each serving container running through the workload trial. During fabric qualification and profiling, reserve the engines for the probes so the measurements reflect these processes at idle load.
 
 ## Capture actual cache geometry
 
@@ -237,6 +237,6 @@ export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 ```
 
-`capture-cache` checks running container identity, image, source and plan hashes, and every TP rank before writing `cache-layout.json`. The serving process remains live.
+`capture-cache` checks container identity, image, source and plan hashes, and every TP rank before writing `cache-layout.json` from the live process. Compare resolved layout and page geometry within each signature group; a differing layout or page geometry gets its own Gate D budget.
 
 Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Qualify-Fabric.md).

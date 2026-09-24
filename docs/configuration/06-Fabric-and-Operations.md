@@ -47,11 +47,7 @@ The workload inputs are:
 - TP shape
 - runtime inputs
 
-It retains one serving representative per group.
-
-The representative's running process provides the initial trial budget from its cache pages. Each directed host edge is compared with its source budget.
-
-Every running engine later verifies its resolved cache layout against its representative.
+Capture the live cache layout from every engine. Matching layouts share a source budget derived from one representative capture; each directed host edge is compared with that source budget.
 
 ### 17.2 Retained budget evidence
 
@@ -178,15 +174,14 @@ For a new or materially changed deployment, the configuration flow is:
 4. Prepare a new deployment output directory from the exact management revision.
 5. Install the verified source bundle and role-specific configuration to each physical host.
 6. Inspect every engine host against its generated launch record.
-7. Verify image, package, and connector identity, then launch one serving representative per cache class and capture its runtime cache layout.
-8. Qualify the directed transfer fabric against budgets derived from the representative runtime cache geometry.
-9. Launch remaining engines and one attestation sidecar per contracted engine.
-10. Finalise the fleet contract from live sidecars.
-11. Profile the deployed engine shape using generated `profiling-limits.json`.
-12. Run `narwhal-check` against the exact fleet and engine build.
-13. Start the router and observability services with the qualified fleet configuration.
-14. Measure workload capacity with the final authentication mode, queueing, retry, byte-limit, and timeout settings.
-15. Run controller advisory mode against representative traffic before allowing production role movement.
-16. Preserve the fleet, generated private inputs, launch evidence, revision, launcher digest, and container identity beside the run artifacts.
+7. Verify image, package, and connector identity, then start every engine and capture its live cache layout.
+8. Qualify the directed transfer fabric against budgets derived from the matching cache layouts.
+9. Start one attestation sidecar per engine and finalise the fleet contract from the live processes.
+10. Profile the deployed engine shape using generated `profiling-limits.json`.
+11. Run `narwhal-check` against the exact fleet and engine build.
+12. Start the router and observability services with the qualified fleet configuration.
+13. Measure workload capacity with the final authentication mode, queueing, retry, byte-limit, and timeout settings.
+14. Run controller advisory mode against representative traffic before allowing production role movement.
+15. Preserve the fleet, generated private inputs, launch evidence, revision, launcher digest, and container identity beside the run artifacts.
 
 Any material change to engine build, serving policy, queueing, concurrency, retry, handoff timeout, or byte limits invalidates the corresponding capacity evidence and requires remeasurement.
