@@ -1,0 +1,74 @@
+{
+  "schema": "narwhal.dev-template",
+  "schema_version": 1,
+  "name": "rtx5090-qwen35-08b-q4km-native",
+  "gpu": {
+    "product": "NVIDIA GeForce RTX 5090",
+    "minimum_total_mib": 30000,
+    "reserve_mib": 2048
+  },
+  "model": {
+    "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+    "revision": "e524882462b3f2a9fe83be967c654c4322abb2f6",
+    "quantization": "Q4_K_M",
+    "filename": "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "served_name": "Qwen3.5-0.8B-GGUF-Q4_K_M"
+  },
+  "runtime": {
+    "expected_packages": {
+      "vllm": "0.29.0",
+      "nixl": "1.4.1",
+      "vllm-gguf-plugin": "0.0.5"
+    },
+    "model_dtype": "bfloat16",
+    "kv_cache_dtype": "auto",
+    "block_size": 128,
+    "max_model_len": 4096,
+    "max_num_seqs": 4
+  },
+  "allocation": {
+    "engine_count": 3,
+    "device_allowance": 0.4,
+    "gpu_memory_utilization": 0.1
+  },
+  "ports": {
+    "router": 18000,
+    "engine_first": 18101,
+    "attestation_first": 18201,
+    "nixl_first": 5701,
+    "ucx_range": "39000-39999"
+  },
+  "slo": {
+    "ttft_s": 10.0,
+    "tpot_s": 0.125
+  },
+  "controller": {
+    "reactive": {
+      "window_s": 30.0,
+      "evidence_span_s": 15.0,
+      "evidence_max_span_s": 30.0,
+      "demand_floor": 0.2
+    }
+  },
+  "engine_contract": {
+    "vllm_version": "0.29.0",
+    "image_digest": "",
+    "nixl_version": "1.4.1",
+    "nixl_connector_version": 9,
+    "model_architecture": "Qwen3_5ForConditionalGeneration",
+    "model_dtype": "bfloat16",
+    "kv_heads": 2,
+    "head_size": 256,
+    "hidden_layers": 24,
+    "attention_backend": "FLASH_ATTN",
+    "kv_cache_dtype": "auto",
+    "cross_layers_blocks": false,
+    "hybrid_kv_cache_manager": true,
+    "connector": "NixlConnector",
+    "kv_role": "kv_both",
+    "transfer_mode": "pull",
+    "speculative_config": "disabled",
+    "enforce_handshake_compat": true
+  }
+}

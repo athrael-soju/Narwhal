@@ -66,6 +66,7 @@ Issues = "https://github.com/athrael-soju/Narwhal/issues"
 
 [tool.setuptools.package-data]
 narwhal = ["py.typed", "fleet.example.json"]
+"narwhal.dev" = ["reference-v1.json"]
 "narwhal.observability" = [
   "compose.yml",
   "grafana-narwhal.json",
