@@ -25,7 +25,12 @@
     "kv_cache_dtype": "auto",
     "block_size": 128,
     "max_model_len": 4096,
-    "max_num_seqs": 4
+    "max_num_seqs": 4,
+    "environment": {
+      "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+      "VLLM_USE_FLASHINFER_SAMPLER": "0",
+      "VLLM_USE_V2_MODEL_RUNNER": "0"
+    }
   },
   "allocation": {
     "engine_count": 3,

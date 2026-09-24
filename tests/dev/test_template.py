@@ -61,7 +61,8 @@ class TemplateTest(unittest.TestCase):
         assert len(fleet.engines) == 3
         assert all(engine.shared_device is not None for engine in fleet.engines)
         for index in range(1, 4):
-            selected_launch(document, f"engine-{index}", {})
+            record = selected_launch(document, f"engine-{index}", {})
+            assert record["runtime"]["environment"]["VLLM_SSM_CONV_STATE_LAYOUT"] == "DS"
         targets = json.loads((self.output / "targets" / "engines.json").read_text())
         assert [row["labels"]["iid"] for row in targets] == ["n1", "n2", "n3"]
         with self.assertRaises(FileExistsError):

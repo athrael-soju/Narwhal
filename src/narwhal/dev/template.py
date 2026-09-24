@@ -203,7 +203,7 @@ def materialize(
         "model_dtype": spec["runtime"]["model_dtype"],
         "kv_cache_dtype": spec["runtime"]["kv_cache_dtype"],
         "block_size": spec["runtime"]["block_size"],
-        "environment": {},
+        "environment": spec["runtime"]["environment"],
         "extra_args": [
             "--tokenizer",
             str(model_dir),
