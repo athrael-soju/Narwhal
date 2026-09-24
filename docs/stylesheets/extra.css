@@ -34,6 +34,10 @@
   letter-spacing: 0.02em;
 }
 
+.md-header__option {
+  order: 1;
+}
+
 .md-logo img {
   background: white;
   border-radius: 0.35rem;
@@ -176,10 +180,6 @@
   background: #252b32;
   border-color: #414b54;
   box-shadow: 0 0.25rem 0.8rem rgb(0 0 0 / 18%);
-}
-
-[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
-  background: var(--narwhal-ink);
 }
 
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
