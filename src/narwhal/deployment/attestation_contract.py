@@ -16,6 +16,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from narwhal.config import EngineContract, FleetConfig
+from narwhal.deployment.launch_engine import (
+    handshake_policy,
+    registration_layout,
+    run_runtime_script,
+)
 from narwhal.engines.attestation import (
     AttestationDocument,
     fetch_engine_identity,
@@ -54,8 +59,15 @@ def checked_plan(run: Path) -> tuple[dict, dict, str]:
     checked = read_json(run / "checked.json")
     plan_hash = digest(plan_path)
     if checked.get("plan_sha256") != plan_hash:
-        raise ValueError("Image check belongs to another serving plan")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", checked.get("image_id", "")):
+        raise ValueError("Runtime check belongs to another serving plan")
+    if plan.get("backend") == "native":
+        if (
+            checked.get("backend") != "native"
+            or checked.get("python_executable") != plan.get("python_executable")
+            or checked.get("expected_packages") != plan.get("expected_packages")
+        ):
+            raise ValueError("Native runtime check differs from the serving plan")
+    elif not re.fullmatch(r"sha256:[0-9a-f]{64}", checked.get("image_id", "")):
         raise ValueError("Image check lacks an immutable image ID")
     return plan, checked, plan_hash
 
@@ -76,6 +88,36 @@ def live_container(run: Path, checked: dict) -> str:
     if observed.get("State", {}).get("Running") is not True:
         raise ValueError("Serving container must be running before attestation")
     return cid
+
+
+def live_native(run: Path, plan: dict, checked: dict) -> dict:
+    """Bind checked native evidence to its current Linux process and vLLM instance."""
+    from narwhal.deployment.native_engine import process_identity
+
+    process = read_json(run / "native-process.json")
+    try:
+        if process_identity(process["pid"]) != process:
+            raise ValueError("Native serving process identity changed")
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise ValueError("Native serving process is no longer running") from error
+    startup = read_json(run / "shared-start.json")
+    if (
+        startup.get("status") != "running"
+        or startup.get("plan_sha256") != digest(run / "launch.json")
+        or startup.get("process") != process
+        or startup.get("vllm_version") != checked["vllm_api_version"]
+    ):
+        raise ValueError("Native startup evidence differs from the live serving plan")
+    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    key = values.get("VLLM_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else None
+    identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
+    if (
+        identity.vllm_version != startup["vllm_version"]
+        or identity.process_start_time_seconds != startup["process_start_time_seconds"]
+    ):
+        raise ValueError("Native engine HTTP identity changed since launch")
+    return process
 
 
 NIXL_CAPTURE_TAG = "NARWHAL_NIXL_CAPTURE_V1:"
@@ -148,27 +190,43 @@ print("\\n" + {MODEL_DIMENSIONS_CAPTURE_TAG!r} + json.dumps(record), flush=True)
 
 def capture_model_dimensions(run: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
-    cid = live_container(run, checked)
+    native = plan.get("backend") == "native"
+    identity = live_native(run, plan, checked) if native else live_container(run, checked)
     destination = run / "model-dimensions.live.json"
     if destination.exists():
         raise ValueError("Live model dimensions already exist; retain the capture")
-    result = subprocess.run(
-        [
+    if native:
+        values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+        command = [
+            plan["python_executable"],
+            "-c",
+            MODEL_DIMENSIONS_CAPTURE,
+            plan_hash,
+            str(run / "hook/launch.json"),
+            plan["model_config_path"],
+        ]
+    else:
+        assert isinstance(identity, str)
+        command = [
             "docker",
             "exec",
             "--env",
             "NARWHAL_CAPTURE_CACHE=0",
-            cid,
+            identity,
             "python3",
             "-c",
             MODEL_DIMENSIONS_CAPTURE,
             plan_hash,
             "/narwhal-hooks/launch.json",
             "/model/config.json",
-        ],
+        ]
+        values = {}
+    result = subprocess.run(
+        command,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"} if native else None,
     )
     log = run / f"model-dimensions.live-{uuid.uuid4().hex}.log"
     write_private_text(log, result.stdout + "\nSTDERR\n" + result.stderr)
@@ -213,16 +271,26 @@ def capture_model_dimensions(run: Path) -> Path:
         )
         if previous.get("contract") != contract:
             raise ValueError("Live model dimensions differ from the retained plan capture")
-    record.update(image_id=checked["image_id"], container_id=cid, capture_log_sha256=digest(log))
+    if native:
+        record.update(process=identity, model_revision=plan["model_revision"])
+    else:
+        record.update(image_id=checked["image_id"], container_id=identity)
+    record["capture_log_sha256"] = digest(log)
     write_private(destination, record)
     return destination
 
 
 def capture_nixl(run: Path) -> Path:
-    _, checked, plan_hash = checked_plan(run)
-    cid = live_container(run, checked)
+    plan, checked, plan_hash = checked_plan(run)
+    native = plan.get("backend") == "native"
+    identity = live_native(run, plan, checked) if native else live_container(run, checked)
+    if native:
+        command = [plan["python_executable"], "-c", NIXL_CAPTURE]
+    else:
+        assert isinstance(identity, str)
+        command = ["docker", "exec", identity, "python3", "-c", NIXL_CAPTURE]
     result = subprocess.run(
-        ["docker", "exec", cid, "python3", "-c", NIXL_CAPTURE],
+        command,
         capture_output=True,
         text=True,
         check=True,
@@ -233,10 +301,95 @@ def capture_nixl(run: Path) -> Path:
         or record["nixl_connector_version"] < 1
     ):
         raise ValueError("Pinned connector returned an invalid protocol version")
-    record.update(plan_sha256=plan_hash, image_id=checked["image_id"], container_id=cid)
+    record["plan_sha256"] = plan_hash
+    if native:
+        record["process"] = identity
+    else:
+        record.update(image_id=checked["image_id"], container_id=identity)
     destination = run / "nixl-connector-version.json"
     write_private(destination, record)
     return destination
+
+
+def capture_native_transfer_mode(run: Path) -> Path:
+    """Resolve the installed connector class and its NIXL transfer direction."""
+    plan, checked, plan_hash = checked_plan(run)
+    if plan.get("backend") != "native":
+        raise ValueError("native transfer capture requires a native launch plan")
+    process = live_native(run, plan, checked)
+    script = """import hashlib, inspect, json, sys
+from pathlib import Path
+from vllm.config import KVTransferConfig
+from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
+config = KVTransferConfig(**json.loads(sys.argv[1]))
+connector = KVConnectorFactory.get_connector_class(config)
+name = connector.__name__
+if name in ('NixlConnector', 'NixlPullConnector'):
+    mode = 'pull'
+elif name == 'NixlPushConnector':
+    mode = 'push'
+else:
+    raise ValueError('Unrecognized NIXL connector class: ' + name)
+source = Path(inspect.getfile(connector))
+print('NARWHAL_TRANSFER_MODE=' + json.dumps({
+    'transfer_mode': mode, 'connector_class': connector.__module__ + '.' + name,
+    'module_file': str(source), 'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest()
+}))
+"""
+    output = run_runtime_script(
+        run, plan, script, [json.dumps(plan["connector"])], "transfer-mode.log"
+    )
+    record = parse_tagged_capture(output, "NARWHAL_TRANSFER_MODE=", "transfer mode")
+    record.update(plan_sha256=plan_hash, process=process)
+    destination = run / "transfer-mode.json"
+    write_private(destination, record)
+    return destination
+
+
+def capture_native_http(run: Path) -> None:
+    """Retain the HTTP identity and metrics for the checked native process."""
+    plan, checked, _ = checked_plan(run)
+    if plan.get("backend") != "native":
+        raise ValueError("native HTTP capture requires a native launch plan")
+    live_native(run, plan, checked)
+    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    key = values.get("VLLM_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else None
+    with httpx.Client(timeout=10, headers=headers) as client:
+        version_response = client.get(plan["endpoint"].rstrip("/") + "/version")
+        version_response.raise_for_status()
+        metrics_response = client.get(plan["endpoint"].rstrip("/") + "/metrics")
+        metrics_response.raise_for_status()
+    version = version_response.json()
+    if version.get("version") != checked["vllm_api_version"]:
+        raise ValueError("native HTTP version differs from the checked runtime")
+    if (
+        parse_process_start(metrics_response.text)
+        != read_json(run / "shared-start.json")["process_start_time_seconds"]
+    ):
+        raise ValueError("native HTTP process start differs from the launch record")
+    write_private(run / "version.json", version)
+    write_private_text(run / "metrics.txt", metrics_response.text)
+
+
+def capture_native(run: Path) -> Path:
+    """Feed native evidence through Narwhal's existing attestation generator."""
+    plan, checked, _ = checked_plan(run)
+    if plan.get("backend") != "native":
+        raise ValueError("native capture requires a native launch plan")
+    live_native(run, plan, checked)
+    cache = run / "cache-layout.json"
+    if not cache.is_file():
+        raise ValueError("native engine did not capture its live KV cache layout")
+    capture_model_dimensions(run)
+    capture_nixl(run)
+    registration_layout(run, plan, cache, True)
+    handshake_policy(run, plan)
+    capture_native_transfer_mode(run)
+    capture_native_http(run)
+    snapshot = run / "startup-attestation.log"
+    write_private_text(snapshot, (run / "startup.log").read_text())
+    return generate(run, snapshot)
 
 
 def require_binding(record: dict, label: str, **expected: object) -> None:
@@ -270,7 +423,8 @@ def attention_backends(log: str) -> str:
 
 def engine_document(run: Path, startup_log: Path) -> dict:
     plan, checked, plan_hash = checked_plan(run)
-    cid = live_container(run, checked)
+    native = plan.get("backend") == "native"
+    identity = live_native(run, plan, checked) if native else live_container(run, checked)
     inspection = run
     inspection_hash = plan_hash
     original_dimensions = inspection / "model-dimensions.json"
@@ -287,12 +441,13 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         revision=plan["revision"],
     )
     if dimension_source == live_dimensions:
+        binding = (
+            {"process": identity, "model_revision": plan["model_revision"]}
+            if native
+            else {"image_id": checked["image_id"], "container_id": identity}
+        )
         require_binding(
-            dimensions,
-            "Live model dimensions",
-            image_id=checked["image_id"],
-            container_id=cid,
-            launcher_sha256=plan["launcher_sha256"],
+            dimensions, "Live model dimensions", launcher_sha256=plan["launcher_sha256"], **binding
         )
         if original_dimensions.exists():
             previous = read_json(original_dimensions)
@@ -319,11 +474,15 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         launch_config_sha256=plan["launch_sha256"],
     )
     nixl = read_json(run / "nixl-connector-version.json")
-    require_binding(
-        nixl, "NIXL protocol", plan_sha256=plan_hash, image_id=checked["image_id"], container_id=cid
+    binding = (
+        {"process": identity}
+        if native
+        else {"image_id": checked["image_id"], "container_id": identity}
     )
+    require_binding(nixl, "NIXL protocol", plan_sha256=plan_hash, **binding)
     transfer = read_json(run / "transfer-mode.json")
-    require_binding(transfer, "Transfer mode", plan_sha256=plan_hash, image_id=checked["image_id"])
+    transfer_binding = {"process": identity} if native else {"image_id": checked["image_id"]}
+    require_binding(transfer, "Transfer mode", plan_sha256=plan_hash, **transfer_binding)
     handshake = read_json(run / "handshake-policy.json")
     require_binding(
         handshake,
@@ -342,8 +501,13 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         raise ValueError("Capture live model dimensions for the resolved architecture")
     version = read_json(run / "version.json").get("version")
     if version != checked.get("vllm_api_version"):
-        raise ValueError("HTTP version differs from the checked image")
-    parse_process_start((run / "metrics.txt").read_text())
+        raise ValueError("HTTP version differs from the checked runtime")
+    process_start = parse_process_start((run / "metrics.txt").read_text())
+    if (
+        native
+        and process_start != read_json(run / "shared-start.json")["process_start_time_seconds"]
+    ):
+        raise ValueError("HTTP process start differs from the native launch record")
     ranks = cache.get("ranks", [])
     tp = int(option(plan["args"], "--tensor-parallel-size"))
     if sorted(rank.get("rank") for rank in ranks) != list(range(tp)):
@@ -362,7 +526,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         raise ValueError("Checked image lacks a pinned NIXL package")
     contract = {
         "vllm_version": version,
-        "image_digest": checked["image_id"],
+        "image_digest": "" if native else checked["image_id"],
         "nixl_version": nixl_version,
         "nixl_connector_version": nixl["nixl_connector_version"],
         "model_architecture": architecture,
@@ -405,6 +569,8 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "speculative_config": run / "launch.json",
         "enforce_handshake_compat": run / "handshake-policy.json",
     }
+    if native:
+        evidence.pop("image_digest")
     sources = {field: f"{path.resolve()} sha256:{digest(path)}" for field, path in evidence.items()}
     return {
         "schema": "narwhal.attestation",
@@ -432,14 +598,20 @@ def generate(run: Path, startup_log: Path) -> Path:
 
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
-    live_container(run, checked)
+    if plan.get("backend") == "native":
+        live_native(run, plan, checked)
+    else:
+        live_container(run, checked)
     role = plan.get("role", "")
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
     node = role.split("-")[1]
     destination = run / "engine-attestation.json"
     AttestationDocument.load(destination)
-    if read_json(destination) != engine_document(run, run / "startup.log"):
+    startup_log = run / (
+        "startup-attestation.log" if plan.get("backend") == "native" else "startup.log"
+    )
+    if read_json(destination) != engine_document(run, startup_log):
         raise ValueError("Attestation document differs from current serving evidence")
     expected = os.environ.get(f"NARWHAL_NODE_{node}_ATTESTATION_URL", "")
     url = urlsplit(expected)
@@ -515,6 +687,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     capture = commands.add_parser("capture-nixl")
     capture.add_argument("--run", required=True, type=Path)
+    native = commands.add_parser("native-capture")
+    native.add_argument("--run", required=True, type=Path)
     dimensions = commands.add_parser("capture-model-dimensions")
     dimensions.add_argument("--run", required=True, type=Path)
     engine = commands.add_parser("generate")
@@ -529,6 +703,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "capture-nixl":
             result = capture_nixl(args.run)
             print(f"Captured pinned NIXL protocol in {result}")
+        elif args.command == "native-capture":
+            result = capture_native(args.run)
+            print(f"Captured native engine attestation in {result}")
         elif args.command == "capture-model-dimensions":
             result = capture_model_dimensions(args.run)
             print(f"Captured live model dimensions in {result}")

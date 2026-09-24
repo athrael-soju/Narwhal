@@ -144,12 +144,18 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
     _ports_free(selected)
     gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
     started: list[Path] = []
+    baseline_used: int | None = None
     try:
         for run, plan in selected:
             _checked_plan(run, plan)
             before = gpu_memory(gpu_uuid)
+            if baseline_used is None:
+                baseline_used = before["used_mib"]
             budget = (
                 Decimal(str(plan["shared_device"]["gpu_memory_utilization"])) * before["total_mib"]
+            )
+            allowance = (
+                Decimal(str(plan["shared_device"]["device_allowance"])) * before["total_mib"]
             )
             record = {
                 "role": plan["role"],
@@ -157,7 +163,9 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                 "shared_device": plan["shared_device"],
                 "plan_sha256": digest(run / "launch.json"),
                 "gpu_before": before,
+                "gpu_baseline_used_mib": baseline_used,
                 "budget_mib": float(budget),
+                "device_allowance_mib": float(allowance),
                 "vllm_args": plan["args"],
                 "expected_packages": plan["expected_packages"],
                 "model_sha256": plan.get("model_sha256", plan["model_config_sha256"]),
@@ -186,14 +194,23 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                 live = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
                 if live.vllm_version != _checked_plan(run, plan)["vllm_api_version"]:
                     raise ValueError("live vLLM version differs from the checked native runtime")
+                after = gpu_memory(gpu_uuid)
+                aggregate_delta = after["used_mib"] - baseline_used
                 record.update(
                     status="running",
                     process=identity,
                     vllm_version=live.vllm_version,
                     process_start_time_seconds=live.process_start_time_seconds,
                     model_revision=plan["model_revision"],
-                    gpu_after=gpu_memory(gpu_uuid),
+                    gpu_after=after,
+                    observed_delta_mib=after["used_mib"] - before["used_mib"],
+                    aggregate_delta_mib=aggregate_delta,
                 )
+                if Decimal(aggregate_delta) > allowance:
+                    raise ValueError(
+                        f"observed shared GPU use {aggregate_delta} MiB exceeds "
+                        f"the {allowance} MiB device allowance"
+                    )
                 started.append(run)
             except (OSError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as error:
                 record.update(status="failed", error=str(error))
@@ -210,11 +227,18 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                 except (OSError, ValueError, subprocess.SubprocessError) as cleanup_error:
                     record["cleanup_error"] = str(cleanup_error)
                 try:
-                    record["gpu_after"] = gpu_memory(gpu_uuid)
+                    record["gpu_after_cleanup"] = gpu_memory(gpu_uuid)
                 except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
                     record["gpu_after_error"] = str(inspection_error)
                 write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
-                message = f"{plan['role']}: native launch failed: {error}"
+                message = (
+                    f"{plan['role']}: native launch failed with "
+                    f"{before['used_mib']} MiB used before start, "
+                    f"{budget} MiB allocation"
+                )
+                if "observed_delta_mib" in record:
+                    message += f", {record['observed_delta_mib']} MiB observed increase"
+                message += f": {error}"
                 if record.get("cleanup_error"):
                     message += f"; cleanup failed: {record['cleanup_error']}"
                 raise ValueError(message) from error

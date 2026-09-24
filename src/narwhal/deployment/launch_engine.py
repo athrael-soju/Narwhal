@@ -25,6 +25,9 @@ VALUE_OPTIONS = {
     "--max-num-seqs",
     "--reasoning-parser",
     "--attention-backend",
+    "--tokenizer",
+    "--hf-config-path",
+    "--load-format",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -134,6 +137,10 @@ def requires_ds_conv_state_layout(model_dir: Path) -> bool:
         return True
     if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
         return True
+    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
+        "layer_types", []
+    ):
+        return True
     return any(
         isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
         for layer in text_model.get("layer_types", [])
@@ -207,10 +214,16 @@ def build(
     )
     model_dir = str(Path(env["NARWHAL_MODEL_DIR"]).resolve())
     model_ref = (
-        str(Path(env.get("NARWHAL_MODEL_PATH", model_dir)).resolve())
+        os.path.abspath(env.get("NARWHAL_MODEL_PATH", model_dir))
         if backend == "native"
         else "/model"
     )
+    if (
+        backend == "native"
+        and model_ref.endswith(".gguf")
+        and not runtime["expected_packages"].get("vllm-gguf-plugin")
+    ):
+        raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     common = [
@@ -365,6 +378,40 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
 
+def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str], log: str) -> str:
+    """Inspect the checked vLLM environment through its selected backend."""
+    if plan.get("backend") != "native":
+        return docker(
+            [
+                "run",
+                "--rm",
+                *plan["common"],
+                "--entrypoint",
+                "python3",
+                plan["image"],
+                "-c",
+                script,
+                *arguments,
+            ],
+            run,
+            log,
+        )
+    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    result = subprocess.run(
+        [plan["python_executable"], "-c", script, *arguments],
+        env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    write_private(run / log, result.stdout + "\nSTDERR\n" + result.stderr)
+    if result.returncode:
+        raise ValueError(
+            f"native runtime inspection exited {result.returncode}: {result.stderr[-1000:]}"
+        )
+    return result.stdout
+
+
 def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
     env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
@@ -502,7 +549,13 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 def require_checked(run: Path, plan: dict) -> None:
     checked = json.loads((run / "checked.json").read_text())
     if checked["plan_sha256"] != digest(run / "launch.json"):
-        raise ValueError("launch plan changed after its image check")
+        raise ValueError("launch plan changed after its runtime check")
+    if plan.get("backend") == "native" and (
+        checked.get("backend") != "native"
+        or checked.get("python_executable") != plan["python_executable"]
+        or checked.get("expected_packages") != plan["expected_packages"]
+    ):
+        raise ValueError("native runtime check differs from the launch plan")
 
 
 def cache_groups(groups: list) -> list[dict]:
@@ -543,7 +596,8 @@ def runtime_config(plan: dict) -> Any:
     from vllm.engine.arg_utils import EngineArgs  # type: ignore[import-not-found]
     from vllm.utils.argparse_utils import FlexibleArgumentParser  # type: ignore[import-not-found]
 
-    if digest(Path("/model/config.json")) != plan["model_config_sha256"]:
+    model_config = Path(plan.get("model_config_path", "/model/config.json"))
+    if digest(model_config) != plan["model_config_sha256"]:
         raise ValueError("model config changed since launch preparation")
     # EngineArgs owns the model options; HTTP listener options belong to the API server.
     arguments = list(plan["args"][2:])
@@ -719,21 +773,7 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
     'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
 }))
 """
-    output = docker(
-        [
-            "run",
-            "--rm",
-            *plan["common"],
-            "--entrypoint",
-            "python3",
-            plan["image"],
-            "-c",
-            script,
-            name,
-        ],
-        run,
-        "cache-registration.log",
-    )
+    output = run_runtime_script(run, plan, script, [name], "cache-registration.log")
     prefix = "NARWHAL_CACHE_REGISTRATION="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -805,21 +845,7 @@ print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
     'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
 }))
 """
-    output = docker(
-        [
-            "run",
-            "--rm",
-            *plan["common"],
-            "--entrypoint",
-            "python3",
-            plan["image"],
-            "-c",
-            script,
-            json.dumps(connector),
-        ],
-        run,
-        "handshake-policy.log",
-    )
+    output = run_runtime_script(run, plan, script, [json.dumps(connector)], "handshake-policy.log")
     prefix = "NARWHAL_HANDSHAKE_POLICY="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -1185,7 +1211,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             run = args.run.resolve()
             plan = load(run)
-            if plan.get("backend") == "native" and args.command != "check":
+            if plan.get("backend") == "native" and args.command not in {
+                "check",
+                "cache-registration",
+                "handshake-policy",
+            }:
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )

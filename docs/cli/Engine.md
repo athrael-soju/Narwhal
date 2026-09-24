@@ -4,14 +4,19 @@ Prepare and run vLLM engines from the existing `narwhal.engine-launch` record. T
 
 The native path requires `NARWHAL_MODEL_REVISION` alongside the launch environment produced during deployment. A local GGUF file can be selected with `NARWHAL_MODEL_PATH`; preparation records its SHA-256. Each run directory is immutable. A fresh start needs a fresh directory.
 
+For GGUF, pin `vllm-gguf-plugin` in `runtime.expected_packages` and keep the model path inside its snapshot directory so the loader can find companion files. Supply the base model tokenizer and configuration through `--tokenizer` and `--hf-config-path` in `runtime.extra_args`.
+
 ```bash
 narwhal-engine prepare --backend native --out runs/engine-1
 narwhal-engine check --run runs/engine-1
 narwhal-engine start-shared --backend native --run runs/engine-1 --run runs/engine-2
+python -m narwhal.deployment.attestation_contract native-capture --run runs/engine-1
 narwhal-engine stop-native --run runs/engine-1
 ```
 
-`start-shared` checks every selected role, port and GPU budget before launching sequentially. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. `stop-native` signals only the recorded process group when its identity still matches. Native attestation and the installed `narwhal dev` workflow remain milestone gates.
+`start-shared` checks every selected role, port and GPU budget before launching sequentially. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. It checks observed fleet GPU use against `shared_device.device_allowance` after each start. `native-capture` uses Narwhal's existing model, cache, NIXL and handshake evidence checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` signals only the recorded process group when its identity still matches. The installed `narwhal dev` workflow remains a milestone gate.
+
+On WSL2 launched through Windows OpenSSH, keep the WSL instance running during remote qualification. In the Kimchi run, vLLM processes exited when the final remote `wsl.exe` session closed; a persistent WSL session kept the same native launches alive for live attestation.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
