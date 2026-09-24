@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
@@ -113,6 +114,37 @@ def candidate(root: Path) -> tuple[str, int | None] | None:
     if len(prs) != 1:
         raise ValueError("Multiple release PRs identify this commit")
     return validate(root), prs[0]["number"]
+
+
+def candidate_ref(sha: str) -> tuple[str, int | None] | None:
+    """Validate a merged release commit as data before a workflow checks it out."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Release candidate must be a full commit SHA")
+    if command("git", "cat-file", "-t", sha) != "commit":
+        raise ValueError("Release candidate must identify a commit")
+    command("git", "merge-base", "--is-ancestor", sha, "origin/main")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        for name in (
+            "pyproject.toml",
+            "CITATION.cff",
+            ".release-please-manifest.json",
+            "CHANGELOG.md",
+        ):
+            (root / name).write_text(command("git", "show", f"{sha}:{name}"))
+        value = version(root)
+        prs = [pr for pr in api(f"commits/{sha}/pulls") if release_pr(pr, sha, value)]
+        if not prs:
+            if (
+                value == "0.1.0"
+                and command("git", "rev-parse", "origin/main") == sha
+                and len(command("git", "rev-list", "--parents", "-n", "1", sha).split()) == 1
+            ):
+                return validate(root), None
+            return None
+        if len(prs) != 1:
+            raise ValueError("Multiple release PRs identify this commit")
+        return validate(root), prs[0]["number"]
 
 
 def asset_matches(asset: dict, path: Path) -> bool:
@@ -263,6 +295,7 @@ def main() -> None:
     parser.add_argument("action", choices=["check", "candidate", "publish", "pypi-status", "title"])
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--tag")
+    parser.add_argument("--sha")
     parser.add_argument("--dist", type=Path, default=Path("dist"))
     args = parser.parse_args()
     root = Path.cwd()
@@ -273,11 +306,12 @@ def main() -> None:
             value = validate(root, args.tag) if args.release or args.tag else version(root)
             print(f"Version metadata agrees at {value}")
         elif args.action == "candidate":
-            selected = candidate(root)
+            selected = candidate_ref(args.sha) if args.sha else candidate(root)
             with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
                 output.write(f"release={'true' if selected else 'false'}\n")
                 if selected:
                     output.write(f"version={selected[0]}\n")
+                    output.write(f"sha={args.sha or command('git', 'rev-parse', 'HEAD')}\n")
         elif args.action == "pypi-status":
             status = pypi_status(root, args.dist)
             with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
