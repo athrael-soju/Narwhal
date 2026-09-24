@@ -122,7 +122,11 @@ class HostDeploymentTests(unittest.TestCase):
 
     def test_roles_resolve_to_one_authentication_entry(self):
         with tempfile.TemporaryDirectory() as folder:
-            hosts = load_hosts(self.inventory(Path(folder) / "hosts.json"), self.env)
+            inventory = self.inventory(Path(folder) / "hosts.json")
+            contents = inventory.read_text()
+            self.assertIn('"password_env": "NODE_1_PASSWORD"', contents)
+            self.assertNotIn(self.env["NODE_1_PASSWORD"], contents)
+            hosts = load_hosts(inventory, self.env)
             router = next(h for h in hosts if "router" in h.roles)
             engine = next(h for h in hosts if "engine-1" in h.roles)
             self.assertIs(router, engine)
