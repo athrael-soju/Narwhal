@@ -115,19 +115,7 @@ a 30-second demand window and three confirmations for ordinary moves. After
 `verify`, fill one demand window with representative traffic before
 assessing role changes.
 
-Changing engine count, model, context length or memory fractions requires a
-matching template and a fresh `up` and `verify` cycle. Export the installed
-reference to edit it:
-
-```bash
-python - <<'PY' > runs/dev-template.json
-from importlib.resources import files
-print(files('narwhal.dev').joinpath('reference-v1.json').read_text())
-PY
-narwhal dev init --instance runs/dev-custom --template runs/dev-template.json
-```
-
-The installed small-GPU template uses two engines and accepts the selected
-CUDA GPU by available memory. For another four-engine configuration, adjust
-the template and verify its startup memory, directed KV paths and routed
-completion on that card.
+To change engine count, model, context length or memory fractions, edit the
+exported `runs/rtx5090-template.json` and initialize a fresh instance with
+that file. Run `up` and `verify` to measure startup memory, directed KV paths
+and routed completion on the target GPU.
