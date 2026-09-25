@@ -6,7 +6,7 @@ Four engines open as two prefill and two decode processes on the selected
 GPU. Repeating `init` preserves the existing directory.
 
 `up` checks the ports and runtime, starts each engine, captures live
-attestations, profiles the opening split and one split with an extra decode
+attestations, profiles every split with at least one prefill and one decode
 engine, and starts the router. It reports `launched`.
 `verify` runs full preflight across every eligible directed KV path, checks
 the profiles against current processes, sends an arithmetic request through

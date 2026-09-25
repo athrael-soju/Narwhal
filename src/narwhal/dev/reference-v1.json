@@ -58,11 +58,13 @@
     "ucx_range": "39000-39999"
   },
   "slo": {
-    "ttft_s": 10.0,
+    "ttft_s": 1.0,
     "tpot_s": 0.125
   },
   "controller": {
+    "monitor_interval_s": 0.1,
     "reactive": {
+      "step_s": 0.25,
       "window_s": 30.0,
       "evidence_span_s": 15.0,
       "evidence_max_span_s": 30.0,
@@ -72,12 +74,12 @@
   "profile": {
     "prefill_lens": [
       128,
-      512,
-      1024
+      1024,
+      3840
     ],
     "decode_input_lens": [
       128,
-      512
+      3840
     ],
     "decode_concurrency": [
       1,

@@ -161,10 +161,8 @@ def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
 
 def _profiles(run: Path, fleet: dict, spec: dict) -> None:
     count = len(fleet["engines"])
-    opening = sum(e["role"] == "prefill" for e in fleet["engines"])
-    mixes = sorted({opening, max(1, opening - 1)})
     sources = []
-    for prefill in mixes:
+    for prefill in range(1, count):
         measured = json.loads(json.dumps(fleet))
         for index, engine in enumerate(measured["engines"]):
             engine["role"] = "prefill" if index < prefill else "decode"

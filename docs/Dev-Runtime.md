@@ -113,11 +113,19 @@ curl http://127.0.0.1:18000/metrics
 ```
 
 The four engines open with two prefill and two decode roles. Startup
-profiles that split and a one-prefill, three-decode split so the controller
-can price a role change from the current processes. Decode profiles cover
-128 to 512 input tokens at concurrency one and two; prefill profiles extend
-to 1,024 tokens. Use requests within those bounds when exercising role
-control. The 4,096-token engine context limit bounds input plus output.
+profiles 1P:3D, 2P:2D and 3P:1D so the controller can price changes in both
+directions from the current processes. Prefill and decode sweeps cover
+128 to 3,840 input tokens, with decode concurrency one and two and up to
+128 output tokens. Use long inputs with short outputs to exercise prefill
+growth, and longer outputs to exercise decode growth. The controller prices
+each move from the profiles and resident work. The 4,096-token engine context
+limit bounds input plus output.
+
+The reference uses a 1-second TTFT budget and a 125-ms TPOT budget. Narwhal
+samples engines every 100 ms and evaluates role changes every 250 ms, using
+a 30-second demand window and three confirmations for ordinary moves. After
+`verify`, fill one demand window with representative traffic before
+assessing role changes.
 
 Keep four engines for the default RTX 5090 setup. Changing engine count,
 model, context length or memory fractions requires a matching template and
