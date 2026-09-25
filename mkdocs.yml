@@ -107,6 +107,7 @@ nav:
           - Overview: CLI-Reference.md
           - narwhal config: Config-Inspection.md
           - Command results: Command-Results.md
+          - narwhal diagnostics: Diagnostic-Bundles.md
           - narwhal dev: cli/Dev.md
           - narwhal-engine: cli/Engine.md
           - narwhal-attest: cli/Attest.md

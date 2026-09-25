@@ -26,5 +26,6 @@ Current interfaces are:
 | Prometheus metrics   | `narwhal.metrics`           |       1 |
 | Command result       | `narwhal.command-result`    |       1 |
 | Contract manifest    | `narwhal.contract-manifest` |       1 |
+| Diagnostic bundle    | `narwhal.diagnostic-bundle` |       1 |
 
 Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments,
         _main,
         operation="dev",
-        capture_child_stdout=selected[:1] != ["config"],
+        capture_child_stdout=selected[:1] not in (["config"], ["diagnostics"]),
     )
 
 
@@ -32,8 +32,10 @@ def _main(argv: list[str]) -> int:
     results.add_format(parser)
     commands = parser.add_subparsers(dest="command", required=True)
     from ..config import cli as config_cli
+    from ..diagnostics import bundle
 
     config_cli.configure_parser(commands.add_parser("config", help="Inspect fleet files offline"))
+    bundle.add_commands(commands)
     dev = commands.add_parser("dev", help="Run independent engines on one local NVIDIA GPU")
     actions = dev.add_subparsers(dest="action", required=True)
     for name in ("init", "up", "verify", "status", "down"):
@@ -61,6 +63,8 @@ def _main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.command == "config":
         return config_cli.run(args)
+    if args.command == "diagnostics":
+        return bundle.run(args)
     results.set_operation("dev " + args.action)
     root = args.instance.expanduser().resolve()
     results.set_data({"instance": str(root)})

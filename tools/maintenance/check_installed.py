@@ -9,6 +9,8 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -119,6 +121,94 @@ def check_command_results():
         assert "Traceback" not in completed.stderr, completed.stderr
 
 
+def check_diagnostics():
+    """Collect local HTTP fixtures through the installed command and inspect its artifacts."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status = 503 if self.path == "/partial/ready" else 200
+            body = json.dumps(
+                {
+                    "phase": "degraded" if status == 503 else "ready",
+                    "api_key": "fixture-secret",
+                    "prompt": "fixture-request-content",
+                }
+            ).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                for case, exit_code, status in (
+                    ("healthy", 0, "success"),
+                    ("partial", 3, "degraded"),
+                ):
+                    output = root / case
+                    result = subprocess.run(
+                        [
+                            "narwhal",
+                            "diagnostics",
+                            "collect",
+                            "--router",
+                            f"http://127.0.0.1:{server.server_port}/{case}",
+                            "--out",
+                            str(output),
+                            "--format",
+                            "json",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        cwd=root,
+                    )
+                    document = json.loads(result.stdout)
+                    assert result.returncode == document["exit_code"] == exit_code, result
+                    assert document["status"] == status, document
+                    assert document["operation"] == "diagnostics collect", document
+                    assert document["artifacts"][0]["state"] == "created", document
+                    assert result.stderr == "", result.stderr
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    assert manifest["schema"] == "narwhal.diagnostic-bundle", manifest
+                    assert len(manifest["sources"]) == 5, manifest
+                    if case == "partial":
+                        assert manifest["sources"][1]["http_status"] == 503, manifest
+                    for path in output.iterdir():
+                        assert "fixture-secret" not in path.read_text(), path
+                        assert "fixture-request-content" not in path.read_text(), path
+                existing = subprocess.run(
+                    [
+                        "narwhal",
+                        "diagnostics",
+                        "collect",
+                        "--router",
+                        f"http://127.0.0.1:{server.server_port}",
+                        "--out",
+                        str(root / "healthy"),
+                        "--format",
+                        "json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=root,
+                )
+                assert existing.returncode == 2, existing
+                assert json.loads(existing.stdout)["errors"][0]["code"] == "output_exists"
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+
 def main(argv=None):
     """Check distribution identity, bundled files and every installed console command."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -172,6 +262,7 @@ def main(argv=None):
         assert importlib.util.find_spec(module) is None, module
     check_offline_config()
     check_command_results()
+    check_diagnostics()
     asyncio.run(check_http())
     print(f"Installed package passed: {len(entries)} commands, package data and HTTP contracts")
     return 0

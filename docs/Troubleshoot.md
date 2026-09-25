@@ -2,20 +2,35 @@
 
 ## Capture router and engine state
 
-Before changing router or engine state, create a separate ignored evidence directory for each router in the incident and capture its control endpoints.
+Before changing router or engine state, collect a separate bundle for each router in the incident. Choose a fresh output path and select the fleet configuration and run directory that belong to that router.
 
 ```bash
 mkdir -p runs/diagnostics
-incident_dir=$(mktemp -d runs/diagnostics/router.XXXXXX)
-
-curl -sS http://router:8000/health > "$incident_dir/health.json"
-curl -sS -o "$incident_dir/ready.json" -w '%{http_code}\n' http://router:8000/ready
-curl -sS http://router:8000/narwhal/state > "$incident_dir/state.json"
-curl -sS http://router:8000/narwhal/lifecycle > "$incident_dir/lifecycle.json"
-curl -sS http://router:8000/metrics > "$incident_dir/metrics.txt"
+narwhal diagnostics collect \
+  --router http://router:8000 \
+  --fleet config/fleet.json \
+  --run runs/dev/run-example \
+  --out runs/diagnostics/router-incident-001
 ```
 
-Store the router journal, ingress and supervisor status, engine boot logs, fleet configuration, profiles, and deployment load results beside the endpoint snapshots. Before stopping an engine, capture the evidence required by its planned lifecycle restart or unplanned-failure procedure.
+The [diagnostic bundle manifest](Diagnostic-Bundles.md) records HTTP status, retained response bodies, collection errors, source paths and artifact hashes. Exit `3` identifies a partial bundle; inspect its source rows before retrying individual reads. Add `--artifact PATH` for ingress and supervisor status, engine boot logs, profiles or deployment load results outside the selected run. Use `--include-request-content` when the incident requires journal or completion content.
+
+For an installation awaiting the collector command, capture the endpoints with bounded curl requests into a private directory:
+
+```bash
+umask 077
+mkdir -p runs/diagnostics
+incident_dir=$(mktemp -d runs/diagnostics/router.XXXXXX)
+
+for endpoint in health ready narwhal/state narwhal/lifecycle metrics; do
+  name=${endpoint##*/}
+  curl --connect-timeout 2 --max-time 5 -sS \
+    -o "$incident_dir/$name.body" -w '%{http_code}\n' \
+    "http://router:8000/$endpoint" > "$incident_dir/$name.status"
+done
+```
+
+Place site-filtered local artifacts beside these manual snapshots. Before stopping an engine, capture the evidence required by its planned lifecycle restart or unplanned-failure procedure.
 
 ## Router, admission, and lifecycle signals
 
