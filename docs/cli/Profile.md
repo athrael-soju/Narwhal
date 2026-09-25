@@ -31,6 +31,11 @@ The profiler rejects symlink destinations and requires `--overwrite` to replace 
 
 Before each completion, the profiler verifies that the actual tokenised input plus the requested output fits the engine.
 
+With `--colocated`, every neighbour must complete requests during the target's
+measurement interval. The sample sidecar records each neighbour's role,
+completion count, achieved rate and errors. A stalled or failed neighbour
+rejects that profile's measured role mix.
+
 A profiling run aborts when any of these conditions occurs:
 
 - the `--only` selection matches zero configured engines;

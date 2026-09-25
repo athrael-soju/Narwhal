@@ -10,7 +10,7 @@ from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 
 if TYPE_CHECKING:
-    from .model import FleetConfig
+    from .model import FleetConfig, SharedDeviceAllocation
 
 
 def validate(config: FleetConfig, source: str = "config") -> None:
@@ -294,6 +294,29 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             problems.append(
                 "hardware.tensor_parallel cannot exceed hardware.accelerators_per_engine"
             )
+    shared_groups: dict[str, list[tuple[str, SharedDeviceAllocation]]] = {}
+    for engine in config.engines:
+        allocation = engine.shared_device
+        if allocation is None:
+            continue
+        if not allocation.group or not allocation.gpu_uuid:
+            problems.append(f"{engine.iid}: shared_device requires group and gpu_uuid")
+        for name in ("device_allowance", "gpu_memory_utilization"):
+            fraction = getattr(allocation, name)
+            if not math.isfinite(fraction) or not 0 < fraction <= 1:
+                problems.append(f"{engine.iid}: shared_device.{name} must be above 0 and at most 1")
+        shared_groups.setdefault(allocation.group, []).append((engine.iid, allocation))
+    for group, members in shared_groups.items():
+        identities = {(a.gpu_uuid, a.device_allowance) for _, a in members}
+        if len(identities) != 1:
+            problems.append(f"shared_device group {group}: GPU identity or allowance differs")
+        if not 2 <= len(members) <= 8:
+            problems.append(f"shared_device group {group}: requires two to eight engines")
+        if (
+            sum(a.gpu_memory_utilization for _, a in members)
+            > members[0][1].device_allowance + 1e-12
+        ):
+            problems.append(f"shared_device group {group}: memory budgets exceed device allowance")
     for name, value in (
         (
             "profiles.max_decode_fit_mape",

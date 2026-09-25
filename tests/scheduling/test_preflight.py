@@ -1,10 +1,12 @@
 """Check preflight gate results and permitted KV-transfer pairs."""
 
 import io
+import json
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -29,6 +31,7 @@ from narwhal.engines.client import EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
+from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
 from tests.fixtures import fleet, profile
 
@@ -224,6 +227,37 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(report.failed), 1)
                 self.assertEqual(calls, ["/v1/completions"])
 
+    async def test_pace_adapts_a_context_overflow_using_the_live_tokenizer(self):
+        """A 4096-token engine can serve the pace probe with one output token."""
+        prompts = []
+
+        def handle(request):
+            body = json.loads(request.content)
+            if request.url.path == "/tokenize":
+                return httpx.Response(
+                    200,
+                    json={"count": len(body["prompt"].split()) + 1, "max_model_len": 4096},
+                )
+            prompts.append(body["prompt"])
+            if len(body["prompt"].split()) + 2 > 4096:
+                return httpx.Response(400, json={"error": {"message": "context overflow"}})
+            return httpx.Response(
+                200, json={"usage": {"prompt_tokens": len(body["prompt"].split()) + 1}}
+            )
+
+        report = Report()
+        slow = await gate_pace(
+            self.cfg,
+            {"e0"},
+            report,
+            repeats=1,
+            transport=httpx.MockTransport(handle),
+        )
+        self.assertEqual(slow, set())
+        self.assertEqual(report.failed, [])
+        self.assertEqual(len(prompts), 2)
+        self.assertLess(len(prompts[1]), len(prompts[0]))
+
     async def test_orchestration_gates_transfer_and_preserves_configuration(self):
         """After preflight passes, KV transfer checks use the requested topology."""
         for blocked in (None, "contract", "model", "pace", "skip"):
@@ -346,6 +380,312 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(report.failed), 2)
 
+    async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {
+                "kv_transfer_params": {
+                    "remote_engine_id": "engine",
+                    "remote_block_ids": [0],
+                    "remote_host": "192.0.2.1",
+                    "remote_port": 5701,
+                    "transfer_mode": "pull",
+                }
+            },
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+
+        async def output(*args, **kwargs):
+            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+
+        client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
+
+        def snapshot(iid, *, start=100.0, transfers=0.0):
+            return {
+                "iid": iid,
+                "vllm_version": "0.29.0",
+                "process_start_time_seconds": start,
+                "attestation_digest": "sha256:attested",
+                "nixl_transfer_count": transfers,
+                "nixl_transfer_seconds_sum": transfers * 0.2,
+            }
+
+        pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
+        src, dst = pair[0]
+        with (
+            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(
+                check,
+                "_pair_snapshot",
+                new=AsyncMock(
+                    side_effect=[
+                        snapshot(src),
+                        snapshot(dst),
+                        snapshot(src),
+                        snapshot(dst, transfers=1.0),
+                    ]
+                ),
+            ),
+        ):
+            report = Report()
+            await gate_consume(
+                self.cfg,
+                {src, dst},
+                {src: result, dst: result},
+                client,
+                report,
+                True,
+                evidence=report.pairs,
+            )
+        self.assertEqual(report.failed, [])
+        self.assertEqual(report.pairs[0]["status"], "passed")
+        self.assertEqual(report.pairs[0]["nixl_transfer_seconds"], 0.2)
+        self.assertEqual(report.pairs[0]["remote_port"], 5701)
+
+        with (
+            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(
+                check,
+                "_pair_snapshot",
+                new=AsyncMock(
+                    side_effect=[
+                        snapshot(src),
+                        snapshot(dst),
+                        snapshot(src, start=101.0),
+                        snapshot(dst, transfers=1.0),
+                    ]
+                ),
+            ),
+        ):
+            report = Report()
+            await gate_consume(
+                self.cfg,
+                {src, dst},
+                {src: result, dst: result},
+                client,
+                report,
+                True,
+                evidence=report.pairs,
+            )
+        self.assertEqual(report.pairs[0]["status"], "failed")
+        self.assertIn("process or attestation changed", report.failed[0])
+
+    async def test_directed_kv_evidence_reports_side_channel_and_layout_failures(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "engine", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+        src, dst = self.cfg.engines[0].iid, self.cfg.engines[1].iid
+        for detail in ("NIXL side channel connection refused", "incompatible cache layout"):
+
+            async def failed(*args, failure_detail=detail, **kwargs):
+                raise EngineError("decode", self.cfg.engines[1].url, 503, failure_detail)
+                yield ""
+
+            client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=failed)
+            with (
+                patch.object(check, "validation_pairs", return_value=[(src, dst)]),
+                patch.object(check, "_pair_snapshot", new=AsyncMock(return_value={"iid": src})),
+            ):
+                report = Report()
+                await gate_consume(
+                    self.cfg,
+                    {src, dst},
+                    {src: result, dst: result},
+                    client,
+                    report,
+                    True,
+                    evidence=report.pairs,
+                )
+            self.assertEqual(report.pairs[0]["status"], "failed")
+            self.assertIn(detail, report.failed[0])
+
+    async def test_saved_directed_kv_evidence_expires_on_process_restart(self):
+        fleet_path = self.cfg.profiles_path.parent / "fleet.json"
+        fleet_path.write_text("{}")
+        evidence_path = fleet_path.parent / "kv-evidence.json"
+
+        def snapshot(iid, start=100.0):
+            return {
+                "iid": iid,
+                "vllm_version": "0.29.0",
+                "process_start_time_seconds": start,
+                "attestation_digest": "sha256:attested",
+            }
+
+        pairs = check.validation_pairs(self.cfg.engines, mesh=True)
+        rows = [
+            {
+                "producer": src,
+                "consumer": dst,
+                "status": "passed",
+                "producer_before": snapshot(src),
+                "producer_after": snapshot(src),
+                "consumer_before": snapshot(dst),
+                "consumer_after": snapshot(dst),
+                "output_tokens": 3,
+                "nixl_transfer_count_delta": 1,
+                "nixl_transfer_seconds": 0.2,
+            }
+            for src, dst in pairs
+        ]
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "schema": "narwhal.directed-kv-evidence",
+                    "schema_version": 1,
+                    "status": "passed",
+                    "failed": [],
+                    "skipped": [],
+                    "fleet_sha256": sha256(fleet_path.read_bytes()).hexdigest(),
+                    "profile_sha256": sha256(self.cfg.profiles_path.read_bytes()).hexdigest(),
+                    "contract_fingerprint": self.cfg.engine_contract.fingerprint(),
+                    "expected_pairs": [list(pair) for pair in pairs],
+                    "repeats": 1,
+                    "pairs": rows,
+                }
+            )
+        )
+        with patch.object(
+            check, "_pair_snapshot", new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid))
+        ):
+            self.assertEqual(
+                await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path), []
+            )
+        with patch.object(
+            check,
+            "_pair_snapshot",
+            new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid, start=101.0)),
+        ):
+            failures = await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path)
+        self.assertTrue(any("changed since KV qualification" in failure for failure in failures))
+
+    async def test_directed_qualification_binds_the_full_mesh_and_profiles(self):
+        """Each passed document verifies immediately against its unchanged fleet."""
+        digest = "sha256:" + "a" * 64
+        for restart_at, repeats, changed_file in (
+            (None, 1, None),
+            (None, 2, None),
+            (4, 1, None),
+            (4, 2, None),
+            (0, 1, None),
+            (8, 1, None),
+            (None, 1, "profiles"),
+            (None, 1, "fleet"),
+        ):
+            with self.subTest(restart_at=restart_at, repeats=repeats, changed_file=changed_file):
+                store = ProfileStore(self.cfg.profiles_path, load=False)
+                for spec in self.cfg.engines:
+                    store.put(profile(spec.iid, generation_digest=digest))
+                fleet_path = self.cfg.profiles_path.parent / "fleet.json"
+                self.cfg.save(fleet_path)
+                evidence_path = fleet_path.parent / "mesh.json"
+                evidence_path.unlink(missing_ok=True)
+                snapshots = 0
+
+                async def snapshot(
+                    cfg,
+                    iid,
+                    restart_at=restart_at,
+                    changed_file=changed_file,
+                    fleet_path=fleet_path,
+                ):
+                    nonlocal snapshots
+                    restarted = iid == "e0" and restart_at is not None and snapshots >= restart_at
+                    transfers = snapshots // 4 + (snapshots % 4 >= 2)
+                    snapshots += 1
+                    if changed_file is not None and snapshots == 5:
+                        path = cfg.profiles_path if changed_file == "profiles" else fleet_path
+                        path.write_text(path.read_text() + "\n")
+                    return {
+                        "iid": iid,
+                        "vllm_version": "0.29.0",
+                        "process_start_time_seconds": 101.0 if restarted else 100.0,
+                        "attestation_digest": "sha256:" + "b" * 64 if restarted else digest,
+                        "nixl_transfer_count": transfers,
+                        "nixl_transfer_seconds_sum": transfers * 0.2,
+                    }
+
+                async def output(*args, **kwargs):
+                    yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+
+                result = NixlConnector().prefill_result(
+                    {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+                    url=self.cfg.engines[0].url,
+                    endpoint="/v1/completions",
+                    request_id="request",
+                )
+                client = SimpleNamespace(
+                    prefill=AsyncMock(return_value=result), decode=output, aclose=AsyncMock()
+                )
+                report = Report()
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(check, "EngineClient", return_value=client))
+                    for name, value in (
+                        ("reach", {"e0", "e3"}),
+                        ("contract", set()),
+                        ("model", set()),
+                        ("pace", set()),
+                        ("tokenize", None),
+                        ("produce", {"e0": result, "e3": result}),
+                    ):
+                        stack.enter_context(
+                            patch.object(check, f"gate_{name}", new=AsyncMock(return_value=value))
+                        )
+                    stack.enter_context(
+                        patch.object(
+                            check,
+                            "read_generation",
+                            new=AsyncMock(return_value=GenerationEvidence(digest, {})),
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(check, "_pair_snapshot", new=AsyncMock(side_effect=snapshot))
+                    )
+                    code = await check.run(
+                        self.cfg,
+                        mesh=True,
+                        skip_kv=False,
+                        repeats=repeats,
+                        report=report,
+                        evidence_out=evidence_path,
+                        fleet_path=fleet_path,
+                    )
+                    saved = json.loads(evidence_path.read_text())
+                    if restart_at is None and changed_file is None:
+                        self.assertEqual(code, 0, report.failed)
+                        self.assertEqual(saved["status"], "passed")
+                        self.assertEqual(
+                            await check.verify_directed_kv_evidence(
+                                self.cfg, fleet_path, evidence_path
+                            ),
+                            [],
+                        )
+                    else:
+                        self.assertEqual(code, 1)
+                        self.assertEqual(saved["status"], "failed")
+                        if restart_at == 4:
+                            self.assertTrue(
+                                any("differs across directed KV probes" in p for p in report.failed)
+                            )
+                        elif restart_at == 0:
+                            self.assertTrue(
+                                any("profile generation differs" in p for p in report.failed)
+                            )
+                        elif changed_file is not None:
+                            self.assertTrue(
+                                any(
+                                    "changed during directed KV qualification" in p
+                                    for p in report.failed
+                                )
+                            )
+                client.aclose.assert_awaited_once()
+
     def test_pairs_respect_role_sets_and_cover_consumers(self):
         """Ring construction covers permitted consumers with eligible producers."""
         self.assertEqual(pairs_of([], ["d"], False), [])
@@ -363,6 +703,40 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
 
+    async def test_stale_candidate_role_profile_fails_generation_gate(self):
+        """A valid current mix cannot admit a stale candidate mix after a restart."""
+        live_digest = "sha256:" + "a" * 64
+        stale_digest = "sha256:" + "b" * 64
+        base = replace(
+            profile("e0"),
+            generation_digest=live_digest,
+            colocated_group="gpu",
+            colocated_target_role="prefill",
+            colocated_prefill_engines=1,
+            colocated_decode_engines=2,
+            colocated_prefill_rps=1.0,
+            colocated_decode_rps=2.0,
+        )
+        store = ProfileStore(self.cfg.profiles_path, load=False)
+        store.put(base)
+        store.put(
+            replace(
+                base,
+                generation_digest=stale_digest,
+                colocated_prefill_engines=2,
+                colocated_decode_engines=1,
+            )
+        )
+        with patch.object(
+            check,
+            "read_generation",
+            new=AsyncMock(return_value=GenerationEvidence(live_digest, {})),
+        ):
+            report = Report()
+            unsafe = await check.gate_profile_generation(self.cfg, store, {"e0"}, report)
+        self.assertEqual(unsafe, {"e0"})
+        self.assertTrue(any("profile generation differs" in failure for failure in report.failed))
+
     def test_slo_gate_rejects_targets_below_profile_floors(self):
         """The profile's fixed decode and single-token prefill costs bound feasible SLOs."""
         store = ProfileStore(self.cfg.profiles_path)
@@ -370,3 +744,60 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             report = Report()
             gate_slo(replace(self.cfg, slo=slo), store, report)
             self.assertEqual(len(report.failed), 2)
+
+    def test_slo_gate_prices_the_measured_request_and_kv_minimum(self):
+        """TPOT feasibility and reported capacity charge the active request cohort."""
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        store = ProfileStore(self.cfg.profiles_path)
+        for request_slope, token_slope, minimum_requests, minimum_tokens, passes in (
+            (1.0, 0.000001, 1, 1, False),
+            (0.1, 0.000001, 8, 1, False),
+            (0.0, 0.00001, 1, 100_000, False),
+            (0.0, 0.000001, 1, 100_000, True),
+            (0.0, 0.000001, 1, 1, True),
+            (0.1, 0.000001, 2, 1, True),
+        ):
+            with self.subTest(request_slope=request_slope, minimum_requests=minimum_requests):
+                for spec in self.cfg.engines:
+                    store.put(
+                        profile(
+                            spec.iid,
+                            tpot_request_slope=request_slope,
+                            tpot_slope=token_slope,
+                            decode_min_requests=minimum_requests,
+                            decode_min_kv_tokens=minimum_tokens,
+                        )
+                    )
+                report = Report()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    gate_slo(self.cfg, store, report)
+                if passes:
+                    self.assertEqual(report.failed, [])
+                    self.assertIn(f"across {minimum_requests} requests", output.getvalue())
+                else:
+                    self.assertEqual(len(report.failed), 2)
+                    self.assertIn(f"at {minimum_requests} requests", report.failed[0])
+
+    def test_slo_capacity_and_profile_equation_include_the_request_coefficient(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid, tpot_request_slope=0.01, tpot_slope=0.0001))
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        output = io.StringIO()
+        report = Report()
+        with redirect_stdout(output):
+            gate_profile(self.cfg, report)
+            gate_slo(self.cfg, store, report)
+        self.assertEqual(report.failed, [])
+        self.assertIn("tpot=1.00e-02q+1.00e-04b+0.0010", output.getvalue())
+        self.assertIn("4890 batch tokens across 1 requests", output.getvalue())
+
+    def test_slo_gate_accepts_a_flat_profile_at_the_measured_boundary(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid, tpot_slope=0, tpot_request_slope=0, tpot_intercept=0.5))
+        report = Report()
+        gate_slo(self.cfg, store, report)
+        self.assertEqual(report.failed, [])

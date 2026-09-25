@@ -17,6 +17,7 @@ from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
 from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.controller import ReactiveController
+from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.policy import ServingPolicy
@@ -172,6 +173,180 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(fleet.scheduler.pool_load(Role.PREFILL), 1.0)
         self.assertGreater(fleet.scheduler.pool_load(Role.DECODE), 1.0)
 
+    def test_candidate_uses_its_colocated_prefill_cost(self) -> None:
+        """A 2P/4D proposal is priced from its own measured mix rows."""
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            base = fleet.profiles.get(iid)
+            for prefill, decode, multiplier in ((1, 5, 1.0), (2, 4, 10.0)):
+                fleet.profiles.put(
+                    replace(
+                        base,
+                        ttft_b=base.ttft_b * multiplier,
+                        colocated_group="gpu-0",
+                        colocated_target_role=(
+                            Role.PREFILL.value
+                            if iid == "e0" or (prefill == 2 and iid == "e1")
+                            else Role.DECODE.value
+                        ),
+                        colocated_prefill_engines=prefill,
+                        colocated_decode_engines=decode,
+                        colocated_prefill_rps=1.0,
+                        colocated_decode_rps=1.0,
+                    )
+                )
+        fleet.profiles.bind_role_mix(
+            dict.fromkeys(fleet.monitor.instances, "gpu-0"),
+            lambda group: (1, 5),
+            lambda iid: fleet.monitor.instances[iid].role,
+        )
+        fleet.controller._demand(fleet.now)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            fleet.controller.last_demand,
+            utilization=fleet.controller.utilization,
+            observed_load=(0.0, 0.0),
+            window_s=fleet.controller.window_s,
+            step_s=fleet.controller.step_s,
+        )
+        self.assertEqual(len(snapshot.profile_options[1][1]), 6)
+        self.assertGreater(
+            snapshot.score(2).ttft_ratio,
+            snapshot.score(1).ttft_ratio,
+        )
+        too_narrow = replace(
+            snapshot,
+            profile_options=(
+                (
+                    2,
+                    tuple(
+                        replace(p, prefill_max_tokens=50) for p in snapshot.profile_options[1][1]
+                    ),
+                ),
+            ),
+            offered_inputs=(100,),
+        )
+        self.assertFalse(too_narrow.score(2).decode_profile_covered)
+
+    def test_donor_selection_requires_the_measured_destination_roles(self) -> None:
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            base = fleet.profiles.get(iid)
+            for prefill, decode in ((1, 5), (2, 4)):
+                fleet.profiles.put(
+                    replace(
+                        base,
+                        colocated_group="gpu-0",
+                        colocated_target_role=(
+                            "prefill" if iid == "e0" or (prefill == 2 and iid == "e2") else "decode"
+                        ),
+                        colocated_prefill_engines=prefill,
+                        colocated_decode_engines=decode,
+                        colocated_prefill_rps=1.0,
+                        colocated_decode_rps=1.0,
+                    )
+                )
+        fleet.profiles.bind_role_mix(
+            dict.fromkeys(fleet.monitor.instances, "gpu-0"),
+            lambda group: (
+                len(fleet.monitor.pool(Role.PREFILL)),
+                len(fleet.monitor.pool(Role.DECODE)),
+            ),
+            lambda iid: fleet.monitor.instances[iid].role,
+        )
+        donor, reason = fleet.scheduler.planned_donor(Role.PREFILL)
+        self.assertEqual(donor.iid, "e2")
+        self.assertEqual(reason, "")
+        nominated, reason = fleet.scheduler.planned_donor(
+            Role.PREFILL, candidate=fleet.monitor.instances["e1"]
+        )
+        self.assertIsNone(nominated)
+        self.assertIn("measured", reason)
+        fleet.scheduler.pinned = frozenset({"e2"})
+        self.assertIsNone(fleet.scheduler.planned_donor(Role.PREFILL)[0])
+
+    def _colocated_candidate(self, **changes) -> None:
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            base = fleet.profiles.get(iid)
+            for prefill, decode in ((1, 5), (2, 4)):
+                row = replace(
+                    base,
+                    colocated_group="gpu-0",
+                    colocated_target_role=(
+                        "prefill" if iid == "e0" or (prefill == 2 and iid == "e1") else "decode"
+                    ),
+                    colocated_prefill_engines=prefill,
+                    colocated_decode_engines=decode,
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+                fleet.profiles.put(replace(row, **changes) if prefill == 2 else row)
+        fleet.profiles.bind_role_mix(
+            dict.fromkeys(fleet.monitor.instances, "gpu-0"),
+            lambda group: (
+                len(fleet.monitor.pool(Role.PREFILL)),
+                len(fleet.monitor.pool(Role.DECODE)),
+            ),
+            lambda iid: fleet.monitor.instances[iid].role,
+        )
+
+    def test_candidate_pending_decode_domain_blocks_role_change(self) -> None:
+        fleet = self.fleet
+        self._colocated_candidate(decode_max_kv_tokens=50)
+        fleet.monitor.waiting["pending"] = Request("pending", 100, wanted_len=10)
+        self.assertIsNone(fleet.confirm())
+        self.assertFalse(fleet.scheduler._last_decision["decode_profile_covered"])
+        self.assertEqual(
+            fleet.scheduler._last_decision["reason"], "decode profile does not cover proposed work"
+        )
+        self.assertEqual(fleet.scheduler.flips, [])
+
+    def test_candidate_prices_pending_work_with_its_decode_curve(self) -> None:
+        fleet = self.fleet
+        self._colocated_candidate(tpot_slope=0.0, tpot_intercept=0.005, decode_max_requests=1)
+        for index in range(2):
+            rid = f"pending-{index}"
+            fleet.monitor.waiting[rid] = Request(rid, 100, wanted_len=10, phase=Phase.DECODE)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.0, 0.0, 0, 0),
+            utilization=0.8,
+            observed_load=(0.0, 0.0),
+            correction=1.5,
+        )
+        candidate = snapshot.score(2)
+        self.assertTrue(candidate.decode_profile_covered)
+        self.assertAlmostEqual(candidate.decode_queue_ratio, 2 * 10 * 0.005 * 1.5 / 4)
+        self.assertGreater(candidate.decode_queue_ratio, snapshot.score(1).decode_queue_ratio)
+
+    def test_candidate_checks_inflight_prefill_domain(self) -> None:
+        fleet = self.fleet
+        self._colocated_candidate()
+        fleet.monitor.dispatched("e0", Request("pending", 100, wanted_len=10))
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.0, 0.0, 0, 0),
+            utilization=0.8,
+            observed_load=(0.0, 0.0),
+        )
+        self.assertEqual(snapshot.offered_inputs, ())
+        self.assertEqual(snapshot.offered_outputs, ())
+        candidates = dict(snapshot.profile_options)[2]
+        for bounds in (
+            {"decode_max_kv_tokens": 50},
+            {"decode_min_kv_tokens": 200},
+            {"prefill_max_tokens": 50},
+            {"decode_max_output_tokens": 5},
+        ):
+            with self.subTest(bounds=bounds):
+                narrowed = replace(
+                    snapshot,
+                    profile_options=((2, tuple(replace(p, **bounds) for p in candidates)),),
+                )
+                self.assertFalse(narrowed.score(2).decode_profile_covered)
+        self.assertIsNotNone(fleet.confirm())
+
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
         fleet = self.fleet
         fleet.pressure[Role.PREFILL] = 0.9
@@ -260,7 +435,7 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNone(fleet.confirm())
         self.assertEqual(fleet.scheduler.flips, [])
         self.assertGreater(
-            fleet.scheduler._last_decision["decode_tokens_per_engine"],
+            fleet.scheduler._last_decision["pending_decode_tokens"],
             fleet.scheduler._last_decision["decode_kv_capacity_tokens"],
         )
 
@@ -286,6 +461,23 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(len(fleet.monitor.instances["e1"].decode), 2)
 
+    def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
+        fleet = self.fleet
+        for index in range(1, 6):
+            iid = f"e{index}"
+            profile = fleet.profiles.get(iid)
+            fleet.profiles.put(replace(profile, decode_max_kv_tokens=1_200))
+            fleet.monitor.dispatched(iid, Request(f"resident{index}", 1_000, phase=Phase.DECODE))
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(1.0, 0.1, 10, 10),
+            utilization=0.8,
+            observed_load=(0.0, 0.0),
+        )
+        candidate = snapshot.score(2)
+        self.assertEqual(candidate.decode_tokens_per_engine, 1_000)
+        self.assertTrue(candidate.decode_profile_covered)
+
     def test_pending_output_exceeding_kv_blocks_move(self) -> None:
         fleet = self.fleet
         # Pending output is priced before decode dispatch, even when all GPUs
@@ -293,11 +485,53 @@ class MixedPressureTests(unittest.TestCase):
         fleet.monitor.waiting["pending"] = Request("pending", 1, wanted_len=1_000_000)
         self.assertIsNone(fleet.confirm())
         decision = fleet.scheduler._last_decision
-        self.assertGreater(
-            decision["decode_tokens_per_engine"], decision["decode_kv_capacity_tokens"]
-        )
+        self.assertGreater(decision["pending_decode_tokens"], decision["decode_kv_capacity_tokens"])
         self.assertEqual(decision["pending_decode_requests"], 1)
         self.assertEqual(fleet.scheduler.flips, [])
+
+    def test_waiting_decode_work_does_not_expand_the_active_batch(self) -> None:
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=2))
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.monitor.instances["e2"].role = Role.PREFILL
+        for iid, count in (("e3", 2), ("e4", 1), ("e5", 1)):
+            for index in range(count):
+                fleet.monitor.dispatched(
+                    iid, Request(f"{iid}-active-{index}", 100, phase=Phase.DECODE)
+                )
+        for index in range(100):
+            request = Request(f"queued-{index}", 100, wanted_len=10, phase=Phase.DECODE)
+            fleet.monitor.waiting[request.rid] = request
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.1, 3.0, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 1.0),
+        )
+        expand_decode = snapshot.score(2)
+        shrink_decode = snapshot.score(4)
+        self.assertTrue(expand_decode.decode_profile_covered)
+        self.assertLessEqual(expand_decode.decode_requests_per_engine, 2)
+        self.assertTrue(shrink_decode.decode_profile_covered)
+        self.assertGreater(shrink_decode.decode_queue_ratio, expand_decode.decode_queue_ratio)
+        self.assertEqual(shrink_decode.pending_decode_requests, 100)
+
+    def test_idle_candidate_decoder_does_not_create_fractional_batch(self) -> None:
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.monitor.instances["e2"].role = Role.PREFILL
+        for iid in ("e3", "e4", "e5"):
+            fleet.monitor.dispatched(iid, Request(f"{iid}-active", 100, phase=Phase.DECODE))
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.1, 2.0, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 1.0),
+        )
+        expanded = snapshot.score(2)
+        self.assertEqual(expanded.decode_requests_per_engine, 0.75)
+        self.assertTrue(expanded.decode_profile_covered)
 
     def test_flip_resident_guard_blocks_a_heavy_donor(self) -> None:
         fleet = self.fleet
@@ -524,9 +758,7 @@ class ProjectedTTFTRecoveryTests(unittest.TestCase):
         self.assertIsNone(fleet.controller.step(urgent=True))
         decision = fleet.scheduler._last_decision
         self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
-        self.assertGreater(
-            decision["decode_tokens_per_engine"], decision["decode_kv_capacity_tokens"]
-        )
+        self.assertGreater(decision["pending_decode_tokens"], decision["decode_kv_capacity_tokens"])
 
     def test_urgent_move_retains_pin_dwell_and_resident_guards(self) -> None:
         fleet = self.fleet

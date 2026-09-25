@@ -63,7 +63,7 @@ def load_workload(path: Path) -> dict:
     value = json.loads(path.read_text())
     if value.get("schema") != 1 or value.get("kind") != "synthetic-token-length":
         raise ValueError("Workload requires schema 1 and synthetic-token-length kind")
-    for key, minimum in (("input_tokens", 1), ("output_tokens", 2), ("seed", 0)):
+    for key, minimum in (("input_tokens", 1), ("output_tokens", 1), ("seed", 0)):
         if type(value.get(key)) is not int or value[key] < minimum:
             raise ValueError(f"Workload requires integer {key} >= {minimum}")
     pool = value.get("token_pool")
@@ -136,15 +136,20 @@ async def request_one(client, base, body, rid, scheduled, timeout, clock=time.mo
                     if len(choices) > 1 or any(c.get("index", 0) != 0 for c in choices):
                         raise ValueError("multiple_choices")
                     ids = token_ids(choices)
-                    if ids is None or len(ids) > 1:
-                        raise ValueError("requires_one_identified_token_per_event")
+                    if ids is None:
+                        row["invalid_token_event"] = {
+                            "choice_keys": [sorted(choice) for choice in choices],
+                        }
+                        raise ValueError("requires_identified_tokens_per_event")
                     if ids:
                         if finished:
                             raise ValueError("tokens_after_finish")
                         last = clock()
                         if first is None:
                             first = last
-                        row["output_tokens"] += 1
+                        row["output_tokens"] += len(ids)
+                        if len(ids) > 1:
+                            row["batched_token_events"] = row.get("batched_token_events", 0) + 1
                         if row["output_tokens"] > body["max_tokens"]:
                             raise ValueError("output_exceeds_requested_length")
                     for choice in choices:
@@ -235,10 +240,15 @@ def summary(rows, args, elapsed):
         r["sent"] and r["schedule_lag_s"] <= args.max_lag for r in rows
     )
     completed = [r for r in rows if r["outcome"] == "completed"]
-    passed = [r for r in completed if r["ttft_s"] <= args.ttft and r["tpot_s"] <= args.tpot]
+    passed = [
+        r
+        for r in completed
+        if r["ttft_s"] <= args.ttft
+        and (r["output_tokens"] == 1 or (r["tpot_s"] is not None and r["tpot_s"] <= args.tpot))
+    ]
 
     def distribution(key):
-        values = sorted(r[key] for r in completed)
+        values = sorted(r[key] for r in completed if r[key] is not None)
         return {
             f"p{p}": values[max(0, math.ceil(len(values) * p / 100) - 1)] if values else None
             for p in (50, 95, 99)
@@ -441,8 +451,8 @@ def main(argv=None):
     ):
         if not math.isfinite(getattr(args, key)) or getattr(args, key) <= 0:
             parser.error(f"--{key.replace('_', '-')} must be finite and positive")
-    if not 0 < args.attainment <= 1 or args.output_tokens < 2 or args.seed < 0:
-        parser.error("Require attainment in (0, 1], output tokens >= 2, and seed >= 0")
+    if not 0 < args.attainment <= 1 or args.output_tokens < 1 or args.seed < 0:
+        parser.error("Require attainment in (0, 1], output tokens >= 1, and seed >= 0")
     if args.command == "run" and args.workload is None:
         parser.error("run requires --workload")
     parsed = urlsplit(args.base)

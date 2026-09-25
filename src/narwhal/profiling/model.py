@@ -17,6 +17,8 @@ _FLOAT_FIELDS = (
     "tpot_request_slope",
     "decode_fit_mape",
     "decode_cv_mape",
+    "colocated_prefill_rps",
+    "colocated_decode_rps",
 )
 
 
@@ -26,13 +28,24 @@ _INT_FIELDS = (
     "decode_max_requests",
     "decode_min_kv_tokens",
     "decode_max_kv_tokens",
+    "prefill_min_tokens",
+    "prefill_max_tokens",
+    "decode_min_output_tokens",
+    "decode_max_output_tokens",
+    "colocated_prefill_engines",
+    "colocated_decode_engines",
 )
 
 
 _REQUIRED_FIELDS = ("iid", "ttft_a", "ttft_b", "ttft_c", "tpot_slope", "tpot_intercept")
 
 
-_OPTIONAL_FLOAT_FIELDS = ("decode_fit_mape", "decode_cv_mape")
+_OPTIONAL_FLOAT_FIELDS = (
+    "decode_fit_mape",
+    "decode_cv_mape",
+    "colocated_prefill_rps",
+    "colocated_decode_rps",
+)
 
 
 _DECODE_BOUNDS = (
@@ -53,6 +66,16 @@ _OPTIONAL_DEFAULTS: dict[str, Any] = {
     "decode_max_kv_tokens": None,
     "decode_fit_mape": None,
     "decode_cv_mape": None,
+    "prefill_min_tokens": None,
+    "prefill_max_tokens": None,
+    "decode_min_output_tokens": None,
+    "decode_max_output_tokens": None,
+    "colocated_group": None,
+    "colocated_target_role": None,
+    "colocated_prefill_engines": None,
+    "colocated_decode_engines": None,
+    "colocated_prefill_rps": None,
+    "colocated_decode_rps": None,
 }
 
 
@@ -96,15 +119,21 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
     for name in ("ttft_a", "ttft_b", "ttft_c", "tpot_intercept", "tpot_request_slope"):
         if values[name] < 0:
             raise ValueError(f"{where}: {name} must be nonnegative")
-    # A zero slope prices infinite decode capacity into every placement.
-    if values["tpot_slope"] <= 0:
-        raise ValueError(f"{where}: tpot_slope must be positive")
+    if values["tpot_slope"] < 0:
+        raise ValueError(f"{where}: tpot_slope must be nonnegative")
+    # A measured flat decode plane is safe only inside an explicit request/KV domain.
+    if values["tpot_slope"] == 0 and not all(
+        name in values for name in ("decode_max_requests", "decode_max_kv_tokens")
+    ):
+        raise ValueError(f"{where}: zero tpot_slope requires measured decode bounds")
     for name in _OPTIONAL_FLOAT_FIELDS:
         if name in values and values[name] < 0:
             raise ValueError(f"{where}: {name} must be nonnegative")
     for lo, hi in (
         ("decode_min_requests", "decode_max_requests"),
         ("decode_min_kv_tokens", "decode_max_kv_tokens"),
+        ("prefill_min_tokens", "prefill_max_tokens"),
+        ("decode_min_output_tokens", "decode_max_output_tokens"),
     ):
         if lo in values and hi in values and values[lo] > values[hi]:
             raise ValueError(f"{where}: {lo} must not exceed {hi}")
@@ -114,9 +143,24 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
         and values["kv_capacity_tokens"] < values["decode_max_kv_tokens"]
     ):
         raise ValueError(f"{where}: kv_capacity_tokens must be at least decode_max_kv_tokens")
-    for name in (*_DECODE_BOUNDS, *_OPTIONAL_FLOAT_FIELDS):
+    for name in (*_DECODE_BOUNDS, "decode_fit_mape", "decode_cv_mape"):
         if name not in values:
             raise ValueError(f"{where}: {name} is required on a current profile")
+    group = raw.get("colocated_group")
+    role = raw.get("colocated_target_role")
+    mix = (raw.get("colocated_prefill_engines"), raw.get("colocated_decode_engines"))
+    loads = (raw.get("colocated_prefill_rps"), raw.get("colocated_decode_rps"))
+    if group is not None:
+        if not isinstance(group, str) or not group:
+            raise ValueError(f"{where}: colocated_group must be a nonempty string")
+        if role not in ("prefill", "decode"):
+            raise ValueError(f"{where}: colocated_target_role must be prefill or decode")
+        if mix[0] is None or mix[1] is None or any(value is None for value in loads):
+            raise ValueError(f"{where}: colocated role mix and neighbour load are required")
+        if mix[0] + mix[1] < 2:
+            raise ValueError(f"{where}: colocated role mix and neighbour load are required")
+    elif role is not None or any(value is not None for value in (*mix, *loads)):
+        raise ValueError(f"{where}: colocated role mix requires colocated_group")
 
 
 @dataclass(frozen=True)
@@ -140,6 +184,16 @@ class Profile:
     decode_max_kv_tokens: int | None = None
     decode_fit_mape: float | None = None
     decode_cv_mape: float | None = None
+    prefill_min_tokens: int | None = None
+    prefill_max_tokens: int | None = None
+    decode_min_output_tokens: int | None = None
+    decode_max_output_tokens: int | None = None
+    colocated_group: str | None = None
+    colocated_target_role: str | None = None
+    colocated_prefill_engines: int | None = None
+    colocated_decode_engines: int | None = None
+    colocated_prefill_rps: float | None = None
+    colocated_decode_rps: float | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -153,6 +207,18 @@ class Profile:
         """Predict prefill time for an input length."""
         x = float(input_len)
         return max(0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c)
+
+    def covers_prefill(self, input_len: int) -> bool:
+        """Return whether a prompt length was in the measured prefill sweep."""
+        return (self.prefill_min_tokens is None or input_len >= self.prefill_min_tokens) and (
+            self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
+        )
+
+    def covers_output(self, output_len: float) -> bool:
+        """Return whether an output length was in the measured decode sweep."""
+        return (
+            self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
+        ) and (self.decode_max_output_tokens is None or output_len <= self.decode_max_output_tokens)
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
         """Predict one decode iteration from active requests and their KV tokens."""
@@ -223,7 +289,12 @@ class Profile:
         correction: float = 1.0,
     ) -> float:
         """Return measured-domain request capacity for one decode engine."""
-        if context_tokens <= 0 or output_tokens <= 0 or correction <= 0:
+        if (
+            context_tokens <= 0
+            or output_tokens <= 0
+            or correction <= 0
+            or not self.covers_output(output_tokens)
+        ):
             return 0.0
         hi = self.decode_request_limit(context_tokens)
         if hi <= 0:
