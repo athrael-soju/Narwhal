@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import socket
 import sys
 
-import httpx
 import uvicorn
 
+from .cli_errors import failure
+from .cli_support import add_version_argument
 from .config import FleetConfig
+from .runtime.listeners import check_http_bind
 from .serving.app import create_app
 
 # Map uvicorn's trace level to logging's DEBUG.
@@ -27,10 +30,16 @@ LOG_LEVELS = {
 def serve(argv: list[str] | None = None) -> int:
     """Run the serving CLI."""
     ap = argparse.ArgumentParser(description="Run Narwhal over a disaggregated engine fleet")
+    add_version_argument(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--log-level", default="info", choices=sorted(LOG_LEVELS))
+    ap.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
+    ap.add_argument("--port", type=int, default=8000, help="TCP port (default: %(default)s)")
+    ap.add_argument(
+        "--log-level",
+        default="info",
+        choices=sorted(LOG_LEVELS),
+        help="logging threshold (default: %(default)s)",
+    )
     ap.add_argument(
         "--journal",
         default="",
@@ -48,7 +57,7 @@ def serve(argv: list[str] | None = None) -> int:
         "--graceful-timeout",
         type=int,
         default=None,
-        help="seconds for in-flight requests to finish on shutdown "
+        help="nonnegative integer seconds for in-flight requests to finish on shutdown "
         "(default: the config's graceful_timeout_s)",
     )
     ap.add_argument(
@@ -63,19 +72,19 @@ def serve(argv: list[str] | None = None) -> int:
         "--standby-probe-interval",
         type=float,
         default=None,
-        help="seconds between standby probes of the primary (default 0.25)",
+        help="finite positive seconds between standby probes of the primary (default 0.25)",
     )
     ap.add_argument(
         "--standby-takeover-after",
         type=int,
         default=None,
-        help="consecutive failed probes before the standby takes over (default 4)",
+        help="consecutive failed probes before the standby takes over, at least 1 (default 4)",
     )
     ap.add_argument(
         "--standby-max-handoff-age",
         type=float,
         default=30.0,
-        help="maximum age of state eligible for automatic takeover (default 30)",
+        help="finite positive maximum state age in seconds for automatic takeover (default 30)",
     )
     ap.add_argument(
         "--lease-path",
@@ -87,18 +96,25 @@ def serve(argv: list[str] | None = None) -> int:
         default="",
         help="stable router name reported with its unique lease holder token",
     )
-    ap.add_argument("--lease-ttl", type=float, default=5.0, help="lease lifetime in seconds")
+    ap.add_argument(
+        "--lease-ttl",
+        type=float,
+        default=5.0,
+        help="finite lease lifetime in seconds, must exceed --lease-renew-interval plus "
+        "--lease-safety-margin (default: %(default)s)",
+    )
     ap.add_argument(
         "--lease-renew-interval",
         type=float,
         default=1.0,
-        help="seconds between lease renewals",
+        help="finite positive seconds between lease renewals (default: %(default)s)",
     )
     ap.add_argument(
         "--lease-safety-margin",
         type=float,
         default=1.0,
-        help="maximum relative clock skew reserved before expiry (default 1)",
+        help="finite nonnegative relative clock skew in seconds reserved before expiry "
+        "(default: %(default)s)",
     )
     ap.add_argument(
         "--resume",
@@ -106,6 +122,8 @@ def serve(argv: list[str] | None = None) -> int:
         help="restore roles, breaker holds, and counters from the last state handoff",
     )
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
+    if not 0 <= args.port <= 65535:
+        ap.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.max_concurrent is not None and args.max_concurrent < 1:
         ap.error(f"--max-concurrent must be at least 1, got {args.max_concurrent}")
     # uvicorn counts this forward from SIGTERM.
@@ -119,14 +137,13 @@ def serve(argv: list[str] | None = None) -> int:
     # httpx emits one INFO line per engine leg. Keep it only for debug runs.
     if LOG_LEVELS[args.log_level] != "DEBUG":
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    if (holder := _port_in_use(args.port)) is not None:
-        print(
-            f"Port {args.port} is already in use ({holder}).",
-            file=sys.stderr,
-        )
-        return 2
+    if (error := _port_in_use(args.port, args.host)) is not None:
+        return failure("narwhal-serve", f"bind {args.host}:{args.port}", OSError(error), 1)
 
-    cfg = FleetConfig.load(args.fleet)
+    try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-serve", f"load fleet {args.fleet}", exc, 2)
     if args.max_concurrent is not None and args.max_concurrent > cfg.max_connections:
         ap.error(
             f"--max-concurrent {args.max_concurrent} exceeds the fleet's "
@@ -134,6 +151,16 @@ def serve(argv: list[str] | None = None) -> int:
         )
     if args.resume:
         cfg.resume = True
+    for name in (
+        "lease_ttl",
+        "lease_renew_interval",
+        "lease_safety_margin",
+        "standby_probe_interval",
+        "standby_max_handoff_age",
+    ):
+        value = getattr(args, name)
+        if value is not None and not math.isfinite(value):
+            ap.error(f"--{name.replace('_', '-')} must be finite")
     if args.standby_probe_interval is not None and args.standby_probe_interval <= 0:
         ap.error("--standby-probe-interval must be positive")
     if args.standby_takeover_after is not None and args.standby_takeover_after < 1:
@@ -164,9 +191,8 @@ def serve(argv: list[str] | None = None) -> int:
             lease_renew_interval_s=args.lease_renew_interval,
             lease_safety_margin_s=args.lease_safety_margin,
         )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)
     uvicorn.run(
         app,
         host=args.host,
@@ -179,23 +205,12 @@ def serve(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _port_in_use(port: int) -> str | None:
-    """Describe the process listening on `port`, or return None."""
-    for family, addr in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
-        with socket.socket(family, socket.SOCK_STREAM) as s:
-            s.settimeout(1.0)
-            try:
-                s.connect((addr, port))
-            except OSError:
-                continue
-        try:
-            r = httpx.get(
-                f"http://[{addr}]:{port}/health" if ":" in addr else f"http://{addr}:{port}/health",
-                timeout=2.0,
-            )
-            return f"answering /health with {r.text[:60]}"
-        except httpx.HTTPError:
-            return "accepting connections"
+def _port_in_use(port: int, host: str = "127.0.0.1") -> str | None:
+    """Return the configured listener's bind failure, or None when it binds."""
+    try:
+        check_http_bind(host, port)
+    except OSError as error:
+        return str(error)
     return None
 
 

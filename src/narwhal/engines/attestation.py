@@ -7,7 +7,6 @@ import asyncio
 import json
 import math
 import re
-import sys
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -17,6 +16,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
+from ..cli_support import add_version_argument
 from ..config import EngineContract
 from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
 
@@ -333,14 +333,27 @@ def build_app(
 def main(argv: list[str] | None = None) -> int:
     """Start one engine attestation sidecar."""
     parser = argparse.ArgumentParser(description=__doc__)
+    add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
     parser.add_argument("--engine-base", required=True, help="vLLM HTTP base URL")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8010)
-    parser.add_argument("--timeout-s", type=float, default=5.0)
+    parser.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
+    parser.add_argument("--port", type=int, default=8010, help="TCP port (default: %(default)s)")
+    parser.add_argument(
+        "--timeout-s",
+        type=float,
+        default=5.0,
+        help="engine identity HTTP timeout in seconds (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        parser.error(f"--port must be between 0 and 65535, got {args.port}")
+    from ..cli_errors import failure
+
     try:
         document = AttestationDocument.load(args.document)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-attest", f"load document {args.document}", exc, 2)
+    try:
         identity = asyncio.run(fetch_engine_identity(args.engine_base, timeout_s=args.timeout_s))
         if identity.vllm_version != document.contract.vllm_version:
             raise ValueError(
@@ -348,8 +361,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"document expects {document.contract.vllm_version}"
             )
     except (OSError, ValueError, httpx.HTTPError) as exc:
-        print(f"narwhal-attest: {exc}", file=sys.stderr)
-        return 2
+        return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)
     uvicorn.run(
         build_app(document, args.engine_base, identity, timeout_s=args.timeout_s),
         host=args.host,

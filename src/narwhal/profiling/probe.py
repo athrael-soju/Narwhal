@@ -19,6 +19,8 @@ from typing import Any
 import httpx
 
 from .. import command_results as results
+from ..cli_errors import failure
+from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
@@ -985,65 +987,144 @@ def main(argv: list[str] | None = None) -> int:
 
 def _main(argv: list[str]) -> int:
     """Parse one profiling operation."""
-    ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
+    ap = argparse.ArgumentParser(
+        description="Measure live prefill/decode curves into fleet profiles.path, refit saved "
+        "TTFT samples, or merge measured role mixes. Refits and merges use --out and write "
+        "a .samples.json sidecar; sweep and neighbour options apply to live measurement.",
+    )
+    add_version_argument(ap)
     results.add_format(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
-    ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
-    ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")
     ap.add_argument(
-        "--merge", type=Path, action="append", default=[], help="profile store to merge; repeatable"
+        "--only",
+        action="append",
+        default=[],
+        help="live-sweep instance ID; repeatable (default: all configured engines)",
     )
-    ap.add_argument("--out", type=Path, help="fresh profile path for --refit-samples")
+    ap.add_argument(
+        "--refit-samples",
+        type=Path,
+        help="refit TTFT from a generation-bound sample sidecar covering the complete fleet, "
+        "retaining decode fits; requires --out; exclusive with --only and --merge",
+    )
+    ap.add_argument(
+        "--merge",
+        type=Path,
+        action="append",
+        default=[],
+        help="measured profile store with matching sidecar; repeat at least twice and supply "
+        "--out; combined stores must cover the fleet; exclusive with --refit-samples, "
+        "--only and --overwrite",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        help="fresh profile path required for --refit-samples and --merge; "
+        "also writes PATH with suffix replaced by .samples.json",
+    )
     ap.add_argument(
         "--limits",
         type=Path,
-        help="generated per-engine profiling limits from deployment preparation",
+        help="generated max_num_seqs limits for live decode cohorts "
+        "(default: use the requested concurrency points)",
     )
     ap.add_argument(
-        "--overwrite", action="store_true", help="replace the profile store and sample sidecar"
+        "--overwrite",
+        action="store_true",
+        help="replace live-sweep profiles and sample sidecar; --only retains selected engines "
+        "(default: require fresh outputs); refits always require fresh outputs",
     )
     ap.add_argument(
         "--prefill-lens",
         default=",".join(str(n) for n in PREFILL_LENS),
-        help="comma-separated prompt lengths for the prefill sweep; "
-        "cover the fleet's actual ISL band or the fit extrapolates",
+        help="comma-separated positive input token lengths; at least three usable distinct "
+        "points within live max_model_len (default: %(default)s)",
     )
     ap.add_argument(
         "--decode-concurrency",
         default=",".join(str(n) for n in DECODE_CONCURRENCY),
-        help="comma-separated stream counts for the decode sweep",
+        help="comma-separated positive simultaneous stream counts; at least two usable "
+        "distinct points after --limits (default: %(default)s)",
     )
     ap.add_argument(
         "--decode-input-lens",
         default=",".join(str(n) for n in DECODE_INPUT_LENS),
-        help="comma-separated prompt lengths for the decode sweep",
+        help="comma-separated positive input token lengths; at least two usable distinct "
+        "points with room for --decode-tokens (default: %(default)s)",
     )
-    ap.add_argument("--decode-tokens", type=int, default=DECODE_TOKENS)
-    ap.add_argument("--decode-repeats", type=int, default=1)
-    ap.add_argument("--prefill-repeats", type=int, default=PREFILL_REPEATS)
     ap.add_argument(
-        "--colocated", action="store_true", help="run measured traffic on GPU neighbours"
+        "--decode-tokens",
+        type=int,
+        default=DECODE_TOKENS,
+        help="output tokens per decode stream, at least 3 (default: %(default)s)",
     )
-    ap.add_argument("--neighbour-prefill-rps", type=float)
-    ap.add_argument("--neighbour-decode-rps", type=float)
-    ap.add_argument("--neighbour-prefill-tokens", type=int)
-    ap.add_argument("--neighbour-decode-input-tokens", type=int)
-    ap.add_argument("--neighbour-decode-output-tokens", type=int)
+    ap.add_argument(
+        "--decode-repeats",
+        type=int,
+        default=1,
+        help="repetitions per decode input/concurrency point, at least 1 (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--prefill-repeats",
+        type=int,
+        default=PREFILL_REPEATS,
+        help="repetitions per prefill length, at least 3; fit the median (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--colocated",
+        action="store_true",
+        help="load peers in each target's shared_device group during the live sweep; "
+        "requires all five --neighbour-* options (default: target-only traffic)",
+    )
+    ap.add_argument(
+        "--neighbour-prefill-rps",
+        type=float,
+        help="finite positive requests/second per prefill neighbour; required with --colocated",
+    )
+    ap.add_argument(
+        "--neighbour-decode-rps",
+        type=float,
+        help="finite positive requests/second per decode neighbour; required with --colocated",
+    )
+    ap.add_argument(
+        "--neighbour-prefill-tokens",
+        type=int,
+        help="positive input tokens per prefill neighbour request (one output token); "
+        "required with --colocated",
+    )
+    ap.add_argument(
+        "--neighbour-decode-input-tokens",
+        type=int,
+        help="positive input tokens per decode neighbour request; required with --colocated",
+    )
+    ap.add_argument(
+        "--neighbour-decode-output-tokens",
+        type=int,
+        help="positive output tokens per decode neighbour request; input plus output must "
+        "fit its live max_model_len; required with --colocated",
+    )
     args = ap.parse_args(argv)
-    cfg = FleetConfig.load(args.fleet)
-    results.protect_environment(cfg.engine_api_key_env)
-    results.set_operation("merge" if args.merge else "refit" if args.refit_samples else "profile")
-    output_path = args.out or cfg.profiles_path
-    results.add_artifact("profiles", output_path)
-    if args.out is None:
+    try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        if results.json_mode():
+            raise
+        return failure("narwhal-profile", f"load fleet {args.fleet}", exc, 2)
+    if results.json_mode():
+        results.protect_environment(cfg.engine_api_key_env)
+        results.set_operation(
+            "merge" if args.merge else "refit" if args.refit_samples else "profile"
+        )
+        output_path = args.out or cfg.profiles_path
+        results.add_artifact("profiles", output_path)
         results.add_artifact("profile_samples", output_path.with_suffix(".samples.json"))
-    results.set_data(
-        {
-            "engines": [
-                engine.iid for engine in cfg.engines if not args.only or engine.iid in args.only
-            ]
-        }
-    )
+        results.set_data(
+            {
+                "engines": [
+                    engine.iid for engine in cfg.engines if not args.only or engine.iid in args.only
+                ]
+            }
+        )
     if any(
         path.resolve() == Path(args.fleet).resolve()
         or (path.exists() and path.samefile(args.fleet))
@@ -1123,11 +1204,14 @@ def _main(argv: list[str]) -> int:
                 colocated_workload=colocated_workload,
             )
         )
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError) as exc:
         if results.json_mode():
             raise
-        print(str(exc), file=sys.stderr)
-        return 2
+        return failure("narwhal-profile", f"profile fleet {args.fleet}", exc, 2)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        if results.json_mode():
+            raise
+        return failure("narwhal-profile", f"profile fleet {args.fleet}", exc, 1)
 
 
 if __name__ == "__main__":

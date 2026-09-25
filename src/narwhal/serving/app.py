@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -73,6 +74,15 @@ def create_app(
     cfg = cfg or FleetConfig.from_env()
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
+    for name, value in (
+        ("lease_ttl_s", lease_ttl_s),
+        ("lease_renew_interval_s", lease_renew_interval_s),
+        ("lease_safety_margin_s", lease_safety_margin_s),
+        ("standby_probe_interval_s", standby_probe_interval_s),
+        ("standby_max_handoff_age_s", standby_max_handoff_age_s),
+    ):
+        if value is not None and not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
     if lease_safety_margin_s < 0:
         raise ValueError("lease_safety_margin_s must be nonnegative")
     if lease_renew_interval_s <= 0 or lease_ttl_s <= lease_renew_interval_s + lease_safety_margin_s:
@@ -81,6 +91,10 @@ def create_app(
         )
     if standby_max_handoff_age_s is not None and standby_max_handoff_age_s <= 0:
         raise ValueError("standby_max_handoff_age_s must be positive")
+    if standby_probe_interval_s is not None and standby_probe_interval_s <= 0:
+        raise ValueError("standby_probe_interval_s must be positive")
+    if standby_takeover_after is not None and standby_takeover_after < 1:
+        raise ValueError("standby_takeover_after must be at least 1")
     if lease is None and lease_path is not None:
         holder = f"{router_id}:{uuid.uuid4().hex}"
         lease = FileLease(

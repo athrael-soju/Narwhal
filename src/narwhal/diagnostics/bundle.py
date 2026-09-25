@@ -438,11 +438,17 @@ async def collect(
 def add_commands(commands: Any) -> None:
     """Register diagnostic collection beneath the installed root command."""
     diagnostic = commands.add_parser(
-        "diagnostics", help="Collect private router and run diagnostics"
+        "diagnostics",
+        help="Collect private router and run diagnostics",
+        description="Read router endpoints and selected local artifacts into a private bundle.",
     )
     actions = diagnostic.add_subparsers(dest="action", required=True)
     collect_parser = actions.add_parser(
-        "collect", help="Collect bounded GET snapshots and selected artifacts"
+        "collect",
+        help="Collect bounded GET snapshots and selected artifacts",
+        description=(
+            "Fetch bounded router snapshots and copy selected artifacts into a fresh bundle."
+        ),
     )
     from ..command_results import add_format
 

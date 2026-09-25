@@ -1,10 +1,11 @@
-"""Prepare, inspect and launch one pinned vLLM/NIXL container from its engine record."""
+"""Prepare, inspect and launch pinned vLLM/NIXL engines with container or native backends."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -110,7 +111,7 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def requires_remote_code(model_dir: Path) -> bool:
+def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> bool:
     def has_auto_map(value: object) -> bool:
         if isinstance(value, dict):
             return bool(value.get("auto_map")) or any(has_auto_map(item) for item in value.values())
@@ -118,7 +119,8 @@ def requires_remote_code(model_dir: Path) -> bool:
             return any(has_auto_map(item) for item in value)
         return False
 
-    for name in ("config.json", "tokenizer_config.json"):
+    names = ("config.json", "tokenizer_config.json") if include_tokenizer else ("config.json",)
+    for name in names:
         path = model_dir / name
         if path.is_file() and has_auto_map(json.loads(path.read_text())):
             return True
@@ -151,6 +153,12 @@ def requires_ds_conv_state_layout(model_dir: Path) -> bool:
 def write_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
+        stream.write(data)
+
+
+def append_private(path: Path, data: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as stream:
         stream.write(data)
 
 
@@ -330,6 +338,8 @@ def build(
             model_revision=model_revision,
             python_executable=sys.executable,
         )
+        if attestation_url := env.get(f"NARWHAL_NODE_{node}_ATTESTATION_URL"):
+            plan["attestation_url"] = attestation_url
     return plan, values
 
 
@@ -513,7 +523,11 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
             stages.write_evidence(Path(error.context["evidence"]), error.context)
         raise
     if result.returncode:
-        raise ValueError(f"Docker command failed; inspect {log}")
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise ValueError(
+            f"Docker command exited {result.returncode}: "
+            f"{detail[-1] if detail else 'empty subprocess output'}; inspect {run / log}"
+        )
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
 
@@ -538,6 +552,8 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             log,
         )
     values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    if (run / log).exists():
+        raise FileExistsError(17, "inspection log already exists", str(run / log))
     result = stages.run(
         [plan["python_executable"], "-c", script, *arguments],
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"},
@@ -545,16 +561,20 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
         log=run / log,
     )
     if result.returncode:
+        detail = result.stderr.strip().splitlines()
         raise ValueError(
-            f"native runtime inspection exited {result.returncode}: {result.stderr[-1000:]}"
+            f"native runtime inspection exited {result.returncode}: "
+            f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
         )
     return result.stdout
 
 
 def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
+    if not isinstance(plan, dict):
+        raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
     env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    if digest(run / env_file) != plan["env_sha256"]:
+    if digest(run / env_file) != plan.get("env_sha256"):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan
 
@@ -565,7 +585,29 @@ def check(run: Path, plan: dict) -> None:
 
     native = plan.get("backend") == "native"
     env_file = "engine.env" if native else "container.env"
-    if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
+    log = "runtime-check.log" if native else "image-check.log"
+    if (run / "checked.json").exists():
+        require_checked(run, plan)
+    append_private(
+        run / log,
+        "\n"
+        + json.dumps(
+            {"check_attempt": uuid.uuid4().hex, "plan_sha256": digest(run / "launch.json")}
+        )
+        + "\n",
+    )
+    default_tokenizer = plan["model_dir"] if native else "/model"
+    tokenizer_path = default_tokenizer
+    for index, argument in enumerate(plan["args"]):
+        if argument == "--tokenizer":
+            tokenizer_path = plan["args"][index + 1]
+    trust_remote_code = "--trust-remote-code" in plan["args"]
+    if (
+        requires_remote_code(
+            Path(plan["model_dir"]), include_tokenizer=tokenizer_path == default_tokenizer
+        )
+        and not trust_remote_code
+    ):
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
     if (
@@ -591,7 +633,11 @@ def check(run: Path, plan: dict) -> None:
             matches = expected in inspection.get("RepoDigests", [])
         if not matches:
             raise ValueError("local image identity differs from the launch plan")
-    script = """import importlib.metadata as m, json
+    # Resolve tokenizer metadata in the serving namespace, including image-local paths.
+    script = (
+        "from pathlib import Path\n"
+        + inspect.getsource(requires_remote_code)
+        + """import importlib.metadata as m, json
 expected = json.loads(__import__('sys').argv[1])
 observed = {name: m.version(name) for name in expected}
 print(json.dumps(observed))
@@ -605,9 +651,13 @@ connector = KVConnectorFactory.get_connector_class(config)
 if json.loads(__import__('sys').argv[4]):
     from vllm.model_executor.layers.mamba.mamba_utils import get_conv_state_layout
     assert get_conv_state_layout() == 'DS', 'NIXL convolutional state requires DS layout'
+tokenizer_path = __import__('sys').argv[5]
+trust_remote_code = json.loads(__import__('sys').argv[3])
+if requires_remote_code(Path(tokenizer_path)) and not trust_remote_code:
+    raise ValueError('Tokenizer metadata requires --trust-remote-code in the launch record')
 tokenizer = AutoTokenizer.from_pretrained(
-    __import__('sys').argv[5],
-    trust_remote_code=json.loads(__import__('sys').argv[3]),
+    tokenizer_path,
+    trust_remote_code=trust_remote_code,
     local_files_only=True
 )
 assert tokenizer is not None, 'checkpoint tokenizer did not initialise'
@@ -615,14 +665,15 @@ print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__})
 print('NARWHAL_TOKENIZER_READY=1')
 print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
+    )
     arguments = [
         "-c",
         script,
         json.dumps(plan["expected_packages"]),
         json.dumps(plan["connector"]),
-        json.dumps("--trust-remote-code" in plan["args"]),
+        json.dumps(trust_remote_code),
         json.dumps(ds_required),
-        plan["model_dir"] if native else "/model",
+        tokenizer_path,
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
@@ -630,11 +681,13 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             [plan["python_executable"], *arguments],
             env={**os.environ, **values},
             stage="native-runtime-check",
-            log=run / "runtime-check.log",
+            log=run / log,
         )
         if result.returncode:
+            detail = result.stderr.strip().splitlines()
             raise ValueError(
-                f"native runtime check exited {result.returncode}: {result.stderr[-1000:]}"
+                f"native runtime check exited {result.returncode}: "
+                f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
             )
         output = result.stdout
     else:
@@ -656,12 +709,12 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
     ]
     if len(records) != 1:
-        raise ValueError("image check requires one runtime version record; inspect image-check.log")
+        raise ValueError(f"runtime check requires one runtime version record; inspect {run / log}")
     if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
-        raise ValueError("image check requires one tokenizer confirmation; inspect image-check.log")
+        raise ValueError(f"runtime check requires one tokenizer confirmation; inspect {run / log}")
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
-        raise ValueError("image check returned an invalid API version; inspect image-check.log")
+        raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
     marker = run / "checked.json"
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
@@ -679,7 +732,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     value = json.dumps(evidence)
     if marker.exists():
         if marker.read_text() != value:
-            raise ValueError("image check changed; prepare a fresh launch directory")
+            raise ValueError("runtime identity changed; prepare a fresh launch directory")
     else:
         write_private(marker, value)
     print("Runtime identity, package pins, connector import and tokenizer passed.")
@@ -1048,7 +1101,7 @@ def measure_cache(run: Path, plan: dict) -> None:
     print("Runtime cache pages captured in cache-layout.json; sizing container removed.")
 
 
-def start(run: Path, plan: dict) -> None:
+def _create_container(run: Path, plan: dict) -> str:
     require_checked(run, plan)
     if digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]:
         raise ValueError("cache capture hook changed; prepare a fresh launch plan")
@@ -1080,6 +1133,11 @@ def start(run: Path, plan: dict) -> None:
     )
     if not re.fullmatch(r"[0-9a-f]{64}", cid):
         raise ValueError("Docker returned an invalid container ID; inspect launch.log")
+    return cid
+
+
+def start(run: Path, plan: dict) -> None:
+    cid = _create_container(run, plan)
     write_private(run / "container.id", cid + "\n")
     docker(["start", cid], run, "launch.log")
     print("Container started; follow its logs and verify the HTTP endpoints.")
@@ -1227,73 +1285,138 @@ def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
     raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
 
 
+def _rollback_shared_containers(
+    started: list[tuple[Path, str, dict]],
+    cause: str,
+    removed: set[str] | None = None,
+) -> list[str]:
+    errors = []
+    for run, cid, record in reversed(started):
+        record["status"] = "failed"
+        record.setdefault("error", f"shared startup rolled back: {cause}")
+        try:
+            if cid not in (removed or set()):
+                docker(["rm", "--force", cid], run, "launch.log")
+            record["cleanup_status"] = "removed"
+        except (OSError, ValueError, subprocess.SubprocessError) as cleanup_error:
+            record.update(cleanup_status="failed", cleanup_error=str(cleanup_error))
+            errors.append(f"{record['role']} ({cid}): {cleanup_error}")
+        try:
+            pending = run / f".shared-start-{uuid.uuid4().hex}.json"
+            write_private(pending, json.dumps(record, indent=2) + "\n")
+            pending.replace(run / "shared-start.json")
+        except OSError as evidence_error:
+            errors.append(f"{record['role']}: cleanup record failed: {evidence_error}")
+    return errors
+
+
 def start_shared(runs: list[Path], ready_seconds: int) -> None:
     from narwhal.deployment import stages
 
     selected = validate_shared_runs(runs)
     gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
-    for run, plan in selected:
-        role = plan["role"]
-        shared = plan["shared_device"]
-        before = gpu_memory(gpu_uuid)
-        budget_mib = Decimal(str(shared["gpu_memory_utilization"])) * before["total_mib"]
-        record = {
-            "role": role,
-            "shared_device": shared,
-            "ucx_tls": plan["ucx_tls"],
-            "plan_sha256": digest(run / "launch.json"),
-            "gpu_before": before,
-            "budget_mib": float(budget_mib),
-        }
-        try:
-            if Decimal(before["total_mib"] - before["used_mib"]) < budget_mib:
-                raise ValueError(
-                    f"{role}: free GPU memory is below its {budget_mib} MiB allocation"
-                )
-            start(run, plan)
-            cid = (run / "container.id").read_text().strip()
-            wait_ready(run, plan, cid, ready_seconds)
-            state = json.loads(
-                docker(["inspect", "--format", "{{json .State}}", cid], run, "launch.log")
-            )
-            command = json.loads(
-                docker(["inspect", "--format", "{{json .Config.Cmd}}", cid], run, "launch.log")
-            )
-            image_id = docker(["inspect", "--format", "{{.Image}}", cid], run, "launch.log")
-            checked = json.loads((run / "checked.json").read_text())
-            if (
-                not state.get("Running")
-                or type(state.get("Pid")) is not int
-                or state["Pid"] < 1
-                or command != plan["args"]
-                or image_id != checked["image_id"]
-            ):
-                raise ValueError(f"{role}: live process, image or arguments differ from plan")
-            record.update(
-                status="running",
-                container_id=cid,
-                process_id=state["Pid"],
-                image_id=image_id,
-                vllm_args=command,
-                gpu_after=gpu_memory(gpu_uuid),
-            )
-        except (OSError, ValueError, subprocess.TimeoutExpired, stages.StageCancelled) as error:
-            record.update(status="failed", error=str(error))
-            if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
-                record.update(failure_stage=error.stage, failure_context=error.context)
+    started: list[tuple[Path, str, dict]] = []
+    baseline_used: int | None = None
+    try:
+        for run, plan in selected:
+            role = plan["role"]
+            shared = plan["shared_device"]
+            before = gpu_memory(gpu_uuid)
+            if baseline_used is None:
+                baseline_used = before["used_mib"]
+            budget_mib = Decimal(str(shared["gpu_memory_utilization"])) * before["total_mib"]
+            allowance = Decimal(str(shared["device_allowance"])) * before["total_mib"]
+            record = {
+                "role": role,
+                "backend": "container",
+                "shared_device": shared,
+                "ucx_tls": plan["ucx_tls"],
+                "plan_sha256": digest(run / "launch.json"),
+                "gpu_before": before,
+                "gpu_baseline_used_mib": baseline_used,
+                "budget_mib": float(budget_mib),
+                "device_allowance_mib": float(allowance),
+            }
             try:
-                record["gpu_after"] = gpu_memory(gpu_uuid)
-            except (OSError, ValueError, subprocess.TimeoutExpired) as inspection_error:
-                record["gpu_after_error"] = str(inspection_error)
+                if Decimal(before["total_mib"] - before["used_mib"]) < budget_mib:
+                    raise ValueError(
+                        f"{role}: free GPU memory is below its {budget_mib} MiB allocation"
+                    )
+                cid = _create_container(run, plan)
+                # Retain ownership before filesystem or Docker start failures can intervene.
+                started.append((run, cid, record))
+                record["container_id"] = cid
+                write_private(run / "container.id", cid + "\n")
+                docker(["start", cid], run, "launch.log")
+                wait_ready(run, plan, cid, ready_seconds)
+                state = json.loads(
+                    docker(["inspect", "--format", "{{json .State}}", cid], run, "launch.log")
+                )
+                command = json.loads(
+                    docker(["inspect", "--format", "{{json .Config.Cmd}}", cid], run, "launch.log")
+                )
+                image_id = docker(["inspect", "--format", "{{.Image}}", cid], run, "launch.log")
+                checked = json.loads((run / "checked.json").read_text())
+                if (
+                    not state.get("Running")
+                    or type(state.get("Pid")) is not int
+                    or state["Pid"] < 1
+                    or command != plan["args"]
+                    or image_id != checked["image_id"]
+                ):
+                    raise ValueError(f"{role}: live process, image or arguments differ from plan")
+                after = gpu_memory(gpu_uuid)
+                aggregate_delta = after["used_mib"] - baseline_used
+                record.update(
+                    status="running",
+                    process_id=state["Pid"],
+                    image_id=image_id,
+                    vllm_args=command,
+                    gpu_after=after,
+                    observed_delta_mib=after["used_mib"] - before["used_mib"],
+                    aggregate_delta_mib=aggregate_delta,
+                )
+                if Decimal(aggregate_delta) > allowance:
+                    raise ValueError(
+                        f"observed shared GPU use {aggregate_delta} MiB above the "
+                        f"{baseline_used} MiB baseline exceeds the {allowance} MiB device allowance"
+                    )
+            except (
+                OSError,
+                ValueError,
+                subprocess.SubprocessError,
+                stages.StageCancelled,
+            ) as error:
+                record.update(status="failed", error=str(error))
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    record.update(failure_stage=error.stage, failure_context=error.context)
+                if "gpu_after" not in record:
+                    try:
+                        record["gpu_after"] = gpu_memory(gpu_uuid)
+                    except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
+                        record["gpu_after_error"] = str(inspection_error)
+                write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    raise
+                raise ValueError(
+                    f"{role}: shared GPU start failed at {before['used_mib']}/"
+                    f"{before['total_mib']} MiB used, {budget_mib} MiB budget: {error}"
+                ) from error
             write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+            print(f"{role}: ready on {gpu_uuid}; {record['gpu_after']['used_mib']} MiB used")
+    except (OSError, ValueError, subprocess.SubprocessError, stages.StageCancelled) as error:
+        removed = set()
+        if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+            removed.update(error.context.get("docker_reconciliation", {}).get("removed", []))
+        cleanup_errors = _rollback_shared_containers(started, str(error), removed)
+        if cleanup_errors:
             if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                error.context["container_cleanup_errors"] = cleanup_errors
                 raise
             raise ValueError(
-                f"{role}: shared GPU start failed at {before['used_mib']}/"
-                f"{before['total_mib']} MiB used, {budget_mib} MiB budget: {error}"
+                f"{error}; container cleanup failed: {'; '.join(cleanup_errors)}"
             ) from error
-        write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
-        print(f"{role}: ready on {gpu_uuid}; {record['gpu_after']['used_mib']} MiB used")
+        raise
 
 
 def capture_cache(run: Path, plan: dict) -> None:
@@ -1351,16 +1474,52 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str], *, structured: bool = True) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
-    sub = parser.add_subparsers(dest="command", required=True)
-    preparation = sub.add_parser("prepare")
-    preparation.add_argument("--out", type=Path, required=True)
-    preparation.add_argument("--backend", choices=("container", "native"), default="container")
-    sub.add_parser("_cache-probe", help=argparse.SUPPRESS).add_argument(
-        "--plan", type=Path, required=True
+    # Runtime probes execute a standalone copy inside the engine image.
+    if __package__:
+        from narwhal.cli_support import add_version_argument
+
+        add_version_argument(parser)
+    descriptions = {
+        "prepare": "Pin launch inputs from NARWHAL_ENGINE_LAUNCH_CONFIG and the deployment "
+        "environment into a fresh directory; supports container and native backends.",
+        "check": "Check the prepared model, tokenizer, runtime packages and connector; "
+        "write checked.json for the plan's container or native backend.",
+        "measure-cache": "Run a temporary sizing container from a checked, unused plan; "
+        "write cache-layout.json and remove the completed sizing container (container only).",
+        "model-dimensions": "Inspect model dimensions using a checked plan; "
+        "write model-dimensions.json (container only).",
+        "handshake-policy": "Inspect the installed NIXL compatibility policy using a checked "
+        "plan; write handshake-policy.json (container and native).",
+        "start": "Start one serving container from a checked plan and record container.id; "
+        "verify HTTP readiness separately (container only).",
+        "capture-cache": "Capture cache-layout.json from the running container recorded by "
+        "a checked plan (container only).",
+        "cache-registration": "Resolve cache block grouping from a checked plan and a startup "
+        "log or runtime layout; write cache-registration.json (container and native).",
+        "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
+        "engine's readiness and memory allowance, and record shared-start.json "
+        "(container and native).",
+        "stop-native": "Stop owned process groups after validating the recorded native "
+        "process identities in the run directory (native only).",
+    }
+    sub = parser.add_subparsers(
+        dest="command", required=True, metavar="{" + ",".join(descriptions) + "}"
     )
-    sub.add_parser("_model-dimensions", help=argparse.SUPPRESS).add_argument(
-        "--plan", type=Path, required=True
+    public = {
+        name: sub.add_parser(name, help=description, description=description)
+        for name, description in descriptions.items()
+    }
+    preparation = public["prepare"]
+    preparation.add_argument("--out", type=Path, required=True, help="fresh launch directory")
+    preparation.add_argument(
+        "--backend",
+        choices=("container", "native"),
+        default="container",
+        help="launch backend (default: %(default)s)",
     )
+    # Omitting help hides the choice rows; the explicit metavar hides internal names in usage.
+    sub.add_parser("_cache-probe").add_argument("--plan", type=Path, required=True)
+    sub.add_parser("_model-dimensions").add_argument("--plan", type=Path, required=True)
     for command in (
         "check",
         "measure-cache",
@@ -1369,18 +1528,41 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
         "start",
         "capture-cache",
     ):
-        sub.add_parser(command).add_argument("--run", type=Path, required=True)
-    registration = sub.add_parser("cache-registration")
-    registration.add_argument("--run", type=Path, required=True)
+        public[command].add_argument(
+            "--run", type=Path, required=True, help="prepared launch directory"
+        )
+    registration = public["cache-registration"]
+    registration.add_argument("--run", type=Path, required=True, help="checked launch directory")
     source = registration.add_mutually_exclusive_group(required=True)
-    source.add_argument("--startup-log", type=Path)
-    source.add_argument("--runtime-layout", type=Path)
-    shared = sub.add_parser("start-shared")
-    shared.add_argument("--run", type=Path, action="append", required=True)
-    shared.add_argument("--ready-seconds", type=int, default=180)
-    shared.add_argument("--backend", choices=("container", "native"), default="container")
-    sub.add_parser("stop-native").add_argument("--run", type=Path, required=True)
+    source.add_argument("--startup-log", type=Path, help="serving log with a resolved KV layout")
+    source.add_argument("--runtime-layout", type=Path, help="captured runtime cache layout JSON")
+    shared = public["start-shared"]
+    shared.add_argument(
+        "--run",
+        type=Path,
+        action="append",
+        required=True,
+        help="checked launch directory; repeat for two to eight engines on the same GPU; "
+        "sum of per-engine memory fractions must be <= device_allowance",
+    )
+    shared.add_argument(
+        "--ready-seconds",
+        type=int,
+        default=180,
+        help="readiness budget in seconds per engine, at least 1 (default: %(default)s)",
+    )
+    shared.add_argument(
+        "--backend",
+        choices=("container", "native"),
+        default="container",
+        help="backend shared by every selected plan (default: %(default)s)",
+    )
+    public["stop-native"].add_argument(
+        "--run", type=Path, required=True, help="native launch directory with process records"
+    )
     args = parser.parse_args(argv)
+    if args.command == "start-shared" and args.ready_seconds < 1:
+        parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     if structured:
         from narwhal import command_results as results
 
@@ -1404,12 +1586,18 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
             ):
                 results.add_artifact(name.removesuffix(".json"), root / name)
     os.umask(0o077)
+    target = getattr(args, "run", getattr(args, "out", getattr(args, "plan", "")))
+    context = f"narwhal-engine: {args.command}"
     try:
         if args.command == "prepare":
-            prepare(args.out, dict(os.environ), backend=args.backend)
+            try:
+                prepare(args.out, dict(os.environ), backend=args.backend)
+            except (KeyError, TypeError) as error:
+                if structured and results.json_mode():
+                    raise
+                input_source = os.environ.get("NARWHAL_ENGINE_LAUNCH_CONFIG", "role environment")
+                parser.exit(2, f"{context}: invalid input in {input_source}: {error}\n")
         elif args.command == "start-shared":
-            if args.ready_seconds < 1:
-                raise ValueError("--ready-seconds must be positive")
             runs = [run.resolve() for run in args.run]
             if args.backend == "native":
                 from narwhal.deployment.native_engine import start_shared as start_native_shared
@@ -1427,7 +1615,12 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
             print("NARWHAL_MODEL_DIMENSIONS=" + json.dumps(runtime_model_dimensions(args.plan)))
         else:
             run = args.run.resolve()
-            plan = load(run)
+            try:
+                plan = load(run)
+            except (OSError, ValueError) as error:
+                if structured and results.json_mode():
+                    raise
+                parser.exit(2, f"{context}: load run {run}: {error}\n")
             if plan.get("backend") == "native" and args.command not in {
                 "check",
                 "cache-registration",
@@ -1452,16 +1645,22 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
                 "handshake-policy": handshake_policy,
                 "start": start,
             }[args.command](run, plan)
-    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        subprocess.SubprocessError,
+    ) as error:
         if structured and results.json_mode():
             raise
         if isinstance(error, FileExistsError):
-            parser.exit(1, "Launch directory exists; choose a fresh output path.\n")
-        if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
-            parser.exit(1, f"{error}\n")
-        parser.exit(
-            1, "Check the role environment, runtime fields, artifact paths and preceding gate.\n"
-        )
+            parser.exit(1, f"{context}: artifact already exists: {error.filename or error}\n")
+        status = 2 if args.command == "prepare" else 1
+        if isinstance(error, subprocess.TimeoutExpired):
+            parser.exit(status, f"{context}: {target}: timed out after {error.timeout} seconds\n")
+        parser.exit(status, f"{context}: {target}: {error}\n")
     return 0
 
 

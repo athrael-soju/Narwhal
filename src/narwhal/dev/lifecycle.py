@@ -28,12 +28,70 @@ from narwhal.diagnostics.check import verify_directed_kv_evidence
 from .template import _check_free_ports, _port_layout, _sha256, check_plugin
 
 
+class LifecycleDocumentError(ValueError):
+    """A persisted lifecycle document has invalid fields consumed by its readers."""
+
+
 def read(path: Path) -> dict:
     """Read an instance document as an object."""
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object: {path}")
     return value
+
+
+def _validate_identity(identity: dict, path: Path, field: str) -> None:
+    if type(identity.get("pid")) is not int or identity["pid"] < 1:
+        raise LifecycleDocumentError(f"{path}: {field}.pid must be a positive integer")
+    if not isinstance(identity.get("boot_id"), str) or not identity["boot_id"].strip():
+        raise LifecycleDocumentError(f"{path}: {field}.boot_id must be a nonempty string")
+    if type(identity.get("start_ticks")) is not int or identity["start_ticks"] < 0:
+        raise LifecycleDocumentError(f"{path}: {field}.start_ticks must be a nonnegative integer")
+
+
+def _read_identity(path: Path) -> dict:
+    try:
+        identity = read(path)
+    except ValueError as exc:
+        raise LifecycleDocumentError(f"{path}: {exc}") from exc
+    _validate_identity(identity, path, "identity")
+    return identity
+
+
+def _read_state(root: Path) -> dict:
+    path = root / "lifecycle.json"
+    try:
+        state = read(path)
+    except ValueError as exc:
+        raise LifecycleDocumentError(f"{path}: {exc}") from exc
+    for name, kind in (("run", str), ("phase", str), ("processes", list)):
+        if not isinstance(state.get(name), kind):
+            raise LifecycleDocumentError(f"{path}: {name} must be {kind.__name__}")
+    if "verification" in state and not isinstance(state["verification"], str):
+        raise LifecycleDocumentError(f"{path}: verification must be a path string")
+    for index, record in enumerate(state["processes"]):
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("name"), str)
+            or not isinstance(record.get("identity"), dict)
+        ):
+            raise LifecycleDocumentError(
+                f"{path}: processes[{index}] requires a name string and identity object"
+            )
+        _validate_identity(record["identity"], path, f"processes[{index}].identity")
+    stage_failure = state.get("failure")
+    if stage_failure is not None and (
+        not isinstance(stage_failure, dict) or not isinstance(stage_failure.get("message"), str)
+    ):
+        raise LifecycleDocumentError(f"{path}: failure requires a message string")
+    if "failed_verification" in state and not isinstance(state["failed_verification"], str):
+        raise LifecycleDocumentError(f"{path}: failed_verification must be a path string")
+    failure = state.get("verification_failure")
+    if failure is not None and (
+        not isinstance(failure, dict) or not isinstance(failure.get("reason"), str)
+    ):
+        raise LifecycleDocumentError(f"{path}: verification_failure requires a reason string")
+    return state
 
 
 def write(path: Path, value: dict) -> None:
@@ -82,7 +140,8 @@ def _busy(root: Path) -> bool:
 
 
 def _run(root: Path, module: str, args: list[str], log: str) -> None:
-    command = [sys.executable, "-m", module, *args]
+    # Preserve write order so buffered progress cannot follow the final diagnostic.
+    command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
     result = stages.run(
         command,
@@ -92,8 +151,10 @@ def _run(root: Path, module: str, args: list[str], log: str) -> None:
         retain_descendants=log == "native-start-shared",
     )
     if result.returncode:
-        detail = (root / f"{log}.log").read_text(errors="replace")[-3000:]
-        raise ValueError(f"{log} exited {result.returncode}: {detail}")
+        path = root / f"{log}.log"
+        lines = path.read_text(errors="replace").strip().splitlines()
+        detail = lines[-1] if lines else "empty subprocess output"
+        raise ValueError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
@@ -228,7 +289,7 @@ def _stop(root: Path, state: dict) -> None:
     run = Path(state["run"])
     records = list(state.get("processes", []))
     for path in sorted(run.glob("engine-*/native-process.json")):
-        records.insert(0, {"name": path.parent.name, "identity": read(path)})
+        records.insert(0, {"name": path.parent.name, "identity": _read_identity(path)})
     stopped = []
     for path, helper in _helper_records(run):
         try:
@@ -250,6 +311,8 @@ def _stop(root: Path, state: dict) -> None:
             except (OSError, ValueError) as exc:
                 errors.append(f"{record['name']}: {exc}")
     state.update(phase="degraded" if errors else "stopped", stopped=stopped, errors=errors)
+    if not errors:
+        state.pop("verification_failure", None)
     write(root / "lifecycle.json", state)
     write(run / "teardown.json", {"time": time.time(), "stopped": stopped, "errors": errors})
     if errors:
@@ -261,7 +324,7 @@ def up(root: Path) -> dict:
     config = instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():
-            previous = read(root / "lifecycle.json")
+            previous = _read_state(root)
             if previous.get("phase") != "stopped":
                 raise ValueError("run dev down before starting another generation")
         spec = read(root / "template.json")
@@ -330,12 +393,14 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],
+            f"NARWHAL_NODE_{number}_ATTESTATION_URL": engine["attestation_url"],
             "NARWHAL_ENGINE_MODEL_NAME": fleet["model"],
             "NARWHAL_ENGINE_API_KEY": engine_key or "",
             "NARWHAL_DEPLOYMENT_REVISION": digest(root / "template.json"),
         }
         engine_run = run / name
-        prepare(engine_run, env, backend="native")
+        with contextlib.redirect_stdout(sys.stderr):
+            prepare(engine_run, env, backend="native")
         _run(run, "narwhal.deployment.launch_engine", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
     _run(
@@ -394,12 +459,13 @@ def verify(root: Path) -> dict:
     """Run current-process preflight, all eligible KV paths and a routed completion."""
     config = instance(root)
     with locked(root):
-        state = read(root / "lifecycle.json")
+        state = _read_state(root)
         if state.get("phase") not in {"launched", "ready", "degraded"}:
             raise ValueError("dev verify requires a launched instance")
         run = Path(state["run"])
-        state["phase"] = "launched"
+        state["phase"] = "degraded" if state.get("verification_failure") else "launched"
         state.pop("verification", None)
+        state.pop("verified_at", None)
         write(root / "lifecycle.json", state)
         evidence = run / f"verify-{uuid.uuid4().hex[:12]}"
         evidence.mkdir(mode=0o700)
@@ -431,8 +497,21 @@ def verify(root: Path) -> dict:
                     )
                     response.raise_for_status()
                     result = response.json()
-                    write(evidence / "completion.json", result)
-                    if result["choices"][0]["message"]["content"].strip() != "5":
+                    completion = evidence / "completion.json"
+                    write(completion, result)
+                    try:
+                        content = result["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError, TypeError) as exc:
+                        raise ValueError(
+                            "routed completion requires choices[0].message.content as a string; "
+                            f"inspect {completion}"
+                        ) from exc
+                    if not isinstance(content, str):
+                        raise ValueError(
+                            "routed completion requires choices[0].message.content as a string; "
+                            f"inspect {completion}"
+                        )
+                    if content.strip() != "5":
                         raise ValueError(
                             "routed arithmetic canary expected 5; inspect completion.json"
                         )
@@ -447,32 +526,39 @@ def verify(root: Path) -> dict:
             state.pop("failure", None)
             state.pop("failed_verification", None)
             state.update(phase="ready", verification=str(evidence), verified_at=time.time())
+            state.pop("verification_failure", None)
             write(root / "lifecycle.json", state)
         except BaseException as error:
             state["failed_verification"] = str(evidence)
             state["failure"] = {
-                "message": str(error),
+                "message": str(error) or type(error).__name__,
                 "stage": getattr(error, "stage", "verification"),
                 "context": getattr(error, "context", {}),
             }
-            state["phase"] = "degraded"
+            failure = {
+                "reason": state["failure"]["message"],
+                "evidence": str(evidence),
+                "failed_at": time.time(),
+            }
+            state.update(phase="degraded", verification_failure=failure)
             write(root / "lifecycle.json", state)
+            write(evidence / "failure.json", failure)
             raise
     return status(root)
 
 
 def status(root: Path) -> dict:
-    """Derive readiness from current owned processes, HTTP health and saved KV evidence."""
+    """Combine process and HTTP health with retained qualification outcomes and KV evidence."""
     config = instance(root)
     if not (root / "lifecycle.json").exists():
         return {"status": "stopped"}
-    state = read(root / "lifecycle.json")
+    state = _read_state(root)
     run = Path(state["run"])
     if state["phase"] == "starting" and _busy(root):
         return {"status": "starting", "run": str(run)}
     records = list(state["processes"])
     records.extend(
-        {"name": path.parent.name, "identity": read(path)}
+        {"name": path.parent.name, "identity": _read_identity(path)}
         for path in sorted(run.glob("engine-*/native-process.json"))
     )
     live = [r["name"] for r in records if native_engine._owns_process(r["identity"])]
@@ -494,7 +580,7 @@ def status(root: Path) -> dict:
         for name, pids in survivors.items()
     )
     problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
-    if state.get("failure"):
+    if state.get("failure") and not state.get("verification_failure"):
         problems.append(state["failure"]["message"])
     if len(live) != 2 * config["engine_count"] + 1:
         problems.append(
@@ -524,6 +610,9 @@ def status(root: Path) -> dict:
             client.get(config["router_url"] + "/ready").raise_for_status()
         except httpx.HTTPError as exc:
             problems.append(f"router readiness: {exc}")
+    failure = state.get("verification_failure")
+    if failure:
+        problems.append(f"verification failed: {failure['reason']}")
     if evidence := state.get("verification"):
         problems.extend(
             asyncio.run(
@@ -541,6 +630,7 @@ def status(root: Path) -> dict:
         "surviving_processes": survivors,
         "stage_processes": helpers,
         "problems": problems,
+        **({"verification_failure": failure} if failure else {}),
     }
 
 
@@ -549,5 +639,5 @@ def down(root: Path) -> dict:
     instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():
-            _stop(root, read(root / "lifecycle.json"))
+            _stop(root, _read_state(root))
     return status(root)

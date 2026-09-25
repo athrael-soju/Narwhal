@@ -8,13 +8,14 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from narwhal import command_results as results
 from narwhal.config import FleetConfig
 from narwhal.contracts import COMMAND_RESULT, ContractVersionError, manifest, validate_document
-from narwhal.deployment import launch_engine
+from narwhal.deployment import launch_engine, stages
 from narwhal.dev import cli as dev
 from narwhal.diagnostics import check
 from narwhal.profiling import probe
@@ -80,7 +81,10 @@ class CommandResultTests(unittest.TestCase):
 
     def test_dev_default_payload_and_json_degraded_exit(self):
         payload = {"status": "degraded", "problems": ["e0 process identity expired"]}
-        with patch.object(dev.lifecycle, "status", return_value=payload):
+        with (
+            patch.object(dev.lifecycle, "instance", return_value={}),
+            patch.object(dev.lifecycle, "status", return_value=payload),
+        ):
             document, _ = call(dev.main, ["dev", "status"])
             self.assertEqual(document["status"], "degraded")
             self.assertEqual(document["exit_code"], 3)
@@ -89,6 +93,36 @@ class CommandResultTests(unittest.TestCase):
             with redirect_stdout(stdout):
                 self.assertEqual(dev.main(["dev", "status"]), 1)
             self.assertEqual(json.loads(stdout.getvalue()), payload)
+
+    def test_dev_json_runtime_package_failure_keeps_input_exit(self):
+        with (
+            patch.object(dev.lifecycle, "instance", return_value={}),
+            patch.object(dev.lifecycle, "up", side_effect=metadata.PackageNotFoundError("vllm")),
+        ):
+            document, stderr = call(dev.main, ["dev", "up"])
+        self.assertEqual(document["status"], "invalid_input")
+        self.assertEqual(document["exit_code"], 2)
+        self.assertEqual(document["errors"][0]["code"], "runtime_package_missing")
+        self.assertIn("load runtime package", stderr)
+
+    def test_dev_json_timeout_retains_stage_context_after_instance_validation(self):
+        context = {
+            "budget_seconds": 0.1,
+            "elapsed_seconds": 0.12,
+            "evidence": "retained.stage.json",
+            "recovery": "inspect retained evidence",
+        }
+        with (
+            patch.object(dev.lifecycle, "instance", return_value={}),
+            patch.object(
+                dev.lifecycle, "verify", side_effect=stages.StageTimeout("preflight", context)
+            ),
+        ):
+            document, _ = call(dev.main, ["dev", "verify"])
+        self.assertEqual(document["exit_code"], 4)
+        self.assertEqual(document["errors"][0]["code"], "stage_timeout")
+        self.assertEqual(document["errors"][0]["stage"], "preflight")
+        self.assertEqual(document["errors"][0]["context"], context)
 
     def test_engine_preparation_reports_created_plan(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -49,7 +49,11 @@ class SharedStageFailureTests(unittest.TestCase):
                 plan = {
                     "role": "engine-1",
                     "ucx_tls": "tcp,cuda",
-                    "shared_device": {"gpu_uuid": "GPU-test", "gpu_memory_utilization": 0.1},
+                    "shared_device": {
+                        "gpu_uuid": "GPU-test",
+                        "gpu_memory_utilization": 0.1,
+                        "device_allowance": 0.9,
+                    },
                 }
                 error = failure(exception, run)
                 with (
@@ -59,7 +63,7 @@ class SharedStageFailureTests(unittest.TestCase):
                         "gpu_memory",
                         return_value={"total_mib": 10000, "used_mib": 1000},
                     ),
-                    patch.object(launch_engine, "start", side_effect=error),
+                    patch.object(launch_engine, "_create_container", side_effect=error),
                 ):
                     result = invoke([run], "container")
                 self.assertEqual(result["exit_code"], code)

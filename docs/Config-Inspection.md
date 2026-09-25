@@ -10,6 +10,11 @@ narwhal config validate --fleet config/fleet.json
 narwhal config inspect --fleet config/fleet.json --format json
 ```
 
+| Option | Operation |
+| --- | --- |
+| `--fleet PATH` | Load the fleet document selected for validation or inspection. |
+| `--format text\|json` | Print validation in text mode or wrap the effective configuration in a versioned JSON command result. |
+
 `inspect --format json` puts a `narwhal.effective-config` version 1 document in the
 `data` field of the [command result](CLI-Reference.md). The default text mode prints
 that inspection document directly. `validate --format json` returns the same data

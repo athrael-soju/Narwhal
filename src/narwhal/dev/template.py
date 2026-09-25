@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal
 from importlib import metadata, resources
 from pathlib import Path
 from typing import Any
@@ -21,11 +22,20 @@ from narwhal.deployment.launch_engine import gpu_memory, validate_runtime, write
 
 
 def reference() -> dict:
-    """Read the versioned template from the installed Narwhal distribution."""
-    source = resources.files("narwhal.dev").joinpath("reference-v1.json")
+    """Read the measured four-engine reference from the installed distribution."""
+    return _read_template("reference-v1.json")
+
+
+def default_template() -> dict:
+    """Read the installed small-GPU starting template."""
+    return _read_template("small-cuda-v1.json")
+
+
+def _read_template(filename: str) -> dict:
+    source = resources.files("narwhal.dev").joinpath(filename)
     document = json.loads(source.read_text())
     if document.get("schema") != "narwhal.dev-template" or document.get("schema_version") != 1:
-        raise ValueError("installed Narwhal Dev template requires schema version 1")
+        raise ValueError(f"installed Narwhal dev template {filename} requires schema version 1")
     return document
 
 
@@ -161,25 +171,116 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _template_differences(requested: dict, existing: dict, prefix: str = "") -> list[str]:
+    differences = []
+    for key in sorted(requested.keys() | existing.keys()):
+        field = f"{prefix}.{key}" if prefix else key
+        if key not in requested or key not in existing:
+            differences.append(field)
+        elif isinstance(requested[key], dict) and isinstance(existing[key], dict):
+            differences.extend(_template_differences(requested[key], existing[key], field))
+        elif requested[key] != existing[key]:
+            differences.append(field)
+    return differences
+
+
 def materialize(
     output: Path,
     *,
-    model_dir: Path,
-    model_path: Path,
-    fabric_interface: str,
+    model_dir: Path | None = None,
+    model_path: Path | None = None,
+    fabric_interface: str | None = None,
     gpu_uuid: str | None = None,
     template: dict | None = None,
+    engine_count: int | None = None,
+    port_base: int | None = None,
+    gpu_memory_utilization: float | None = None,
+    device_allowance: float | None = None,
 ) -> Path:
-    """Check the host and write one private native instance without replacing files."""
-    spec = copy.deepcopy(template if template is not None else reference())
-    if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
-        raise ValueError("Narwhal Dev template requires schema version 1")
+    """Reuse matching explicit settings, or check the host and write a private instance."""
     output = output.expanduser().resolve()
+    existing = None
+    saved = None
     if output.exists():
         existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
+        saved = json.loads((output / "template.json").read_text())
+    source = template if template is not None else saved
+    spec = copy.deepcopy(source if source is not None else default_template())
+    if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
+        raise ValueError("Narwhal dev template requires schema version 1")
+    allocation = {
+        "engine_count": engine_count,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "device_allowance": device_allowance,
+    }
+    for field, allocation_value in allocation.items():
+        if allocation_value is not None:
+            spec["allocation"][field] = allocation_value
+    if port_base is not None:
+        spec["ports"].update(
+            router=port_base,
+            engine_first=port_base + 1,
+            attestation_first=port_base + 101,
+            nixl_first=port_base + 201,
+        )
+    if existing is not None and saved is not None:
+        conflicts = []
+        for flag, field, value in (
+            (
+                "--model-dir",
+                "model_dir",
+                str(model_dir.expanduser().resolve()) if model_dir else None,
+            ),
+            (
+                "--model",
+                "model_path",
+                str(model_path.expanduser().absolute()) if model_path else None,
+            ),
+            ("--interface", "fabric_interface", fabric_interface),
+            ("--gpu", "gpu_uuid", gpu_uuid),
+            ("--engine-count", "engine_count", engine_count),
+        ):
+            if value is not None and value != existing[field]:
+                conflicts.append(flag)
+        conflicts.extend(
+            "--" + field.replace("_", "-")
+            for field in ("gpu_memory_utilization", "device_allowance")
+            if allocation[field] is not None and allocation[field] != saved["allocation"][field]
+        )
+        if port_base is not None and any(
+            spec["ports"][field] != existing["ports"][field]
+            for field in ("router", "engine_first", "attestation_first", "nixl_first")
+        ):
+            conflicts.append("--port-base")
+        if template is not None:
+            conflicts.extend(f"--template {field}" for field in _template_differences(spec, saved))
+        if conflicts:
+            raise ValueError(
+                f"existing instance {output} conflicts with {', '.join(conflicts)}; "
+                "create a fresh instance with narwhal dev init --instance <new-directory> "
+                "and the requested settings"
+            )
         return output
+    hub = Path.home() / ".cache/huggingface/hub"
+    model = spec["model"]
+    model_path = (
+        model_path
+        or hub
+        / ("models--" + model["repository"].replace("/", "--"))
+        / "snapshots"
+        / model["revision"]
+        / model["filename"]
+    )
+    model_dir = (
+        model_dir
+        or hub
+        / ("models--" + model["tokenizer_repository"].replace("/", "--"))
+        / "snapshots"
+        / model["tokenizer_revision"]
+    )
+    fabric_interface = fabric_interface if fabric_interface is not None else "eth0"
     model_dir = model_dir.expanduser().resolve(strict=True)
     # Keep the snapshot filename: Hugging Face cache files are often symlinks to blobs.
     model_path = model_path.expanduser().absolute()
@@ -199,17 +300,25 @@ def materialize(
     ports, used_ports = _port_layout(spec, count)
     fraction = spec["allocation"]["gpu_memory_utilization"]
     allowance = spec["allocation"]["device_allowance"]
-    if not 0 < fraction <= 1 or not fraction * count <= allowance <= 1:
+    fraction_decimal = Decimal(str(fraction))
+    allowance_decimal = Decimal(str(allowance))
+    if (
+        not fraction_decimal.is_finite()
+        or not allowance_decimal.is_finite()
+        or not 0 < fraction_decimal <= 1
+        or not fraction_decimal * count <= allowance_decimal <= 1
+    ):
         raise ValueError("engine budgets exceed the shared GPU allowance")
     rows = _gpu_rows()
     selected = [row for row in rows if gpu_uuid is None or row["uuid"] == gpu_uuid]
     if len(selected) != 1:
         raise ValueError("select exactly one physical GPU with gpu_uuid")
     gpu = selected[0]
-    if gpu["name"] != spec["gpu"]["product"]:
-        raise ValueError(f"template requires {spec['gpu']['product']}; found {gpu['name']}")
+    product = spec["gpu"].get("product")
+    if product and gpu["name"] != product:
+        raise ValueError(f"template requires {product}; found {gpu['name']}")
     memory = gpu_memory(gpu["uuid"])
-    if memory["total_mib"] < spec["gpu"]["minimum_total_mib"]:
+    if memory["total_mib"] < spec["gpu"].get("minimum_total_mib", 0):
         raise ValueError("GPU VRAM is below the qualified template minimum")
     available = memory["total_mib"] - memory["used_mib"]
     required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]

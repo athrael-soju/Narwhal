@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import json
 import os
 import signal
-import socket
 import subprocess
 import time
 from decimal import Decimal
@@ -18,6 +16,7 @@ from urllib.request import urlopen
 import httpx
 
 from narwhal.engines.attestation import fetch_engine_identity
+from narwhal.runtime.listeners import check_engine_bind, check_http_bind
 
 from . import stages
 from .launch_engine import digest, gpu_memory, validate_shared_runs, write_private
@@ -124,27 +123,40 @@ def _environment(run: Path) -> dict[str, str]:
 
 
 def _ports_free(selected: list[tuple[Path, dict]]) -> None:
-    for _, plan in selected:
-        for port in (
-            urlsplit(plan["endpoint"]).port,
-            plan["attestation_port"],
-            plan["side_channel_port"],
-        ):
-            for family, address in (
-                (socket.AF_INET, "127.0.0.1"),
-                (socket.AF_INET6, "::1"),
-            ):
-                try:
-                    with socket.socket(family, socket.SOCK_STREAM) as listener:
-                        if family == socket.AF_INET6:
-                            listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-                        listener.bind((address, port))
-                except OSError as error:
-                    if error.errno in {errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL}:
-                        continue
-                    raise ValueError(
-                        f"{plan['role']}: port {port} is unavailable: {error}"
-                    ) from error
+    for run, plan in selected:
+        endpoint = urlsplit(plan["endpoint"])
+        host, port = endpoint.hostname, endpoint.port
+        assert host is not None and port is not None
+        try:
+            check_engine_bind(host, port)
+        except OSError as error:
+            raise ValueError(
+                f"{plan['role']}: engine port {port} is unavailable at {host}: {error}"
+            ) from error
+        values = _environment(run)
+        host = values["VLLM_NIXL_SIDE_CHANNEL_HOST"]
+        port = int(values["VLLM_NIXL_SIDE_CHANNEL_PORT"])
+        try:
+            check_engine_bind(host, port, nixl=True)
+        except OSError as error:
+            raise ValueError(
+                f"{plan['role']}: NIXL port {port} is unavailable at {host}: {error}"
+            ) from error
+        node = plan["role"].removeprefix("engine-")
+        attestation = os.environ.get(
+            f"NARWHAL_NODE_{node}_ATTESTATION_URL", plan.get("attestation_url", "")
+        )
+        if attestation:
+            endpoint = urlsplit(attestation)
+            host, port = endpoint.hostname, endpoint.port
+            if endpoint.scheme != "http" or not host or not port:
+                raise ValueError(f"{plan['role']}: invalid attestation URL {attestation!r}")
+            try:
+                check_http_bind(host, port)
+            except OSError as error:
+                raise ValueError(
+                    f"{plan['role']}: attestation port {port} is unavailable at {host}: {error}"
+                ) from error
 
 
 def _wait_ready(run: Path, plan: dict, identity: dict, seconds: int) -> None:
