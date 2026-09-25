@@ -71,7 +71,7 @@ class DocumentationContractTests(unittest.TestCase):
         sections = {}
         for page in (ROOT / "docs/cli").glob("*.md"):
             content = page.read_text()
-            heading = re.match(r"# `(narwhal-[^`]+)`\n", content)
+            heading = re.match(r"# `(narwhal(?:-[^`]+)?)`\n", content)
             self.assertIsNotNone(heading, page)
             sections[heading.group(1)] = content
         self.assertEqual(set(sections), set(project["scripts"]))

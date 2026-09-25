@@ -90,6 +90,8 @@ class ReactivePolicy:
             observed_load=observed_load,
             estimates=estimates,
             correction=correction,
+            window_s=controller.window_s,
+            step_s=controller.step_s,
         )
         n = snapshot.current_prefill + snapshot.current_decode
         current_p = snapshot.current_prefill
@@ -169,7 +171,7 @@ class ReactivePolicy:
         adjacent = [
             snapshot.score(
                 candidate_p,
-                envelope_demand if candidate_p > current_p else demand,
+                envelope_demand if candidate_p > current_p else None,
             )
             for candidate_p in candidate_prefills
             if 0 < candidate_p < n
@@ -206,7 +208,11 @@ class ReactivePolicy:
         evaluations: list[Evaluation] = [
             (
                 candidate,
-                candidate.tpot_ratio if candidate.prefill > current_p else candidate.ttft_ratio,
+                (
+                    max(candidate.tpot_ratio, candidate.decode_queue_ratio)
+                    if candidate.prefill > current_p
+                    else candidate.ttft_ratio
+                ),
                 current.objective - candidate.objective,
                 (
                     candidate.decode_kv_capacity_tokens is None
@@ -216,7 +222,8 @@ class ReactivePolicy:
                 candidate.decode_profile_covered,
                 (
                     candidate.prefill > current_p
-                    and candidate.tpot_ratio > controller.scheduler.th.shrink
+                    and max(candidate.tpot_ratio, candidate.decode_queue_ratio)
+                    > controller.scheduler.th.shrink
                     and (recovery_prefill >= controller.scheduler.th.expand or urgent_ready)
                 ),
                 controller.within_floors(candidate.prefill),
@@ -417,7 +424,11 @@ class ReactivePolicy:
                     }
                 )
 
-        destination_ratio = current.ttft_ratio if direction > 0 else current.tpot_ratio
+        destination_ratio = (
+            current.ttft_ratio
+            if direction > 0
+            else max(current.tpot_ratio, current.decode_queue_ratio)
+        )
         # Relaxing decode shrink requires repeated pressure, even with complete
         # demand. Objective margin, evidence and dwell still constrain reversals.
         confirmations = (

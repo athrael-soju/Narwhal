@@ -19,6 +19,7 @@ class SplitScore:
     ttft_ratio: float
     tpot_ratio: float
     objective: float
+    decode_queue_ratio: float = 0.0
     decode_tokens_per_engine: float = 0.0
     decode_slo_capacity_tokens: float | None = None
     decode_kv_capacity_tokens: float | None = None
@@ -85,9 +86,17 @@ class SplitSnapshot:
     resident_decode_requests: int
     pending_decode_tokens: float
     pending_decode_requests: int
+    pending_decode_max_tokens: float
+    pending_decode_work_s: float
+    pending_decode_profile_covered: bool
     decode_correction: float
     resident_profile_covered: bool
     queued_prefill_s: float = 0.0
+    active_decode_instances: int = 0
+    profile_options: tuple[tuple[int, tuple[Profile, ...]], ...] = ()
+    demand_options: tuple[tuple[int, Demand], ...] = ()
+    offered_inputs: tuple[int, ...] = ()
+    offered_outputs: tuple[int, ...] = ()
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -104,7 +113,22 @@ class SplitSnapshot:
     ) -> SplitScore:
         """Price a candidate without consulting live state or the clock."""
         decode = self.current_prefill + self.current_decode - prefill
-        demand = demand or self.demand
+        priced = next(
+            (row for candidate_prefill, row in self.demand_options if candidate_prefill == prefill),
+            None,
+        )
+        if demand is None:
+            demand = priced or self.demand
+        elif priced is not None and prefill != self.current_prefill:
+            # An explicit decode envelope remains a floor, while the candidate
+            # role mix supplies the phase costs and measured-domain verdict.
+            demand = Demand(
+                priced.prefill_engines,
+                max(priced.decode_engines, demand.decode_engines),
+                demand.arrivals,
+                demand.output_observations,
+                priced.complete and demand.complete,
+            )
         if prefill <= 0 or decode <= 0:
             return SplitScore(prefill, decode, float("inf"), float("inf"), float("inf"))
         ttft_ratio = demand.prefill_engines / (prefill * self.utilization)
@@ -115,12 +139,31 @@ class SplitSnapshot:
                 self.resident_prefill_s / (prefill * self.ttft_slo),
             )
         tpot_ratio = demand.decode_engines / (decode * self.utilization)
-        tokens = self.resident_decode_tokens / decode
-        requests = self.resident_decode_requests / decode
-        profiles = self.profiles
+        # Waiting requests form future batches. Price their drain time and
+        # check each shape against the profile; only current residents belong
+        # in the simultaneous decode batch.
+        # A role change does not migrate resident decode requests. A decoder
+        # switched to prefill keeps its current requests until they finish, so
+        # reducing the target decode pool must not manufacture a larger batch
+        # on the remaining engines for the profile-domain and KV checks.
+        resident_engines = max(decode, self.active_decode_instances or self.current_decode)
+        tokens = self.resident_decode_tokens / resident_engines
+        requests = self.resident_decode_requests / resident_engines
+        # A fractional fleet average means some engines are idle. Check one
+        # actual request on each busy engine, not a nonexistent sub-request.
+        active_requests = 1.0 if 0 < requests < 1 else requests
+        active_tokens = tokens / requests if 0 < requests < 1 else tokens
+        profiles = next(
+            (
+                rows
+                for candidate_prefill, rows in self.profile_options
+                if candidate_prefill == prefill
+            ),
+            self.profiles,
+        )
         correction = self.decode_correction
         capacity = (
-            sum(p.max_tokens(self.tpot_slo / correction, requests) for p in profiles)
+            sum(p.max_tokens(self.tpot_slo / correction, active_requests) for p in profiles)
             / len(profiles)
             if profiles
             else None
@@ -137,17 +180,35 @@ class SplitSnapshot:
             else None
         )
         covered = not include_resident or (
-            bool(profiles) and all(p.covers_decode(requests, tokens) for p in profiles)
+            bool(profiles)
+            and self.pending_decode_profile_covered
+            and all(
+                profile.covers_prefill(length)
+                for profile in profiles
+                for length in self.offered_inputs
+            )
+            and all(
+                profile.covers_output(length)
+                for profile in profiles
+                for length in self.offered_outputs
+            )
+            and all(p.covers_decode(active_requests, active_tokens) for p in profiles)
         )
         if include_resident and prefill > self.current_prefill:
             covered = covered and self.resident_profile_covered
         if not covered:
             tpot_ratio = float("inf")
+        decode_queue_ratio = (
+            self.pending_decode_work_s / (decode * self.ttft_slo) if include_resident else 0.0
+        )
         if include_resident:
             tpot_ratio = max(tpot_ratio, self.decode_pressure * self.current_decode / decode)
             if profiles:
                 interval = (
-                    sum(p.token_interval(math.ceil(tokens), requests) for p in profiles)
+                    sum(
+                        p.token_interval(math.ceil(active_tokens), active_requests)
+                        for p in profiles
+                    )
                     / len(profiles)
                     * correction
                 )
@@ -163,7 +224,8 @@ class SplitSnapshot:
             decode=decode,
             ttft_ratio=ttft_ratio,
             tpot_ratio=tpot_ratio,
-            objective=max(ttft_ratio, tpot_ratio),
+            objective=max(ttft_ratio, tpot_ratio, decode_queue_ratio),
+            decode_queue_ratio=decode_queue_ratio,
             decode_tokens_per_engine=tokens,
             decode_slo_capacity_tokens=(
                 capacity if capacity is not None and math.isfinite(capacity) else None
@@ -274,6 +336,8 @@ class SplitScorer:
         observed_load: tuple[float, float],
         estimates: OutputEstimates | None = None,
         correction: float | None = None,
+        window_s: float | None = None,
+        step_s: float | None = None,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values."""
         instances = tuple(self.monitor.instances.values())
@@ -311,10 +375,67 @@ class SplitScorer:
             )
             resident_prefill += queued_prefill
         pending = [r for inst in instances for r in inst.prefill.values()] + list(waiting)
+        prefill_covered = all(
+            profile.covers_prefill(request.input_len) for request in pending for profile in profiles
+        )
         estimates = self.demand._output_estimates() if estimates is None else estimates
         pending_tokens = sum(
             r.input_len + self.demand._expected_output(r.input_len, r.wanted_len, estimates) / 2.0
             for r in pending
+        )
+        pending_max_tokens = 0.0
+        pending_work_s = 0.0
+        pending_covered = bool(profiles)
+        for request in pending:
+            output = self.demand._expected_output(request.input_len, request.wanted_len, estimates)
+            context = request.input_len + output / 2.0
+            pending_max_tokens = max(pending_max_tokens, context)
+            capacity = self.scheduler.profiles.mean_decode_rps(
+                self.scheduler.slo.tpot_s,
+                context,
+                output,
+                correction=1.0 if correction is None else correction,
+                iids=self.monitor.instances,
+            )
+            if not capacity or not all(p.covers_decode(1, context) for p in profiles):
+                pending_covered = False
+            else:
+                pending_work_s += 1.0 / capacity
+        current_prefill = sum(inst.role is Role.PREFILL for inst in instances)
+        profile_options_list: list[tuple[int, tuple[Profile, ...]]] = []
+        for prefill in range(1, len(instances)):
+            roles = {inst.iid: inst.role for inst in instances}
+            rows: tuple[Profile, ...]
+            if abs(prefill - current_prefill) > 1:
+                rows = ()
+            else:
+                if prefill != current_prefill:
+                    target = Role.PREFILL if prefill > current_prefill else Role.DECODE
+                    donor, _ = self.scheduler.planned_donor(target)
+                    if donor is not None:
+                        roles[donor.iid] = target
+                rows = self.scheduler.profiles.profiles_for_split(
+                    self.monitor.instances, prefill, len(instances) - prefill, roles
+                )
+            profile_options_list.append((prefill, rows))
+        profile_options = tuple(profile_options_list)
+        demand_options = (
+            tuple(
+                (
+                    prefill,
+                    self.demand.price_profiles(
+                        now,
+                        window_s=window_s,
+                        step_s=step_s,
+                        profiles=rows,
+                        estimates=estimates,
+                        correction=correction,
+                    ),
+                )
+                for prefill, rows in profile_options
+            )
+            if window_s is not None and step_s is not None
+            else ()
         )
         return SplitSnapshot(
             at=now,
@@ -322,22 +443,45 @@ class SplitScorer:
             current_prefill=sum(inst.role is Role.PREFILL for inst in instances),
             current_decode=sum(inst.role is Role.DECODE for inst in instances),
             profiles=profiles,
-            profiles_complete=len(profiles) == len(instances),
+            profiles_complete=len(profiles) == len(instances) and prefill_covered,
             ttft_slo=self.scheduler.slo.ttft_s,
             tpot_slo=self.scheduler.slo.tpot_s,
             utilization=utilization,
             prefill_pressure=observed_load[0],
             decode_pressure=observed_load[1],
             resident_prefill_s=resident_prefill,
-            resident_decode_tokens=sum(i.decode_tokens() for i in instances) + pending_tokens,
-            resident_decode_requests=sum(len(i.decode) for i in instances) + len(pending),
+            resident_decode_tokens=sum(i.decode_tokens() for i in instances),
+            resident_decode_requests=sum(len(i.decode) for i in instances),
             pending_decode_tokens=pending_tokens,
             pending_decode_requests=len(pending),
+            pending_decode_max_tokens=pending_max_tokens,
+            pending_decode_work_s=pending_work_s,
+            pending_decode_profile_covered=pending_covered,
             decode_correction=(
                 self.demand._decode_correction() if correction is None else correction
             ),
             resident_profile_covered=resident_covered,
             queued_prefill_s=queued_prefill,
+            active_decode_instances=sum(bool(inst.decode) for inst in instances),
+            profile_options=profile_options,
+            demand_options=demand_options,
+            offered_inputs=tuple(
+                row.value
+                for row in self.demand.arrivals.rows(
+                    now - (window_s if window_s is not None else 0.0)
+                )
+            ),
+            offered_outputs=tuple(
+                (
+                    row.value[1]
+                    if row.overflow
+                    else self.demand._expected_output(row.value[0], row.value[1], estimates)
+                )
+                for row in self.demand.expected_decode.rows(
+                    now - (window_s if window_s is not None else 0.0)
+                )
+                if row.value[1] > 0
+            ),
         )
 
 

@@ -7,9 +7,15 @@ import asyncio
 import contextlib
 import json
 import math
+import os
+import re
 import sys
+import time
 from dataclasses import dataclass, field
+from hashlib import sha256
 from importlib import resources
+from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -23,7 +29,9 @@ from ..engines.dialect import lookup as lookup_dialect
 from ..engines.validation import can_consume, can_produce, validation_pairs
 from ..profiling.generation import generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
+from ..profiling.probe import engine_context_limit, make_prompt
 from ..profiling.store import ProfileStore
+from ..types import Role
 
 PROBE_PROMPT = "benchmark " * 64
 
@@ -34,6 +42,7 @@ class Report:
 
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    pairs: list[dict[str, object]] = field(default_factory=list)
 
     def ok(self, msg: str) -> None:
         """Print a passing gate result."""
@@ -207,7 +216,7 @@ async def gate_pace(
     a healthy peer's engine core.
     """
     print("pace")
-    body = {
+    base_body = {
         "model": cfg.model,
         "prompt": PACE_PROMPT,
         "max_tokens": 1,
@@ -224,6 +233,7 @@ async def gate_pace(
             if spec.iid not in live:
                 rep.skip(f"{spec.iid} pace: unreachable")
                 continue
+            body = base_body.copy()
             best = None
             for _ in range(repeats):
                 start = asyncio.get_event_loop().time()
@@ -234,6 +244,27 @@ async def gate_pace(
                     failed_probes.add(spec.iid)
                     best = None
                     break
+                if r.status_code == 400 and body["prompt"] == PACE_PROMPT:
+                    try:
+                        dialect = lookup_dialect(cfg.dialect)
+                        limit = await engine_context_limit(c, spec.url, cfg.model, dialect)
+                        if limit < 2:
+                            raise ValueError(f"engine context limit {limit} leaves no output token")
+                        prompt, count = await make_prompt(
+                            c, spec.url, cfg.model, min(4096, limit - 1), dialect
+                        )
+                        if count + 1 > limit:
+                            raise ValueError(
+                                f"pace prompt {count} plus one output exceeds context {limit}"
+                            )
+                        body["prompt"] = prompt
+                        start = asyncio.get_event_loop().time()
+                        r = await c.post(f"{spec.url}/v1/completions", json=body)
+                    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                        rep.fail(f"{spec.iid} pace probe: 400; context adaptation failed: {exc}")
+                        failed_probes.add(spec.iid)
+                        best = None
+                        break
                 elapsed = asyncio.get_event_loop().time() - start
                 if r.status_code != 200:
                     rep.fail(f"{spec.iid} pace probe: {r.status_code}")
@@ -342,6 +373,62 @@ async def gate_produce(
     return handoffs
 
 
+_NIXL_TRANSFER = re.compile(
+    r"^vllm:nixl_xfer_time_seconds_(count|sum)(?:\{[^}]*\})?\s+([0-9.eE+-]+)$",
+    re.MULTILINE,
+)
+
+
+async def _pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
+    """Verify one current engine and retain the NIXL transfer counter."""
+    if cfg.engine_contract is None:
+        raise ValueError("directed KV evidence requires a declared engine contract")
+    spec = next(spec for spec in cfg.engines if spec.iid == iid)
+    if not spec.attestation_url:
+        raise ValueError(f"{iid} has no attestation URL")
+    identity = await fetch_engine_identity(
+        spec.url, timeout_s=cfg.health_timeout_s, headers=cfg.engine_headers()
+    )
+    async with httpx.AsyncClient(timeout=cfg.health_timeout_s) as client:
+        attestation = await client.get(spec.attestation_url)
+        attestation.raise_for_status()
+        payload = attestation.json()
+        failures = verify_attestation(payload, cfg.engine_contract, identity)
+        if failures:
+            raise ValueError(f"{iid} attestation: {'; '.join(failures)}")
+        metrics = await client.get(spec.url.rstrip("/") + "/metrics", headers=cfg.engine_headers())
+        metrics.raise_for_status()
+    transfer = {"count": 0.0, "sum": 0.0}
+    for name, value in _NIXL_TRANSFER.findall(metrics.text):
+        transfer[name] += float(value)
+    if not math.isfinite(transfer["count"]) or not math.isfinite(transfer["sum"]):
+        raise ValueError(f"{iid} returned non-finite NIXL transfer metrics")
+    if not _NIXL_TRANSFER.search(metrics.text):
+        raise ValueError(f"{iid} exposes no NIXL transfer metrics")
+    sources = payload["sources"]
+    return {
+        "iid": iid,
+        "vllm_version": identity.vllm_version,
+        "process_start_time_seconds": identity.process_start_time_seconds,
+        "attestation_digest": payload["attestation_digest"],
+        "contract_fingerprint": cfg.engine_contract.fingerprint(),
+        "cache_layout_sources": {
+            name: sources[name] for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
+        },
+        "connector_source": sources["nixl_connector_version"],
+        "transfer_mode_source": sources["transfer_mode"],
+        "nixl_transfer_count": transfer["count"],
+        "nixl_transfer_seconds_sum": transfer["sum"],
+    }
+
+
+def _same_generation(before: dict[str, object], after: dict[str, object]) -> bool:
+    return all(
+        name in before and name in after and before[name] == after[name]
+        for name in ("vllm_version", "process_start_time_seconds", "attestation_digest")
+    )
+
+
 async def gate_consume(
     cfg: FleetConfig,
     live: set[str],
@@ -350,6 +437,7 @@ async def gate_consume(
     rep: Report,
     mesh: bool,
     repeats: int = 1,
+    evidence: list[dict[str, object]] | None = None,
 ) -> None:
     """Probe role-permitted transfers between distinct engines.
 
@@ -375,8 +463,17 @@ async def gate_consume(
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
+        record: dict[str, object] = {"producer": src, "consumer": dst}
         try:
+            if evidence is not None:
+                before_src = await _pair_snapshot(cfg, src)
+                before_dst = await _pair_snapshot(cfg, dst)
+                record["producer_before"] = before_src
+                record["consumer_before"] = before_dst
+            started = time.monotonic()
             params = await client.prefill(by_id[src].url, "/v1/completions", body, {})
+            prefill_seconds = time.monotonic() - started
+            started = time.monotonic()
             tokens = 0
             async for line in client.decode(
                 by_id[dst].url,
@@ -389,17 +486,79 @@ async def gate_consume(
                 from ..engines.stream import sse_token_count
 
                 tokens += sse_token_count(line)
+            decode_seconds = time.monotonic() - started
+            if evidence is not None:
+                after_src = await _pair_snapshot(cfg, src)
+                after_dst = await _pair_snapshot(cfg, dst)
+                record["producer_after"] = after_src
+                record["consumer_after"] = after_dst
+                if not _same_generation(before_src, after_src):
+                    raise ValueError(f"{src} process or attestation changed during transfer")
+                if not _same_generation(before_dst, after_dst):
+                    raise ValueError(f"{dst} process or attestation changed during transfer")
+                count_delta = cast(float, after_dst["nixl_transfer_count"]) - cast(
+                    float, before_dst["nixl_transfer_count"]
+                )
+                transfer_seconds = cast(float, after_dst["nixl_transfer_seconds_sum"]) - cast(
+                    float, before_dst["nixl_transfer_seconds_sum"]
+                )
+                if count_delta < 1 or transfer_seconds <= 0:
+                    raise ValueError(f"{src} -> {dst} produced no observed consumer NIXL transfer")
+                descriptor = params.parameters()
+                record.update(
+                    status="passed",
+                    connector=params.connector,
+                    transfer_metric="vllm:nixl_xfer_time_seconds",
+                    transfer_mode=descriptor.get("transfer_mode"),
+                    remote_engine_id=descriptor.get("remote_engine_id"),
+                    remote_host=descriptor.get("remote_host"),
+                    remote_port=descriptor.get("remote_port"),
+                    descriptor_sha256=sha256(params.descriptor_json.encode()).hexdigest(),
+                    prefill_seconds=prefill_seconds,
+                    decode_seconds=decode_seconds,
+                    nixl_transfer_count_delta=count_delta,
+                    nixl_transfer_seconds=transfer_seconds,
+                    output_tokens=tokens,
+                )
         except EngineError as exc:
             rep.fail(f"{src} -> {dst}: {exc}")
+            record.update(status="failed", error=str(exc))
+            if evidence is not None:
+                evidence.append(record)
             continue
         except Exception as exc:
             rep.fail(f"{src} -> {dst}: {type(exc).__name__}: {exc}")
+            record.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            if evidence is not None:
+                evidence.append(record)
             continue
         if not tokens:
             rep.fail(f"{src} -> {dst} accepted the handoff and produced no tokens")
+            record.update(status="failed", error="consumer produced no tokens")
         elif (src, dst) not in seen:
             seen.add((src, dst))
             rep.ok(f"{src} -> {dst} moved KV and produced {tokens} tokens")
+        if evidence is not None:
+            evidence.append(record)
+
+
+def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
+    groups = {
+        spec.iid: spec.shared_device.group for spec in cfg.engines if spec.shared_device is not None
+    }
+    if groups:
+        roles = {spec.iid: spec.role for spec in cfg.engines}
+        mixes = {
+            group: (
+                sum(
+                    role is Role.PREFILL for iid, role in roles.items() if groups.get(iid) == group
+                ),
+                sum(role is Role.DECODE for iid, role in roles.items() if groups.get(iid) == group),
+            )
+            for group in set(groups.values())
+        }
+        store.bind_role_mix(groups, mixes.__getitem__, roles.__getitem__)
+    return store
 
 
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
@@ -409,7 +568,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     inside the fleet's profile-validation error limits.
     """
     print("profile")
-    store = ProfileStore(cfg.profiles_path)
+    store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
     for spec in cfg.engines:
         p = store.get(spec.iid)
@@ -451,8 +610,8 @@ async def gate_profile_generation(
     """Fence profiles whose measured engine generation differs from the live one."""
     unsafe: set[str] = set()
     for spec in cfg.engines:
-        profile = store.get(spec.iid)
-        if profile is None or spec.iid not in live:
+        profiles = store.profiles_for_engine(spec.iid)
+        if not profiles or spec.iid not in live:
             continue
         try:
             generation = await read_generation(
@@ -466,11 +625,19 @@ async def gate_profile_generation(
             rep.fail(f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission")
             unsafe.add(spec.iid)
             continue
-        problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
-        if problem:
+        problems = [
+            problem
+            for profile in profiles
+            if (
+                problem := generation_problem(
+                    spec.iid, profile.generation_digest, generation.digest
+                )
+            )
+        ]
+        for problem in dict.fromkeys(problems):
             rep.fail(problem)
             unsafe.add(spec.iid)
-        else:
+        if not problems:
             rep.ok(f"{spec.iid} profile generation {generation.digest}")
     return unsafe
 
@@ -499,6 +666,93 @@ def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
         rep.ok(f"{spec.iid} holds {headroom:.0f} batch tokens at the TPOT target")
 
 
+async def verify_directed_kv_evidence(
+    cfg: FleetConfig, fleet_path: Path, evidence_path: Path
+) -> list[str]:
+    """Reject saved mesh results after a process, profile, or fleet change."""
+    try:
+        document = json.loads(evidence_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"directed KV evidence unreadable: {exc}"]
+    if not isinstance(document, dict):
+        return ["directed KV evidence must be an object"]
+    problems: list[str] = []
+    contract = cfg.engine_contract
+    if contract is None:
+        problems.append("current fleet has no engine contract")
+    if (
+        document.get("schema") != "narwhal.directed-kv-evidence"
+        or document.get("schema_version") != 1
+    ):
+        problems.append("directed KV evidence schema differs")
+    if document.get("status") != "passed" or document.get("failed") or document.get("skipped"):
+        problems.append("directed KV evidence contains failed or skipped gates")
+    if document.get("fleet_sha256") != sha256(fleet_path.read_bytes()).hexdigest():
+        problems.append("fleet changed since directed KV qualification")
+    profile_hash = (
+        sha256(cfg.profiles_path.read_bytes()).hexdigest() if cfg.profiles_path.exists() else None
+    )
+    if document.get("profile_sha256") != profile_hash or profile_hash is None:
+        problems.append("profiles changed or are absent since directed KV qualification")
+    if contract is not None and document.get("contract_fingerprint") != contract.fingerprint():
+        problems.append("engine contract changed since directed KV qualification")
+    expected = validation_pairs(cfg.engines, mesh=True)
+    if document.get("expected_pairs") != [list(pair) for pair in expected]:
+        problems.append("eligible directed KV pairs changed")
+    rows = document.get("pairs")
+    if not isinstance(rows, list):
+        problems.append("directed KV evidence has no pair records")
+        return problems
+    repeats = document.get("repeats")
+    if type(repeats) is not int or repeats < 1:
+        problems.append("directed KV evidence has no valid repeat count")
+        return problems
+    if len(rows) != len(expected) * repeats:
+        problems.append("directed KV evidence pair count differs from the eligible mesh")
+    saved: dict[str, dict[str, object]] = {}
+    for src, dst in expected:
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("producer") == src
+            and row.get("consumer") == dst
+            and row.get("status") == "passed"
+        ]
+        if len(matches) != repeats:
+            problems.append(f"{src} -> {dst} has no complete passing transfer evidence")
+        for row in matches:
+            if (
+                not isinstance(row.get("output_tokens"), int)
+                or row["output_tokens"] < 1
+                or not isinstance(row.get("nixl_transfer_count_delta"), (int, float))
+                or row["nixl_transfer_count_delta"] < 1
+                or not isinstance(row.get("nixl_transfer_seconds"), (int, float))
+                or row["nixl_transfer_seconds"] <= 0
+            ):
+                problems.append(f"{src} -> {dst} lacks observed KV transfer and token evidence")
+            for side, iid in (("producer", src), ("consumer", dst)):
+                before = row.get(f"{side}_before")
+                snapshot = row.get(f"{side}_after")
+                if not isinstance(before, dict) or not isinstance(snapshot, dict):
+                    problems.append(f"{src} -> {dst} has no {side} process evidence")
+                    continue
+                if not _same_generation(before, snapshot):
+                    problems.append(f"{iid} process changed during saved transfer")
+                previous = saved.get(iid)
+                if previous is not None and not _same_generation(previous, snapshot):
+                    problems.append(f"{iid} process generation differs across pair records")
+                saved[iid] = snapshot
+    for iid, before in saved.items():
+        try:
+            current = await _pair_snapshot(cfg, iid)
+            if not _same_generation(before, current):
+                problems.append(f"{iid} process or attestation changed since KV qualification")
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            problems.append(f"{iid} current identity is unavailable: {exc}")
+    return problems
+
+
 async def run(
     cfg: FleetConfig,
     mesh: bool,
@@ -506,8 +760,17 @@ async def run(
     repeats: int = 1,
     *,
     report: Report | None = None,
+    evidence_out: Path | None = None,
+    fleet_path: Path | None = None,
 ) -> int:
     """Run every preflight gate and return a process exit code."""
+    if evidence_out is not None:
+        if not mesh or skip_kv or cfg.engine_contract is None or fleet_path is None:
+            raise ValueError(
+                "directed KV evidence requires a fleet file, full mesh, and engine contract"
+            )
+        if evidence_out.exists():
+            raise ValueError(f"directed KV evidence already exists: {evidence_out}")
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
@@ -545,14 +808,76 @@ async def run(
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")
         else:
             handoffs = await gate_produce(cfg, live, client, rep)
-            await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
+            if evidence_out is None:
+                await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
+            else:
+                await gate_consume(
+                    cfg, live, handoffs, client, rep, mesh, repeats, evidence=rep.pairs
+                )
         gate_slo(cfg, store, rep)
+        if evidence_out is not None:
+            expected = validation_pairs(cfg.engines, mesh=True)
+            for src, dst in expected:
+                passed = sum(
+                    row.get("producer") == src
+                    and row.get("consumer") == dst
+                    and row.get("status") == "passed"
+                    for row in rep.pairs
+                )
+                if passed < max(1, repeats):
+                    rep.fail(f"{src} -> {dst}: no current passing directed KV evidence")
+            first_generation: dict[str, dict[str, object]] = {}
+            for row in rep.pairs:
+                for side in ("producer", "consumer"):
+                    snapshot = row.get(f"{side}_before")
+                    if isinstance(snapshot, dict):
+                        first_generation[str(row[side])] = snapshot
+            for iid, before in first_generation.items():
+                try:
+                    current = await _pair_snapshot(cfg, iid)
+                    if not _same_generation(before, current):
+                        rep.fail(f"{iid} process changed after directed KV probes")
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                    rep.fail(f"{iid} current process verification failed: {exc}")
     finally:
         await client.aclose()
+
+    if evidence_out is not None:
+        contract = cfg.engine_contract
+        if fleet_path is None or contract is None:
+            raise ValueError("directed KV evidence has no fleet file or engine contract")
+        document = {
+            "schema": "narwhal.directed-kv-evidence",
+            "schema_version": 1,
+            "captured_at_unix": time.time(),
+            "fleet_sha256": sha256(fleet_path.read_bytes()).hexdigest(),
+            "profile_sha256": (
+                sha256(cfg.profiles_path.read_bytes()).hexdigest()
+                if cfg.profiles_path.exists()
+                else None
+            ),
+            "model": cfg.model,
+            "contract_fingerprint": contract.fingerprint(),
+            "expected_pairs": [list(pair) for pair in validation_pairs(cfg.engines, mesh=True)],
+            "repeats": max(1, repeats),
+            "pairs": rep.pairs,
+            "failed": rep.failed,
+            "skipped": rep.skipped,
+            "status": "passed" if not rep.failed and not rep.skipped else "failed",
+        }
+        evidence_out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(evidence_out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as output:
+            json.dump(document, output, indent=2)
+            output.write("\n")
+        print(f"directed KV evidence: {evidence_out}")
 
     print()
     if rep.failed:
         print(f"{len(rep.failed)} gate(s) failed, {len(rep.skipped)} skipped")
+        return 1
+    if rep.skipped and evidence_out is not None:
+        print(f"directed KV evidence incomplete: {len(rep.skipped)} gate(s) skipped")
         return 1
     if rep.skipped:
         print(f"all gates pass, {len(rep.skipped)} skipped")
@@ -568,6 +893,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ring", action="store_true", help="test rotating producer-consumer pairs")
     ap.add_argument("--repeats", type=int, default=1, help="KV transfer probes per pair")
     ap.add_argument("--no-kv", action="store_true", help="skip the two KV gates")
+    ap.add_argument("--evidence-out", type=Path, help="retain process-bound full-mesh KV evidence")
+    ap.add_argument(
+        "--verify-evidence", type=Path, help="verify a saved KV mesh against live processes"
+    )
     ap.add_argument(
         "--print-example-config",
         action="store_true",
@@ -590,8 +919,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.fleet is None:
         ap.error("give --fleet")
         return 2
+    if args.evidence_out is not None and (args.ring or args.no_kv):
+        ap.error("--evidence-out requires the full KV mesh")
+    if args.evidence_out is not None and args.verify_evidence is not None:
+        ap.error("choose --evidence-out or --verify-evidence")
     cfg = FleetConfig.load(args.fleet)
-    return asyncio.run(run(cfg, not args.ring, args.no_kv, args.repeats))
+    if args.verify_evidence is not None:
+        problems = asyncio.run(
+            verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
+        )
+        for problem in problems:
+            print(f"  FAIL  {problem}")
+        if problems:
+            return 1
+        print("directed KV evidence matches the current fleet, profiles, and processes")
+        return 0
+    try:
+        return asyncio.run(
+            run(
+                cfg,
+                not args.ring,
+                args.no_kv,
+                args.repeats,
+                evidence_out=args.evidence_out,
+                fleet_path=Path(args.fleet),
+            )
+        )
+    except ValueError as exc:
+        ap.error(str(exc))
+        return 2
 
 
 if __name__ == "__main__":

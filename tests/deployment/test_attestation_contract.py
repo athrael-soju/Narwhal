@@ -26,6 +26,7 @@ from tools.deployment.attestation_contract import (
     engine_document,
     finalize_fleet,
     generate,
+    live_native,
     read_json,
     serve,
 )
@@ -38,6 +39,116 @@ def save(path: Path, value: object) -> None:
 
 
 class AttestationContractTests(unittest.TestCase):
+    def native_evidence(self, root: Path) -> tuple[Path, Path, dict]:
+        run, log = self.engine_evidence(root)
+        plan = read_json(run / "launch.json")
+        plan.update(
+            backend="native",
+            image="",
+            python_executable=sys.executable,
+            model_revision="a" * 40,
+            model_config_path=str(root / "model/config.json"),
+        )
+        save(run / "launch.json", plan)
+        plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
+        checked = {
+            "backend": "native",
+            "plan_sha256": plan_hash,
+            "python_executable": sys.executable,
+            "expected_packages": plan["expected_packages"],
+            "vllm_api_version": "0.29.0",
+        }
+        save(run / "checked.json", checked)
+        process = {"pid": 1234, "boot_id": "boot", "start_ticks": 5678}
+        save(run / "native-process.json", process)
+        save(
+            run / "shared-start.json",
+            {
+                "status": "running",
+                "plan_sha256": plan_hash,
+                "process": process,
+                "vllm_version": "0.29.0",
+                "process_start_time_seconds": 100.0,
+            },
+        )
+        (run / "engine.env").write_text("VLLM_API_KEY=test\n")
+        for name in (
+            "model-dimensions.json",
+            "cache-registration.json",
+            "cache-layout.json",
+            "nixl-connector-version.json",
+            "transfer-mode.json",
+            "handshake-policy.json",
+        ):
+            path = run / name
+            record = read_json(path)
+            record["plan_sha256"] = plan_hash
+            if "image" in record:
+                record["image"] = ""
+            if name in {"nixl-connector-version.json", "transfer-mode.json"}:
+                record.pop("image_id", None)
+                record.pop("container_id", None)
+                record["process"] = process
+            save(path, record)
+        dimensions = read_json(run / "model-dimensions.json")
+        dimensions["launcher_sha256"] = plan["launcher_sha256"]
+        dimensions["process"] = process
+        dimensions["model_revision"] = plan["model_revision"]
+        save(run / "model-dimensions.live.json", dimensions)
+        return run, log, process
+
+    def test_native_attestation_uses_existing_contract_and_rejects_restarted_process(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, log, process = self.native_evidence(Path(folder))
+            identity = EngineIdentity("0.29.0", 100.0)
+            with (
+                patch(
+                    "narwhal.deployment.native_engine.process_identity", return_value=process
+                ) as observed,
+                patch(
+                    "tools.deployment.attestation_contract.fetch_engine_identity",
+                    new_callable=AsyncMock,
+                    return_value=identity,
+                ),
+            ):
+                document = engine_document(run, log)
+                self.assertEqual(document["contract"]["image_digest"], "")
+                self.assertFalse(EngineContract(**document["contract"]).missing())
+                self.assertNotIn("image_digest", document["sources"])
+                self.assertEqual(observed.call_args.args, (1234,))
+                changed = {**process, "start_ticks": 5679}
+                observed.return_value = changed
+                with self.assertRaisesRegex(ValueError, "identity changed"):
+                    live_native(
+                        run, read_json(run / "launch.json"), read_json(run / "checked.json")
+                    )
+
+    def test_native_sidecar_uses_frozen_startup_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, log, process = self.native_evidence(Path(folder))
+            snapshot = run / "startup-attestation.log"
+            snapshot.write_text(log.read_text())
+            with (
+                patch("narwhal.deployment.native_engine.process_identity", return_value=process),
+                patch(
+                    "tools.deployment.attestation_contract.fetch_engine_identity",
+                    new_callable=AsyncMock,
+                    return_value=EngineIdentity("0.29.0", 100.0),
+                ),
+                patch(
+                    "tools.deployment.attestation_contract.attest_main", return_value=0
+                ) as sidecar,
+                patch.dict(
+                    os.environ,
+                    {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"},
+                ),
+            ):
+                generate(run, snapshot)
+                with log.open("a") as output:
+                    output.write("GET /metrics HTTP/1.1 200 OK\n")
+                self.assertEqual(serve(run), 0)
+                sidecar.assert_called_once()
+
     def engine_evidence(self, root: Path) -> tuple[Path, Path]:
         run = root / "run"
         run.mkdir()
