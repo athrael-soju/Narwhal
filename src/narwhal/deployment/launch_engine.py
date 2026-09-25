@@ -155,6 +155,12 @@ def write_private(path: Path, data: str) -> None:
         stream.write(data)
 
 
+def append_private(path: Path, data: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as stream:
+        stream.write(data)
+
+
 def build(
     record: dict, env: dict[str, str], output: Path, *, backend: str = "container"
 ) -> tuple[dict, dict[str, str]]:
@@ -372,13 +378,19 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
 
 def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
     result = subprocess.run(["docker", *command], capture_output=True, text=True)
-    with (run / log).open("a") as output:
-        output.write(
-            json.dumps({"command": ["docker", *command], "exit": result.returncode}) + "\n"
-        )
-        output.write(result.stdout + result.stderr)
+    append_private(
+        run / log,
+        json.dumps({"command": ["docker", *command], "exit": result.returncode})
+        + "\n"
+        + result.stdout
+        + result.stderr
+        + "\n",
+    )
     if result.returncode:
-        raise ValueError(f"Docker command failed; inspect {log}")
+        detail = (result.stderr or result.stdout)[-1000:].strip()
+        raise ValueError(
+            f"Docker command exited {result.returncode}: {detail}; inspect {run / log}"
+        )
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
 
@@ -428,6 +440,17 @@ def check(run: Path, plan: dict) -> None:
     """Check the pinned runtime, connector and tokenizer for the selected backend."""
     native = plan.get("backend") == "native"
     env_file = "engine.env" if native else "container.env"
+    log = "runtime-check.log" if native else "image-check.log"
+    if (run / "checked.json").exists():
+        require_checked(run, plan)
+    append_private(
+        run / log,
+        "\n"
+        + json.dumps(
+            {"check_attempt": uuid.uuid4().hex, "plan_sha256": digest(run / "launch.json")}
+        )
+        + "\n",
+    )
     default_tokenizer = plan["model_dir"] if native else "/model"
     tokenizer_path = default_tokenizer
     for index, argument in enumerate(plan["args"]):
@@ -516,7 +539,15 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             text=True,
             timeout=120,
         )
-        write_private(run / "runtime-check.log", result.stdout + "\nSTDERR\n" + result.stderr)
+        append_private(
+            run / log,
+            json.dumps({"exit": result.returncode})
+            + "\n"
+            + result.stdout
+            + "\nSTDERR\n"
+            + result.stderr
+            + "\n",
+        )
         if result.returncode:
             raise ValueError(
                 f"native runtime check exited {result.returncode}: {result.stderr[-1000:]}"
@@ -541,12 +572,12 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
     ]
     if len(records) != 1:
-        raise ValueError("image check requires one runtime version record; inspect image-check.log")
+        raise ValueError(f"runtime check requires one runtime version record; inspect {run / log}")
     if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
-        raise ValueError("image check requires one tokenizer confirmation; inspect image-check.log")
+        raise ValueError(f"runtime check requires one tokenizer confirmation; inspect {run / log}")
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
-        raise ValueError("image check returned an invalid API version; inspect image-check.log")
+        raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
     marker = run / "checked.json"
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
@@ -564,7 +595,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     value = json.dumps(evidence)
     if marker.exists():
         if marker.read_text() != value:
-            raise ValueError("image check changed; prepare a fresh launch directory")
+            raise ValueError("runtime identity changed; prepare a fresh launch directory")
     else:
         write_private(marker, value)
     print("Runtime identity, package pins, connector import and tokenizer passed.")
@@ -1351,7 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
             }[args.command](run, plan)
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         if isinstance(error, FileExistsError):
-            parser.exit(1, "Launch directory exists; choose a fresh output path.\n")
+            parser.exit(1, f"{args.command}: artifact already exists: {error.filename or error}\n")
         if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
             parser.exit(1, f"{error}\n")
         parser.exit(

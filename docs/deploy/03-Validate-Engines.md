@@ -154,7 +154,9 @@ Validate the image and plan:
 python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 ```
 
-The check verifies custom-code requirements, immutable image identity, pinned package versions in a temporary container, connector resolution through `KVConnectorFactory`, tokenizer construction with the plan's `--trust-remote-code` setting, DS convolutional-state layout when required, the plan hash, and `vllm.version.__version__` as `vllm_api_version`. `image-check.log` retains the evidence. The temporary container exits after inspection.
+The check verifies custom-code requirements, immutable image identity, pinned package versions in a temporary container, connector resolution through `KVConnectorFactory`, tokenizer construction with the plan's `--trust-remote-code` setting, DS convolutional-state layout when required, the plan hash, and `vllm.version.__version__` as `vllm_api_version`. The temporary container exits after inspection.
+
+`narwhal-engine check --run "$ENGINE_RUN"` appends each inspection's unique identifier, launch-plan hash and subprocess output to `image-check.log` for containers or `runtime-check.log` for native engines, preserving the original `checked.json` when repeated checks succeed. A changed launch-plan hash requires a fresh prepared run; runtime failures report the failing package, tokenizer or identity check while retaining earlier output.
 
 Set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` when the tokenizer lives separately from the model configuration. The check loads the final `--tokenizer` selection from the serving arguments and inspects its custom-code metadata in the selected runtime. Native paths resolve on the host; container paths resolve inside the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. The default tokenizer remains the model directory. A tokenizer load failure stops the check before it writes `checked.json`.
 
