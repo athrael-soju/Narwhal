@@ -91,9 +91,11 @@ class TokenizerCheckTests(unittest.TestCase):
         ].KVConnectorFactory.get_connector_class.return_value = type("NixlConnector", (), {})
         modules["vllm.version"].__version__ = "0.29.0"
         modules["transformers"].AutoTokenizer = Mock()
+        # Python 3.11's Path factory consults pathlib.Path while that name is patched.
+        path_type = type(root)
 
         def runtime_path(value):
-            path = Path(value)
+            path = path_type(value)
             if backend == "container":
                 if value == "/opt/image-tokenizer":
                     return tokenizer
@@ -105,7 +107,7 @@ class TokenizerCheckTests(unittest.TestCase):
                             if "=" in item
                         )
                         if path.is_relative_to(fields["dst"]):
-                            return Path(fields["src"]) / path.relative_to(fields["dst"])
+                            return path_type(fields["src"]) / path.relative_to(fields["dst"])
             return path
 
         def load_tokenizer(path, *, trust_remote_code, local_files_only):
