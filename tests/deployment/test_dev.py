@@ -193,6 +193,42 @@ class DevTests(unittest.TestCase):
             self.initialize()
         self.assertFalse(self.root.exists())
 
+    def test_decimal_memory_totals_accept_exact_allowance(self):
+        for count, allowance in ((3, 0.3), (6, 0.6), (4, 0.4)):
+            with self.subTest(count=count, allowance=allowance):
+                self.root = self.parent / f"instance-{count}"
+                self.spec["allocation"].update(
+                    engine_count=count,
+                    gpu_memory_utilization=0.1,
+                    device_allowance=allowance,
+                )
+                self.initialize()
+                fleet = FleetConfig.load(self.root / "fleet.json")
+                self.assertEqual(len(fleet.engines), count)
+                self.assertEqual(
+                    lifecycle.read(self.root / "template.json")["allocation"],
+                    self.spec["allocation"],
+                )
+
+    def test_decimal_memory_totals_reject_strict_overage_and_nonfinite_values(self):
+        for fraction, allowance in (
+            (0.10000000000000002, 0.3),
+            (0.1, 0.29999999999999993),
+            (float("nan"), 0.3),
+            (0.1, float("nan")),
+            (float("inf"), 0.3),
+            (0.1, float("inf")),
+        ):
+            with self.subTest(fraction=fraction, allowance=allowance):
+                self.spec["allocation"].update(
+                    engine_count=3,
+                    gpu_memory_utilization=fraction,
+                    device_allowance=allowance,
+                )
+                with self.assertRaisesRegex(ValueError, "budgets exceed"):
+                    self.initialize()
+                self.assertFalse(self.root.exists())
+
     def test_model_replacement_after_init_rejects_up(self):
         self.initialize()
         self.gguf.write_bytes(b"replacement model")

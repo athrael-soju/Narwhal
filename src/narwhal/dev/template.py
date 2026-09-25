@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal
 from importlib import metadata, resources
 from pathlib import Path
 from typing import Any
@@ -199,7 +200,14 @@ def materialize(
     ports, used_ports = _port_layout(spec, count)
     fraction = spec["allocation"]["gpu_memory_utilization"]
     allowance = spec["allocation"]["device_allowance"]
-    if not 0 < fraction <= 1 or not fraction * count <= allowance <= 1:
+    fraction_decimal = Decimal(str(fraction))
+    allowance_decimal = Decimal(str(allowance))
+    if (
+        not fraction_decimal.is_finite()
+        or not allowance_decimal.is_finite()
+        or not 0 < fraction_decimal <= 1
+        or not fraction_decimal * count <= allowance_decimal <= 1
+    ):
         raise ValueError("engine budgets exceed the shared GPU allowance")
     rows = _gpu_rows()
     selected = [row for row in rows if gpu_uuid is None or row["uuid"] == gpu_uuid]

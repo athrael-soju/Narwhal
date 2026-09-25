@@ -40,6 +40,10 @@ narwhal dev down
 | `--device-allowance` | Template value, 0.5 | Bound the aggregate observed GPU memory increase. |
 | `--interface` | `"eth0"` | Select the local NIXL/UCX interface. |
 
+Initialization compares the decimal total of the per-engine fractions with
+the device allowance, matching shared startup: three engines at `0.1` fit
+an allowance of `0.3`; a total above the allowance rejects initialization.
+
 Model and runtime changes belong in a custom template, selected with
 `--template`. Runtime and tokenizer checksums bind the default template to
 its measured GGUF loader. Model overrides require their matching template
