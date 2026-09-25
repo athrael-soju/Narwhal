@@ -4,7 +4,7 @@
 
 `narwhal-serve --fleet PATH` starts one router process from a fleet configuration.
 
-Before reading the fleet config, the command probes `--host` and `--port` using Uvicorn's IPv4, IPv6 and wildcard bind behaviour, exiting with status 2 when the listener is unavailable. Uvicorn binds again at startup to detect any process that claimed the address after the check.
+Before reading the fleet config, the command probes `--host` and `--port` using Uvicorn's IPv4, IPv6 and wildcard bind behaviour, exiting with status 1 when the listener bind fails. Uvicorn binds again at startup to detect any process that claimed the address after the check.
 
 [Configuration](../configuration/06-Fabric-and-Operations.md#18-cli-precedence) defines CLI and configuration precedence.
 

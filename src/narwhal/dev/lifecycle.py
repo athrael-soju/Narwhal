@@ -28,12 +28,42 @@ from narwhal.diagnostics.check import verify_directed_kv_evidence
 from .template import _check_free_ports, _port_layout, _sha256, check_plugin
 
 
+class LifecycleDocumentError(ValueError):
+    """A persisted lifecycle document has invalid fields consumed by its readers."""
+
+
 def read(path: Path) -> dict:
     """Read an instance document as an object."""
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object: {path}")
     return value
+
+
+def _read_state(root: Path) -> dict:
+    path = root / "lifecycle.json"
+    try:
+        state = read(path)
+    except ValueError as exc:
+        raise LifecycleDocumentError(f"{path}: {exc}") from exc
+    for name, kind in (("run", str), ("phase", str), ("processes", list)):
+        if not isinstance(state.get(name), kind):
+            raise LifecycleDocumentError(f"{path}: {name} must be {kind.__name__}")
+    for index, record in enumerate(state["processes"]):
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("name"), str)
+            or not isinstance(record.get("identity"), dict)
+        ):
+            raise LifecycleDocumentError(
+                f"{path}: processes[{index}] requires a name string and identity object"
+            )
+    failure = state.get("verification_failure")
+    if failure is not None and (
+        not isinstance(failure, dict) or not isinstance(failure.get("reason"), str)
+    ):
+        raise LifecycleDocumentError(f"{path}: verification_failure requires a reason string")
+    return state
 
 
 def write(path: Path, value: dict) -> None:
@@ -220,7 +250,7 @@ def up(root: Path) -> dict:
     config = instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():
-            previous = read(root / "lifecycle.json")
+            previous = _read_state(root)
             if previous.get("phase") != "stopped":
                 raise ValueError("run dev down before starting another generation")
         spec = read(root / "template.json")
@@ -336,7 +366,7 @@ def verify(root: Path) -> dict:
     """Run current-process preflight, all eligible KV paths and a routed completion."""
     config = instance(root)
     with locked(root):
-        state = read(root / "lifecycle.json")
+        state = _read_state(root)
         if state.get("phase") not in {"launched", "ready", "degraded"}:
             raise ValueError("dev verify requires a launched instance")
         run = Path(state["run"])
@@ -374,8 +404,21 @@ def verify(root: Path) -> dict:
                     )
                     response.raise_for_status()
                     result = response.json()
-                    write(evidence / "completion.json", result)
-                    if result["choices"][0]["message"]["content"].strip() != "5":
+                    completion = evidence / "completion.json"
+                    write(completion, result)
+                    try:
+                        content = result["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError, TypeError) as exc:
+                        raise ValueError(
+                            "routed completion requires choices[0].message.content as a string; "
+                            f"inspect {completion}"
+                        ) from exc
+                    if not isinstance(content, str):
+                        raise ValueError(
+                            "routed completion requires choices[0].message.content as a string; "
+                            f"inspect {completion}"
+                        )
+                    if content.strip() != "5":
                         raise ValueError(
                             "routed arithmetic canary expected 5; inspect completion.json"
                         )
@@ -408,7 +451,7 @@ def status(root: Path) -> dict:
     config = instance(root)
     if not (root / "lifecycle.json").exists():
         return {"status": "stopped"}
-    state = read(root / "lifecycle.json")
+    state = _read_state(root)
     run = Path(state["run"])
     if state["phase"] == "starting" and _busy(root):
         return {"status": "starting", "run": str(run)}
@@ -477,5 +520,5 @@ def down(root: Path) -> dict:
     instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():
-            _stop(root, read(root / "lifecycle.json"))
+            _stop(root, _read_state(root))
     return status(root)

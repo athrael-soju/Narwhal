@@ -146,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if result["status"] == "degraded" else 0
     except metadata.PackageNotFoundError as exc:
         return failure("narwhal", f"{context}: load runtime package", exc, 2)
+    except lifecycle.LifecycleDocumentError as exc:
+        return failure("narwhal", f"{context}: load lifecycle", exc, 2)
     except (KeyError, TypeError) as exc:
         if args.action != "init":
             raise

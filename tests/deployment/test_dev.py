@@ -680,6 +680,75 @@ class DevTests(unittest.TestCase):
             self.assertEqual(operation(self.root)["status"], "stopped")
         self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 0)
 
+    def test_malformed_lifecycle_reports_its_path_and_field_before_operating(self):
+        self.initialize()
+        path = self.root / "lifecycle.json"
+        for document, field in (
+            ({}, "run"),
+            ({"run": [], "phase": "launched", "processes": []}, "run"),
+            ({"run": str(self.root), "phase": "launched", "processes": {}}, "processes"),
+        ):
+            lifecycle.write(path, document)
+            original = path.read_bytes()
+            for action in ("up", "verify", "status", "down"):
+                with (
+                    self.subTest(document=document, action=action),
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    self.assertEqual(main(["dev", action, "--instance", str(self.root)]), 2)
+                self.assertEqual(stdout.getvalue(), "")
+                for text in (f"narwhal: dev {action}", str(path), field):
+                    self.assertIn(text, stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_malformed_completion_retains_failure_and_degraded_status(self):
+        run = self.launched_instance()
+        client = httpx.Client
+        for result in ({}, [], {"choices": []}, {"choices": [{"message": {"content": None}}]}):
+            transport = httpx.MockTransport(
+                lambda request, body=result: httpx.Response(200, json=body)
+            )
+            with (
+                self.subTest(result=result),
+                patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+                patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+                patch.object(lifecycle, "_run"),
+                patch.object(
+                    lifecycle.httpx,
+                    "Client",
+                    side_effect=lambda transport=transport, **kwargs: client(transport=transport),
+                ),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
+                self.assertEqual(stdout.getvalue(), "")
+                state = lifecycle.read(self.root / "lifecycle.json")
+                self.assertEqual(state["phase"], "degraded")
+                failure = state["verification_failure"]
+                evidence = Path(failure["evidence"])
+                self.assertEqual(evidence.parent, run)
+                self.assertEqual(json.loads((evidence / "completion.json").read_text()), result)
+                self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+                self.assertIn("choices[0].message.content", failure["reason"])
+                self.assertIn(str(evidence / "completion.json"), stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                with contextlib.redirect_stdout(io.StringIO()) as status:
+                    self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 1)
+                current = json.loads(status.getvalue())
+                self.assertEqual(current["status"], "degraded")
+                self.assertEqual(current["verification_failure"], failure)
+
+    def test_unexpected_lifecycle_code_error_propagates(self):
+        self.initialize()
+        with (
+            patch.object(lifecycle, "status", side_effect=KeyError("implementation")),
+            self.assertRaisesRegex(KeyError, "implementation"),
+        ):
+            main(["dev", "status", "--instance", str(self.root)])
+
     def test_lifecycle_lock_rejects_overlapping_mutations(self):
         self.initialize()
         with lifecycle.locked(self.root), self.assertRaisesRegex(ValueError, "another lifecycle"):

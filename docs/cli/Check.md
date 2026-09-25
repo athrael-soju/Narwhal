@@ -37,6 +37,6 @@ request count used for the TPOT calculation.
 
 `--repeats` repeats these checks without collecting latency samples. Input-length sweeps and an independent first-token observation window require [separately instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
 
-Exit status 1 indicates a failed gate or a fleet config read or validation error. Exit status 2 indicates invalid arguments.
+Exit status 1 indicates a failed gate or operation. Exit status 2 indicates invalid arguments or a fleet config read or validation error.
 
 Use gate tables to diagnose deployment failures and the contract registry and versioned artifacts for automation.
