@@ -216,3 +216,86 @@ belong to this instance, then repeat `down`.
 
 Run `up` and `verify` again after changing the runtime or restarting an
 engine so profiles and transfer checks bind to the new processes.
+
+## Stage deadlines and recovery
+
+`dev up` and `dev verify` run runtime checks, native shared startup, attestation,
+profiling and preflight as separate subprocess stages. Each stage gets 300 seconds
+of execution by default. `NARWHAL_STAGE_TIMEOUT_SECONDS` overrides that default;
+`NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` overrides one stage, with its name converted
+to uppercase and punctuation replaced by underscores. For example:
+
+```bash
+NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=720 narwhal dev up
+NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
+```
+
+`*.command.json` identifies each dev stage. The command writes partial output to
+private `*.stdout` and `*.stderr` artifacts and records its budget, wall-clock
+start, elapsed time, exit status and process identities in `*.stage.json`.
+The enclosing budget includes helper imports, subprocess startup and execution;
+each engine health check retains its own 180-second limit inside native shared
+startup. Profile splits each receive a fresh stage budget. HTTP health requests
+and the routed verification request retain their existing request deadlines.
+
+On expiry, SIGINT or SIGTERM during a helper stage, the controller signals owned
+processes with SIGTERM, waits up to `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` (10 seconds),
+then uses SIGKILL and waits up to `NARWHAL_STAGE_KILL_GRACE_SECONDS` (5 seconds).
+These periods follow the execution budget. Linux process start ticks and pidfds
+bind signals to the observed helper descendants, including observed descendants
+that start another session. The controller adopts and reaps terminated workers;
+the cleanup record lists any surviving owned PIDs. Successful native shared
+startup retains its engines for the subsequent attestation and profiling stages.
+Other helper stages also clean up workers left behind by an exited leader.
+
+Startup rollback records the initiating failure alongside teardown errors in
+`lifecycle.json`. Verification failures retain the attempt directory and keep
+status degraded until a successful verification. Inspect the failed stage's
+output, run `narwhal dev status --instance PATH`, then use `narwhal dev down
+--instance PATH` to stop the generation before retrying startup. A surviving
+process with expired ownership requires operator inspection of its recorded
+boot ID, start tick and process group. All evidence stays under the instance.
+
+The engine deployment wrapper uses these budgets for Docker clients and native
+runtime checks. Before each Docker create/run, it persists an ownership token
+in `docker-owner.json` and attaches `io.narwhal.launch` to the container. A timed
+out or cancelled client triggers daemon inspection with a separate
+`NARWHAL_DOCKER_RECONCILE_SECONDS` budget (30 seconds). Reconciliation validates
+labelled containers and recorded container IDs, removes owned resources after
+create/run/start failures, and queries daemon state again. Read operations retain
+existing containers and record their IDs. Each reconciliation client shares the
+remaining reconciliation budget and receives the same termination grace periods,
+so final client cleanup can extend reconciliation by 15 seconds with defaults.
+
+`docker-reconcile-*.json` records removed IDs, surviving IDs, refusal decisions,
+inspection errors and observation time. A stalled daemon leaves the result at
+`inspection_required`; inspect the persisted ownership label and recorded IDs
+before retrying. The report describes the daemon at observation time: repeat
+inspection after daemon recovery to catch a create operation that completed after
+client cancellation. Keep the original launch directory through that inspection.
+
+### Reference GPU timeout check
+
+Run this qualification on the reference GPU with the pinned template and an
+operator-selected instance. Retain a successful generation's startup logs and
+`native-start-shared.log.*.stage.json`, then run `dev down` and record idle device
+memory, process IDs and the configured engine, attestation and NIXL ports.
+Use those timestamps to select a native-start budget after the first engine's
+CUDA allocation and before the complete shared startup finishes:
+
+```bash
+NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS="$STARTUP_BUDGET_SECONDS" \
+  narwhal dev up --instance runs/dev-timeout
+narwhal dev status --instance runs/dev-timeout
+narwhal dev down --instance runs/dev-timeout
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv
+```
+
+Record the observed allocation before expiry, command duration, worker exit,
+post-cleanup device memory and port release. Compare duration against the stage
+budget plus termination grace and rollback time, and compare memory against the
+idle baseline. Retain `lifecycle.json`, teardown, startup, memory and stage
+artifacts. Confirm an unrelated process survives, then start and verify a fresh
+generation with the normal budget. This opt-in qualification exercises vLLM
+workers and CUDA cleanup; the automated deadline suite uses CPU helpers and a
+fake Docker daemon executable.

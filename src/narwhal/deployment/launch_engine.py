@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -368,13 +369,112 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
 
 
-def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
-    result = subprocess.run(["docker", *command], capture_output=True, text=True)
-    with (run / log).open("a") as output:
-        output.write(
-            json.dumps({"command": ["docker", *command], "exit": result.returncode}) + "\n"
+def _docker_owner(run: Path) -> str:
+    marker = run / "docker-owner.json"
+    if not marker.exists():
+        with contextlib.suppress(FileExistsError):
+            write_private(marker, json.dumps({"label": uuid.uuid4().hex}))
+    owner = json.loads(marker.read_text())["label"]
+    if not re.fullmatch(r"[0-9a-f]{32}", owner):
+        raise ValueError("docker-owner.json requires a valid ownership token")
+    return owner
+
+
+def reconcile_docker(run: Path, owner: str, *, remove: bool) -> dict:
+    """Inspect daemon state and remove only IDs bound to this launch directory."""
+    from narwhal.deployment import stages
+
+    budget = stages.seconds("NARWHAL_DOCKER_RECONCILE_SECONDS", 30)
+    started = time.monotonic()
+    report: dict = {
+        "budget_seconds": budget,
+        "owner": owner,
+        "removed": [],
+        "surviving_resources": [],
+        "status": "inspection_required",
+    }
+    recorded = set()
+    for name in ("container.id", "cache-probe.id"):
+        path = run / name
+        if path.exists():
+            cid = path.read_text().strip()
+            if re.fullmatch(r"[0-9a-f]{64}", cid):
+                recorded.add(cid)
+
+    def invoke(args: list[str]) -> str:
+        remaining = budget - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ValueError("Docker reconciliation budget exhausted")
+        result = stages.run(
+            ["docker", *args],
+            stage="docker-reconcile-" + args[0],
+            log=run / "docker-reconcile.log",
+            timeout=remaining,
         )
-        output.write(result.stdout + result.stderr)
+        if result.returncode:
+            raise ValueError(f"Docker reconciliation {args[0]} exited {result.returncode}")
+        return result.stdout.strip()
+
+    try:
+        listed = invoke(["ps", "-aq", "--no-trunc", "--filter", f"label=io.narwhal.launch={owner}"])
+        ids = recorded | {cid for cid in listed.splitlines() if re.fullmatch(r"[0-9a-f]{64}", cid)}
+        report["candidates"] = sorted(ids)
+        # The all-container listing permits an absent recorded ID after an earlier cleanup.
+        present = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines()) & ids
+        owned = []
+        if present:
+            records = json.loads(invoke(["inspect", *sorted(present)]))
+            for record in records:
+                cid = record["Id"]
+                labels = record.get("Config", {}).get("Labels") or {}
+                if cid in present and (cid in recorded or labels.get("io.narwhal.launch") == owner):
+                    owned.append(cid)
+                else:
+                    report.setdefault("refused_resources", []).append(cid)
+        report["surviving_resources"] = sorted(owned)
+        if remove and owned:
+            invoke(["rm", "--force", *owned])
+        remaining = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines())
+        report["surviving_resources"] = sorted(set(owned) & remaining)
+        if remove:
+            report["removed"] = sorted(set(owned) - remaining)
+        report["status"] = "observed"
+    except (OSError, ValueError, KeyboardInterrupt) as error:
+        report["error"] = str(error)
+    report.update(
+        elapsed_seconds=time.monotonic() - started,
+        observed_at=time.time(),
+        recovery="inspect docker-reconcile-*.json and recorded IDs/ownership label before retrying",
+    )
+    destination = run / ("docker-reconcile-" + uuid.uuid4().hex[:12] + ".json")
+    write_private(destination, json.dumps(report, indent=2) + "\n")
+    report["evidence"] = str(destination)
+    return report
+
+
+def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
+    from narwhal.deployment import stages
+
+    owner = _docker_owner(run)
+    invocation = list(command)
+    if command[0] in {"create", "run"}:
+        invocation[1:1] = ["--label", f"io.narwhal.launch={owner}"]
+    try:
+        result = stages.run(["docker", *invocation], stage="docker-" + command[0], log=run / log)
+    except (stages.StageTimeout, stages.StageCancelled) as error:
+        try:
+            report = reconcile_docker(run, owner, remove=command[0] in {"create", "run", "start"})
+        except OSError as cleanup_error:
+            report = {
+                "status": "inspection_required",
+                "error": str(cleanup_error),
+                "recovery": "inspect the recorded container IDs and ownership label",
+            }
+        error.context["docker_reconciliation"] = report
+        error.context["recovery"] = report["recovery"]
+        with contextlib.suppress(OSError):
+            stages.write_evidence(Path(error.context["evidence"]), error.context)
+        raise
     if result.returncode:
         raise ValueError(f"Docker command failed; inspect {log}")
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
@@ -382,6 +482,8 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
 
 def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str], log: str) -> str:
     """Inspect the checked vLLM environment through its selected backend."""
+    from narwhal.deployment import stages
+
     if plan.get("backend") != "native":
         return docker(
             [
@@ -399,14 +501,12 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             log,
         )
     values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
-    result = subprocess.run(
+    result = stages.run(
         [plan["python_executable"], "-c", script, *arguments],
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"},
-        capture_output=True,
-        text=True,
-        timeout=120,
+        stage="native-runtime-inspection",
+        log=run / log,
     )
-    write_private(run / log, result.stdout + "\nSTDERR\n" + result.stderr)
     if result.returncode:
         raise ValueError(
             f"native runtime inspection exited {result.returncode}: {result.stderr[-1000:]}"
@@ -424,6 +524,8 @@ def load(run: Path) -> dict:
 
 def check(run: Path, plan: dict) -> None:
     """Check the pinned runtime, connector and tokenizer for the selected backend."""
+    from narwhal.deployment import stages
+
     native = plan.get("backend") == "native"
     env_file = "engine.env" if native else "container.env"
     if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
@@ -487,14 +589,12 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
-        result = subprocess.run(
+        result = stages.run(
             [plan["python_executable"], *arguments],
             env={**os.environ, **values},
-            capture_output=True,
-            text=True,
-            timeout=120,
+            stage="native-runtime-check",
+            log=run / "runtime-check.log",
         )
-        write_private(run / "runtime-check.log", result.stdout + "\nSTDERR\n" + result.stderr)
         if result.returncode:
             raise ValueError(
                 f"native runtime check exited {result.returncode}: {result.stderr[-1000:]}"

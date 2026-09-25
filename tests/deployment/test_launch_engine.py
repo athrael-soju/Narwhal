@@ -56,7 +56,7 @@ class EngineLauncherTests(unittest.TestCase):
             )
             with (
                 patch("tools.deployment.launch_engine.docker") as docker,
-                patch("tools.deployment.launch_engine.subprocess.run") as invoke,
+                patch("narwhal.deployment.stages.run") as invoke,
             ):
                 invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
                 check(run, plan)
@@ -81,7 +81,7 @@ class EngineLauncherTests(unittest.TestCase):
             run = root / "launch"
             prepare(run, env, backend="native")
             model.write_bytes(b"changed")
-            with patch("tools.deployment.launch_engine.subprocess.run") as invoke:
+            with patch("narwhal.deployment.stages.run") as invoke:
                 with self.assertRaisesRegex(ValueError, "model file changed"):
                     check(run, load(run))
                 invoke.assert_not_called()
@@ -734,7 +734,7 @@ class SharedEngineStartTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as folder,
             patch(
-                "tools.deployment.launch_engine.subprocess.run",
+                "narwhal.deployment.stages.run",
                 return_value=subprocess.CompletedProcess([], 0, "", "CUDA IPC failed\n"),
             ),
         ):

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from narwhal.config import FleetConfig
-from narwhal.deployment import cache_capture_hook, native_engine
+from narwhal.deployment import cache_capture_hook, native_engine, stages
 from narwhal.deployment.attestation_contract import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import digest, gpu_memory, prepare
@@ -84,10 +84,13 @@ def _busy(root: Path) -> bool:
 def _run(root: Path, module: str, args: list[str], log: str) -> None:
     command = [sys.executable, "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
-    with (root / f"{log}.log").open("w") as output:
-        result = subprocess.run(  # noqa: S603 - installed modules and explicit argv
-            command, stdout=output, stderr=subprocess.STDOUT, cwd=root, check=False
-        )
+    result = stages.run(
+        command,
+        stage=log,
+        log=root / f"{log}.log",
+        cwd=root,
+        retain_descendants=log == "native-start-shared",
+    )
     if result.returncode:
         detail = (root / f"{log}.log").read_text(errors="replace")[-3000:]
         raise ValueError(f"{log} exited {result.returncode}: {detail}")
@@ -174,7 +177,9 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         for key, value in spec["profile"].items():
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
             args.extend(["--" + key.replace("_", "-"), rendered])
-        print(f"profiling {prefill} prefill / {count - prefill} decode", flush=True)
+        print(
+            f"profiling {prefill} prefill / {count - prefill} decode", file=sys.stderr, flush=True
+        )
         _run(run, "narwhal.profiling.probe", args, f"profile-{prefill}p{count - prefill}d")
         sources.append(profile)
     if len(sources) == 1:
@@ -228,13 +233,22 @@ def up(root: Path) -> dict:
         _check_free_ports(ports, "127.0.0.1")
         run = root / f"run-{uuid.uuid4().hex[:12]}"
         run.mkdir(mode=0o700)
-        state = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
+        state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
         write(root / "lifecycle.json", state)
         try:
             with memory_samples(run, config["gpu_uuid"], "up"):
                 _launch(root, run, config, spec, state)
-        except BaseException:
-            _stop(root, state)
+        except BaseException as error:
+            state["failure"] = {
+                "message": str(error),
+                "stage": getattr(error, "stage", "startup"),
+                "context": getattr(error, "context", {}),
+            }
+            try:
+                _stop(root, state)
+            except (OSError, ValueError) as cleanup_error:
+                state["failure"]["cleanup_error"] = str(cleanup_error)
+                write(root / "lifecycle.json", state)
             raise
         state["phase"] = "launched"
         write(root / "lifecycle.json", state)
@@ -282,7 +296,17 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
         prepare(engine_run, env, backend="native")
         _run(run, "narwhal.deployment.launch_engine", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
-    native_engine.start_shared(runs)
+    _run(
+        run,
+        "narwhal.deployment.launch_engine",
+        [
+            "start-shared",
+            "--backend",
+            "native",
+            *[arg for path in runs for arg in ("--run", str(path))],
+        ],
+        "native-start-shared",
+    )
     for index, engine_run in enumerate(runs):
         _run(
             run,
@@ -378,9 +402,17 @@ def verify(root: Path) -> dict:
                         metrics.raise_for_status()
                         (evidence / f"{name}-metrics.txt").write_text(metrics.text)
                     client.get(config["router_url"] + "/ready").raise_for_status()
+            state.pop("failure", None)
+            state.pop("failed_verification", None)
             state.update(phase="ready", verification=str(evidence), verified_at=time.time())
             write(root / "lifecycle.json", state)
-        except BaseException:
+        except BaseException as error:
+            state["failed_verification"] = str(evidence)
+            state["failure"] = {
+                "message": str(error),
+                "stage": getattr(error, "stage", "verification"),
+                "context": getattr(error, "context", {}),
+            }
             state["phase"] = "degraded"
             write(root / "lifecycle.json", state)
             raise
@@ -414,11 +446,21 @@ def status(root: Path) -> dict:
         f"{name}: surviving group PIDs {pids} require operator inspection"
         for name, pids in survivors.items()
     )
+    if state.get("failure"):
+        problems.append(state["failure"]["message"])
     if len(live) != 2 * config["engine_count"] + 1:
         problems.append(
             "owned process count differs from the configured engines, sidecars and router"
         )
     fleet_path = run / "fleet.json"
+    if not fleet_path.exists():
+        return {
+            "status": "degraded",
+            "run": str(run),
+            "processes": live,
+            "surviving_processes": survivors,
+            "problems": problems,
+        }
     fleet = read(fleet_path)
     with httpx.Client(timeout=2, trust_env=False) as client:
         for name, url in [

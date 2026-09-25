@@ -250,3 +250,11 @@ test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FA
 `capture-cache` checks container identity, image, source and plan hashes, and every TP rank before writing `cache-layout.json` from the live process. Compare resolved layout and page geometry within each signature group; a differing layout or page geometry gets its own Gate D budget.
 
 Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Qualify-Fabric.md).
+
+### Docker command deadlines
+
+The engine wrapper bounds Docker clients, labels created containers with a
+persisted launch token and reconciles daemon resources after timeout or
+cancellation. Configure execution and cleanup periods, inspect retained partial
+output and follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery)
+before reusing a failed deployment.

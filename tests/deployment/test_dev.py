@@ -14,6 +14,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.config import FleetConfig
+from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
 from narwhal.profiling.probe import Sweep, bounded_sweep
@@ -97,7 +98,10 @@ class DevTests(unittest.TestCase):
                 run = self.root / key_env
                 run.mkdir()
 
-                def inspect_preparation(runs, run=run, key_env=key_env):
+                def inspect_preparation(root, module, args, log, run=run, key_env=key_env):
+                    if log != "native-start-shared":
+                        return
+                    runs = [Path(args[i + 1]) for i, arg in enumerate(args) if arg == "--run"]
                     cfg = FleetConfig.load(run / "fleet.json")
                     self.assertEqual(cfg.engine_api_key_env, key_env)
                     for engine_run in runs:
@@ -119,10 +123,7 @@ class DevTests(unittest.TestCase):
                             "CUSTOM_ENGINE_KEY": "synthetic-custom-key",
                         },
                     ),
-                    patch.object(lifecycle, "_run"),
-                    patch.object(
-                        lifecycle.native_engine, "start_shared", side_effect=inspect_preparation
-                    ),
+                    patch.object(lifecycle, "_run", side_effect=inspect_preparation),
                     self.assertRaises(Prepared),
                 ):
                     lifecycle._launch(
@@ -364,6 +365,74 @@ class DevTests(unittest.TestCase):
             result = lifecycle.status(self.root)
         self.assertEqual(result["status"], "degraded")
         self.assertIn("consumer process changed", result["problems"])
+
+    def timeout_helper(self, path, stage):
+        return stages.run(
+            [
+                sys.executable,
+                "-c",
+                "import time; print('retained output',flush=True); time.sleep(30)",
+            ],
+            stage=stage,
+            log=path / (stage + ".log"),
+            timeout=0.1,
+        )
+
+    def test_startup_timeout_retains_failure_and_allows_status_down(self):
+        self.initialize()
+
+        def launch(root, run, config, spec, state):
+            self.timeout_helper(run, "native-start-shared")
+
+        with (
+            patch.object(lifecycle, "_launch", side_effect=launch),
+            patch.object(lifecycle, "_check_free_ports"),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            self.assertRaises(stages.StageTimeout),
+        ):
+            lifecycle.up(self.root)
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["failure"]["stage"], "native-start-shared")
+        self.assertTrue(Path(state["failure"]["context"]["evidence"]).exists())
+        self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
+        self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
+
+    def test_verification_timeout_retains_attempt_and_degraded_status(self):
+        self.initialize()
+        run = self.root / "run-test"
+        run.mkdir()
+        (run / "fleet.json").write_bytes((self.root / "fleet.json").read_bytes())
+        lifecycle.write(
+            self.root / "lifecycle.json",
+            {
+                "run": str(run),
+                "phase": "ready",
+                "processes": [],
+                "verification": "old-evidence",
+            },
+        )
+
+        def preflight(path, module, args, stage):
+            self.timeout_helper(path, stage)
+
+        with (
+            patch.object(lifecycle, "_run", side_effect=preflight),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            self.assertRaises(stages.StageTimeout),
+        ):
+            lifecycle.verify(self.root)
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["phase"], "degraded")
+        self.assertNotIn("verification", state)
+        self.assertTrue(Path(state["failed_verification"]).exists())
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+        with patch.object(
+            lifecycle.httpx, "Client", return_value=httpx.Client(transport=transport)
+        ):
+            result = lifecycle.status(self.root)
+        self.assertEqual(result["status"], "degraded")
+        self.assertTrue(any("preflight exhausted" in problem for problem in result["problems"]))
+        self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
 
     def test_new_instance_status_and_down_are_stopped(self):
         self.initialize()
