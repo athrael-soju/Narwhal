@@ -44,8 +44,6 @@ While Narwhal is reading request bodies, waiting for admission, or writing respo
 
 Reaching this ceiling returns HTTP 429 before body parsing. The request is recorded as an unsized offer.
 
-All active requests share this single global limit.
-
 Queueing and phase-dispatch waits still contribute to demand. Retries preserve the original arrival time, deadline, and reservation.
 
 Before any visible output, Narwhal may retry:
@@ -112,7 +110,7 @@ If every candidate violates its projected SLO, Narwhal records an unserved place
 
 Engine-side prefix caching is independent of router placement.
 
-A live role change affects new requests immediately. Resident requests stay on their current engine until completion or cancellation.
+A live role change affects new placement immediately. Resident requests keep their current engine and reservation until completion or cancellation.
 
 Lifecycle drains, quarantine, ejection, and restart holds remain active while roles change.
 
@@ -137,7 +135,7 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
 | `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                               |
 
-Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range. Collect those timings with [instrumented direct-engine probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline); `narwhal-check` validates transfers using the configured timeout but does not record a latency distribution.
+Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range. Collect those timings with [instrumented direct-engine probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline); `narwhal-check` applies the configured timeout to its transfer checks.
 
 `serving.request_timeout_s` bounds the entire request, including decode streaming.
 
@@ -224,10 +222,6 @@ When capacity returns, the resulting split re-enters the ordinary adjacent-split
 Recovery changes are retained under the same `controller.flip_history` limit as ordinary role changes.
 
 ### 7.3 Resident work during role changes
-
-New requests observe a role change immediately.
-
-Existing requests retain their current engines and reservations until completion or cancellation.
 
 Before turning decode capacity into prefill capacity, the controller verifies that:
 

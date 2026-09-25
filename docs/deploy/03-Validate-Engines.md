@@ -66,7 +66,7 @@ ss -ltnp
 
 For a registry digest in `NARWHAL_ENGINE_IMAGE`, compare the runtime's resolved digest with the configured digest before launch.
 
-The private discovery record binds the checkpoint to its complete manifest and matched tree digest. Ensure to rerun discovery when provisioned checkpoint contents change.
+The private discovery record binds the checkpoint to its complete manifest and matched tree digest. Rerun discovery after changing the provisioned checkpoint.
 
 Check every declared device path:
 

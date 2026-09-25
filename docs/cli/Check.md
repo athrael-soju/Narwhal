@@ -34,7 +34,7 @@ The `slo` gate prices each profile's smallest measured decode cohort,
 including its active-request and KV-token costs. Capacity output states the
 request count used for the TPOT calculation.
 
-`--repeats` repeats these checks without collecting latency samples. Input-length sweeps and an independent first-token observation window require [separately instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+Measure first-token latency across input lengths with [instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
 
 In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
 
