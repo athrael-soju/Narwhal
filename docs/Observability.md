@@ -6,4 +6,5 @@
 
 - [Start and verify monitoring](observability/01-Start-and-Verify.md)
 - [Access dashboards and isolate listeners](observability/02-Access.md)
+- [Monitor a WSL2 development fleet](observability/04-WSL2.md)
 - [Inspect GPU telemetry, alerts, and recovery](observability/03-Telemetry-and-Recovery.md)

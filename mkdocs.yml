@@ -78,6 +78,7 @@ nav:
           - Start and verify monitoring: observability/01-Start-and-Verify.md
           - Access dashboards and isolate listeners: observability/02-Access.md
           - GPU telemetry, alerts, and recovery: observability/03-Telemetry-and-Recovery.md
+          - Monitor a WSL2 development fleet: observability/04-WSL2.md
       - Operate Narwhal:
           - Overview: Operate.md
           - Production boundary and router pair: operate/01-Start-Routers.md
