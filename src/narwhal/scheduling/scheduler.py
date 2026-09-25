@@ -404,6 +404,19 @@ class GlobalScheduler:
             ]
             if not pool:
                 return None, "source engine dwell has not elapsed"
+        if any(profile.colocated_group for profile in self.profiles.all_profiles()):
+            roles = {iid: inst.role for iid, inst in self.monitor.instances.items()}
+            prefill = sum(role is Role.PREFILL for role in roles.values())
+            prefill += 1 if target is Role.PREFILL else -1
+            pool = [
+                inst
+                for inst in pool
+                if self.profiles.profiles_for_split(
+                    roles, prefill, len(roles) - prefill, roles | {inst.iid: target}
+                )
+            ]
+            if not pool:
+                return None, "measured shared-device profiles exclude every source candidate"
         return min(pool, key=self.flip_cost), ""
 
     def flip(

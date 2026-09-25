@@ -228,6 +228,43 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertFalse(too_narrow.score(2).decode_profile_covered)
 
+    def test_donor_selection_requires_the_measured_destination_roles(self) -> None:
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            base = fleet.profiles.get(iid)
+            for prefill, decode in ((1, 5), (2, 4)):
+                fleet.profiles.put(
+                    replace(
+                        base,
+                        colocated_group="gpu-0",
+                        colocated_target_role=(
+                            "prefill" if iid == "e0" or (prefill == 2 and iid == "e2") else "decode"
+                        ),
+                        colocated_prefill_engines=prefill,
+                        colocated_decode_engines=decode,
+                        colocated_prefill_rps=1.0,
+                        colocated_decode_rps=1.0,
+                    )
+                )
+        fleet.profiles.bind_role_mix(
+            dict.fromkeys(fleet.monitor.instances, "gpu-0"),
+            lambda group: (
+                len(fleet.monitor.pool(Role.PREFILL)),
+                len(fleet.monitor.pool(Role.DECODE)),
+            ),
+            lambda iid: fleet.monitor.instances[iid].role,
+        )
+        donor, reason = fleet.scheduler.planned_donor(Role.PREFILL)
+        self.assertEqual(donor.iid, "e2")
+        self.assertEqual(reason, "")
+        nominated, reason = fleet.scheduler.planned_donor(
+            Role.PREFILL, candidate=fleet.monitor.instances["e1"]
+        )
+        self.assertIsNone(nominated)
+        self.assertIn("measured", reason)
+        fleet.scheduler.pinned = frozenset({"e2"})
+        self.assertIsNone(fleet.scheduler.planned_donor(Role.PREFILL)[0])
+
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
         fleet = self.fleet
         fleet.pressure[Role.PREFILL] = 0.9
