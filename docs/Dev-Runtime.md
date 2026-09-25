@@ -98,6 +98,13 @@ curl http://127.0.0.1:18000/v1/chat/completions \
 
 Expect the response content `5`.
 
+## Connect Prometheus and Grafana
+
+Follow [Monitor a WSL2 development fleet](observability/04-WSL2.md) to connect
+the local metrics endpoints to the homelab's canonical monitoring stack.
+Check all five scrape targets and the Narwhal Orchestrator dashboard before
+running workloads.
+
 ## Inspect roles and operating limits
 
 ```bash
