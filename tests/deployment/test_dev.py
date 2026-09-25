@@ -42,7 +42,7 @@ class DevTests(unittest.TestCase):
         )
         self.spec["runtime"].pop("gguf_plugin_python_sha256", None)
 
-    def initialize(self):
+    def initialize(self, **overrides):
         with (
             patch.object(
                 template,
@@ -62,6 +62,7 @@ class DevTests(unittest.TestCase):
                 model_path=self.gguf,
                 fabric_interface="lo",
                 template=self.spec,
+                **overrides,
             )
 
     def test_four_roles_and_unique_loopback_ports(self):
@@ -184,6 +185,122 @@ class DevTests(unittest.TestCase):
                 template=self.spec,
             )
         self.assertEqual(path.read_text(), "operator edit")
+
+    def test_cli_reuse_reports_all_conflicts_and_preserves_operator_edits(self):
+        self.initialize()
+        (self.root / "fleet.json").write_text("operator fleet edit")
+        (self.root / "notes.txt").write_text("operator notes")
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+            patch.object(template, "_gpu_rows", side_effect=AssertionError("reuse is local")),
+        ):
+            result = main(
+                [
+                    "dev",
+                    "init",
+                    "--instance",
+                    str(self.root),
+                    "--engine-count",
+                    "2",
+                    "--port-base",
+                    "19000",
+                ]
+            )
+        self.assertEqual(result, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("--engine-count", errors.getvalue())
+        self.assertIn("--port-base", errors.getvalue())
+        self.assertIn("narwhal dev init --instance <new-directory>", errors.getvalue())
+        self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
+    def test_cli_reuse_checks_every_explicit_setting(self):
+        self.initialize()
+        changed = lifecycle.read(self.root / "template.json")
+        changed["runtime"]["max_model_len"] += 1
+        template_path = self.parent / "changed-template.json"
+        template_path.write_text(json.dumps(changed))
+        for flag, value, detail in (
+            ("--model", str(self.parent / "other.gguf"), "--model"),
+            ("--model-dir", str(self.parent / "other-model"), "--model-dir"),
+            ("--gpu", "GPU-other", "--gpu"),
+            ("--interface", "eth0", "--interface"),
+            ("--gpu-memory-utilization", "0.11", "--gpu-memory-utilization"),
+            ("--device-allowance", "0.6", "--device-allowance"),
+            ("--template", str(template_path), "--template runtime.max_model_len"),
+        ):
+            with (
+                self.subTest(flag=flag),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(
+                    main(["dev", "init", "--instance", str(self.root), flag, value]), 2
+                )
+                self.assertIn(detail, errors.getvalue())
+                self.assertEqual(output.getvalue(), "")
+
+    def test_cli_matching_and_omitted_settings_reuse_custom_instance(self):
+        self.initialize(engine_count=2, port_base=19000, device_allowance=0.4)
+        (self.root / "fleet.json").write_text("operator fleet edit")
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        matching = [
+            "--model",
+            str(self.gguf),
+            "--model-dir",
+            str(self.model),
+            "--interface",
+            "lo",
+            "--gpu",
+            "GPU-test",
+            "--engine-count",
+            "2",
+            "--port-base",
+            "19000",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--device-allowance",
+            "0.4",
+            "--template",
+            str(self.root / "template.json"),
+        ]
+        for flags in ([], matching, matching):
+            with (
+                self.subTest(flags=flags),
+                patch.object(
+                    template, "reference", side_effect=AssertionError("use saved settings")
+                ),
+                patch.object(template, "_gpu_rows", side_effect=AssertionError("reuse is local")),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(main(["dev", "init", "--instance", str(self.root), *flags]), 0)
+            self.assertEqual(
+                json.loads(output.getvalue()), {"status": "reused", "instance": str(self.root)}
+            )
+            self.assertEqual(errors.getvalue(), "")
+            self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
+    def test_materialize_rejects_conflicting_explicit_settings(self):
+        self.initialize()
+        with self.assertRaisesRegex(ValueError, "--engine-count"):
+            template.materialize(self.root, engine_count=2)
+        self.spec["allocation"]["engine_count"] = 2
+        with self.assertRaisesRegex(ValueError, "--template allocation.engine_count"):
+            self.initialize()
+
+    def test_init_help_explains_reuse_and_configuration_changes(self):
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            self.assertRaises(SystemExit) as exit,
+        ):
+            main(["dev", "init", "--help"])
+        self.assertEqual(exit.exception.code, 0)
+        help_text = " ".join(output.getvalue().split())
+        self.assertIn("report reused", help_text)
+        self.assertIn("Reuse preserves operator edits", help_text)
+        self.assertIn("select a fresh directory with --instance", help_text)
 
     def test_invalid_memory_and_overlapping_ports_reject_init(self):
         self.spec["allocation"]["device_allowance"] = 0.3

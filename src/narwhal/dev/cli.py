@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
         action = actions.add_parser(name)
         action.add_argument("--instance", type=Path, default=Path("runs/dev"))
         if name == "init":
+            action.description = (
+                "Create an instance, or report reused when explicit settings match an existing "
+                "instance. Reuse preserves operator edits. To change settings, select a fresh "
+                "directory with --instance."
+            )
             action.add_argument(
                 "--template", type=Path, help="Versioned model and runtime settings"
             )
@@ -38,52 +43,25 @@ def main(argv: list[str] | None = None) -> int:
             )
             action.add_argument("--gpu-memory-utilization", type=float)
             action.add_argument("--device-allowance", type=float)
-            action.add_argument("--interface", default="eth0")
+            action.add_argument("--interface", help="Local NIXL/UCX interface (default: eth0)")
     args = parser.parse_args(argv)
     root = args.instance.expanduser().resolve()
     try:
         if args.action == "init":
-            spec = lifecycle.read(args.template) if args.template else template.reference()
-            for argument, field in (
-                ("engine_count", "engine_count"),
-                ("gpu_memory_utilization", "gpu_memory_utilization"),
-                ("device_allowance", "device_allowance"),
-            ):
-                if (value := getattr(args, argument)) is not None:
-                    spec["allocation"][field] = value
-            if args.port_base is not None:
-                spec["ports"].update(
-                    router=args.port_base,
-                    engine_first=args.port_base + 1,
-                    attestation_first=args.port_base + 101,
-                    nixl_first=args.port_base + 201,
-                )
-            hub = Path.home() / ".cache/huggingface/hub"
-            model = spec["model"]
-            model_path = (
-                args.model
-                or hub
-                / ("models--" + model["repository"].replace("/", "--"))
-                / "snapshots"
-                / model["revision"]
-                / model["filename"]
-            )
-            model_dir = (
-                args.model_dir
-                or hub
-                / ("models--" + model["tokenizer_repository"].replace("/", "--"))
-                / "snapshots"
-                / model["tokenizer_revision"]
-            )
+            reused = root.exists()
             template.materialize(
                 root,
-                model_dir=model_dir,
-                model_path=model_path,
+                model_dir=args.model_dir,
+                model_path=args.model,
                 fabric_interface=args.interface,
                 gpu_uuid=args.gpu,
-                template=spec,
+                template=lifecycle.read(args.template) if args.template else None,
+                engine_count=args.engine_count,
+                port_base=args.port_base,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                device_allowance=args.device_allowance,
             )
-            result = {"status": "initialized", "instance": str(root)}
+            result = {"status": "reused" if reused else "initialized", "instance": str(root)}
         else:
             operation = {
                 "up": lifecycle.up,

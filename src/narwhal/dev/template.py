@@ -162,25 +162,116 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _template_differences(requested: dict, existing: dict, prefix: str = "") -> list[str]:
+    differences = []
+    for key in sorted(requested.keys() | existing.keys()):
+        field = f"{prefix}.{key}" if prefix else key
+        if key not in requested or key not in existing:
+            differences.append(field)
+        elif isinstance(requested[key], dict) and isinstance(existing[key], dict):
+            differences.extend(_template_differences(requested[key], existing[key], field))
+        elif requested[key] != existing[key]:
+            differences.append(field)
+    return differences
+
+
 def materialize(
     output: Path,
     *,
-    model_dir: Path,
-    model_path: Path,
-    fabric_interface: str,
+    model_dir: Path | None = None,
+    model_path: Path | None = None,
+    fabric_interface: str | None = None,
     gpu_uuid: str | None = None,
     template: dict | None = None,
+    engine_count: int | None = None,
+    port_base: int | None = None,
+    gpu_memory_utilization: float | None = None,
+    device_allowance: float | None = None,
 ) -> Path:
-    """Check the host and write one private native instance without replacing files."""
-    spec = copy.deepcopy(template if template is not None else reference())
-    if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
-        raise ValueError("Narwhal Dev template requires schema version 1")
+    """Reuse matching explicit settings, or check the host and write a private instance."""
     output = output.expanduser().resolve()
+    existing = None
+    saved = None
     if output.exists():
         existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
+        saved = json.loads((output / "template.json").read_text())
+    source = template if template is not None else saved
+    spec = copy.deepcopy(source if source is not None else reference())
+    if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
+        raise ValueError("Narwhal Dev template requires schema version 1")
+    allocation = {
+        "engine_count": engine_count,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "device_allowance": device_allowance,
+    }
+    for field, allocation_value in allocation.items():
+        if allocation_value is not None:
+            spec["allocation"][field] = allocation_value
+    if port_base is not None:
+        spec["ports"].update(
+            router=port_base,
+            engine_first=port_base + 1,
+            attestation_first=port_base + 101,
+            nixl_first=port_base + 201,
+        )
+    if existing is not None and saved is not None:
+        conflicts = []
+        for flag, field, value in (
+            (
+                "--model-dir",
+                "model_dir",
+                str(model_dir.expanduser().resolve()) if model_dir else None,
+            ),
+            (
+                "--model",
+                "model_path",
+                str(model_path.expanduser().absolute()) if model_path else None,
+            ),
+            ("--interface", "fabric_interface", fabric_interface),
+            ("--gpu", "gpu_uuid", gpu_uuid),
+            ("--engine-count", "engine_count", engine_count),
+        ):
+            if value is not None and value != existing[field]:
+                conflicts.append(flag)
+        conflicts.extend(
+            "--" + field.replace("_", "-")
+            for field in ("gpu_memory_utilization", "device_allowance")
+            if allocation[field] is not None and allocation[field] != saved["allocation"][field]
+        )
+        if port_base is not None and any(
+            spec["ports"][field] != existing["ports"][field]
+            for field in ("router", "engine_first", "attestation_first", "nixl_first")
+        ):
+            conflicts.append("--port-base")
+        if template is not None:
+            conflicts.extend(f"--template {field}" for field in _template_differences(spec, saved))
+        if conflicts:
+            raise ValueError(
+                f"existing instance {output} conflicts with {', '.join(conflicts)}; "
+                "create a fresh instance with narwhal dev init --instance <new-directory> "
+                "and the requested settings"
+            )
         return output
+    hub = Path.home() / ".cache/huggingface/hub"
+    model = spec["model"]
+    model_path = (
+        model_path
+        or hub
+        / ("models--" + model["repository"].replace("/", "--"))
+        / "snapshots"
+        / model["revision"]
+        / model["filename"]
+    )
+    model_dir = (
+        model_dir
+        or hub
+        / ("models--" + model["tokenizer_repository"].replace("/", "--"))
+        / "snapshots"
+        / model["tokenizer_revision"]
+    )
+    fabric_interface = fabric_interface if fabric_interface is not None else "eth0"
     model_dir = model_dir.expanduser().resolve(strict=True)
     # Keep the snapshot filename: Hugging Face cache files are often symlinks to blobs.
     model_path = model_path.expanduser().absolute()

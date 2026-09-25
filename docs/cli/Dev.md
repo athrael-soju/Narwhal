@@ -3,7 +3,12 @@
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
 Four engines open as two prefill and two decode processes on the selected
-GPU. Repeating `init` preserves the existing directory.
+GPU. Repeating `init` preserves the existing files and operator edits,
+returning `status: reused` when explicitly supplied settings match the saved
+instance. Omitted settings retain their saved values. Conflicting flags exit
+2 and name the settings that differ. To change initialization settings,
+select a fresh directory with `narwhal dev init --instance runs/new-instance`
+and supply the desired template and flags.
 
 `up` checks the ports and runtime, starts each engine, captures live
 attestations, profiles every split with at least one prefill and one decode
@@ -27,7 +32,7 @@ SIGKILL. Successful teardown reports `stopped`; a subsequent `up` creates
 another run directory with fresh profiles. Earlier logs and measurements
 stay beside it.
 
-Lifecycle commands exit 0 for `initialized`, `starting`, `launched`, `ready`
+Lifecycle commands exit 0 for `initialized`, `reused`, `starting`, `launched`, `ready`
 or `stopped`, 1 when the returned status is `degraded`, and 2 when the command
 raises an operational or validation error. A failed `verify` exits 2; querying
 that retained failure with `status` exits 1, including when HTTP checks pass.
