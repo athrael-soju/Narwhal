@@ -106,8 +106,8 @@ curl http://127.0.0.1:18000/metrics
 ```
 
 The four engines open with two prefill and two decode roles. Startup
-profiles that split and a one-prefill, three-decode split so the controller
-can price a role change from the current processes. Decode profiles cover
+profiles 1P:3D, 2P:2D and 3P:1D so the controller can price changes in both
+directions from the current processes. Decode profiles cover
 128 to 512 input tokens at concurrency one and two; prefill profiles extend
 to 1,024 tokens. Use requests within those bounds when exercising role
 control. The 4,096-token engine context limit bounds input plus output.

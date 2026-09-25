@@ -67,6 +67,29 @@ class DevTests(unittest.TestCase):
         _, ports = template._port_layout(self.spec, 4)
         self.assertEqual(len(ports), 13)
 
+    def test_four_engine_profiles_cover_both_adjacent_splits(self):
+        self.initialize()
+        fleet = lifecycle.read(self.root / "fleet.json")
+        run = self.root / "run-profiles"
+        run.mkdir()
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, fleet, self.spec)
+        measured = {
+            tuple(e["role"] for e in lifecycle.read(path)["engines"])
+            for path in run.glob("profile-*.fleet.json")
+        }
+        self.assertEqual(
+            measured,
+            {
+                ("prefill", "decode", "decode", "decode"),
+                ("prefill", "prefill", "decode", "decode"),
+                ("prefill", "prefill", "prefill", "decode"),
+            },
+        )
+        merge_args = command.call_args.args[2]
+        merged = [merge_args[i + 1] for i, arg in enumerate(merge_args) if arg == "--merge"]
+        self.assertEqual(set(merged), {str(run / f"profiles-{p}p{4 - p}d.json") for p in (1, 2, 3)})
+
     def test_repeated_init_preserves_the_existing_instance(self):
         self.initialize()
         path = self.root / "fleet.json"
