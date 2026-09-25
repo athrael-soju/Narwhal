@@ -179,11 +179,9 @@ def main(argv=None):
         )
         assert version_result.stdout == f"narwhal-inference {distribution.version}\n", entry.name
         assert version_result.stderr == "", (entry.name, version_result.stderr)
-    reference = importlib.resources.files("narwhal.dev").joinpath("reference-v1.json")
-    assert (
-        reference.read_bytes()
-        == (args.source_root / "src/narwhal/dev/reference-v1.json").read_bytes()
-    )
+    for name in ("small-cuda-v1.json", "reference-v1.json"):
+        packaged = importlib.resources.files("narwhal.dev").joinpath(name)
+        assert packaged.read_bytes() == (args.source_root / "src/narwhal/dev" / name).read_bytes()
     for command in ("init", "up", "verify", "status", "down"):
         subprocess.run(
             ["narwhal", "dev", command, "--help"], check=True, timeout=30, capture_output=True

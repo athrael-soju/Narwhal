@@ -101,6 +101,68 @@ class DevTests(unittest.TestCase):
         _, ports = template._port_layout(self.spec, 4)
         self.assertEqual(len(ports), 13)
 
+    def test_default_template_accepts_an_eight_gib_cuda_gpu(self):
+        self.spec = template.default_template()
+        self.spec["model"].update(
+            filename=self.gguf.name,
+            sha256=hashlib.sha256(b"synthetic").hexdigest(),
+            tokenizer_sha256={},
+        )
+        self.spec["runtime"].pop("gguf_plugin_python_sha256", None)
+        self.assertEqual(self.spec["allocation"]["engine_count"], 2)
+        self.assertNotIn("product", self.spec["gpu"])
+        self.assertNotIn("minimum_total_mib", self.spec["gpu"])
+        self.assertEqual(self.spec["runtime"]["model_dtype"], "float16")
+        profile = self.spec["profile"]
+        sweep = Sweep(
+            prefill_lens=tuple(profile["prefill_lens"]),
+            decode_input_lens=tuple(profile["decode_input_lens"]),
+            decode_concurrency=tuple(profile["decode_concurrency"]),
+            decode_tokens=profile["decode_tokens"],
+        )
+        runtime = self.spec["runtime"]
+        self.assertEqual(
+            bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"]), sweep
+        )
+        with (
+            patch.object(
+                template,
+                "_gpu_rows",
+                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
+            ),
+            patch.object(template, "gpu_memory", return_value={"total_mib": 8192, "used_mib": 0}),
+            patch.object(template, "_check_runtime"),
+            patch.object(template, "_address", return_value="127.0.0.1"),
+            patch.object(template, "_check_free_ports"),
+        ):
+            template.materialize(
+                self.root,
+                model_dir=self.model,
+                model_path=self.gguf,
+                fabric_interface="lo",
+                template=self.spec,
+            )
+        fleet = lifecycle.read(self.root / "fleet.json")
+        self.assertEqual([engine["role"] for engine in fleet["engines"]], ["prefill", "decode"])
+        self.assertEqual(fleet["hardware"]["accelerator"], "NVIDIA Test GPU")
+
+    def test_measured_reference_requires_its_gpu_product(self):
+        with (
+            patch.object(
+                template,
+                "_gpu_rows",
+                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
+            ),
+            self.assertRaisesRegex(ValueError, "template requires NVIDIA GeForce RTX 5090"),
+        ):
+            template.materialize(
+                self.root,
+                model_dir=self.model,
+                model_path=self.gguf,
+                fabric_interface="lo",
+                template=self.spec,
+            )
+
     def test_init_records_the_engine_credential_reference(self):
         with patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": "synthetic-key"}):
             self.initialize()
@@ -330,7 +392,7 @@ class DevTests(unittest.TestCase):
             with (
                 self.subTest(flags=flags),
                 patch.object(
-                    template, "reference", side_effect=AssertionError("use saved settings")
+                    template, "default_template", side_effect=AssertionError("use saved settings")
                 ),
                 patch.object(template, "_gpu_rows", side_effect=AssertionError("reuse is local")),
                 contextlib.redirect_stdout(io.StringIO()) as output,

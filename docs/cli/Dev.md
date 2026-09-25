@@ -3,14 +3,16 @@
 `narwhal --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on
-Ubuntu or Ubuntu under WSL2. Its small-GPU target is 8 GB of VRAM or less;
-the installed reference is a measured RTX 5090 recipe. GPU-specific templates
-select the model, runtime, memory budget and minimum device memory.
+Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a
+selected NVIDIA GPU and targets 8 GB of VRAM or less. The optional
+[RTX 5090 reference](../dev/RTX-5090-Reference.md) records a measured
+four-engine configuration. Templates select the model, runtime and memory
+budget; `gpu.product` pins a model of card when a recipe requires one.
 
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
-The reference template configures four engines, two prefill and two decode,
-on the selected GPU. Repeating `init` preserves the existing files and operator edits,
+The installed template configures one prefill and one decode engine on the
+selected GPU. Repeating `init` preserves the existing files and operator edits,
 returning `status: reused` when explicitly supplied settings match the saved
 instance. Omitted settings retain their saved values. Conflicting flags exit
 2 and name the settings that differ. To change initialization settings,
@@ -61,32 +63,32 @@ narwhal dev down
 | Flag | Default | Operation |
 | --- | --- | --- |
 | `--instance` | `runs/dev` | Select the private instance for any subcommand. |
-| `--template` | Installed reference | Supply versioned model, tokenizer, runtime, profiling and memory settings to `init`. |
+| `--template` | Installed small-GPU template | Supply versioned model, tokenizer, runtime, profiling and memory settings to `init`. |
 | `--model` | Pinned Hugging Face cache file | Select the GGUF file matching the template checksum. |
 | `--model-dir` | Pinned tokenizer cache directory | Select tokenizer and configuration files. |
 | `--gpu` | Single discovered GPU | Select a physical GPU UUID. |
-| `--engine-count` | Template value, four | Allocate independent engine processes. |
+| `--engine-count` | Template value, two | Allocate independent engine processes. |
 | `--port-base` | Template ports: router 18000, engine 18101, attestation 18201, NIXL 5701 | Set the router TCP port; engine HTTP, attestation and NIXL ranges start at offsets 1, 101 and 201. All selected ports must be distinct and fit 1..65535. |
-| `--gpu-memory-utilization` | Template value, 0.1 | Finite per-engine fraction of total GPU memory, greater than zero and at most 1. |
-| `--device-allowance` | Template value, 0.5 | Finite fraction of total GPU memory, at most 1; bounds the sum of engine fractions and the aggregate observed startup memory increase. |
+| `--gpu-memory-utilization` | Template value, 0.35 | Finite per-engine fraction of total GPU memory, greater than zero and at most 1. |
+| `--device-allowance` | Template value, 0.8 | Finite fraction of total GPU memory, at most 1; bounds the sum of engine fractions and the aggregate observed startup memory increase. |
 | `--interface` | `"eth0"` | Select the local NIXL/UCX interface. |
 
 Initialization accepts two to eight engines and compares the decimal total of
 their per-engine fractions with the device allowance: three engines at `0.1`
 fit an allowance of `0.3`; a total above the allowance rejects initialization.
 The free-memory check reserves the allowance times total device memory plus
-the template's `gpu.reserve_mib` (2048 MiB in the installed reference).
+the template's `gpu.reserve_mib` (512 MiB in the installed template).
 
 Model and runtime changes belong in a custom template, selected with
 `--template`. Runtime and tokenizer checksums bind the default template to
-its measured GGUF loader. Model overrides require their matching template
+its pinned GGUF loader. Model overrides require their matching template
 checksums and serving limits.
 
 Export `NARWHAL_ENGINE_API_KEY` before `up` to authenticate engine requests.
 The generated fleet references that environment variable for profiling,
 verification and routing; keep it set when using those commands.
 
-The installed reference also contains `role_cycle`, with deterministic
+The RTX 5090 reference also contains `role_cycle`, with deterministic
 workloads for 1P:3D, 2P:2D and 3P:1D. The checkout command
 `python -m tools.measurement.dev_cycle --instance runs/dev` replays these
 workloads through a verified fleet and saves transition and latency checks.

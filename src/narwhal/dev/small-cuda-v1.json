@@ -1,0 +1,118 @@
+{
+  "schema": "narwhal.dev-template",
+  "schema_version": 1,
+  "name": "cuda-small-gpu-qwen35-08b-q4km-native",
+  "gpu": {
+    "reserve_mib": 512
+  },
+  "model": {
+    "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+    "revision": "e524882462b3f2a9fe83be967c654c4322abb2f6",
+    "quantization": "Q4_K_M",
+    "filename": "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "served_name": "Qwen3.5-0.8B-GGUF-Q4_K_M",
+    "tokenizer_repository": "Qwen/Qwen3.5-0.8B",
+    "tokenizer_revision": "2fc06364715b967f1860aea9cf38778875588b17",
+    "tokenizer_sha256": {
+      "config.json": "b90b86f35c8e6925ef74ee04d0e758f0a845c83a42089ad82bbaa948de9b4204",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+  },
+  "runtime": {
+    "expected_packages": {
+      "vllm": "0.29.0",
+      "nixl": "1.4.1",
+      "vllm-gguf-plugin": "0.0.5",
+      "torch": "2.13.0",
+      "transformers": "5.17.0",
+      "nixl-cu13": "1.4.1"
+    },
+    "model_dtype": "float16",
+    "kv_cache_dtype": "auto",
+    "block_size": 128,
+    "max_model_len": 1024,
+    "max_num_seqs": 2,
+    "environment": {
+      "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+      "VLLM_USE_FLASHINFER_SAMPLER": "0",
+      "VLLM_USE_V2_MODEL_RUNNER": "0"
+    },
+    "gguf_plugin_source_revision": "d4c1f0d082fc7cd4350da56689109a01c1f29d6c",
+    "gguf_plugin_python_sha256": "b08b2ffdf18e4314ed7e4a8cfd49de3520edd5d9bc9be4564d8a71b2265771e0",
+    "gguf_plugin_extension_sha256": "64521127698503e4b72053cd06adc9aa0448debb07715b2663b1250a816b2c1e"
+  },
+  "allocation": {
+    "engine_count": 2,
+    "device_allowance": 0.8,
+    "gpu_memory_utilization": 0.35
+  },
+  "ports": {
+    "router": 18000,
+    "engine_first": 18101,
+    "attestation_first": 18201,
+    "nixl_first": 5701,
+    "ucx_range": "39000-39999"
+  },
+  "slo": {
+    "ttft_s": 5.0,
+    "tpot_s": 0.5
+  },
+  "controller": {
+    "monitor_interval_s": 0.1,
+    "monitor_failure_limit": 5,
+    "advisory": false,
+    "min_prefill": 1,
+    "min_decode": 1,
+    "flip_history": 1000,
+    "thresholds": {
+      "expand": 1.0,
+      "shrink": 0.5,
+      "cooldown_s": 10.0,
+      "dwell_s": 0.0,
+      "sustained_intervals": 3,
+      "panic_ratio": 0.0,
+      "flip_resident_guard": 0
+    },
+    "reactive": {
+      "window_s": 30.0,
+      "confirmations": 2,
+      "utilization": 0.8,
+      "min_arrivals": 10,
+      "demand_floor": 0.2,
+      "movement_margin": 0.05,
+      "step_s": 0.25,
+      "evidence_span_s": 15.0,
+      "evidence_max_span_s": 30.0,
+      "evidence_min_arrivals": 10,
+      "demand_rise_tolerance": 0.25,
+      "decode_correction_min": 0.5,
+      "decode_correction_max": 2.0,
+      "decode_correction_alpha": 0.2,
+      "decode_correction_min_samples": 8
+    }
+  },
+  "profile": {
+    "prefill_lens": [
+      128,
+      512,
+      896
+    ],
+    "decode_input_lens": [
+      128,
+      768
+    ],
+    "decode_concurrency": [
+      1,
+      2
+    ],
+    "decode_tokens": 64,
+    "neighbour_prefill_rps": 0.5,
+    "neighbour_decode_rps": 0.25,
+    "neighbour_prefill_tokens": 512,
+    "neighbour_decode_input_tokens": 128,
+    "neighbour_decode_output_tokens": 32,
+    "decode_repeats": 3
+  }
+}

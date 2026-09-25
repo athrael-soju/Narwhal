@@ -55,6 +55,7 @@ nav:
   - Install from PyPI: Install-from-PyPI.md
   - Narwhal dev:
       - Overview: Dev-Runtime.md
+      - Install the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
   - Deploy a fleet:
       - Overview: Deploy.md

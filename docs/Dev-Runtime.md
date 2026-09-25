@@ -1,18 +1,17 @@
 # Narwhal dev
 
-Narwhal dev starts, profiles, verifies and stops a local fleet of independent
-engines sharing one GPU. Its native backend currently uses NVIDIA CUDA and
-runs on Ubuntu or Ubuntu under WSL2. Each instance keeps its model, runtime,
-GPU allocation, ports, profiles and process identities together under
-`runs/dev` by default.
+Narwhal dev starts, profiles, verifies and stops independent engines sharing
+one GPU. The current native backend uses NVIDIA CUDA on Ubuntu or Ubuntu under
+WSL2. Each instance keeps its model, runtime, GPU allocation, ports, profiles
+and process identities under `runs/dev` by default.
 
-The intended small-GPU target is **8 GB of VRAM or less**. The repository
-currently ships a measured [RTX 5090 reference](dev/RTX-5090-Reference.md)
-with four engines, a pinned model and a 30,000 MiB minimum. That reference
-establishes the command and transfer workflow; a smaller GPU needs a
-separately measured model and runtime template with at least one prefill and
-one decode engine. The current native backend selects NVIDIA GPUs through
-`nvidia-smi`.
+The installed template starts two engines, one prefill and one decode, with
+Qwen3.5-0.8B GGUF. It selects a CUDA GPU by UUID and checks available VRAM
+against its allocation and 512 MiB reserve. The target is an NVIDIA GPU with
+**8 GB of VRAM or less**; a successful `up` and `verify` establishes fit and
+directed KV transfer on the selected card. The separate
+[RTX 5090 reference](dev/RTX-5090-Reference.md) records the measured
+four-engine configuration.
 
 ## Prepare Ubuntu or WSL2
 
@@ -25,37 +24,51 @@ environment and instance directory on the Linux filesystem in either case.
 In the Ubuntu shell, inspect the available GPU and IPv4 interfaces:
 
 ```bash
-nvidia-smi --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
+nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
+"$nvidia_smi" --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
 ip -brief -4 address
 ```
 
 WSL2 exposes `nvidia-smi` at `/usr/lib/wsl/lib/nvidia-smi` when that path is
 outside the shell's `PATH`. Choose an interface with one IPv4 address for
-NIXL/UCX; its name may differ from the default `eth0`. Narwhal dev uses the
-same Linux process lifecycle and commands on both hosts.
+NIXL/UCX; its name may differ from the default `eth0`. The commands below
+run in the Ubuntu shell on both hosts.
 
-## Select a runtime and template
+## Install the runtime and model
 
-The installed reference pairs the RTX 5090 with Qwen3.5-0.8B GGUF and pinned
-vLLM, Torch, NIXL, Transformers and GGUF loader versions. Follow its
-[installation and model steps](dev/RTX-5090-Reference.md#install-the-reference-runtime)
-when using that template. A different NVIDIA GPU needs a template whose
-`gpu.product`, `gpu.minimum_total_mib`, `gpu.reserve_mib`, model checksums,
-runtime pins and memory allocation describe its tested recipe. `--template`
-selects that file; `--engine-count`, `--gpu-memory-utilization` and
-`--device-allowance` can adjust its allocation for a fresh instance.
+Follow the [CUDA runtime and model steps](dev/CUDA-Runtime.md) in the Ubuntu
+shell. The installed template pins vLLM, Torch, NIXL, Transformers, the GGUF
+loader, model and tokenizer. CUDA support currently covers NVIDIA GPUs;
+contributions can add discovery, launch and transfer support for other
+vendors.
 
-The engine-count floor is two, allowing one prefill and one decode engine.
-Narwhal checks the summed vLLM fractions and observed whole-device startup
-growth against the template's allowance, while leaving its free-memory
-reserve available. Model weights, runtime overhead and KV cache also consume
-VRAM. A smaller template must establish its own measured fit and directed
-KV transfer result on the target GPU.
+The default two-engine allocation assigns each vLLM process 0.35 of total
+VRAM, caps whole-device startup growth at 0.8 and reserves 512 MiB of free
+memory at initialization. Model weights, runtime overhead and KV cache
+consume that budget. Tune `--gpu-memory-utilization` and `--device-allowance`
+for a fresh instance after checking the card's available memory. Its initial
+development budgets are 5 seconds TTFT and 500 ms TPOT; set targets from
+measurements on the selected card. A custom
+`--template` can change the model, runtime, context length, profiling sweep
+and reserve. A recipe can set `gpu.product` to pin a card and
+`gpu.minimum_total_mib` to require a measured capacity.
+
+Export the installed template when preparing a new recipe:
+
+```bash
+mkdir -p runs
+python - <<'PYTHON' > runs/small-cuda-template.json
+from importlib.resources import files
+print(files('narwhal.dev').joinpath('small-cuda-v1.json').read_text())
+PYTHON
+```
+
+Edit the file, then initialize a fresh instance with
+`narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
 
 ## Initialize and verify an instance
 
-Select the IPv4 interface found above. Use `--template /path/to/template.json`
-for a recipe other than the installed RTX 5090 reference:
+Select the IPv4 interface found above:
 
 ```bash
 interface=eth0  # replace with the interface reported by ip
@@ -78,7 +91,7 @@ and error diagnostics go to stderr. `status` reports `degraded` with the
 retained reason when verification fails; a successful `verify` restores
 `ready` after the failing input is repaired.
 
-The reference router listens at `http://127.0.0.1:18000`. Inspect its state
+The default router listens at `http://127.0.0.1:18000`. Inspect its state
 and metrics after verification:
 
 ```bash
@@ -90,7 +103,7 @@ Select another port layout with `narwhal dev init --port-base`, or another
 instance with `--instance` on each command. The [CLI reference](cli/Dev.md)
 lists the flags, lifecycle results and exit codes. The optional
 [four-engine role cycle](dev/RTX-5090-Reference.md#replay-all-three-role-splits)
-uses the installed reference's workload and split targets.
+uses the RTX 5090 reference's workload and split targets.
 
 ## Inspect and stop the instance
 
@@ -113,10 +126,10 @@ a separate Prometheus and Grafana host.
 
 ## Contribute another GPU recipe
 
-The first small-GPU milestone is an NVIDIA CUDA recipe that launches and
-verifies two engines within 8 GB of VRAM or less. Record the GPU, driver,
-model and runtime versions, free-memory reserve, peak startup memory, both
-directed KV transfers and routed completion in its qualification evidence.
+For another small CUDA GPU, record the GPU, driver, model and runtime
+versions, free-memory reserve, peak startup memory, both directed KV
+transfers and routed completion. Share its working template and qualification
+evidence so the allocation can be reproduced.
 
 Contributions for other GPU vendors can add discovery, memory accounting,
 engine launch and a compatible transfer runtime alongside a measured

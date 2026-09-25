@@ -1,68 +1,29 @@
 # RTX 5090 reference for Narwhal dev
 
-The installed Narwhal dev template pins an RTX 5090, Qwen3.5-0.8B GGUF,
-four engines and the runtime versions below. This is the measured reference
-recipe. Run it on Ubuntu or Ubuntu under WSL2 after following the host setup
-in [Narwhal dev](../Dev-Runtime.md). The same Python and lifecycle commands
-run in either environment.
+This measured recipe pins an RTX 5090, Qwen3.5-0.8B GGUF and four engines.
+Follow the host setup in [Narwhal dev](../Dev-Runtime.md) and the shared
+[CUDA runtime and model installation](CUDA-Runtime.md) on Ubuntu or Ubuntu
+under WSL2.
 
 The reference allocates four engines with a 4,096-token context limit, four
 active sequences per engine and a 0.1 vLLM memory fraction each. Launch
 checks reserve 2,048 MiB of free VRAM beyond the 0.5 whole-device allowance.
 
-## Install the reference runtime
+## Select the RTX 5090 template
 
-From the Narwhal checkout in the Linux shell:
-
-```bash
-python3.12 -m venv .venv-dev
-source .venv-dev/bin/activate
-python -m pip install .
-python -m pip install 'vllm==0.29.0' 'torch==2.13.0' \
-  'transformers==5.17.0' 'nixl==1.4.1' 'nixl-cu13==1.4.1'
-python -m pip install \
-  'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
-```
-
-Apply the pinned GGUF loader sources over the wheel's Python files while
-keeping its CUDA extension:
+Export the packaged reference into the Linux checkout before initializing an
+instance:
 
 ```bash
 mkdir -p runs
-git clone https://github.com/vllm-project/vllm-gguf-plugin.git runs/gguf-plugin
-git -C runs/gguf-plugin checkout d4c1f0d082fc7cd4350da56689109a01c1f29d6c
-python - <<'PY'
-from importlib.metadata import distribution
-from pathlib import Path
-import shutil
-
-source = Path('runs/gguf-plugin/vllm_gguf_plugin')
-target = Path(distribution('vllm-gguf-plugin').locate_file('vllm_gguf_plugin'))
-for path in source.rglob('*.py'):
-    destination = target / path.relative_to(source)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(path, destination)
-PY
+python - <<'PYTHON' > runs/rtx5090-template.json
+from importlib.resources import files
+print(files('narwhal.dev').joinpath('reference-v1.json').read_text())
+PYTHON
 ```
 
-`narwhal dev init` checks the plugin's Python tree and CUDA extension hashes
-against the installed template. Reapply these pinned sources after
-reinstalling the plugin wheel.
-
-## Download the reference model and tokenizer
-
-```bash
-hf download unsloth/Qwen3.5-0.8B-GGUF \
-  --revision e524882462b3f2a9fe83be967c654c4322abb2f6 \
-  Qwen3.5-0.8B-Q4_K_M.gguf
-hf download Qwen/Qwen3.5-0.8B \
-  --revision 2fc06364715b967f1860aea9cf38778875588b17 \
-  --include '*.json' '*.txt' '*.jinja'
-```
-
-The template resolves these revisions in the Hugging Face cache. For a
-custom cache location, pass the GGUF file with `--model` and the
-configuration/tokenizer directory with `--model-dir`.
+The template pins the GPU product, a 30,000 MiB minimum and the same runtime
+and model hashes as the installed small-GPU template.
 
 ## Launch and verify the reference
 
@@ -70,7 +31,7 @@ Select the Linux network interface that has one IPv4 address with
 `ip -brief -4 address`, then use its name in place of `eth0` if needed:
 
 ```bash
-narwhal dev init --interface eth0
+narwhal dev init --interface eth0 --template runs/rtx5090-template.json
 narwhal dev up
 narwhal dev verify
 narwhal dev status
@@ -166,7 +127,7 @@ PY
 narwhal dev init --instance runs/dev-custom --template runs/dev-template.json
 ```
 
-The product name and 30,000 MiB minimum in that template record the
-reference hardware. A smaller GPU needs a separately measured template and
-runtime configuration that fit two engines, model weights, KV cache and the
-free-memory reserve.
+The installed small-GPU template uses two engines and accepts the selected
+CUDA GPU by available memory. For another four-engine configuration, adjust
+the template and verify its startup memory, directed KV paths and routed
+completion on that card.

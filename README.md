@@ -62,7 +62,7 @@ The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest
 
 ## Narwhal dev
 
-[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA GPU fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. The small-GPU target is 8 GB of VRAM or less; the bundled, measured reference uses four engines on an RTX 5090. Contributors can add recipes for smaller NVIDIA cards and support for other GPU vendors.
+[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. Its installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
 
 ## Deploy a fleet
 

@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             action.add_argument(
                 "--template",
                 type=Path,
-                help="versioned model and runtime settings (default: installed reference)",
+                help="versioned model and runtime settings (default: installed small-GPU template)",
             )
             action.add_argument(
                 "--model",
@@ -86,28 +86,28 @@ def main(argv: list[str] | None = None) -> int:
             action.add_argument(
                 "--engine-count",
                 type=int,
-                help="independent engines, 2 to 8 (default: template value, reference 4)",
+                help="independent engines, 2 to 8 (default: template value, installed 2)",
             )
             action.add_argument(
                 "--port-base",
                 type=int,
                 help="router TCP port; engine HTTP, attestation and NIXL ranges start at "
                 "+1, +101 and +201; all ports must fit 1..65535 and be distinct "
-                "(default: template ports, reference router 18000)",
+                "(default: template ports, installed router 18000)",
             )
             action.add_argument(
                 "--gpu-memory-utilization",
                 type=float,
                 help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
                 "engine-count * fraction <= device-allowance "
-                "(default: template value, reference 0.1)",
+                "(default: template value, installed 0.35)",
             )
             action.add_argument(
                 "--device-allowance",
                 type=float,
                 help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
                 "engine fractions; bounds startup memory increase "
-                "(default: template value, reference 0.5)",
+                "(default: template value, installed 0.8)",
             )
             action.add_argument("--interface", help="Local NIXL/UCX interface (default: eth0)")
     args = parser.parse_args(argv)

@@ -22,11 +22,20 @@ from narwhal.deployment.launch_engine import gpu_memory, validate_runtime, write
 
 
 def reference() -> dict:
-    """Read the versioned template from the installed Narwhal distribution."""
-    source = resources.files("narwhal.dev").joinpath("reference-v1.json")
+    """Read the measured four-engine reference from the installed distribution."""
+    return _read_template("reference-v1.json")
+
+
+def default_template() -> dict:
+    """Read the installed small-GPU starting template."""
+    return _read_template("small-cuda-v1.json")
+
+
+def _read_template(filename: str) -> dict:
+    source = resources.files("narwhal.dev").joinpath(filename)
     document = json.loads(source.read_text())
     if document.get("schema") != "narwhal.dev-template" or document.get("schema_version") != 1:
-        raise ValueError("installed Narwhal dev template requires schema version 1")
+        raise ValueError(f"installed Narwhal dev template {filename} requires schema version 1")
     return document
 
 
@@ -198,7 +207,7 @@ def materialize(
             raise ValueError(f"unsupported instance configuration: {output}")
         saved = json.loads((output / "template.json").read_text())
     source = template if template is not None else saved
-    spec = copy.deepcopy(source if source is not None else reference())
+    spec = copy.deepcopy(source if source is not None else default_template())
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
         raise ValueError("Narwhal dev template requires schema version 1")
     allocation = {
@@ -305,10 +314,11 @@ def materialize(
     if len(selected) != 1:
         raise ValueError("select exactly one physical GPU with gpu_uuid")
     gpu = selected[0]
-    if gpu["name"] != spec["gpu"]["product"]:
-        raise ValueError(f"template requires {spec['gpu']['product']}; found {gpu['name']}")
+    product = spec["gpu"].get("product")
+    if product and gpu["name"] != product:
+        raise ValueError(f"template requires {product}; found {gpu['name']}")
     memory = gpu_memory(gpu["uuid"])
-    if memory["total_mib"] < spec["gpu"]["minimum_total_mib"]:
+    if memory["total_mib"] < spec["gpu"].get("minimum_total_mib", 0):
         raise ValueError("GPU VRAM is below the qualified template minimum")
     available = memory["total_mib"] - memory["used_mib"]
     required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
