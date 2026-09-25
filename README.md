@@ -60,6 +60,10 @@ narwhal-check --help
 
 The wheel installs `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
+## Run locally on an RTX 5090
+
+Follow [Set up the WSL2 GPU runtime](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to install the pinned runtime and run four engines on one GPU with `narwhal dev init/up/verify/status/down`.
+
 ## Deploy a fleet
 
 From a management workstation, an operator follows [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) to inspect the target hardware and model, install an approved source revision, validate the running vLLM processes and KV paths, then profile and preflight before routing traffic. The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.

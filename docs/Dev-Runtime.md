@@ -1,7 +1,7 @@
 # Set up the WSL2 GPU runtime
 
 Use Ubuntu under WSL2, Python 3.12 and an RTX 5090 with 32 GB VRAM.
-Check GPU access from the WSL2 shell:
+Install the NVIDIA Windows driver and run these commands in the WSL2 shell:
 
 ```bash
 nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv
@@ -58,7 +58,7 @@ plugin wheel.
 ```bash
 hf download unsloth/Qwen3.5-0.8B-GGUF \
   --revision e524882462b3f2a9fe83be967c654c4322abb2f6 \
-  Qwen3.5-0.8B-Q4_K_M.gguf mmproj-F16.gguf
+  Qwen3.5-0.8B-Q4_K_M.gguf
 hf download Qwen/Qwen3.5-0.8B \
   --revision 2fc06364715b967f1860aea9cf38778875588b17 \
   --include '*.json' '*.txt' '*.jinja'
@@ -82,6 +82,9 @@ narwhal dev status
 current engine profiles, and sends a routed arithmetic request before
 reporting `ready`.
 
+Keep this virtual environment active for every lifecycle command. The
+instance records its interpreter and requires the same runtime on restart.
+
 The router listens on `127.0.0.1:18000`. Engine HTTP ports start at 18101,
 attestation ports at 18201, and NIXL side-channel ports at 5701. Select
 another port layout with `dev init --port-base`, or another instance with
@@ -93,9 +96,52 @@ curl http://127.0.0.1:18000/v1/chat/completions \
   -d '{"model":"Qwen3.5-0.8B-GGUF-Q4_K_M","messages":[{"role":"user","content":"Reply with only the number: 2 + 3 = ?"}],"temperature":0,"max_tokens":32}'
 ```
 
-Expect the response content `5`. Inspect `runs/dev/run-*/router.log` and
-`engine-*/startup.log` when startup or inference fails. The same run
-directory contains profiles, transfer evidence, metrics and VRAM samples.
+Expect the response content `5`.
+
+## Inspect roles and operating limits
+
+```bash
+curl http://127.0.0.1:18000/narwhal/state
+curl http://127.0.0.1:18000/metrics
+```
+
+The four engines open with two prefill and two decode roles. Startup
+profiles that split and a one-prefill, three-decode split so the controller
+can price a role change from the current processes. Decode profiles cover
+128 to 512 input tokens at concurrency one and two; prefill profiles extend
+to 1,024 tokens. Use requests within those bounds when exercising role
+control. The 4,096-token engine context limit bounds input plus output.
+
+Keep four engines for the default RTX 5090 setup. Changing engine count,
+model, context length or memory fractions requires a matching template and
+a fresh `up` and `verify` cycle. Export the installed reference to edit it:
+
+```bash
+python - <<'PY' > runs/dev-template.json
+from importlib.resources import files
+print(files('narwhal.dev').joinpath('reference-v1.json').read_text())
+PY
+narwhal dev init --instance runs/dev-custom --template runs/dev-template.json
+```
+
+## Diagnose startup and inference
+
+Inspect the current run path printed by `status`:
+
+| File | Contents |
+| --- | --- |
+| `engine-*/startup.log` | Model loading, cache allocation and engine requests. |
+| `profile-*.log` | Probe failures and profile fit errors. |
+| `router.log` | Router startup and request errors. |
+| `journal.jsonl` | Admission, placement and controller decisions. |
+| `verify-*/preflight.log` | Runtime, profile and directed transfer checks. |
+| `*-memory.jsonl` | Whole-device VRAM samples. |
+| `teardown.json` | Stopped process groups and cleanup errors. |
+
+Free conflicting ports or select another `--port-base` in a new instance.
+For a VRAM reserve failure, stop other GPU workloads before retrying. For
+a model or plugin hash mismatch, restore the pinned files above. After
+repairing a startup failure, run `down`, `up` and `verify` for that instance.
 
 ## Stop or restart
 
