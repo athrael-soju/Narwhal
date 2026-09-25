@@ -52,6 +52,8 @@ docs = [
 ]
 
 [project.scripts]
+narwhal = "narwhal.dev.cli:main"
+narwhal-engine = "narwhal.deployment.launch_engine:main"
 narwhal-check = "narwhal.diagnostics.check:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
@@ -64,6 +66,7 @@ Issues = "https://github.com/athrael-soju/Narwhal/issues"
 
 [tool.setuptools.package-data]
 narwhal = ["py.typed", "fleet.example.json"]
+"narwhal.dev" = ["reference-v1.json"]
 
 [tool.ruff]
 line-length = 100
@@ -77,6 +80,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101"
 # Harnesses use assertions, fixed seeds, and fake credentials.
 "tools/*.py" = ["E402", "E731", "D", "S"]
 "tests/*.py" = ["D", "E731", "S"]
+# Preserve the existing deployment scripts' lint baseline during packaging.
+"src/narwhal/deployment/*.py" = ["D101", "D103", "S"]
 
 [tool.mypy]
 python_version = "3.11"

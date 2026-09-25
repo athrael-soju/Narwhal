@@ -19,6 +19,7 @@ from .model import (
     FleetConfig,
     HardwareSpec,
     ProfileValidationPolicy,
+    SharedDeviceAllocation,
 )
 
 
@@ -75,6 +76,7 @@ def load(path: str | Path) -> FleetConfig:
                         f"engines[{k}].attestation_url",
                         e.get("attestation_url", ""),
                     ),
+                    shared_device=_read_shared_device(problems, k, e.get("shared_device")),
                 )
             )
     slo_raw = raw["slo"]
@@ -514,7 +516,32 @@ _KNOWN_KEYS = {
 }
 
 _SLO_KEYS = {"ttft_s", "tpot_s"}
-_ENGINE_SPEC_KEYS = {"iid", "url", "role", "pin", "attestation_url"}
+_ENGINE_SPEC_KEYS = {"iid", "url", "role", "pin", "attestation_url", "shared_device"}
+_SHARED_DEVICE_KEYS = {"group", "gpu_uuid", "device_allowance", "gpu_memory_utilization"}
+
+
+def _read_shared_device(
+    problems: list[str], index: int, raw: object
+) -> SharedDeviceAllocation | None:
+    if raw is None:
+        return None
+    name = f"engines[{index}].shared_device"
+    if not isinstance(raw, dict):
+        problems.append(f"{name} must be an object")
+        return None
+    _check_unknown(problems, name, raw, _SHARED_DEVICE_KEYS)
+    return SharedDeviceAllocation(
+        group=_read_str(problems, f"{name}.group", raw.get("group")),
+        gpu_uuid=_read_str(problems, f"{name}.gpu_uuid", raw.get("gpu_uuid")),
+        device_allowance=_read_float(
+            problems, f"{name}.device_allowance", raw.get("device_allowance")
+        ),
+        gpu_memory_utilization=_read_float(
+            problems, f"{name}.gpu_memory_utilization", raw.get("gpu_memory_utilization")
+        ),
+    )
+
+
 _CONTROLLER_KEYS = {
     "monitor_interval_s",
     "monitor_failure_limit",

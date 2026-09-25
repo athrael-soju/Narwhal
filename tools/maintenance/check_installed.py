@@ -66,14 +66,33 @@ def main(argv=None):
         key=lambda entry: entry.name,
     )
     expected_entries = {
+        "narwhal",
         "narwhal-attest",
         "narwhal-check",
+        "narwhal-engine",
         "narwhal-profile",
         "narwhal-serve",
     }
     assert {entry.name for entry in entries} == expected_entries
     for entry in entries:
         subprocess.run([entry.name, "--help"], check=True, timeout=30, capture_output=True)
+    reference = importlib.resources.files("narwhal.dev").joinpath("reference-v1.json")
+    assert (
+        reference.read_bytes()
+        == (args.source_root / "src/narwhal/dev/reference-v1.json").read_bytes()
+    )
+    for command in ("init", "up", "verify", "status", "down"):
+        subprocess.run(
+            ["narwhal", "dev", command, "--help"], check=True, timeout=30, capture_output=True
+        )
+    with tempfile.TemporaryDirectory() as folder:
+        result = subprocess.run(
+            ["narwhal", "dev", "status", "--instance", str(Path(folder) / "missing")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 2 and "instance.json" in result.stderr
     for module in ("narwhal.benchmarking", "narwhal.diagnostics.qualification", "narwhal.fleet"):
         assert importlib.util.find_spec(module) is None, module
     asyncio.run(check_http())

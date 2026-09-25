@@ -104,6 +104,8 @@ nav:
           - Fabric and operations: configuration/06-Fabric-and-Operations.md
       - CLI:
           - Overview: CLI-Reference.md
+          - narwhal dev: cli/Dev.md
+          - narwhal-engine: cli/Engine.md
           - narwhal-attest: cli/Attest.md
           - narwhal-serve: cli/Serve.md
           - narwhal-profile: cli/Profile.md
