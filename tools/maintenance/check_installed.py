@@ -5,6 +5,8 @@ import asyncio
 import importlib.metadata
 import importlib.resources
 import importlib.util
+import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,6 +44,57 @@ async def check_http():
                 assert "narwhal_" in metrics.text
         finally:
             await app.state.router.engines.aclose()
+
+
+def check_offline_config():
+    """Validate and inspect a fleet before profiles and engine credentials exist."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        fleet = root / "fleet.json"
+        fleet.write_text(
+            json.dumps(
+                {
+                    "schema": "narwhal.fleet",
+                    "schema_version": 1,
+                    "model": "installed-offline",
+                    "engines": [{"iid": "e", "url": "${NARWHAL_INSTALLED_ENGINE_URL}"}],
+                    "slo": {"ttft_s": 1, "tpot_s": 1},
+                    "engine": {"engine_api_key_env": "NARWHAL_INSTALLED_CONFIG_KEY"},
+                }
+            )
+        )
+        env = os.environ.copy()
+        env.pop("NARWHAL_INSTALLED_CONFIG_KEY", None)
+        env["NARWHAL_INSTALLED_ENGINE_URL"] = "http://127.0.0.1:1/"
+        for action in ("validate", "inspect"):
+            subprocess.run(
+                ["narwhal", "config", action, "--help"],
+                check=True,
+                timeout=30,
+                capture_output=True,
+                cwd=root,
+                env=env,
+            )
+            output = subprocess.run(
+                ["narwhal", "config", action, "--fleet", str(fleet), "--format", "json"],
+                check=True,
+                timeout=30,
+                capture_output=True,
+                text=True,
+                cwd=root,
+                env=env,
+            )
+            result = json.loads(output.stdout)
+            assert output.stderr == "", output.stderr
+            assert result["schema"] == "narwhal.command-result"
+            assert result["operation"] == f"config {action}"
+            data = result["data"]
+            assert data["schema"] == "narwhal.effective-config"
+            assert data["schema_version"] == 1
+            assert data["settings"]["engines"][0]["url"] == "http://127.0.0.1:1"
+            assert data["settings"]["engine"]["control_connections"] == 4
+            assert data["artifact_paths"]["profiles"] == str(root / "runs/profiles.json")
+        assert list(root.iterdir()) == [fleet]
 
 
 def main(argv=None):
@@ -95,6 +148,7 @@ def main(argv=None):
         assert result.returncode == 2 and "instance.json" in result.stderr
     for module in ("narwhal.benchmarking", "narwhal.diagnostics.qualification", "narwhal.fleet"):
         assert importlib.util.find_spec(module) is None, module
+    check_offline_config()
     asyncio.run(check_http())
     print(f"Installed package passed: {len(entries)} commands, package data and HTTP contracts")
     return 0

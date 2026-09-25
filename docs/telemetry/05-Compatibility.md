@@ -15,6 +15,7 @@ Current interfaces are:
 | Interface            | Schema                      | Version |
 | -------------------- | --------------------------- | ------: |
 | Native fleet config  | `narwhal.fleet`             |       1 |
+| Effective fleet config | `narwhal.effective-config` |       1 |
 | Engine profile store | `narwhal.profiles`          |       1 |
 | Engine attestation   | `narwhal.attestation`       |       1 |
 | Router handoff       | `narwhal.handoff`           |       1 |

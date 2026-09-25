@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 FLEET = "fleet"
+EFFECTIVE_CONFIG = "effective_config"
 PROFILES = "profiles"
 HANDOFF = "handoff"
 LEASE = "lease"
@@ -30,6 +31,7 @@ class Contract:
 
 CONTRACTS: dict[str, Contract] = {
     FLEET: Contract("narwhal.fleet"),
+    EFFECTIVE_CONFIG: Contract("narwhal.effective-config"),
     PROFILES: Contract("narwhal.profiles"),
     HANDOFF: Contract("narwhal.handoff"),
     LEASE: Contract("narwhal.router-lease"),

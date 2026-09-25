@@ -6,6 +6,7 @@ Use the installed `narwhal-*` commands in deployment scripts because internal Py
 
 | Command                             | Purpose                                                                 |
 | ----------------------------------- | ----------------------------------------------------------------------- |
+| [`narwhal config`](Config-Inspection.md) | Validate fleet files and inspect resolved defaults and paths offline |
 | [`narwhal dev`](cli/Dev.md) | Initialize, launch, verify and stop a local shared-GPU development fleet |
 | [`narwhal-engine`](cli/Engine.md) | Prepare and launch checked engine processes |
 | [`narwhal-attest`](cli/Attest.md)   | Serve engine identity and attestation data for one vLLM engine          |
