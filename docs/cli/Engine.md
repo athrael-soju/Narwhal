@@ -14,9 +14,11 @@ python -m narwhal.deployment.attestation_contract native-capture --run runs/engi
 narwhal-engine stop-native --run runs/engine-1
 ```
 
-`start-shared` checks every selected role, port and GPU budget before launching sequentially. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. It checks observed fleet GPU use against `shared_device.device_allowance` after each start. `native-capture` uses Narwhal's existing model, cache, NIXL and handshake evidence checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` signals only the recorded process group when its identity still matches. The installed `narwhal dev` workflow remains a milestone gate.
+`start-shared` checks every selected role, port and GPU budget before launching sequentially. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. It checks observed fleet GPU use against `shared_device.device_allowance` after each start. `native-capture` uses Narwhal's model, cache, NIXL and handshake checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` signals only the recorded process group when its identity still matches.
 
-On WSL2 launched through Windows OpenSSH, keep the WSL instance running during remote qualification. In the Kimchi run, vLLM processes exited when the final remote `wsl.exe` session closed; a persistent WSL session kept the same native launches alive for live attestation.
+When starting engines through Windows OpenSSH, keep a WSL terminal open for
+the fleet's lifetime. Closing the final `wsl.exe` session can stop the WSL
+instance and its engine processes.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
