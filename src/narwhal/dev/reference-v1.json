@@ -63,12 +63,36 @@
   },
   "controller": {
     "monitor_interval_s": 0.1,
+    "monitor_failure_limit": 5,
+    "advisory": false,
+    "min_prefill": 1,
+    "min_decode": 1,
+    "flip_history": 1000,
+    "thresholds": {
+      "expand": 1.0,
+      "shrink": 0.5,
+      "cooldown_s": 10.0,
+      "dwell_s": 0.0,
+      "sustained_intervals": 3,
+      "panic_ratio": 0.0,
+      "flip_resident_guard": 0
+    },
     "reactive": {
-      "step_s": 0.25,
       "window_s": 30.0,
+      "confirmations": 2,
+      "utilization": 0.8,
+      "min_arrivals": 10,
+      "demand_floor": 0.2,
+      "movement_margin": 0.05,
+      "step_s": 0.25,
       "evidence_span_s": 15.0,
       "evidence_max_span_s": 30.0,
-      "demand_floor": 0.2
+      "evidence_min_arrivals": 10,
+      "demand_rise_tolerance": 0.25,
+      "decode_correction_min": 0.5,
+      "decode_correction_max": 2.0,
+      "decode_correction_alpha": 0.2,
+      "decode_correction_min_samples": 8
     }
   },
   "profile": {
@@ -92,5 +116,94 @@
     "neighbour_decode_input_tokens": 128,
     "neighbour_decode_output_tokens": 32,
     "decode_repeats": 3
+  },
+  "role_cycle": {
+    "schema_version": 1,
+    "token_pool": [
+      826,
+      26832,
+      18541,
+      4105,
+      883,
+      51356,
+      11,
+      7785,
+      11,
+      16725,
+      11,
+      4477,
+      11,
+      9541,
+      11,
+      7318,
+      11,
+      3712,
+      11,
+      321,
+      6775,
+      13,
+      73533,
+      279,
+      4105,
+      440,
+      12258,
+      13
+    ],
+    "timeout_s": 120.0,
+    "max_schedule_lag_s": 0.05,
+    "expected_splits": [
+      [
+        2,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        2,
+        2
+      ]
+    ],
+    "phases": [
+      {
+        "name": "decode",
+        "input_tokens": 256,
+        "output_tokens": 128,
+        "seed": 1731,
+        "requests": 24,
+        "rate_rps": 0.5,
+        "max_inflight": 8,
+        "require_slo": true
+      },
+      {
+        "name": "prefill-steady",
+        "input_tokens": 3840,
+        "output_tokens": 1,
+        "seed": 1730,
+        "requests": 35,
+        "rate_rps": 1.0,
+        "max_inflight": 8,
+        "require_slo": true
+      },
+      {
+        "name": "prefill-burst",
+        "input_tokens": 3840,
+        "output_tokens": 1,
+        "seed": 1730,
+        "requests": 12,
+        "rate_rps": 100.0,
+        "max_inflight": 12,
+        "require_slo": false
+      }
+    ]
   }
 }

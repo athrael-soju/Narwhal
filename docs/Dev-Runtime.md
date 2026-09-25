@@ -105,6 +105,48 @@ the local metrics endpoints to the homelab's canonical monitoring stack.
 Check all five scrape targets and the Narwhal Orchestrator dashboard before
 running workloads.
 
+## Replay all three role splits
+
+The installed template's `role_cycle` section fixes the token pool, random
+seeds and workload order. From the matching Narwhal checkout, with the
+instance's virtual environment active:
+
+```bash
+python -m tools.measurement.dev_cycle --instance runs/dev --dry-run
+python -m tools.measurement.dev_cycle --instance runs/dev
+narwhal dev down --instance runs/dev
+```
+
+Start from a verified 2P:2D fleet. The runner lets the 30-second demand
+window expire, then sends one warmup request before each phase:
+
+| Phase | Input / output tokens | Requests | Requests/s | Maximum in flight |
+| --- | --- | --- | --- | --- |
+| Decode | 256 / 128 | 24 | 0.5 | 8 |
+| Prefill steady | 3,840 / 1 | 35 | 1 | 8 |
+| Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
+
+Narwhal chooses roles from the current profiles and resident work throughout
+the sequence. The runner checks controller-selected
+**2P:2D → 1P:3D → 2P:2D → 3P:1D → 2P:2D** transitions and requires every
+steady-phase request to meet the template's TTFT and TPOT budgets. The burst
+accepts completed requests and TTFT-budget HTTP 429 responses, and records
+its latency attainment separately. Engine profiles and concurrent GPU work
+can change the resulting transitions and latency.
+
+Allow about two minutes for the workload sequence after `up` and `verify`.
+Each replay creates `cycle-*` beneath the instance, or a fresh directory
+selected with `--out`. Its `summary.json` contains the observed splits,
+per-phase latency, acceptance result and `grafana_range` timestamps for the
+dashboard's `from` and `to` URL parameters. The directory also preserves
+the template, effective fleet, source hashes, request rows and router state.
+Exit code 0 means the cycle and steady-phase budgets passed; 2 means a
+completed replay failed those checks; 1 means setup or execution failed.
+Use `dev down` after inspecting the replay to release GPU memory.
+
+Existing instances retain their template across `init` calls. Create a new
+instance from the current reference when upgrading to this recipe.
+
 ## Inspect roles and operating limits
 
 ```bash

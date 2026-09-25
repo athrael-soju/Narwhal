@@ -49,6 +49,13 @@ Export `NARWHAL_ENGINE_API_KEY` before `up` to authenticate engine requests.
 The generated fleet references that environment variable for profiling,
 verification and routing; keep it set when using those commands.
 
+The installed reference also contains `role_cycle`, with deterministic
+workloads for 1P:3D, 2P:2D and 3P:1D. The checkout command
+`python -m tools.measurement.dev_cycle --instance runs/dev` replays these
+workloads through a verified fleet and saves transition and latency checks.
+See [Replay all three role splits](../Dev-Runtime.md#replay-all-three-role-splits)
+for the workload order, output files and exit codes.
+
 Each `run-*` directory contains the fleet used by the router, effective
 commands, engine logs, cache layouts, attestations, measured profiles,
 whole-device VRAM samples and request journal. A `verify-*` directory adds
