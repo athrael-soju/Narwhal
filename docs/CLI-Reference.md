@@ -13,3 +13,5 @@ Use the installed `narwhal-*` commands in deployment scripts because internal Py
 | [`narwhal-serve`](cli/Serve.md)     | Run a Narwhal router                                                    |
 | [`narwhal-profile`](cli/Profile.md) | Measure engine behaviour and write the profile store used by the router |
 | [`narwhal-check`](cli/Check.md)     | Run deployment preflight gates                                          |
+
+Finite commands accept `--format json` for [versioned command results](Command-Results.md), including failures, artifact references and a documented status-to-exit-code mapping.

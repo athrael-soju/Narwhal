@@ -46,3 +46,7 @@ A profiling run aborts when any of these conditions occurs:
 - the representative prefill fit exceeds 50% worst-point error.
 
 A completed sweep prints `wrote N profile(s) to PATH`; a refit prints `refitted N profile(s) to PATH`.
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

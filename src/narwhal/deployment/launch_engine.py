@@ -1293,7 +1293,21 @@ def capture_cache(run: Path, plan: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Delivered launcher snapshots and container probes also run before package install.
+    standalone = __name__ == "__main__" and not any(
+        argument == "--format" or argument.startswith("--format=") for argument in arguments
+    )
+    if standalone or (arguments and arguments[0].startswith("_")):
+        return _main(arguments, structured=False)
+    from narwhal import command_results as results
+
+    return results.invoke("narwhal-engine", arguments, _main, operation="engine")
+
+
+def _main(argv: list[str], *, structured: bool = True) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     sub = parser.add_subparsers(dest="command", required=True)
     preparation = sub.add_parser("prepare")
     preparation.add_argument("--out", type=Path, required=True)
@@ -1324,6 +1338,28 @@ def main(argv: list[str] | None = None) -> int:
     shared.add_argument("--backend", choices=("container", "native"), default="container")
     sub.add_parser("stop-native").add_argument("--run", type=Path, required=True)
     args = parser.parse_args(argv)
+    if structured:
+        from narwhal import command_results as results
+
+        results.set_operation(args.command)
+        roots = [args.out] if args.command == "prepare" else args.run
+        if not isinstance(roots, list):
+            roots = [roots]
+        results.set_data({"runs": [str(root.resolve()) for root in roots]})
+        for root in roots:
+            for name in (
+                "launch.json",
+                "checked.json",
+                "runtime-check.log",
+                "container.id",
+                "native-process.json",
+                "shared-start.json",
+                "cache-layout.json",
+                "model-dimensions.json",
+                "cache-registration.json",
+                "handshake-policy.json",
+            ):
+                results.add_artifact(name.removesuffix(".json"), root / name)
     os.umask(0o077)
     try:
         if args.command == "prepare":
@@ -1374,6 +1410,8 @@ def main(argv: list[str] | None = None) -> int:
                 "start": start,
             }[args.command](run, plan)
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+        if structured and results.json_mode():
+            raise
         if isinstance(error, FileExistsError):
             parser.exit(1, "Launch directory exists; choose a fresh output path.\n")
         if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):

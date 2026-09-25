@@ -62,3 +62,7 @@ whole-device VRAM samples and request journal. A `verify-*` directory adds
 the preflight log, directed transfer evidence, routed response and metrics.
 On startup failure, inspect the named stage's log, repair the configuration
 or runtime, and run `up` again after `down` confirms teardown.
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from .. import command_results as results
 from ..config import FleetConfig
 from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
@@ -796,6 +797,9 @@ async def run(
             raise FileExistsError(f"output exists: {path}; use a new path or --overwrite")
     targets = [e for e in cfg.engines if not only or e.iid in only]
     if not targets:
+        results.record_error(
+            "engine_selection_empty", "Selection matched zero engines", field="only"
+        )
         print("no matching instances", file=sys.stderr)
         return 2
     limits = (
@@ -823,6 +827,9 @@ async def run(
         for spec in targets:
             r = await client.get(f"{spec.url}{dialect.health_path}", timeout=10.0)
             if r.status_code != 200:
+                results.record_error(
+                    "engine_unhealthy", "Health gate failed", stage="health", engine=spec.iid
+                )
                 print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
                 return 1
             if dialect.tokenize_path is None:
@@ -973,7 +980,13 @@ async def run(
 
 def main(argv: list[str] | None = None) -> int:
     """Run the profiling CLI."""
+    return results.invoke("narwhal-profile", argv, _main, operation="profile")
+
+
+def _main(argv: list[str]) -> int:
+    """Parse one profiling operation."""
     ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
+    results.add_format(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
     ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")
@@ -1018,6 +1031,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--neighbour-decode-output-tokens", type=int)
     args = ap.parse_args(argv)
     cfg = FleetConfig.load(args.fleet)
+    results.protect_environment(cfg.engine_api_key_env)
+    results.set_operation("merge" if args.merge else "refit" if args.refit_samples else "profile")
+    output_path = args.out or cfg.profiles_path
+    results.add_artifact("profiles", output_path)
+    if args.out is None:
+        results.add_artifact("profile_samples", output_path.with_suffix(".samples.json"))
+    results.set_data(
+        {
+            "engines": [
+                engine.iid for engine in cfg.engines if not args.only or engine.iid in args.only
+            ]
+        }
+    )
     if any(
         path.resolve() == Path(args.fleet).resolve()
         or (path.exists() and path.samefile(args.fleet))
@@ -1098,6 +1124,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except (OSError, ValueError, RuntimeError) as exc:
+        if results.json_mode():
+            raise
         print(str(exc), file=sys.stderr)
         return 2
 

@@ -28,3 +28,7 @@ instance and its engine processes.
 | `--out` | required | Create a fresh launch directory during preparation. |
 | `--run` | required | Select an existing launch directory; repeat for shared startup. |
 | `--ready-seconds` | `180` | Time allowed for each engine to pass health and identity checks. |
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

@@ -29,3 +29,7 @@ request count used for the TPOT calculation.
 Exit status 1 indicates a failed gate or a fleet config read or validation error. Exit status 2 indicates invalid arguments.
 
 Use gate tables to diagnose deployment failures and the contract registry and versioned artifacts for automation.
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

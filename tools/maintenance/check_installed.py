@@ -97,6 +97,28 @@ def check_offline_config():
         assert list(root.iterdir()) == [fleet]
 
 
+def check_command_results():
+    """Exercise versioned stdout through installed commands outside the checkout."""
+    from narwhal.contracts import COMMAND_RESULT, validate_document
+
+    cases = [
+        (["narwhal-check", "--print-contract-versions"], 0, "success"),
+        (["narwhal-check", "--unknown-option"], 2, "invalid_input"),
+        (["narwhal-profile"], 2, "invalid_input"),
+        (["narwhal-engine", "check", "--run", "missing-instance"], 2, "invalid_input"),
+        (["narwhal", "dev", "status", "--instance", "missing-instance"], 2, "invalid_input"),
+    ]
+    for argv, code, status in cases:
+        completed = subprocess.run(
+            [*argv, "--format", "json"], capture_output=True, text=True, timeout=30
+        )
+        document = json.loads(completed.stdout)
+        validate_document(document, COMMAND_RESULT)
+        assert document["status"] == status, document
+        assert document["exit_code"] == completed.returncode == code, document
+        assert "Traceback" not in completed.stderr, completed.stderr
+
+
 def main(argv=None):
     """Check distribution identity, bundled files and every installed console command."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -149,6 +171,7 @@ def main(argv=None):
     for module in ("narwhal.benchmarking", "narwhal.diagnostics.qualification", "narwhal.fleet"):
         assert importlib.util.find_spec(module) is None, module
     check_offline_config()
+    check_command_results()
     asyncio.run(check_http())
     print(f"Installed package passed: {len(entries)} commands, package data and HTTP contracts")
     return 0
