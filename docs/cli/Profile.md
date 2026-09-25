@@ -11,6 +11,7 @@ Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and 
 | Option                 | Default     | Contract                                                                                                                                                                |
 | ---------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--version`            |             | Print the installed distribution version. |
+| `--format` | `text` | Select `json` for [versioned command results](../Command-Results.md). |
 | `--fleet PATH`         | required    | Fleet config JSON; defines engine membership for all three modes. |
 | `--only IID`           | all engines | Repeatable engine selector for live sweeps. |
 | `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining decode fits. Requires `--out` and samples covering every fleet engine; exclusive with `--only` and `--merge`. |

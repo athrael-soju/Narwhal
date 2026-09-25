@@ -147,7 +147,7 @@ class TokenizerCheckTests(unittest.TestCase):
 
         failure = case in {"default_missing", "explicit_missing", "custom_code"}
         with (
-            patch("tools.deployment.launch_engine.subprocess.run", side_effect=native_execute),
+            patch("narwhal.deployment.stages.run", side_effect=native_execute),
             patch("tools.deployment.launch_engine.docker", side_effect=container_execute),
         ):
             if failure:

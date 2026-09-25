@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from narwhal.config import FleetConfig
-from narwhal.deployment import cache_capture_hook, native_engine
+from narwhal.deployment import cache_capture_hook, native_engine, stages
 from narwhal.deployment.attestation_contract import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import digest, gpu_memory, prepare
@@ -79,6 +79,13 @@ def _read_state(root: Path) -> dict:
                 f"{path}: processes[{index}] requires a name string and identity object"
             )
         _validate_identity(record["identity"], path, f"processes[{index}].identity")
+    stage_failure = state.get("failure")
+    if stage_failure is not None and (
+        not isinstance(stage_failure, dict) or not isinstance(stage_failure.get("message"), str)
+    ):
+        raise LifecycleDocumentError(f"{path}: failure requires a message string")
+    if "failed_verification" in state and not isinstance(state["failed_verification"], str):
+        raise LifecycleDocumentError(f"{path}: failed_verification must be a path string")
     failure = state.get("verification_failure")
     if failure is not None and (
         not isinstance(failure, dict) or not isinstance(failure.get("reason"), str)
@@ -136,10 +143,13 @@ def _run(root: Path, module: str, args: list[str], log: str) -> None:
     # Preserve write order so buffered progress cannot follow the final diagnostic.
     command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
-    with (root / f"{log}.log").open("w") as output:
-        result = subprocess.run(  # noqa: S603 - installed modules and explicit argv
-            command, stdout=output, stderr=subprocess.STDOUT, cwd=root, check=False
-        )
+    result = stages.run(
+        command,
+        stage=log,
+        log=root / f"{log}.log",
+        cwd=root,
+        retain_descendants=log == "native-start-shared",
+    )
     if result.returncode:
         path = root / f"{log}.log"
         lines = path.read_text(errors="replace").strip().splitlines()
@@ -163,9 +173,29 @@ def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env
         )
     try:
         identity = native_engine.process_identity(child.pid)
-    except BaseException:
-        child.terminate()
-        child.wait()
+    except BaseException as error:
+        owned: dict[int, int] = {}
+        try:
+            with stages._reaper():
+                cleanup = stages._cleanup(
+                    child,
+                    owned,
+                    stages.seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
+                    stages.seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
+                )
+            write(
+                run / f"{name}-spawn.stage.json",
+                {
+                    "stage": name,
+                    "pid": child.pid,
+                    "processes": owned,
+                    "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                    "status": "cancelled",
+                    "cleanup": cleanup,
+                },
+            )
+        except (OSError, ValueError) as cleanup_error:
+            error.add_note(f"{name} cleanup: {cleanup_error}")
         raise
     record = {"name": name, "identity": identity}
     state["processes"].append(record)
@@ -242,6 +272,17 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         _run(run, "narwhal.profiling.probe", args, "profile-merge")
 
 
+def _helper_records(run: Path) -> list[tuple[Path, dict]]:
+    records = []
+    for path in sorted(run.rglob("*.stage.json")):
+        record = read(path)
+        if record.get("status") in {"running", "recovery_required"} or record.get(
+            "cleanup", {}
+        ).get("surviving_processes"):
+            records.append((path, record))
+    return records
+
+
 def _stop(root: Path, state: dict) -> None:
     errors = []
     # The native launcher persists ownership before health checks, including failures.
@@ -250,6 +291,17 @@ def _stop(root: Path, state: dict) -> None:
     for path in sorted(run.glob("engine-*/native-process.json")):
         records.insert(0, {"name": path.parent.name, "identity": _read_identity(path)})
     stopped = []
+    for path, helper in _helper_records(run):
+        try:
+            cleanup = stages.recover(path)
+            if cleanup["surviving_processes"]:
+                errors.append(
+                    f"{helper['stage']}: surviving helper PIDs {cleanup['surviving_processes']}"
+                )
+            else:
+                stopped.append("helper:" + helper["stage"])
+        except (OSError, ValueError) as error:
+            errors.append(f"{helper['stage']}: {error}")
     for record in reversed(records):
         identity = record["identity"]
         if native_engine._group_members(identity):
@@ -286,13 +338,22 @@ def up(root: Path) -> dict:
         _check_free_ports(ports, "127.0.0.1")
         run = root / f"run-{uuid.uuid4().hex[:12]}"
         run.mkdir(mode=0o700)
-        state = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
+        state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
         write(root / "lifecycle.json", state)
         try:
             with memory_samples(run, config["gpu_uuid"], "up"):
                 _launch(root, run, config, spec, state)
-        except BaseException:
-            _stop(root, state)
+        except BaseException as error:
+            state["failure"] = {
+                "message": str(error),
+                "stage": getattr(error, "stage", "startup"),
+                "context": getattr(error, "context", {}),
+            }
+            try:
+                _stop(root, state)
+            except (OSError, ValueError) as cleanup_error:
+                state["failure"]["cleanup_error"] = str(cleanup_error)
+                write(root / "lifecycle.json", state)
             raise
         state["phase"] = "launched"
         write(root / "lifecycle.json", state)
@@ -342,7 +403,17 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             prepare(engine_run, env, backend="native")
         _run(run, "narwhal.deployment.launch_engine", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
-    native_engine.start_shared(runs)
+    _run(
+        run,
+        "narwhal.deployment.launch_engine",
+        [
+            "start-shared",
+            "--backend",
+            "native",
+            *[arg for path in runs for arg in ("--run", str(path))],
+        ],
+        "native-start-shared",
+    )
     for index, engine_run in enumerate(runs):
         _run(
             run,
@@ -452,12 +523,20 @@ def verify(root: Path) -> dict:
                         metrics.raise_for_status()
                         (evidence / f"{name}-metrics.txt").write_text(metrics.text)
                     client.get(config["router_url"] + "/ready").raise_for_status()
+            state.pop("failure", None)
+            state.pop("failed_verification", None)
             state.update(phase="ready", verification=str(evidence), verified_at=time.time())
             state.pop("verification_failure", None)
             write(root / "lifecycle.json", state)
-        except BaseException as exc:
+        except BaseException as error:
+            state["failed_verification"] = str(evidence)
+            state["failure"] = {
+                "message": str(error) or type(error).__name__,
+                "stage": getattr(error, "stage", "verification"),
+                "context": getattr(error, "context", {}),
+            }
             failure = {
-                "reason": str(exc) or type(exc).__name__,
+                "reason": state["failure"]["message"],
                 "evidence": str(evidence),
                 "failed_at": time.time(),
             }
@@ -488,18 +567,35 @@ def status(root: Path) -> dict:
         for r in records
         if r["name"] not in live and (members := native_engine._group_members(r["identity"]))
     }
-    if state["phase"] == "stopped" and not live and not survivors:
+    helpers = {
+        str(path.relative_to(run)): sorted(members)
+        for path, record in _helper_records(run)
+        if (members := stages.active(record))
+    }
+    if state["phase"] == "stopped" and not live and not survivors and not helpers:
         return {"status": "stopped", "run": str(run)}
     problems = [r["name"] + " process identity expired" for r in records if r["name"] not in live]
     problems.extend(
         f"{name}: surviving group PIDs {pids} require operator inspection"
         for name, pids in survivors.items()
     )
+    problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
+    if state.get("failure") and not state.get("verification_failure"):
+        problems.append(state["failure"]["message"])
     if len(live) != 2 * config["engine_count"] + 1:
         problems.append(
             "owned process count differs from the configured engines, sidecars and router"
         )
     fleet_path = run / "fleet.json"
+    if not fleet_path.exists():
+        return {
+            "status": "degraded",
+            "run": str(run),
+            "processes": live,
+            "surviving_processes": survivors,
+            "stage_processes": helpers,
+            "problems": problems,
+        }
     fleet = read(fleet_path)
     with httpx.Client(timeout=2, trust_env=False) as client:
         for name, url in [
@@ -532,6 +628,7 @@ def status(root: Path) -> dict:
         "router": config["router_url"],
         "processes": live,
         "surviving_processes": survivors,
+        "stage_processes": helpers,
         "problems": problems,
         **({"verification_failure": failure} if failure else {}),
     }

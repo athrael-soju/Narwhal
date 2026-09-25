@@ -36,6 +36,10 @@ request count used for the TPOT calculation.
 
 `--repeats` repeats these checks without collecting latency samples. Input-length sweeps and an independent first-token observation window require [separately instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
 
-Exit status 1 indicates a failed gate or operation. Exit status 2 indicates invalid arguments or a fleet config read or validation error.
+In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
 
 Use gate tables to diagnose deployment failures and the contract registry and versioned artifacts for automation.
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

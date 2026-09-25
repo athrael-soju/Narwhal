@@ -18,6 +18,7 @@ import httpx
 from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.runtime.listeners import check_engine_bind, check_http_bind
 
+from . import stages
 from .launch_engine import digest, gpu_memory, validate_shared_runs, write_private
 
 
@@ -294,8 +295,16 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                         f"the {allowance} MiB device allowance"
                     )
                 started.append(run)
-            except (OSError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as error:
+            except (
+                OSError,
+                ValueError,
+                subprocess.SubprocessError,
+                httpx.HTTPError,
+                stages.StageCancelled,
+            ) as error:
                 record.update(status="failed", error=str(error))
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    record.update(failure_stage=error.stage, failure_context=error.context)
                 try:
                     if identity is not None and _group_members(identity):
                         _terminate(identity)
@@ -313,6 +322,8 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                 except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
                     record["gpu_after_error"] = str(inspection_error)
                 write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    raise
                 message = (
                     f"{plan['role']}: native launch failed with "
                     f"{before['used_mib']} MiB used before start, "
@@ -325,7 +336,13 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                     message += f"; cleanup failed: {record['cleanup_error']}"
                 raise ValueError(message) from error
             write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
-    except (OSError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as error:
+    except (
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+        httpx.HTTPError,
+        stages.StageCancelled,
+    ) as error:
         cleanup_errors = []
         for run in reversed(started):
             try:
@@ -333,6 +350,9 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
             except (OSError, ValueError) as cleanup_error:
                 cleanup_errors.append(f"{run}: {cleanup_error}")
         if cleanup_errors:
+            if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                error.context["native_cleanup_errors"] = cleanup_errors
+                raise
             raise ValueError(
                 f"{error}; native engine cleanup failed: {'; '.join(cleanup_errors)}"
             ) from error

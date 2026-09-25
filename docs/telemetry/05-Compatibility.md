@@ -15,6 +15,7 @@ Current interfaces are:
 | Interface            | Schema                      | Version |
 | -------------------- | --------------------------- | ------: |
 | Native fleet config  | `narwhal.fleet`             |       1 |
+| Effective fleet config | `narwhal.effective-config` |       1 |
 | Engine profile store | `narwhal.profiles`          |       1 |
 | Engine attestation   | `narwhal.attestation`       |       1 |
 | Router handoff       | `narwhal.handoff`           |       1 |
@@ -23,6 +24,8 @@ Current interfaces are:
 | Request journal      | `narwhal.journal`           |       1 |
 | Live state           | `narwhal.state`             |       1 |
 | Prometheus metrics   | `narwhal.metrics`           |       1 |
+| Command result       | `narwhal.command-result`    |       1 |
 | Contract manifest    | `narwhal.contract-manifest` |       1 |
+| Diagnostic bundle    | `narwhal.diagnostic-bundle` |       1 |
 
 Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

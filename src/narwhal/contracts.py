@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 FLEET = "fleet"
+EFFECTIVE_CONFIG = "effective_config"
 PROFILES = "profiles"
 HANDOFF = "handoff"
 LEASE = "lease"
@@ -18,6 +19,8 @@ STATE = "state"
 METRICS = "metrics"
 ATTESTATION = "attestation"
 CLI = "cli"
+COMMAND_RESULT = "command_result"
+DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,7 @@ class Contract:
 
 CONTRACTS: dict[str, Contract] = {
     FLEET: Contract("narwhal.fleet"),
+    EFFECTIVE_CONFIG: Contract("narwhal.effective-config"),
     PROFILES: Contract("narwhal.profiles"),
     HANDOFF: Contract("narwhal.handoff"),
     LEASE: Contract("narwhal.router-lease"),
@@ -39,6 +43,8 @@ CONTRACTS: dict[str, Contract] = {
     METRICS: Contract("narwhal.metrics"),
     ATTESTATION: Contract("narwhal.attestation"),
     CLI: Contract("narwhal.contract-manifest"),
+    COMMAND_RESULT: Contract("narwhal.command-result"),
+    DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
 }
 
 

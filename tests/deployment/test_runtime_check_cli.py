@@ -5,12 +5,14 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.deployment import launch_engine as launcher
+from narwhal.deployment import stages
 from tests.deployment.fixtures import launcher_inputs
 
 
@@ -20,15 +22,35 @@ class RuntimeCheckCliTests(unittest.TestCase):
             run, _ = self.prepare(Path(folder), "native")
             log = run / "runtime-check.log"
             log.write_text("earlier inspection\n")
-            timeout = subprocess.TimeoutExpired(
-                ["python", "-c", "runtime inspection"],
-                120,
-                output=b"package versions\n",
-                stderr=b"connector import started\n",
-            )
-            with patch.object(launcher.subprocess, "run", side_effect=timeout):
+            run_stage = stages.run
+
+            def timeout(command, **kwargs):
+                return run_stage(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys,time; "
+                        "print('package versions',flush=True); "
+                        "print('connector import started',file=sys.stderr,flush=True); "
+                        "time.sleep(30)",
+                    ],
+                    stage=kwargs["stage"],
+                    log=kwargs["log"],
+                    timeout=0.3,
+                )
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "NARWHAL_STAGE_CLEANUP_GRACE_SECONDS": ".05",
+                        "NARWHAL_STAGE_KILL_GRACE_SECONDS": ".2",
+                    },
+                ),
+                patch.object(stages, "run", side_effect=timeout),
+            ):
                 diagnostic = self.failed_cli(["check", "--run", str(run)])
-            self.assertIn("timed out after 120 seconds", diagnostic)
+            self.assertIn("native-runtime-check exhausted 0.3s", diagnostic)
             self.assertIn(str(log), diagnostic)
             self.assertNotIn("Traceback", diagnostic)
             self.assertFalse((run / "checked.json").exists())
@@ -95,8 +117,21 @@ class RuntimeCheckCliTests(unittest.TestCase):
             )
             return subprocess.CompletedProcess(command, 0, stdout, "")
 
+        def stage(command, **kwargs):
+            result = inspect(command)
+            launcher.append_private(
+                kwargs["log"],
+                json.dumps({"exit": result.returncode})
+                + "\n"
+                + result.stdout
+                + "\nSTDERR\n"
+                + result.stderr
+                + "\n",
+            )
+            return result
+
         with (
-            patch.object(launcher.subprocess, "run", side_effect=inspect),
+            patch.object(stages, "run", side_effect=stage),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             arguments = ["check", "--run", str(run)]
@@ -148,7 +183,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
                 original = (run / "checked.json").read_bytes()
                 plan["args"].append("--language-model-only")
                 (run / "launch.json").write_text(json.dumps(plan))
-                with patch.object(launcher.subprocess, "run") as invoke:
+                with patch.object(stages, "run") as invoke:
                     diagnostic = self.failed_cli(["check", "--run", str(run)])
                 self.assertIn("launch plan changed after its runtime check", diagnostic)
                 self.assertEqual((run / "checked.json").read_bytes(), original)
@@ -176,7 +211,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
             log = run / "handshake-policy.log"
             log.write_text("prior inspection")
             with patch.object(
-                launcher.subprocess,
+                stages,
                 "run",
                 return_value=subprocess.CompletedProcess([], 0, "inspection", ""),
             ):

@@ -26,6 +26,7 @@ Preparation requires a fresh `--out`; subsequent actions use `--run`. Each inspe
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `--version` | | Print the installed distribution version. |
+| `--format` | `text` | Select `json` for [versioned command results](../Command-Results.md). |
 | `--backend` | `container` | Select `container` or `native` for `prepare` and `start-shared`; shared startup requires every selected plan to use that backend. Other actions read the plan's backend. |
 | `--out` | required for `prepare` | Create a fresh launch directory. |
 | `--run` | required after preparation | Select an existing launch directory; repeat two to eight times for `start-shared`. |

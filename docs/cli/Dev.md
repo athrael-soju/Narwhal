@@ -39,16 +39,18 @@ SIGKILL. Successful teardown reports `stopped`; a subsequent `up` creates
 another run directory with fresh profiles. Earlier logs and measurements
 stay beside it.
 
-Lifecycle commands write their returned result as one JSON document to stdout
-and send preparation progress, profiling progress and error diagnostics to
-stderr. Use `narwhal dev up > result.json` to retain the result while progress
-remains visible.
+In default text mode, lifecycle commands write their returned state as one JSON
+document to stdout and send preparation progress, profiling progress and error
+diagnostics to stderr. Use `narwhal dev up > result.json` to retain that state
+while progress remains visible. `--format json` wraps the state in the versioned
+command result and maps its status to the documented exit code.
 
-Commands exit 0 for `initialized`, `reused`, `starting`, `launched`, `ready`
-or `stopped`, 2 for argument, instance configuration or runtime package errors,
-and 1 for failed lifecycle operations or a `degraded` status. A failed `verify`
-and subsequent `status` both exit 1 while that failure is retained, including
-when HTTP checks pass.
+In default text mode, commands exit 0 for `initialized`, `reused`, `starting`,
+`launched`, `ready` or `stopped`, 2 for argument, instance configuration or
+runtime package errors, and 1 for failed lifecycle operations or a `degraded`
+status. A failed `verify` and subsequent `status` both exit 1 while that failure
+is retained, including when HTTP checks pass. JSON mode returns 3 for a degraded
+status and 4 for an operational error.
 
 ```bash
 narwhal dev init --model /path/to/model.gguf --model-dir /path/to/tokenizer
@@ -100,3 +102,7 @@ whole-device VRAM samples and request journal. A `verify-*` directory adds
 the preflight log, directed transfer evidence, routed response and metrics.
 On startup failure, inspect the named stage's log, repair the configuration
 or runtime, and run `up` again after `down` confirms teardown.
+
+| Output option | Default | Purpose |
+| --- | --- | --- |
+| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |

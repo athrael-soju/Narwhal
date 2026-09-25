@@ -19,6 +19,7 @@ from typing import cast
 
 import httpx
 
+from .. import command_results as results
 from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import manifest
@@ -905,6 +906,16 @@ async def run(
             output.write("\n")
         print(f"directed KV evidence: {evidence_out}")
 
+    results.set_data({"failed": rep.failed, "skipped": rep.skipped, "pairs": rep.pairs})
+    for problem in rep.failed:
+        results.record_error("gate_failed", problem, stage="preflight")
+    if rep.failed or (rep.skipped and evidence_out is not None):
+        results.set_status("failed_gate")
+    elif rep.skipped:
+        results.set_status("degraded")
+        results.record_error(
+            "gates_skipped", "Preflight completed its selected gates", stage="preflight"
+        )
     print()
     if rep.failed:
         print(f"{len(rep.failed)} gate(s) failed, {len(rep.skipped)} skipped")
@@ -921,12 +932,18 @@ async def run(
 
 def main(argv: list[str] | None = None) -> int:
     """Run the fleet-check CLI."""
+    return results.invoke("narwhal-check", argv, _main, operation="check")
+
+
+def _main(argv: list[str]) -> int:
+    """Parse a fleet-check operation."""
     ap = argparse.ArgumentParser(
         description="Check running engines and their measured profiles before starting the "
         "router. By default, probe the full eligible directed KV mesh; retain it with "
         "--evidence-out or verify a saved mesh with --verify-evidence.",
     )
     add_version_argument(ap)
+    results.add_format(ap)
     ap.add_argument(
         "--fleet", help="fleet config JSON; required for preflight and evidence verification"
     )
@@ -977,9 +994,15 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.print_example_config:
+        results.set_operation("print-example-config")
+        results.set_data(
+            json.loads(resources.files("narwhal").joinpath("fleet.example.json").read_text())
+        )
         print(resources.files("narwhal").joinpath("fleet.example.json").read_text(), end="")
         return 0
     if args.print_contract_versions:
+        results.set_operation("print-contract-versions")
+        results.set_data(manifest())
         print(json.dumps(manifest(), indent=2))
         return 0
 
@@ -990,18 +1013,28 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
         ap.error("choose --evidence-out or --verify-evidence")
+    if args.evidence_out is not None:
+        results.add_artifact("directed_kv_evidence", args.evidence_out)
     from ..cli_errors import failure
 
     try:
         cfg = FleetConfig.load(args.fleet)
     except (OSError, ValueError) as exc:
+        if results.json_mode():
+            raise
         return failure("narwhal-check", f"load fleet {args.fleet}", exc, 2)
+    if results.json_mode():
+        results.protect_environment(cfg.engine_api_key_env)
     try:
         if args.verify_evidence is not None:
+            results.set_operation("verify-evidence")
+            results.add_artifact("directed_kv_evidence", args.verify_evidence)
             problems = asyncio.run(
                 verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
             )
+            results.set_data({"failed": problems})
             for problem in problems:
+                results.record_error("evidence_gate_failed", problem, stage="verify-evidence")
                 print(f"  FAIL  {problem}")
             if problems:
                 return 1
@@ -1018,8 +1051,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except ValueError as exc:
+        if results.json_mode():
+            raise
         return failure("narwhal-check", f"check fleet {args.fleet}", exc, 2)
     except (OSError, httpx.HTTPError) as exc:
+        if results.json_mode():
+            raise
         return failure("narwhal-check", f"check fleet {args.fleet}", exc, 1)
 
 

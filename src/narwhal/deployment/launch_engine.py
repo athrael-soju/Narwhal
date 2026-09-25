@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import inspect
 import json
@@ -378,16 +379,149 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
 
 
-def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
-    result = subprocess.run(["docker", *command], capture_output=True, text=True)
-    append_private(
-        run / log,
-        json.dumps({"command": ["docker", *command], "exit": result.returncode})
-        + "\n"
-        + result.stdout
-        + result.stderr
-        + "\n",
+def _docker_owner(run: Path) -> str:
+    marker = run / "docker-owner.json"
+    if not marker.exists():
+        with contextlib.suppress(FileExistsError):
+            write_private(marker, json.dumps({"label": uuid.uuid4().hex}))
+    owner = json.loads(marker.read_text())["label"]
+    if not re.fullmatch(r"[0-9a-f]{32}", owner):
+        raise ValueError("docker-owner.json requires a valid ownership token")
+    return owner
+
+
+def reconcile_docker(
+    run: Path,
+    owner: str,
+    *,
+    remove: bool,
+    operation: str | None = None,
+    targets: tuple[str, ...] = (),
+) -> dict:
+    """Inspect launch resources and remove only the interrupted operation's containers."""
+    from narwhal.deployment import stages
+
+    budget = stages.seconds("NARWHAL_DOCKER_RECONCILE_SECONDS", 30)
+    started = time.monotonic()
+    report: dict = {
+        "budget_seconds": budget,
+        "owner": owner,
+        "operation": operation,
+        "targets": list(targets),
+        "removed": [],
+        "preserved_resources": [],
+        "surviving_resources": [],
+        "status": "inspection_required",
+    }
+    recorded = set()
+    for name in ("container.id", "cache-probe.id"):
+        path = run / name
+        if path.exists():
+            cid = path.read_text().strip()
+            if re.fullmatch(r"[0-9a-f]{64}", cid):
+                recorded.add(cid)
+
+    def invoke(args: list[str]) -> str:
+        remaining = budget - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ValueError("Docker reconciliation budget exhausted")
+        result = stages.run(
+            ["docker", *args],
+            stage="docker-reconcile-" + args[0],
+            log=run / "docker-reconcile.log",
+            timeout=remaining,
+        )
+        if result.returncode:
+            raise ValueError(f"Docker reconciliation {args[0]} exited {result.returncode}")
+        return result.stdout.strip()
+
+    try:
+        listed = invoke(["ps", "-aq", "--no-trunc", "--filter", f"label=io.narwhal.launch={owner}"])
+        ids = recorded | {cid for cid in listed.splitlines() if re.fullmatch(r"[0-9a-f]{64}", cid)}
+        report["candidates"] = sorted(ids)
+        # The all-container listing permits an absent recorded ID after an earlier cleanup.
+        present = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines()) & ids
+        owned = []
+        cleanup = []
+        if present:
+            records = json.loads(invoke(["inspect", *sorted(present)]))
+            for record in records:
+                cid = record["Id"]
+                labels = record.get("Config", {}).get("Labels") or {}
+                if cid in present and (cid in recorded or labels.get("io.narwhal.launch") == owner):
+                    owned.append(cid)
+                    if remove and (
+                        cid in targets
+                        or (
+                            operation is not None
+                            and labels.get("io.narwhal.operation") == operation
+                        )
+                    ):
+                        cleanup.append(cid)
+                else:
+                    report.setdefault("refused_resources", []).append(cid)
+        report["surviving_resources"] = sorted(owned)
+        report["preserved_resources"] = sorted(set(owned) - set(cleanup))
+        if cleanup:
+            invoke(["rm", "--force", *cleanup])
+        remaining = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines())
+        report["surviving_resources"] = sorted(set(owned) & remaining)
+        if remove:
+            report["removed"] = sorted(set(cleanup) - remaining)
+        report["status"] = "observed"
+    except (OSError, ValueError, KeyboardInterrupt) as error:
+        report["error"] = str(error)
+    report.update(
+        elapsed_seconds=time.monotonic() - started,
+        observed_at=time.time(),
+        recovery="inspect docker-reconcile-*.json and recorded IDs/ownership label before retrying",
     )
+    destination = run / ("docker-reconcile-" + uuid.uuid4().hex[:12] + ".json")
+    write_private(destination, json.dumps(report, indent=2) + "\n")
+    report["evidence"] = str(destination)
+    return report
+
+
+def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = False) -> str:
+    from narwhal.deployment import stages
+
+    owner = _docker_owner(run)
+    invocation = list(command)
+    operation = uuid.uuid4().hex if command[0] in {"create", "run"} else None
+    targets = (
+        tuple(value for value in command[1:] if re.fullmatch(r"[0-9a-f]{64}", value))
+        if command[0] == "start"
+        else ()
+    )
+    if operation is not None:
+        invocation[1:1] = [
+            "--label",
+            f"io.narwhal.launch={owner}",
+            "--label",
+            f"io.narwhal.operation={operation}",
+        ]
+    try:
+        result = stages.run(["docker", *invocation], stage="docker-" + command[0], log=run / log)
+    except (stages.StageTimeout, stages.StageCancelled) as error:
+        try:
+            report = reconcile_docker(
+                run,
+                owner,
+                remove=command[0] in {"create", "run", "start"},
+                operation=operation,
+                targets=targets,
+            )
+        except OSError as cleanup_error:
+            report = {
+                "status": "inspection_required",
+                "error": str(cleanup_error),
+                "recovery": "inspect the recorded container IDs and ownership label",
+            }
+        error.context["docker_reconciliation"] = report
+        error.context["recovery"] = report["recovery"]
+        with contextlib.suppress(OSError):
+            stages.write_evidence(Path(error.context["evidence"]), error.context)
+        raise
     if result.returncode:
         detail = (result.stderr or result.stdout).strip().splitlines()
         raise ValueError(
@@ -399,6 +533,8 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
 
 def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str], log: str) -> str:
     """Inspect the checked vLLM environment through its selected backend."""
+    from narwhal.deployment import stages
+
     if plan.get("backend") != "native":
         return docker(
             [
@@ -416,14 +552,14 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             log,
         )
     values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
-    result = subprocess.run(
+    if (run / log).exists():
+        raise FileExistsError(17, "inspection log already exists", str(run / log))
+    result = stages.run(
         [plan["python_executable"], "-c", script, *arguments],
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"},
-        capture_output=True,
-        text=True,
-        timeout=120,
+        stage="native-runtime-inspection",
+        log=run / log,
     )
-    write_private(run / log, result.stdout + "\nSTDERR\n" + result.stderr)
     if result.returncode:
         detail = result.stderr.strip().splitlines()
         raise ValueError(
@@ -445,6 +581,8 @@ def load(run: Path) -> dict:
 
 def check(run: Path, plan: dict) -> None:
     """Check the pinned runtime, connector and tokenizer for the selected backend."""
+    from narwhal.deployment import stages
+
     native = plan.get("backend") == "native"
     env_file = "engine.env" if native else "container.env"
     log = "runtime-check.log" if native else "image-check.log"
@@ -539,41 +677,11 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
-        try:
-            result = subprocess.run(
-                [plan["python_executable"], *arguments],
-                env={**os.environ, **values},
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as error:
-            # TimeoutExpired retains bytes even when subprocess.run requested text.
-            partial_output = error.stdout or b""
-            errors = error.stderr or b""
-            append_private(
-                run / log,
-                f"runtime check timed out after {error.timeout} seconds\n"
-                + (
-                    partial_output.decode(errors="replace")
-                    if isinstance(partial_output, bytes)
-                    else partial_output
-                )
-                + "\nSTDERR\n"
-                + (errors.decode(errors="replace") if isinstance(errors, bytes) else errors)
-                + "\n",
-            )
-            raise ValueError(
-                f"native runtime check timed out after {error.timeout} seconds; inspect {run / log}"
-            ) from error
-        append_private(
-            run / log,
-            json.dumps({"exit": result.returncode})
-            + "\n"
-            + result.stdout
-            + "\nSTDERR\n"
-            + result.stderr
-            + "\n",
+        result = stages.run(
+            [plan["python_executable"], *arguments],
+            env={**os.environ, **values},
+            stage="native-runtime-check",
+            log=run / log,
         )
         if result.returncode:
             detail = result.stderr.strip().splitlines()
@@ -1177,13 +1285,18 @@ def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
     raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
 
 
-def _rollback_shared_containers(started: list[tuple[Path, str, dict]], cause: str) -> list[str]:
+def _rollback_shared_containers(
+    started: list[tuple[Path, str, dict]],
+    cause: str,
+    removed: set[str] | None = None,
+) -> list[str]:
     errors = []
     for run, cid, record in reversed(started):
         record["status"] = "failed"
         record.setdefault("error", f"shared startup rolled back: {cause}")
         try:
-            docker(["rm", "--force", cid], run, "launch.log")
+            if cid not in (removed or set()):
+                docker(["rm", "--force", cid], run, "launch.log")
             record["cleanup_status"] = "removed"
         except (OSError, ValueError, subprocess.SubprocessError) as cleanup_error:
             record.update(cleanup_status="failed", cleanup_error=str(cleanup_error))
@@ -1198,6 +1311,8 @@ def _rollback_shared_containers(started: list[tuple[Path, str, dict]], cause: st
 
 
 def start_shared(runs: list[Path], ready_seconds: int) -> None:
+    from narwhal.deployment import stages
+
     selected = validate_shared_runs(runs)
     gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
     started: list[tuple[Path, str, dict]] = []
@@ -1266,23 +1381,38 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                         f"observed shared GPU use {aggregate_delta} MiB above the "
                         f"{baseline_used} MiB baseline exceeds the {allowance} MiB device allowance"
                     )
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
+            except (
+                OSError,
+                ValueError,
+                subprocess.SubprocessError,
+                stages.StageCancelled,
+            ) as error:
                 record.update(status="failed", error=str(error))
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    record.update(failure_stage=error.stage, failure_context=error.context)
                 if "gpu_after" not in record:
                     try:
                         record["gpu_after"] = gpu_memory(gpu_uuid)
                     except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
                         record["gpu_after_error"] = str(inspection_error)
                 write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+                if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                    raise
                 raise ValueError(
                     f"{role}: shared GPU start failed at {before['used_mib']}/"
                     f"{before['total_mib']} MiB used, {budget_mib} MiB budget: {error}"
                 ) from error
             write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
             print(f"{role}: ready on {gpu_uuid}; {record['gpu_after']['used_mib']} MiB used")
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        cleanup_errors = _rollback_shared_containers(started, str(error))
+    except (OSError, ValueError, subprocess.SubprocessError, stages.StageCancelled) as error:
+        removed = set()
+        if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+            removed.update(error.context.get("docker_reconciliation", {}).get("removed", []))
+        cleanup_errors = _rollback_shared_containers(started, str(error), removed)
         if cleanup_errors:
+            if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                error.context["container_cleanup_errors"] = cleanup_errors
+                raise
             raise ValueError(
                 f"{error}; container cleanup failed: {'; '.join(cleanup_errors)}"
             ) from error
@@ -1329,7 +1459,21 @@ def capture_cache(run: Path, plan: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Delivered launcher snapshots and container probes also run before package install.
+    standalone = __name__ == "__main__" and not any(
+        argument == "--format" or argument.startswith("--format=") for argument in arguments
+    )
+    if standalone or (arguments and arguments[0].startswith("_")):
+        return _main(arguments, structured=False)
+    from narwhal import command_results as results
+
+    return results.invoke("narwhal-engine", arguments, _main, operation="engine")
+
+
+def _main(argv: list[str], *, structured: bool = True) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     # Runtime probes execute a standalone copy inside the engine image.
     if __package__:
         from narwhal.cli_support import add_version_argument
@@ -1419,6 +1563,28 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "start-shared" and args.ready_seconds < 1:
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
+    if structured:
+        from narwhal import command_results as results
+
+        results.set_operation(args.command)
+        roots = [args.out] if args.command == "prepare" else args.run
+        if not isinstance(roots, list):
+            roots = [roots]
+        results.set_data({"runs": [str(root.resolve()) for root in roots]})
+        for root in roots:
+            for name in (
+                "launch.json",
+                "checked.json",
+                "runtime-check.log",
+                "container.id",
+                "native-process.json",
+                "shared-start.json",
+                "cache-layout.json",
+                "model-dimensions.json",
+                "cache-registration.json",
+                "handshake-policy.json",
+            ):
+                results.add_artifact(name.removesuffix(".json"), root / name)
     os.umask(0o077)
     target = getattr(args, "run", getattr(args, "out", getattr(args, "plan", "")))
     context = f"narwhal-engine: {args.command}"
@@ -1427,6 +1593,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 prepare(args.out, dict(os.environ), backend=args.backend)
             except (KeyError, TypeError) as error:
+                if structured and results.json_mode():
+                    raise
                 input_source = os.environ.get("NARWHAL_ENGINE_LAUNCH_CONFIG", "role environment")
                 parser.exit(2, f"{context}: invalid input in {input_source}: {error}\n")
         elif args.command == "start-shared":
@@ -1450,6 +1618,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 plan = load(run)
             except (OSError, ValueError) as error:
+                if structured and results.json_mode():
+                    raise
                 parser.exit(2, f"{context}: load run {run}: {error}\n")
             if plan.get("backend") == "native" and args.command not in {
                 "check",
@@ -1475,7 +1645,16 @@ def main(argv: list[str] | None = None) -> int:
                 "handshake-policy": handshake_policy,
                 "start": start,
             }[args.command](run, plan)
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        subprocess.SubprocessError,
+    ) as error:
+        if structured and results.json_mode():
+            raise
         if isinstance(error, FileExistsError):
             parser.exit(1, f"{context}: artifact already exists: {error.filename or error}\n")
         status = 2 if args.command == "prepare" else 1

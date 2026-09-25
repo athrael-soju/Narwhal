@@ -8,13 +8,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from narwhal.deployment import stages
 from narwhal.deployment.launch_engine import check, load, prepare, start_shared
 from tests.deployment.fixtures import launcher_inputs
 
 
 class ContainerAllowanceTests(unittest.TestCase):
     @contextlib.contextmanager
-    def fleet(self, readings, *, fail_start=None, fail_cleanup=None):
+    def fleet(self, readings, *, fail_start=None, fail_cleanup=None, reconciled_timeout=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             runs = []
@@ -40,6 +41,21 @@ class ContainerAllowanceTests(unittest.TestCase):
                     return cid
                 if action == "start":
                     if run.name == fail_start:
+                        if reconciled_timeout:
+                            cid = command[1]
+                            del containers[cid]
+                            raise stages.StageTimeout(
+                                "docker-start",
+                                {
+                                    "budget_seconds": 0.1,
+                                    "evidence": str(run / "stage.json"),
+                                    "recovery": "inspect recorded container IDs",
+                                    "docker_reconciliation": {
+                                        "removed": [cid],
+                                        "surviving_resources": [],
+                                    },
+                                },
+                            )
                         raise ValueError("synthetic Docker start failure")
                     containers[command[1]] = "running"
                     return command[1]
@@ -134,6 +150,25 @@ class ContainerAllowanceTests(unittest.TestCase):
                 self.assertEqual(record["gpu_after"]["used_mib"], (8000, 14000)[index])
                 self.assertEqual((run / "shared-start.json").stat().st_mode & 0o777, 0o600)
                 self.assertIn("13000 MiB", record["error"])
+
+    def test_rollback_preserves_confirmed_daemon_cleanup_after_start_timeout(self):
+        with self.fleet(
+            (1000, 5000, 5000, 5000), fail_start="engine-2", reconciled_timeout=True
+        ) as fleet:
+            runs, ids, containers, removals, external_id = fleet
+            with self.assertRaises(stages.StageTimeout) as caught:
+                start_shared(runs, 30)
+            self.assertEqual(removals, [ids[runs[0]]])
+            self.assertEqual(containers, {external_id: "running"})
+            self.assertNotIn("container_cleanup_errors", caught.exception.context)
+            for run in runs:
+                record = json.loads((run / "shared-start.json").read_text())
+                self.assertEqual(record["cleanup_status"], "removed")
+            failed = json.loads((runs[1] / "shared-start.json").read_text())
+            self.assertEqual(failed["failure_stage"], "docker-start")
+            self.assertEqual(
+                failed["failure_context"]["docker_reconciliation"]["removed"], [ids[runs[1]]]
+            )
 
     def test_observed_boundary_excludes_baseline_and_preserves_running_containers(self):
         with self.fleet((1000, 8000, 8000, 11000)) as fleet:
