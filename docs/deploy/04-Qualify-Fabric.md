@@ -158,7 +158,7 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
   --budget "$FABRIC_RUN/budget.json" --out "$EDGE_PREFIX.evidence.json"
 ```
 
-`record-edge` reads `end.sum_received.bits_per_second`. Exit status 0 means budget met, 1 means measured rate is below budget, and 2 means invalid sample. Stop the temporary server after retention, reverse roles, and repeat against the reverse source's budget.
+`record-edge` reads `end.sum_received.bits_per_second`. Exit status 0 means budget met, 1 means measured rate is below budget, and 2 means invalid sample. After saving the sample and its evidence, stop the temporary server, reverse roles, and repeat against the reverse source's budget.
 
 ## Measure `ucx_rdma`
 
@@ -234,7 +234,7 @@ For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs. Th
 
 Retain source role, destination role, source revision, source and reverse routes, transport, utility version, exact command, budget signature, sample path, and exit status for every edge.
 
-When host assignment, both routes, interfaces, transport, utility version, and measurement parameters match the retained sample, recreate the current link fingerprint and compare it with the corrected budget:
+When host assignment, both routes, interfaces, transport, utility version, and measurement parameters match the retained sample, recreate the current link fingerprint and compare it with the recalculated budget:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \

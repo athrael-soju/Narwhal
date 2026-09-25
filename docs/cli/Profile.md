@@ -1,6 +1,8 @@
 # `narwhal-profile`
 
-`narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config. It binds each fit to the verified attestation when `engine_contract` is configured, or to the live process identity otherwise, and retains that evidence with raw observations in the `.samples.json` sidecar.
+`narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config.
+
+When `engine_contract` is configured, each fit is bound to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation). Otherwise, it is bound to the live process identity. The `.samples.json` sidecar retains that evidence and the raw observations.
 
 The profiler rejects symlink destinations and requires `--overwrite` to replace existing files. Give each run a new output path to retain prior profiles and samples.
 
@@ -10,7 +12,7 @@ The profiler rejects symlink destinations and requires `--overwrite` to replace 
 | ---------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--fleet PATH`         | required    | Fleet config JSON                                                                                                                                                       |
 | `--only IID`           | all engines | Repeatable engine selector                                                                                                                                              |
-| `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining their decode measurements. Requires `--out` and a complete fleet selection.                             |
+| `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining their decode measurements. Requires `--out` and includes every engine in the fleet; cannot be used with `--only`. |
 | `--out PATH`           | omitted     | Fresh profile path for `--refit-samples`; the command writes a matching `.samples.json` sidecar.                                                                        |
 | `--limits PATH`        | omitted     | Generated per-engine `max_num_seqs` limits from deployment preparation. The profiler bounds each decode cohort before probing.                                          |
 | `--overwrite`          | false       | Replaces existing profile and sample files when the first engine completes; with `--only`, the new store contains the selected profiles.                              |

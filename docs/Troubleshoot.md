@@ -46,7 +46,7 @@ When reconciling load-test attainment, divide router completions by admitted req
 
 Reduce offered traffic at ingress or add a fleet whose deployment passed validation.
 
-Run the same request mix at two offered rates with `serving.max_connections`, queue depth, and timeouts fixed, comparing completed throughput and SLO-qualified requests before raising a limit that could hold work past its TTFT budget.
+Run the same request mix at two offered rates. Keep `serving.max_connections`, queue depth, and timeouts fixed, then compare completed throughput and SLO-qualified requests. Use that comparison before raising a limit that could hold work past its TTFT budget.
 
 ## After recovery
 

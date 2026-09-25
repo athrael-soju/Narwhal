@@ -40,6 +40,8 @@ Discovery filters the root `README.md` and `.cache/huggingface/` metadata from a
 
 ## Run discovery and access checks
 
+Remote discovery expects Python 3, Docker, `ip`, either `rocminfo` or `nvidia-smi`, the pinned engine image, and the checkpoint at the configured path.
+
 From the management checkout:
 
 ```bash
@@ -49,13 +51,15 @@ python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
 
-Remote discovery expects Python 3, Docker, `ip`, either `rocminfo` or `nvidia-smi`, the pinned engine image, and the checkpoint at the configured path.
-
 On first contact, discovery records the SSH host key reached through the authenticated private route. `NARWHAL_SSH_KNOWN_HOSTS` may instead point at an existing verified file. Later deployment commands reject a mismatched host key. Verify any changed key through the provider console before replacing the local entry.
 
 For each engine, discovery records GPU product and mappings, checkpoint configuration and hash, tokenizer metadata, convolutional-state fields, fabric interface and global address, and immutable image identity. A temporary container reads image package metadata and exits; discovery derives model dtype and image runtime environment from that inspection.
 
-When checkpoint metadata contains `auto_map`, discovery adds `--trust-remote-code`. When convolutional SSM transfer state is detected, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`. It derives SSM requirements from fields including `text_config.linear_attn_config.kda_layers` and `short_conv_kernel_size`. The image check later verifies those requirements before model load. The pinned vLLM v0.29.0 layout resolver defaults to SD, so the DS requirement must be explicit when applicable.
+When checkpoint metadata contains `auto_map`, discovery adds `--trust-remote-code`.
+
+When convolutional SSM transfer state is detected, discovery sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`. The image check later verifies those requirements before model load.
+
+Discovery derives SSM requirements from fields including `text_config.linear_attn_config.kda_layers` and `short_conv_kernel_size`. The pinned vLLM v0.29.0 layout resolver defaults to SD, so the DS requirement must be explicit when applicable.
 
 Discovery writes mode-0600 configuration:
 

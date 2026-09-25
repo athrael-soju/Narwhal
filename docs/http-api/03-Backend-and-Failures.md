@@ -38,7 +38,7 @@ It rejects:
 
 Opaque runtime fields are retained.
 
-Preflight and occupied-role canaries verify KV transfer against the pinned engine contract.
+[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
 
 ### Ownership and timing
 
@@ -56,11 +56,12 @@ Every retry receives:
 - fresh backend request IDs
 - new producer ownership
 
-Narwhal measures these intervals separately:
+Narwhal records two durations from the original request's arrival at the router:
 
-1. producer HTTP completion
-2. first visible decode output
-3. handoff time between the two
+- `ttft_s`: elapsed time to producer HTTP completion.
+- `first_byte_s`: elapsed time to the first generated decode output observed by the router.
+
+Their difference, `first_byte_s - ttft_s`, gives the interval between those events. See the [measurement contract](../measure/01-Profile.md).
 
 ### Python API
 
@@ -71,25 +72,7 @@ from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import PrefillResult
 ```
 
-Pass the result of:
-
-```python
-EngineClient.prefill()
-```
-
-directly to:
-
-```python
-EngineClient.decode()
-```
-
-For inspection:
-
-```python
-result.parameters()
-```
-
-returns a detached dictionary.
+Pass the result of `EngineClient.prefill()` directly to `EngineClient.decode()`. For inspection, `result.parameters()` returns a detached dictionary.
 
 Internal Python APIs may change between releases.
 
@@ -105,13 +88,7 @@ Prefill finishes before client streaming begins, so prefill failures can be retu
 
 When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
 
-After:
-
-```text
-recovery.eject_after
-```
-
-consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
+After `recovery.eject_after` consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
 
 The failure streak includes:
 
@@ -120,11 +97,7 @@ The failure streak includes:
 
 After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
 
-Each probe leg uses:
-
-```text
-engine.first_token_timeout_s
-```
+Each probe leg uses `engine.first_token_timeout_s`.
 
 Inconclusive probes return to the normal readmission cadence.
 
@@ -149,7 +122,7 @@ An error object carried inside an upstream HTTP `200` stream propagates with the
 
 ### Decode timeouts
 
-`engine.first_token_timeout_s` limits the time between opening the decode stream and receiving the first generated token.
+`engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends at the first generated token. Connection and response-header delays consume the same budget.
 
 After the first token, `engine.decode_read_timeout_s` bounds silence between transport chunks; metadata chunks reset the timer.
 
@@ -170,13 +143,7 @@ Before visible output, Narwhal may start a fresh attempt for a transient fault w
 - the original request deadline still permits it
 - retry budget remains
 
-When:
-
-```text
-recovery.failure_quarantine_s > 0
-```
-
-the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
+When `recovery.failure_quarantine_s > 0`, the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
 
 A decode failure after HTTP `200` has already been committed emits a terminal SSE event:
 

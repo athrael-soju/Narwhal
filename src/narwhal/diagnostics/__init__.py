@@ -1,1 +1,1 @@
-"""Deployment preflight and correctness canaries."""
+"""Deployment preflight and KV transfer checks."""

@@ -28,7 +28,7 @@ Narwhal includes empty-text and reasoning-only token IDs in output length and co
 
 ## 2. Reuse or create an idle-fleet latency profile
 
-Gate F binds the retained `profiles.json` and `profiles.samples.json` pair to attested engine generations; measurement runs against those processes and runtime reuse the pair and its passing preflight.
+[Gate F](../deploy/06-Profile-and-Preflight.md) binds the retained `profiles.json` and `profiles.samples.json` pair to attested engine generations. Measurement runs can reuse the pair while the engine processes and runtime remain unchanged. Retain a passing preflight for the fleet configuration under test.
 
 For a new engine process or runtime, reserve the production engine shape, warm the model with prefix caching disabled, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
 
@@ -59,7 +59,7 @@ Give the decode sweep at least two input lengths and two concurrency values. For
 
 The profiler keeps decode inputs whose input and requested output fit the live context limit. Extend the sweep for long-context deployments; when that limit leaves too few usable cells to fit the profile, select shorter inputs.
 
-Each decode probe requests one identified token per SSE event. The profiler retains token intervals after stream completion, per-event identity, output cardinality, and interval count pass validation.
+Each decode probe requests one identified token per SSE event. The profiler validates token identity as events arrive, then checks stream completion and output token counts. It retains the intervals only after all streams pass these checks and enough intervals have been collected.
 
 ## 3. Retain profile samples and fits
 

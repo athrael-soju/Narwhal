@@ -50,7 +50,7 @@ Use journal `run` as the process boundary when reconciling restored outcome coun
 
 Role-change counters begin accumulating when the scheduler starts.
 
-`narwhal_flip_reversals_total` increments when an engine moves back from its previous target role, starting with its second recorded move.
+`narwhal_flip_reversals_total` increments when an engine's new target role differs from the target of its previous recorded move. The engine's first recorded move does not count as a reversal.
 
 `narwhal_flips_refused_total` records role changes blocked by:
 
@@ -92,12 +92,7 @@ Aggregate router histograms with identical bucket edges.
 
 ## Inspect retained attainment evidence
 
-`narwhal_attainment_evidence_pruned_total` begins appearing after Narwhal has dropped evidence older than every consumer horizon. Its `kind` label identifies the pruned data as either:
-
-```text
-buckets
-outcomes
-```
+`narwhal_attainment_evidence_pruned_total` appears after Narwhal first drops buckets outside the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is `buckets` or `outcomes`.
 
 ## Inspect demand history and decode floor
 

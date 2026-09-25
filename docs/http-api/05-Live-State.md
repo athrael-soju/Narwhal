@@ -167,26 +167,13 @@ While a breach is active, `below_floor.cumulative_s` includes the open interval.
 
 Decode-to-prefill decisions also include the consolidation-evidence snapshot.
 
-Scored reactive decisions report `eligibility_rule` using one of:
-
-```text
-source_shrink
-mixed_pressure
-projected_ttft_recovery
-```
-
-Meanings:
+Scored reactive decisions report one of these `eligibility_rule` values:
 
 - `source_shrink`: ordinary consolidation
 - `mixed_pressure`: observed prefill recovery exceeds the decode shrink threshold
 - `projected_ttft_recovery`: arrival-triggered decode-to-prefill evaluation
 
-Eligible proposals also report:
-
-```text
-confirmations
-required_confirmations
-```
+Eligible proposals also report `confirmations` and `required_confirmations`.
 
 #### Projected-TTFT recovery fields
 
@@ -205,7 +192,7 @@ urgent_signals
 event_to_evaluation_s
 ```
 
-A scored adjacent candidate adds:
+For projected-TTFT recovery, the adjacent candidate has one more prefill engine and one fewer decode engine than the current split. Scoring that candidate adds:
 
 ```text
 candidate_projected_ttft_s
@@ -265,12 +252,6 @@ A role-change record has this form:
 
 `drained_s` is populated with the drain duration when that resident work finishes.
 
-Each `flips_refused[]` record contains:
-
-```text
-at
-to
-why
-```
+Each `flips_refused[]` record contains `at`, `to`, and `why`.
 
 The [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) records per-request evidence.

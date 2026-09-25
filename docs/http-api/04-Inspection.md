@@ -83,7 +83,7 @@ New completion requests receive `backend_unavailable` with `Retry-After: 1`.
 
 Lifecycle and control holds take precedence over backend state.
 
-During a whole-wave hold:
+During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
 
 - `/health` reports `maintenance`
 - `/ready` reports the lifecycle reason

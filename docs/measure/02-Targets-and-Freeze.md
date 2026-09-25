@@ -54,6 +54,6 @@ Across the offered-rate sweep, vary the request rate while holding these inputs 
 
 Between rates, drain resident work and transfer leases.
 
-End the sweep at the first candidate attainment miss or after testing the intended operating ceiling.
+End the sweep when a run with a valid client schedule misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial), or after testing the intended operating ceiling.
 
 Continue with the [synthetic load trial](03-Load-Trial.md).

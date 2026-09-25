@@ -50,7 +50,8 @@ Startup completes after these checks pass:
 - every configured engine target is healthy;
 - the `narwhal_router_ready` metric is present;
 - Grafana has selected the expected Prometheus datasource;
-- the provisioned dashboard satisfies its query contract.
+- the `narwhal-router` dashboard is available and its `router` selector defaults to **All**, using the regex `.*`;
+- at least one dashboard query uses `instance=~"$router"`, and none uses `instance="$router"`.
 
 Listener ownership and Docker inspection commands have a 10-second deadline.
 

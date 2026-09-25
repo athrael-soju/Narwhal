@@ -34,7 +34,7 @@ Narwhal provides:
 
 ## Architecture
 
-On regular controller passes, Narwhal prices the current and adjacent prefill/decode splits from measured engine curves, offered demand, and resident work, moving an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
+On regular controller passes, Narwhal estimates prefill and decode pressure against their SLOs for the current and adjacent role splits, using measured engine curves, offered demand, and resident work. It moves an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
 
 ![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
@@ -66,7 +66,9 @@ Follow [Set up the WSL2 GPU runtime](https://athrael-soju.github.io/Narwhal/Dev-
 
 ## Deploy a fleet
 
-From a management workstation, an operator follows [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) to inspect the target hardware and model, install an approved source revision, validate the running vLLM processes and KV paths, then profile and preflight before routing traffic. The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
+Follow [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. Inspect the target hardware and model, install an approved source revision, and validate the running vLLM processes and KV paths. Then profile and run preflight before routing traffic.
+
+The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
 
 ## Reference
 

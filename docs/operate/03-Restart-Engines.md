@@ -71,11 +71,11 @@ A failed gate places the engine under operator control until repair and explicit
 
 ### 7.5 Recover loss of every placement peer
 
-When a contracted fleet loses every placement peer, automatic recovery waits for the complete cohort and validates that cohort atomically.
+When a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) loses every placement peer, automatic recovery waits for all configured engines to pass their health probes, then validates them atomically.
 
-One failed member keeps the cohort held.
+One failed member keeps the fleet held.
 
-Repair the failing check, then request whole-cohort readmission:
+Repair the failing check, then request whole-fleet readmission:
 
 ```text
 POST /narwhal/lifecycle/readmit

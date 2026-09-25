@@ -13,6 +13,10 @@ With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
 | `--print-example-config`    | false                  | Prints the packaged annotated config before resolving the input config, then exits.         |
 | `--print-contract-versions` | false                  | Prints the versioned JSON interface registry before resolving the input config, then exits. |
 
+KV checks use the fixed prompt `"benchmark " * 64`, whose token count depends on the model tokenizer. Each `consume` probe creates a fresh handoff and requests up to four output tokens from a distinct, role-permitted peer. Decode uses the fleet's `engine.first_token_timeout_s` and must return generated output followed by a valid stream termination.
+
+`--repeats` repeats these checks without collecting latency samples. Input-length sweeps and an independent first-token observation window require [separately instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+
 Exit status 1 indicates a failed gate or a fleet config read or validation error. Exit status 2 indicates invalid arguments.
 
 Use gate tables to diagnose deployment failures and the contract registry and versioned artifacts for automation.

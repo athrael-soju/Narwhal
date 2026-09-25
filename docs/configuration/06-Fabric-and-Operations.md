@@ -14,17 +14,7 @@ For each representative engine role and matching cache configuration:
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
 ```
 
-Use:
-
-```text
---runtime-layout
-```
-
-with the `cache-layout.json` captured from the running cache representative by:
-
-```text
-launch_engine.py capture-cache
-```
+`calculate` takes the representative's captured `cache-layout.json` through `--runtime-layout`. Use `launch_engine.py capture-cache` to capture that file from the running engine.
 
 The calculator:
 
