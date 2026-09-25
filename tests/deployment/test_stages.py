@@ -121,11 +121,13 @@ import json, os, pathlib, sys, time
 path=pathlib.Path(os.environ['FAKE_DOCKER_STATE'])
 state=json.loads(path.read_text())
 a=sys.argv[1:]
-if a[0] == 'create':
-    owner=a[a.index('--label')+1].split('=',1)[1]
-    state['a'*64]={'Id':'a'*64,'Config':{'Labels':{'io.narwhal.launch':owner}}}
+if a[0] in ('create', 'run'):
+    labels=dict(a[i+1].split('=',1) for i,v in enumerate(a) if v == '--label')
+    state['a'*64]={'Id':'a'*64,'Config':{'Labels':labels}}
     path.write_text(json.dumps(state))
     print('created before client stalled',flush=True)
+    time.sleep(30)
+elif a[0] == 'start':
     time.sleep(30)
 elif a[0] == 'ps':
     if os.environ.get('FAKE_DOCKER_STALL_INSPECT'): time.sleep(30)
@@ -180,6 +182,38 @@ class DockerStageTests(unittest.TestCase):
         self.assertEqual(report["surviving_resources"], [])
         self.assertEqual(set(json.loads(state.read_text())), {"b" * 64})
         self.assertIn("created before client stalled", (self.root / "docker.log").read_text())
+
+    def test_stalled_inspection_preserves_the_existing_serving_container(self):
+        state = self.fake_docker()
+        owner = launch_engine._docker_owner(self.root)
+        records = json.loads(state.read_text())
+        records["b" * 64]["Config"]["Labels"]["io.narwhal.launch"] = owner
+        records["b" * 64]["State"] = {"Running": True}
+        state.write_text(json.dumps(records))
+        (self.root / "container.id").write_text("b" * 64)
+        with self.assertRaises(stages.StageTimeout) as caught:
+            launch_engine.docker(["run", "--rm", "image"], self.root, "inspection.log")
+        report = caught.exception.context["docker_reconciliation"]
+        self.assertEqual(report["removed"], ["a" * 64])
+        self.assertEqual(report["preserved_resources"], ["b" * 64])
+        self.assertEqual(report["surviving_resources"], ["b" * 64])
+        self.assertEqual(json.loads(state.read_text()), {"b" * 64: records["b" * 64]})
+
+    def test_stalled_start_cleans_only_the_named_container(self):
+        state = self.fake_docker()
+        owner = launch_engine._docker_owner(self.root)
+        records = {
+            cid: {"Id": cid, "Config": {"Labels": {"io.narwhal.launch": owner}}}
+            for cid in ("a" * 64, "b" * 64)
+        }
+        state.write_text(json.dumps(records))
+        (self.root / "container.id").write_text("b" * 64)
+        with self.assertRaises(stages.StageTimeout) as caught:
+            launch_engine.docker(["start", "a" * 64], self.root, "start.log")
+        report = caught.exception.context["docker_reconciliation"]
+        self.assertEqual(report["removed"], ["a" * 64])
+        self.assertEqual(report["preserved_resources"], ["b" * 64])
+        self.assertEqual(set(json.loads(state.read_text())), {"b" * 64})
 
     def test_daemon_survivor_is_recorded_after_successful_rm_response(self):
         self.fake_docker(FAKE_DOCKER_KEEP_RESOURCE="1")

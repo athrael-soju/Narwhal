@@ -380,8 +380,15 @@ def _docker_owner(run: Path) -> str:
     return owner
 
 
-def reconcile_docker(run: Path, owner: str, *, remove: bool) -> dict:
-    """Inspect daemon state and remove only IDs bound to this launch directory."""
+def reconcile_docker(
+    run: Path,
+    owner: str,
+    *,
+    remove: bool,
+    operation: str | None = None,
+    targets: tuple[str, ...] = (),
+) -> dict:
+    """Inspect launch resources and remove only the interrupted operation's containers."""
     from narwhal.deployment import stages
 
     budget = stages.seconds("NARWHAL_DOCKER_RECONCILE_SECONDS", 30)
@@ -389,7 +396,10 @@ def reconcile_docker(run: Path, owner: str, *, remove: bool) -> dict:
     report: dict = {
         "budget_seconds": budget,
         "owner": owner,
+        "operation": operation,
+        "targets": list(targets),
         "removed": [],
+        "preserved_resources": [],
         "surviving_resources": [],
         "status": "inspection_required",
     }
@@ -422,6 +432,7 @@ def reconcile_docker(run: Path, owner: str, *, remove: bool) -> dict:
         # The all-container listing permits an absent recorded ID after an earlier cleanup.
         present = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines()) & ids
         owned = []
+        cleanup = []
         if present:
             records = json.loads(invoke(["inspect", *sorted(present)]))
             for record in records:
@@ -429,15 +440,24 @@ def reconcile_docker(run: Path, owner: str, *, remove: bool) -> dict:
                 labels = record.get("Config", {}).get("Labels") or {}
                 if cid in present and (cid in recorded or labels.get("io.narwhal.launch") == owner):
                     owned.append(cid)
+                    if remove and (
+                        cid in targets
+                        or (
+                            operation is not None
+                            and labels.get("io.narwhal.operation") == operation
+                        )
+                    ):
+                        cleanup.append(cid)
                 else:
                     report.setdefault("refused_resources", []).append(cid)
         report["surviving_resources"] = sorted(owned)
-        if remove and owned:
-            invoke(["rm", "--force", *owned])
+        report["preserved_resources"] = sorted(set(owned) - set(cleanup))
+        if cleanup:
+            invoke(["rm", "--force", *cleanup])
         remaining = set(invoke(["ps", "-aq", "--no-trunc"]).splitlines())
         report["surviving_resources"] = sorted(set(owned) & remaining)
         if remove:
-            report["removed"] = sorted(set(owned) - remaining)
+            report["removed"] = sorted(set(cleanup) - remaining)
         report["status"] = "observed"
     except (OSError, ValueError, KeyboardInterrupt) as error:
         report["error"] = str(error)
@@ -457,13 +477,30 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
 
     owner = _docker_owner(run)
     invocation = list(command)
-    if command[0] in {"create", "run"}:
-        invocation[1:1] = ["--label", f"io.narwhal.launch={owner}"]
+    operation = uuid.uuid4().hex if command[0] in {"create", "run"} else None
+    targets = (
+        tuple(value for value in command[1:] if re.fullmatch(r"[0-9a-f]{64}", value))
+        if command[0] == "start"
+        else ()
+    )
+    if operation is not None:
+        invocation[1:1] = [
+            "--label",
+            f"io.narwhal.launch={owner}",
+            "--label",
+            f"io.narwhal.operation={operation}",
+        ]
     try:
         result = stages.run(["docker", *invocation], stage="docker-" + command[0], log=run / log)
     except (stages.StageTimeout, stages.StageCancelled) as error:
         try:
-            report = reconcile_docker(run, owner, remove=command[0] in {"create", "run", "start"})
+            report = reconcile_docker(
+                run,
+                owner,
+                remove=command[0] in {"create", "run", "start"},
+                operation=operation,
+                targets=targets,
+            )
         except OSError as cleanup_error:
             report = {
                 "status": "inspection_required",
@@ -1191,6 +1228,8 @@ def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
 
 
 def start_shared(runs: list[Path], ready_seconds: int) -> None:
+    from narwhal.deployment import stages
+
     selected = validate_shared_runs(runs)
     gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
     for run, plan in selected:
@@ -1238,13 +1277,17 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                 vllm_args=command,
                 gpu_after=gpu_memory(gpu_uuid),
             )
-        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        except (OSError, ValueError, subprocess.TimeoutExpired, stages.StageCancelled) as error:
             record.update(status="failed", error=str(error))
+            if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                record.update(failure_stage=error.stage, failure_context=error.context)
             try:
                 record["gpu_after"] = gpu_memory(gpu_uuid)
             except (OSError, ValueError, subprocess.TimeoutExpired) as inspection_error:
                 record["gpu_after_error"] = str(inspection_error)
             write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+            if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
+                raise
             raise ValueError(
                 f"{role}: shared GPU start failed at {before['used_mib']}/"
                 f"{before['total_mib']} MiB used, {budget_mib} MiB budget: {error}"

@@ -257,17 +257,19 @@ process with expired ownership requires operator inspection of its recorded
 boot ID, start tick and process group. All evidence stays under the instance.
 
 The engine deployment wrapper uses these budgets for Docker clients and native
-runtime checks. Before each Docker create/run, it persists an ownership token
-in `docker-owner.json` and attaches `io.narwhal.launch` to the container. A timed
-out or cancelled client triggers daemon inspection with a separate
-`NARWHAL_DOCKER_RECONCILE_SECONDS` budget (30 seconds). Reconciliation validates
-labelled containers and recorded container IDs, removes owned resources after
-create/run/start failures, and queries daemon state again. Read operations retain
-existing containers and record their IDs. Each reconciliation client shares the
-remaining reconciliation budget and receives the same termination grace periods,
-so final client cleanup can extend reconciliation by 15 seconds with defaults.
+runtime checks. Each Docker create/run carries the launch token from
+`docker-owner.json` in `io.narwhal.launch` and a unique operation token in
+`io.narwhal.operation`. A timed out or cancelled client triggers daemon inspection
+with a separate `NARWHAL_DOCKER_RECONCILE_SECONDS` budget (30 seconds).
+Reconciliation removes containers created by the interrupted operation, or the
+explicit target of an interrupted start, then queries daemon state again. It
+retains the launch directory's other containers and records their IDs as
+preserved resources. Each reconciliation client shares the remaining
+reconciliation budget and receives the same termination grace periods, so final
+client cleanup can extend reconciliation by 15 seconds with defaults.
 
-`docker-reconcile-*.json` records removed IDs, surviving IDs, refusal decisions,
+`docker-reconcile-*.json` records the operation token, targeted, removed, preserved
+and surviving IDs, refusal decisions,
 inspection errors and observation time. A stalled daemon leaves the result at
 `inspection_required`; inspect the persisted ownership label and recorded IDs
 before retrying. The report describes the daemon at observation time: repeat
