@@ -1,5 +1,6 @@
 """Bound real CPU helpers, detached descendants and daemon-side Docker resources."""
 
+import contextlib
 import json
 import os
 import signal
@@ -29,6 +30,26 @@ class StageTests(unittest.TestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        reaper = stages._reaper()
+        reaper.__enter__()
+        self.addCleanup(reaper.__exit__, None, None, None)
+        self.process_ticks = stages._processes()[os.getpid()][3]
+        self.baseline = set(stages._discover({os.getpid(): self.process_ticks}, os.getpid()))
+        self.addCleanup(StageTests.cleanup_processes, self)
+
+    def cleanup_processes(self):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            owned = stages._discover({os.getpid(): self.process_ticks}, os.getpid())
+            remaining = {pid: row[3] for pid, row in owned.items() if pid not in self.baseline}
+            stages._signal(remaining, signal.SIGKILL)
+            for pid in remaining:
+                with contextlib.suppress(ChildProcessError):
+                    os.waitpid(pid, os.WNOHANG)
+            if not remaining:
+                return
+            time.sleep(0.02)
+        self.fail(f"test subprocess cleanup exceeded its deadline: {remaining}")
 
     def test_timeout_retains_output_and_reaps_detached_worker(self):
         sibling = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -106,6 +127,109 @@ class StageTests(unittest.TestCase):
         self.assertEqual(evidence["cleanup"]["surviving_processes"], {})
         self.assertFalse(Path(f"/proc/{evidence['pid']}").exists())
 
+    def test_immediate_fork_and_setsid_stays_owned_until_reaped(self):
+        script = (
+            "import os,time; pid=os.fork(); "
+            "os._exit(0) if pid else None; os.setsid(); "
+            "print(os.getpid(),flush=True); time.sleep(30)"
+        )
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                result = stages.run(
+                    [sys.executable, "-c", script],
+                    stage="fast-fork",
+                    log=self.root / f"fork-{attempt}.log",
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertFalse(Path(f"/proc/{int(result.stdout)}").exists())
+
+    def test_successful_native_style_stage_retains_its_worker(self):
+        script = (
+            "import subprocess,sys,time; "
+            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'],"
+            "start_new_session=True); "
+            "print(p.pid,flush=True); time.sleep(.05)"
+        )
+        result = stages.run(
+            [sys.executable, "-c", script],
+            stage="native-start-shared",
+            log=self.root / "retain.log",
+            retain_descendants=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(int(result.stdout), stages._processes())
+        record = json.loads(next(self.root.glob("retain.log.*.stage.json")).read_text())
+        self.assertEqual(record["status"], "completed")
+        self.assertFalse(Path(f"/proc/{record['pid']}").exists())
+
+    def test_release_wait_failure_cleans_children_and_retains_evidence(self):
+        original = subprocess.Popen.wait
+        for failure in (KeyboardInterrupt(), subprocess.TimeoutExpired("supervisor-release", 0.5)):
+            with self.subTest(failure=type(failure).__name__):
+                interrupted = False
+
+                def wait(child, timeout=None, failure=failure):
+                    nonlocal interrupted
+                    if not interrupted:
+                        interrupted = True
+                        raise failure
+                    return original(child, timeout=timeout)
+
+                log = self.root / (type(failure).__name__ + ".log")
+                with (
+                    patch.object(subprocess.Popen, "wait", wait),
+                    self.assertRaises((stages.StageCancelled, stages.StageTimeout)) as caught,
+                ):
+                    stages.run(
+                        [sys.executable, "-c", "print('released')"],
+                        stage="release",
+                        log=log,
+                        retain_descendants=True,
+                    )
+                self.assertEqual(caught.exception.context["cleanup"]["surviving_processes"], {})
+                self.assertTrue(Path(caught.exception.context["evidence"]).exists())
+
+    def test_release_marker_io_failure_cleans_and_records_original_error(self):
+        touch = Path.touch
+
+        def fail_release(path, *args, **kwargs):
+            if path.suffix == ".release":
+                raise OSError("release marker storage unavailable")
+            return touch(path, *args, **kwargs)
+
+        with (
+            patch.object(Path, "touch", fail_release),
+            self.assertRaisesRegex(OSError, "release marker storage unavailable"),
+        ):
+            stages.run(
+                [sys.executable, "-c", "print('release ready')"],
+                stage="release-io",
+                log=self.root / "release-io.log",
+                retain_descendants=True,
+            )
+        record = json.loads(next(self.root.glob("release-io.log.*.stage.json")).read_text())
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["cleanup"]["surviving_processes"], {})
+        self.assertEqual(record["release_error"], "release marker storage unavailable")
+
+    def test_relative_log_with_another_child_working_directory(self):
+        child_root = self.root / "child"
+        child_root.mkdir()
+        previous = Path.cwd()
+        try:
+            os.chdir(self.root)
+            result = stages.run(
+                [sys.executable, "-c", "print('completed')"],
+                stage="relative",
+                log=Path("relative.log"),
+                cwd=child_root,
+            )
+        finally:
+            os.chdir(previous)
+        self.assertEqual(result.stdout.strip(), "completed")
+        record = json.loads(next(self.root.glob("relative.log.*.stage.json")).read_text())
+        self.assertEqual(Path(record["evidence"]).parent, self.root)
+
     def test_invalid_budgets_reject_before_launch(self):
         for value in ("0", "-1", "nan", "inf"):
             with (
@@ -164,7 +288,7 @@ class DockerStageTests(unittest.TestCase):
             {
                 "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                 "FAKE_DOCKER_STATE": str(state),
-                "NARWHAL_DOCKER_RECONCILE_SECONDS": "0.7",
+                "NARWHAL_DOCKER_RECONCILE_SECONDS": "1.5",
                 **extra,
             },
         )
@@ -224,7 +348,7 @@ class DockerStageTests(unittest.TestCase):
         self.assertEqual(report["removed"], [])
 
     def test_stalled_reconciliation_records_uncertain_daemon_state(self):
-        self.fake_docker(FAKE_DOCKER_STALL_INSPECT="1")
+        self.fake_docker(FAKE_DOCKER_STALL_INSPECT="1", NARWHAL_DOCKER_RECONCILE_SECONDS="0.2")
         started = time.monotonic()
         with self.assertRaises(stages.StageTimeout) as caught:
             launch_engine.docker(["create", "image"], self.root, "docker.log")

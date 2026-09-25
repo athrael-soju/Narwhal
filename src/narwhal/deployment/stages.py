@@ -10,6 +10,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -36,10 +37,8 @@ class StageTimeout(ValueError):
     def __init__(self, stage: str, context: dict):
         self.stage = stage
         self.context = context
-        super().__init__(
-            f"{stage} exhausted {context['budget_seconds']:g}s; "
-            f"inspect {context['evidence']}; {context['recovery']}"
-        )
+        detail = context.get("release_error") or f"exhausted {context['budget_seconds']:g}s"
+        super().__init__(f"{stage} {detail}; inspect {context['evidence']}; {context['recovery']}")
 
 
 class StageCancelled(KeyboardInterrupt):
@@ -151,43 +150,106 @@ def _signal(owned: dict[int, int], sig: signal.Signals) -> None:
             os.close(descriptor)
 
 
-def _cleanup(child: subprocess.Popen, owned: dict[int, int], grace: float, kill: float) -> dict:
+def _cleanup(
+    child: subprocess.Popen | None,
+    owned: dict[int, int],
+    grace: float,
+    kill: float,
+    *,
+    leader: int | None = None,
+    hold_leader: bool = False,
+) -> dict:
+    leader = child.pid if child is not None else leader
+    assert leader is not None
     started = time.monotonic()
     escalated = False
     deadline = started + grace
     signalled: set[int] = set()
+    leader_only = False
     while True:
-        members = _discover(owned, child.pid)
-        child.poll()
+        members = _discover(owned, leader)
+        if child is not None:
+            child.poll()
         for pid, row in members.items():
-            if pid != child.pid and row[0] in {"Z", "X"}:
+            if (child is None or pid != child.pid) and row[0] in {"Z", "X"}:
                 with contextlib.suppress(ChildProcessError):
                     os.waitpid(pid, os.WNOHANG)
         live = {pid: row[3] for pid, row in members.items() if row[0] not in {"Z", "X"}}
         if not live:
             break
+        if hold_leader and set(live) == {leader}:
+            if leader_only:
+                _signal(live, signal.SIGKILL)
+            leader_only = True
+        else:
+            leader_only = False
         now = time.monotonic()
         if now >= deadline:
             if escalated:
+                if hold_leader and leader in live:
+                    _signal({leader: live[leader]}, signal.SIGKILL)
                 break
             escalated = True
             deadline = now + kill
             signalled.clear()
-        _signal(
-            {pid: ticks for pid, ticks in live.items() if pid not in signalled},
-            signal.SIGKILL if escalated else signal.SIGTERM,
-        )
-        signalled.update(live)
+        targets = {
+            pid: ticks
+            for pid, ticks in live.items()
+            if pid not in signalled and not (hold_leader and escalated and pid == leader)
+        }
+        _signal(targets, signal.SIGKILL if escalated else signal.SIGTERM)
+        signalled.update(targets)
         time.sleep(0.02)
-    child.poll()
+    if child is not None:
+        child.poll()
     survivors = {
-        pid: row[3] for pid, row in _discover(owned, child.pid).items() if row[0] not in {"Z", "X"}
+        pid: row[3] for pid, row in _discover(owned, leader).items() if row[0] not in {"Z", "X"}
     }
     return {
         "elapsed_seconds": time.monotonic() - started,
         "escalated": escalated,
         "surviving_processes": survivors,
     }
+
+
+def active(record: dict) -> dict[int, int]:
+    """Find recorded helper processes whose boot and start tick still match."""
+    if record.get("boot_id") != Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        return {}
+    processes = _processes()
+    return {
+        int(pid): ticks
+        for pid, ticks in record.get("processes", {}).items()
+        if int(pid) in processes
+        and processes[int(pid)][3] == ticks
+        and processes[int(pid)][0] not in {"Z", "X"}
+    }
+
+
+def recover(path: Path) -> dict:
+    """Stop helpers observed before controller death using persisted Linux identities."""
+    record = json.loads(path.read_text())
+    owned = {int(pid): ticks for pid, ticks in record.get("processes", {}).items()}
+    owned.setdefault(record["pid"], -1)
+    cleanup = (
+        _cleanup(
+            None,
+            owned,
+            seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
+            seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
+            leader=record["pid"],
+            hold_leader=record.get("supervisor", False),
+        )
+        if active(record)
+        else {"surviving_processes": {}}
+    )
+    record.update(
+        status="recovery_required" if cleanup["surviving_processes"] else "recovered",
+        recovery_cleanup=cleanup,
+        recovered_at=time.time(),
+    )
+    write_evidence(path, record)
+    return cleanup
 
 
 def run(
@@ -208,12 +270,17 @@ def run(
     kill = seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5)
     if not math.isfinite(budget) or budget <= 0:
         raise ValueError("stage timeout must be finite and positive")
+    log = log.resolve()
     token = uuid.uuid4().hex[:12]
     evidence = log.with_name(f"{log.name}.{token}.stage.json")
     stdout_path = log.with_name(f"{log.name}.{token}.stdout")
     stderr_path = log.with_name(f"{log.name}.{token}.stderr")
+    result_path = log.with_name(f"{log.name}.{token}.result.json")
+    release_path = log.with_name(f"{log.name}.{token}.release")
     context: dict = {
         "stage": stage,
+        "supervisor": True,
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
         "started_at": time.time(),
         "budget_seconds": budget,
         "cleanup_grace_seconds": grace,
@@ -227,6 +294,8 @@ def run(
     started = time.monotonic()
     failure: type[StageTimeout] | type[StageCancelled] | None = None
     child = None
+    returncode: int | None = None
+    release_failure: OSError | None = None
     owned: dict[int, int] = {}
     with _reaper(), cancellation():
         with contextlib.ExitStack() as stack:
@@ -238,7 +307,13 @@ def run(
             ]
             try:
                 child = subprocess.Popen(
-                    command,
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("stage_worker.py")),
+                        str(result_path),
+                        str(release_path),
+                        *command,
+                    ],
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
@@ -250,7 +325,13 @@ def run(
                 context.update(pid=child.pid, processes=owned, status="running")
                 write_evidence(evidence, context)
                 while child.poll() is None:
+                    previous_count = len(owned)
                     _discover(owned, child.pid)
+                    if len(owned) != previous_count:
+                        write_evidence(evidence, context)
+                    if result_path.exists():
+                        returncode = json.loads(result_path.read_text())["returncode"]
+                        break
                     if time.monotonic() - started >= budget:
                         failure = StageTimeout
                         break
@@ -258,13 +339,27 @@ def run(
             except KeyboardInterrupt:
                 failure = StageCancelled
             finally:
-                if child is not None and (failure or not retain_descendants or child.poll() != 0):
+                if child is not None and retain_descendants and returncode == 0 and not failure:
+                    try:
+                        release_path.touch(mode=0o600)
+                        child.wait(timeout=kill)
+                    except OSError as error:
+                        release_failure = error
+                        context["release_error"] = str(error)
+                    except KeyboardInterrupt:
+                        failure = StageCancelled
+                    except subprocess.TimeoutExpired:
+                        failure = StageTimeout
+                        context["release_error"] = "supervisor release exceeded kill grace"
+                if child is not None and (
+                    failure or release_failure or not retain_descendants or returncode != 0
+                ):
                     saved = {}
                     if threading.current_thread() is threading.main_thread():
                         for sig in (signal.SIGINT, signal.SIGTERM):
                             saved[sig] = signal.signal(sig, signal.SIG_IGN)
                     try:
-                        context["cleanup"] = _cleanup(child, owned, grace, kill)
+                        context["cleanup"] = _cleanup(child, owned, grace, kill, hold_leader=True)
                     except OSError as error:
                         context["cleanup"] = {"error": str(error), "surviving_processes": owned}
                     finally:
@@ -272,11 +367,14 @@ def run(
                             signal.signal(sig, handler)
                 context.update(
                     elapsed_seconds=time.monotonic() - started,
-                    returncode=child.returncode if child else None,
+                    returncode=returncode,
+                    supervisor_returncode=child.returncode if child else None,
                     status="cancelled"
                     if failure is StageCancelled
                     else "timeout"
                     if failure
+                    else "failed"
+                    if release_failure
                     else "completed",
                 )
                 write_evidence(evidence, context)
@@ -286,5 +384,9 @@ def run(
             output.write(json.dumps(context) + "\n" + stdout + stderr)
     if failure:
         raise failure(stage, context)
+    if release_failure:
+        raise release_failure
     assert child is not None
-    return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(
+        command, returncode if returncode is not None else child.returncode, stdout, stderr
+    )

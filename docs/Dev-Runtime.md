@@ -241,12 +241,8 @@ and the routed verification request retain their existing request deadlines.
 On expiry, SIGINT or SIGTERM during a helper stage, the controller signals owned
 processes with SIGTERM, waits up to `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` (10 seconds),
 then uses SIGKILL and waits up to `NARWHAL_STAGE_KILL_GRACE_SECONDS` (5 seconds).
-These periods follow the execution budget. Linux process start ticks and pidfds
-bind signals to the observed helper descendants, including observed descendants
-that start another session. The controller adopts and reaps terminated workers;
-the cleanup record lists any surviving owned PIDs. Successful native shared
-startup retains its engines for the subsequent attestation and profiling stages.
-Other helper stages also clean up workers left behind by an exited leader.
+These periods follow the execution budget; stage evidence records escalation
+and any surviving owned PIDs.
 
 Startup rollback records the initiating failure alongside teardown errors in
 `lifecycle.json`. Verification failures retain the attempt directory and keep
@@ -301,3 +297,73 @@ artifacts. Confirm an unrelated process survives, then start and verify a fresh
 generation with the normal budget. This opt-in qualification exercises vLLM
 workers and CUDA cleanup; the automated deadline suite uses CPU helpers and a
 fake Docker daemon executable.
+
+## Controller interruption
+
+The Linux recovery suite starts synthetic services and subprocess helpers,
+interrupts the controller at synchronised barriers, then executes `status` and
+`down` in fresh processes. Services create workers that delay termination;
+helpers create workers in separate sessions. The suite checks complete committed
+JSON documents, lock release, retained output, idempotent teardown and the
+survival of an unrelated process across these twelve cases:
+
+| Interruption barrier | Signals exercised | Controller cleanup and fresh `down` |
+| --- | --- | --- |
+| Child created, before identity capture | SIGINT | Startup stops the child tree and retains spawn cleanup evidence; `down` reports stopped. |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed ownership set; the operator identifies the newly created service from its command and log. |
+| Ownership document awaiting atomic replacement | SIGKILL | Readers see the previous complete document; operator inspection covers the service described by the pending write. |
+| Ownership committed | SIGINT, SIGTERM | SIGINT rolls startup back; SIGTERM ends the controller and fresh `down` terminates the recorded group. |
+| Service readiness wait | SIGKILL | Fresh `status` reports degraded and `down` terminates the recorded group. |
+| Profiling helper active | SIGINT, SIGTERM, SIGKILL | SIGINT/SIGTERM stop the helper and roll startup back; after SIGKILL, fresh `down` recovers the helper and service records. |
+| Verification helper active | SIGTERM, SIGKILL | SIGTERM records degraded verification and retains services; SIGKILL leaves interrupted helper evidence. Fresh `down` terminates the helpers and services. |
+| Recorded service leader exited, delayed worker surviving | SIGKILL | Status lists the surviving group; teardown requests operator inspection of the worker's identity. |
+
+Each helper runs beneath a dedicated Linux subreaper that holds its process
+identity until cleanup finishes. A helper that forks, starts another session
+and exits immediately leaves its worker attached to that supervisor. The
+controller signals workers before removing the supervisor, then reaps its
+adopted children. Successful native shared startup releases the supervisor
+explicitly so the launched engines continue into attestation and profiling.
+Release failures take the bounded cleanup path and retain their initiating error.
+
+Stage documents retain the boot ID and process start ticks, updating atomically
+when the controller observes another descendant. After abrupt controller death,
+`status` lists matching interrupted helpers in `stage_processes`; `down` uses
+those records and the still-live supervisor to discover and terminate its tree.
+A mismatched boot or start tick protects a replacement process from signalling.
+Recovery updates the stage record to `recovered`, or `recovery_required` with the
+surviving PIDs, and preserves stdout, stderr and command evidence.
+
+Ownership begins with a committed process or stage record. A SIGKILL before that
+commit can leave a service whose command log predates its ownership entry.
+Inspect the log, kernel start ticks and listening ports, stop the confirmed
+process tree, then repeat `down`. Its stopped status covers the persisted
+ownership set. A service leader that exits before teardown establishes worker
+ownership also requires operator inspection; the status and teardown documents
+identify the surviving group. The dedicated helper supervisor covers helper
+leader exit while that supervisor remains alive.
+
+### Reference GPU interruption check
+
+Use an operator-selected instance with the pinned runtime and a completed normal
+`up`/`verify` cycle. Retain its generation, device-memory baseline, process tree
+and engine, attestation and NIXL port assignments. Qualify these two interruption
+points on that host:
+
+1. Start a fresh generation, wait for a committed engine identity and an observed
+   CUDA allocation, then send SIGINT to the `narwhal dev up` controller PID.
+   Record the controller's exit, retained startup failure, worker exits, device
+   memory and port state; run `status` and `down` from a fresh shell.
+2. Start and verify a fresh generation, launch another `dev verify`, wait for its
+   preflight stage ownership record, then send SIGKILL to that controller PID.
+   Record `status`, run `down` twice, and compare surviving process identities,
+   device memory and bound ports against the baseline.
+
+Keep a separately identified process alive during both checks and confirm its
+identity after teardown. Retain controller output, `lifecycle.json`, stage and
+teardown documents, vLLM logs, GPU process listings and timestamped memory/port
+observations. A surviving CUDA allocation or occupied engine port identifies the
+PID to investigate before another generation starts. Record the vLLM, driver,
+CUDA and GPU versions alongside the exercised signal and barrier. The automated
+suite qualifies Linux ownership using CPU processes and substituted HTTP health
+responses; this opt-in procedure adds actual vLLM, CUDA and port-release evidence.

@@ -112,9 +112,29 @@ def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env
         )
     try:
         identity = native_engine.process_identity(child.pid)
-    except BaseException:
-        child.terminate()
-        child.wait()
+    except BaseException as error:
+        owned: dict[int, int] = {}
+        try:
+            with stages._reaper():
+                cleanup = stages._cleanup(
+                    child,
+                    owned,
+                    stages.seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
+                    stages.seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
+                )
+            write(
+                run / f"{name}-spawn.stage.json",
+                {
+                    "stage": name,
+                    "pid": child.pid,
+                    "processes": owned,
+                    "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                    "status": "cancelled",
+                    "cleanup": cleanup,
+                },
+            )
+        except (OSError, ValueError) as cleanup_error:
+            error.add_note(f"{name} cleanup: {cleanup_error}")
         raise
     record = {"name": name, "identity": identity}
     state["processes"].append(record)
@@ -191,6 +211,17 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         _run(run, "narwhal.profiling.probe", args, "profile-merge")
 
 
+def _helper_records(run: Path) -> list[tuple[Path, dict]]:
+    records = []
+    for path in sorted(run.rglob("*.stage.json")):
+        record = read(path)
+        if record.get("status") in {"running", "recovery_required"} or record.get(
+            "cleanup", {}
+        ).get("surviving_processes"):
+            records.append((path, record))
+    return records
+
+
 def _stop(root: Path, state: dict) -> None:
     errors = []
     # The native launcher persists ownership before health checks, including failures.
@@ -199,6 +230,17 @@ def _stop(root: Path, state: dict) -> None:
     for path in sorted(run.glob("engine-*/native-process.json")):
         records.insert(0, {"name": path.parent.name, "identity": read(path)})
     stopped = []
+    for path, helper in _helper_records(run):
+        try:
+            cleanup = stages.recover(path)
+            if cleanup["surviving_processes"]:
+                errors.append(
+                    f"{helper['stage']}: surviving helper PIDs {cleanup['surviving_processes']}"
+                )
+            else:
+                stopped.append("helper:" + helper["stage"])
+        except (OSError, ValueError) as error:
+            errors.append(f"{helper['stage']}: {error}")
     for record in reversed(records):
         identity = record["identity"]
         if native_engine._group_members(identity):
@@ -439,13 +481,19 @@ def status(root: Path) -> dict:
         for r in records
         if r["name"] not in live and (members := native_engine._group_members(r["identity"]))
     }
-    if state["phase"] == "stopped" and not live and not survivors:
+    helpers = {
+        str(path.relative_to(run)): sorted(members)
+        for path, record in _helper_records(run)
+        if (members := stages.active(record))
+    }
+    if state["phase"] == "stopped" and not live and not survivors and not helpers:
         return {"status": "stopped", "run": str(run)}
     problems = [r["name"] + " process identity expired" for r in records if r["name"] not in live]
     problems.extend(
         f"{name}: surviving group PIDs {pids} require operator inspection"
         for name, pids in survivors.items()
     )
+    problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
     if state.get("failure"):
         problems.append(state["failure"]["message"])
     if len(live) != 2 * config["engine_count"] + 1:
@@ -459,6 +507,7 @@ def status(root: Path) -> dict:
             "run": str(run),
             "processes": live,
             "surviving_processes": survivors,
+            "stage_processes": helpers,
             "problems": problems,
         }
     fleet = read(fleet_path)
@@ -490,6 +539,7 @@ def status(root: Path) -> dict:
         "router": config["router_url"],
         "processes": live,
         "surviving_processes": survivors,
+        "stage_processes": helpers,
         "problems": problems,
     }
 
