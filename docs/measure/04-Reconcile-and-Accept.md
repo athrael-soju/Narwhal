@@ -48,7 +48,7 @@ Each trial writes a new directory with mode `0700` and files with mode `0600`. R
 
 After reconciling client and router records, query the dashboard series and run the post-load KV ring described in [Gate G](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
 
-Preflight and the post-load ring establish that the tested role-permitted paths transfer KV and produce tokens. Exact-output correctness across role changes with resident requests requires separate evidence.
+Preflight and the post-load ring establish that the tested role-permitted paths transfer KV and produce tokens. Run an exact-output comparison when accepting correctness across role changes with resident requests.
 
 ## 13. Record deployment acceptance
 

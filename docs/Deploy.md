@@ -16,7 +16,7 @@ Three machine roles are involved:
 | Router and observability host | Hold the fleet configuration and profiles, run Narwhal checks and router, host Prometheus and Grafana.                                                                                     | Verified source bundle and revision, engine and attestation URLs, API credential, model and SLO settings, Docker Engine and Compose plugin.                            |
 | Engine hosts                  | Expose accelerators and transfer devices, run vLLM and attestation sidecars, provide cache and transfer evidence.                                                                          | Accelerator allocation, TP shape, pinned image, checkpoint, launch policy, fabric addresses and ports.                                                                 |
 
-The management workstation needs Git, Bash, Python 3.11 or newer, OpenSSH, and the supplied access tooling. Any remote host that runs Narwhal commands needs Python 3.11 or newer with `venv`, Git, Make, and curl. Engine hosts also need the configured accelerator driver, container runtime, and transfer devices. Password-based SSH additionally requires `sshpass` on the workstation.
+The management workstation needs Git, Bash, Python 3.11 or newer, OpenSSH, and the supplied access tooling. Any remote host that runs Narwhal commands needs Python 3.11 or newer with `venv`, Git, Make, and curl. Engine hosts also need the configured accelerator driver, container runtime, and transfer devices. Password-based SSH requires `sshpass` on the workstation.
 
 Compare each engine allocation with the GPU inventory collected on that engine host. Management workstation inspection describes the workstation's hardware.
 

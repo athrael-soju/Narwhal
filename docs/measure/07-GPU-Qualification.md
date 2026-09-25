@@ -1,6 +1,6 @@
 # Kimi-K3 GPU benchmark qualification
 
-The private run bundle under `runs/issue44-mi355x-20260923/` records host allocation, endpoint addresses, the full deployment package, launch checks, engine attestations, profile samples, preflight output, and raw benchmark evidence. This page contains the reproducible commands and results that can be shared without the fleet inventory.
+The private run bundle under `runs/issue44-mi355x-20260923/` records host allocation, endpoint addresses, the full deployment package, launch checks, engine attestations, profile samples, preflight output, and raw benchmark evidence.
 
 ## Pinned inputs
 
@@ -22,7 +22,7 @@ The private run bundle under `runs/issue44-mi355x-20260923/` records host alloca
 
 The earlier full checkpoint manifests agree on all weight shard hashes. The live launch check confirmed every shard's recorded size and the model config hash on every selected host. Keep the per-host manifests and current process records in the private bundle. The workload token pool comes from the returned prompt token IDs; the seed completion's output IDs were all identical, so using those IDs would have produced a repeated-token prompt.
 
-Live profiles measured 8,192-token prefill medians around 0.92 s and decode intercepts from 0.2416 to 0.2426 s/token. The packaged 2.5 s first-token deadline rejected working KV handoffs between engines. Direct probes with a wider observation window completed on every permitted path; first-token latency ranged from 0.348 to 5.274 s. The qualified fleet copy sets the deadline to 8.5 s. That bound is above the observed maximum and leaves about 0.6 s of the 10 s TTFT budget after the measured prefill if the bound is exhausted. The full preflight then passed its health, contract, generation, model, pace, tokenization, KV transfer, and SLO gates. The engine containers were not restarted for this configuration change. The qualified fleet copy differs from the finalized deployment fleet only in `engine.first_token_timeout_s`.
+Live profiles measured 8,192-token prefill medians around 0.92 s and decode intercepts from 0.2416 to 0.2426 s/token. The packaged 2.5 s first-token deadline rejected working KV handoffs between engines. Direct probes with a wider observation window completed on every permitted path; first-token latency ranged from 0.348 to 5.274 s. The qualified fleet copy changes only `engine.first_token_timeout_s` to 8.5 s, above the observed maximum and leaving about 0.6 s of the 10 s TTFT budget after the measured prefill if the deadline is exhausted. The full preflight passed its health, contract, generation, model, pace, tokenization, KV transfer, and SLO gates against the same running engine containers and profile generations.
 
 ## Procedure
 
@@ -42,7 +42,7 @@ Load the private deployment environment, then prepare and install the pinned sou
 .venv/bin/narwhal-check --fleet runs/issue44-mi355x-20260923/fleet-qualified.json
 ```
 
-Start the router with an explicit private journal. Update the benchmark helper in the router-host checkout to the pinned client revision without restarting the running router, then generate one workload reused by both points:
+Start the router with an explicit private journal. While it runs, update the benchmark helper in the router-host checkout to the pinned client revision, then generate one workload reused by both points:
 
 ```bash
 .venv/bin/narwhal-serve --fleet runs/issue44-mi355x-20260923/fleet-qualified.json \
@@ -66,13 +66,13 @@ The private `benchmark-plan-qualified.json` declares ordered 0.5 and 1 request/s
 
 ## Measured points
 
-Both points completed with a ready router, an idle initial state, and an idle post-point drain. Each point offered 200 measured requests and completed all 200 within both latency budgets. Each point also used one completed warmup request. The client and router journal each recorded 201 terminal requests per point, including that warmup.
+Both points completed with a ready router, an idle initial state, and an idle post-point drain. The table excludes one completed warmup request per point; the client and router journal each recorded 201 terminal requests including that warmup.
 
 | Offered rate | Completed rate including drain | Output throughput including drain | TTFT p50 / p95 / p99 | TPOT p50 / p95 / p99 | Result |
 | --- | --- | --- | --- | --- | --- |
 | 0.5 request/s | 0.460 request/s | 58.9 tokens/s | 5.258 / 7.298 / 7.407 s | 257.5 / 258.4 / 259.3 ms | 200/200 within limits |
 | 1 request/s | 0.840 request/s | 107.5 tokens/s | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
-The router shifted capacity toward decode during the lower-rate point and held the resulting allocation through the higher-rate point. The role history, engine identities, and exact allocation remain in the private evidence. The per-point collector has complete scrape coverage for both intervals, no role-history gap, and matching client and journal outcome counts. Grafana was started during the lower-rate point, so its dashboard does not cover that point's opening interval. The higher-rate point has no evidence diagnostics. The lower-rate point records one `counter_missing` diagnostic for `narwhal_flips_total`: its time series was absent before the first role change and appeared afterward. The role-change events themselves are present in the state timeline. A post-load [KV ring check](../cli/Check.md), covering role-permitted transfers between engines, passed after the second drain.
+The router shifted capacity toward decode during the lower-rate point and held the resulting allocation through the higher-rate point. The private evidence retains role history, engine identities, and exact allocation. Both intervals have complete scrape coverage and matching client and journal outcome counts; the state timeline records each role change. Grafana dashboard coverage begins partway through the lower-rate point. That point records one `counter_missing` diagnostic for `narwhal_flips_total`, whose time series first appeared after the first role change. The higher-rate point passed all collector checks. A post-load [KV ring check](../cli/Check.md), covering role-permitted transfers between engines, passed after the second drain.
 
-The retained private artifact bundle is `runs/issue44-mi355x-20260923/qualification-artifacts.tgz` (SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`). It contains the client records, router journal, per-point evidence, metric samples, profile store and samples, preflight reports, post-load check, workload, and qualified inputs. The working deployment and monitoring services remain running for inspection.
+The retained private artifact bundle is `runs/issue44-mi355x-20260923/qualification-artifacts.tgz` (SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`). It contains the client records, router journal, per-point evidence, metric samples, profile store and samples, preflight reports, post-load check, workload, and qualified inputs. The run left the deployment and monitoring services running for inspection.

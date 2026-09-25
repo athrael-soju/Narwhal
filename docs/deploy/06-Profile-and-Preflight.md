@@ -34,9 +34,9 @@ From the router, keep the engines otherwise idle and run:
 
 The `consume` gate uses a fixed prompt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
 
-Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. If a transfer fails, retain the failing pair, error, and engine logs. Diagnose the path before changing the timeout; use [separate latency measurements](#calibrate-the-first-token-deadline) when the configured deadline needs calibration.
+Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. If a transfer fails, retain the failing pair, error, and engine logs. Diagnose the path before changing the timeout.
 
-`--repeats N` repeats the transfer checks per pair. It reports pass/fail results without recording latency samples or sweeping input lengths. Retain the command, fleet document, preflight output, process identities, and profile store together.
+`--repeats N` runs fixed transfer probes for each pair and reports their verdicts. Retain the command, fleet document, preflight output, process identities, and profile store together.
 
 The full preflight runs these gates:
 
@@ -56,7 +56,7 @@ Start the router after every required gate passes.
 
 ## Calibrate the first-token deadline
 
-Calibration requires instrumented direct-engine probes; `narwhal-check` has no independent observation window. Use a fresh producer handoff for each sample and input lengths spanning the served context range, including the longest admitted input. Record the actual token count, prefill duration, and elapsed time from starting the decode HTTP request to its first generated token. The [Python engine API](../http-api/03-Backend-and-Failures.md#python-api) exposes the prefill and decode calls.
+Calibrate the deadline with instrumented direct-engine probes. Use a fresh producer handoff for each sample and input lengths spanning the served context range, including the longest admitted input. Record the actual token count, prefill duration, and elapsed time from starting the decode HTTP request to its first generated token. The [Python engine API](../http-api/03-Backend-and-Failures.md#python-api) exposes the prefill and decode calls.
 
 Use a diagnostic first-token observation bound above `engine.first_token_timeout_s` and within `serving.request_timeout_s`. Record engine errors and observation-window expiries with the failed path; diagnose them before selecting a serving deadline.
 
