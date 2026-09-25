@@ -2,6 +2,11 @@
 
 `narwhal --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
 
+[Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on
+Ubuntu or Ubuntu under WSL2. Its small-GPU target is 8 GB of VRAM or less;
+the installed reference is a measured RTX 5090 recipe. GPU-specific templates
+select the model, runtime, memory budget and minimum device memory.
+
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
 The reference template configures four engines, two prefill and two decode,
@@ -85,7 +90,7 @@ The installed reference also contains `role_cycle`, with deterministic
 workloads for 1P:3D, 2P:2D and 3P:1D. The checkout command
 `python -m tools.measurement.dev_cycle --instance runs/dev` replays these
 workloads through a verified fleet and saves transition and latency checks.
-See [Replay all three role splits](../Dev-Runtime.md#replay-all-three-role-splits)
+See [Replay all three role splits](../dev/RTX-5090-Reference.md#replay-all-three-role-splits)
 for the workload order, output files and exit codes.
 
 Each `run-*` directory contains the fleet used by the router, effective

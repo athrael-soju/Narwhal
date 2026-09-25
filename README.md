@@ -60,9 +60,9 @@ narwhal-check --help
 
 The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
-## Run locally on an RTX 5090
+## Narwhal dev
 
-Follow [Set up the WSL2 GPU runtime](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to install the pinned runtime and run four engines on one GPU with `narwhal dev init/up/verify/status/down`.
+[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA GPU fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. The small-GPU target is 8 GB of VRAM or less; the bundled, measured reference uses four engines on an RTX 5090. Contributors can add recipes for smaller NVIDIA cards and support for other GPU vendors.
 
 ## Deploy a fleet
 

@@ -53,7 +53,9 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Install from PyPI: Install-from-PyPI.md
-  - WSL2 RTX 5090 runtime: Dev-Runtime.md
+  - Narwhal dev:
+      - Overview: Dev-Runtime.md
+      - RTX 5090 reference: dev/RTX-5090-Reference.md
   - Deploy a fleet:
       - Overview: Deploy.md
       - A. Discover the fleet: deploy/01-Discover.md

@@ -26,7 +26,7 @@ def reference() -> dict:
     source = resources.files("narwhal.dev").joinpath("reference-v1.json")
     document = json.loads(source.read_text())
     if document.get("schema") != "narwhal.dev-template" or document.get("schema_version") != 1:
-        raise ValueError("installed Narwhal Dev template requires schema version 1")
+        raise ValueError("installed Narwhal dev template requires schema version 1")
     return document
 
 
@@ -200,7 +200,7 @@ def materialize(
     source = template if template is not None else saved
     spec = copy.deepcopy(source if source is not None else reference())
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
-        raise ValueError("Narwhal Dev template requires schema version 1")
+        raise ValueError("Narwhal dev template requires schema version 1")
     allocation = {
         "engine_count": engine_count,
         "gpu_memory_utilization": gpu_memory_utilization,
