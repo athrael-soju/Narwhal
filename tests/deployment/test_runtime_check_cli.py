@@ -15,6 +15,27 @@ from tests.deployment.fixtures import launcher_inputs
 
 
 class RuntimeCheckCliTests(unittest.TestCase):
+    def test_native_timeout_retains_partial_output_and_names_its_log(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, _ = self.prepare(Path(folder), "native")
+            log = run / "runtime-check.log"
+            log.write_text("earlier inspection\n")
+            timeout = subprocess.TimeoutExpired(
+                ["python", "-c", "runtime inspection"],
+                120,
+                output=b"package versions\n",
+                stderr=b"connector import started\n",
+            )
+            with patch.object(launcher.subprocess, "run", side_effect=timeout):
+                diagnostic = self.failed_cli(["check", "--run", str(run)])
+            self.assertIn("timed out after 120 seconds", diagnostic)
+            self.assertIn(str(log), diagnostic)
+            self.assertNotIn("Traceback", diagnostic)
+            self.assertFalse((run / "checked.json").exists())
+            output = log.read_text()
+            for text in ("earlier inspection", "package versions", "connector import started"):
+                self.assertIn(text, output)
+
     def prepare(self, root, backend):
         _, env = launcher_inputs(root)
         env["NARWHAL_MODEL_REVISION"] = "a" * 40
@@ -49,7 +70,10 @@ class RuntimeCheckCliTests(unittest.TestCase):
         env_bytes = env_path.read_bytes()
         attempt = 0
         details = {
-            "package": "AssertionError: image package versions differ",
+            "package": (
+                'Traceback (most recent call last):\n  File "runtime.py", line 4\n'
+                "AssertionError: image package versions differ"
+            ),
             "tokenizer": "ValueError: selected tokenizer has invalid vocabulary",
         }
 
@@ -92,8 +116,9 @@ class RuntimeCheckCliTests(unittest.TestCase):
                 else "local image identity differs"
             )
         else:
-            expected = details[failure]
+            expected = details[failure].splitlines()[-1]
         self.assertIn(expected, diagnostic)
+        self.assertNotIn("Traceback", diagnostic)
         self.assertEqual((run / "launch.json").read_bytes(), plan_bytes)
         self.assertEqual(env_path.read_bytes(), env_bytes)
         self.assertEqual((run / "checked.json").read_bytes(), evidence)

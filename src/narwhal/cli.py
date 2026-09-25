@@ -10,6 +10,7 @@ import sys
 
 import uvicorn
 
+from .cli_errors import failure
 from .cli_support import add_version_argument
 from .config import FleetConfig
 from .runtime.listeners import check_http_bind
@@ -109,6 +110,8 @@ def serve(argv: list[str] | None = None) -> int:
         help="restore roles, breaker holds, and counters from the last state handoff",
     )
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
+    if not 0 <= args.port <= 65535:
+        ap.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.max_concurrent is not None and args.max_concurrent < 1:
         ap.error(f"--max-concurrent must be at least 1, got {args.max_concurrent}")
     # uvicorn counts this forward from SIGTERM.
@@ -123,13 +126,12 @@ def serve(argv: list[str] | None = None) -> int:
     if LOG_LEVELS[args.log_level] != "DEBUG":
         logging.getLogger("httpx").setLevel(logging.WARNING)
     if (error := _port_in_use(args.port, args.host)) is not None:
-        print(
-            f"Cannot bind {args.host}:{args.port}: {error}",
-            file=sys.stderr,
-        )
-        return 2
+        return failure("narwhal-serve", f"bind {args.host}:{args.port}", OSError(error), 1)
 
-    cfg = FleetConfig.load(args.fleet)
+    try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-serve", f"load fleet {args.fleet}", exc, 2)
     if args.max_concurrent is not None and args.max_concurrent > cfg.max_connections:
         ap.error(
             f"--max-concurrent {args.max_concurrent} exceeds the fleet's "
@@ -177,9 +179,8 @@ def serve(argv: list[str] | None = None) -> int:
             lease_renew_interval_s=args.lease_renew_interval,
             lease_safety_margin_s=args.lease_safety_margin,
         )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)
     uvicorn.run(
         app,
         host=args.host,

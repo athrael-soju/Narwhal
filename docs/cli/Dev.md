@@ -40,9 +40,10 @@ stderr. Use `narwhal dev up > result.json` to retain the result while progress
 remains visible.
 
 Commands exit 0 for `initialized`, `reused`, `starting`, `launched`, `ready`
-or `stopped`, 1 when the returned status is `degraded`, and 2 when the command
-raises an operational or validation error. A failed `verify` exits 2; querying
-that retained failure with `status` exits 1, including when HTTP checks pass.
+or `stopped`, 2 for argument, instance configuration or runtime package errors,
+and 1 for failed lifecycle operations or a `degraded` status. A failed `verify`
+and subsequent `status` both exit 1 while that failure is retained, including
+when HTTP checks pass.
 
 ```bash
 narwhal dev init --model /path/to/model.gguf --model-dir /path/to/tokenizer

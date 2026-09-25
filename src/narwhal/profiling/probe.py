@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from ..cli_errors import failure
 from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import PROFILES, versioned
@@ -1019,7 +1020,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--neighbour-decode-input-tokens", type=int)
     ap.add_argument("--neighbour-decode-output-tokens", type=int)
     args = ap.parse_args(argv)
-    cfg = FleetConfig.load(args.fleet)
+    try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-profile", f"load fleet {args.fleet}", exc, 2)
     if any(
         path.resolve() == Path(args.fleet).resolve()
         or (path.exists() and path.samefile(args.fleet))
@@ -1099,9 +1103,10 @@ def main(argv: list[str] | None = None) -> int:
                 colocated_workload=colocated_workload,
             )
         )
-    except (OSError, ValueError, RuntimeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-profile", f"profile fleet {args.fleet}", exc, 2)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        return failure("narwhal-profile", f"profile fleet {args.fleet}", exc, 1)
 
 
 if __name__ == "__main__":

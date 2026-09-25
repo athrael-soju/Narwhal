@@ -89,8 +89,10 @@ def _run(root: Path, module: str, args: list[str], log: str) -> None:
             command, stdout=output, stderr=subprocess.STDOUT, cwd=root, check=False
         )
     if result.returncode:
-        detail = (root / f"{log}.log").read_text(errors="replace")[-3000:]
-        raise ValueError(f"{log} exited {result.returncode}: {detail}")
+        path = root / f"{log}.log"
+        lines = path.read_text(errors="replace").strip().splitlines()
+        detail = lines[-1] if lines else "empty subprocess output"
+        raise ValueError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:

@@ -389,9 +389,10 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
         + "\n",
     )
     if result.returncode:
-        detail = (result.stderr or result.stdout)[-1000:].strip()
+        detail = (result.stderr or result.stdout).strip().splitlines()
         raise ValueError(
-            f"Docker command exited {result.returncode}: {detail}; inspect {run / log}"
+            f"Docker command exited {result.returncode}: "
+            f"{detail[-1] if detail else 'empty subprocess output'}; inspect {run / log}"
         )
     return (result.stdout + result.stderr if include_stderr else result.stdout).strip()
 
@@ -424,16 +425,20 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
     )
     write_private(run / log, result.stdout + "\nSTDERR\n" + result.stderr)
     if result.returncode:
+        detail = result.stderr.strip().splitlines()
         raise ValueError(
-            f"native runtime inspection exited {result.returncode}: {result.stderr[-1000:]}"
+            f"native runtime inspection exited {result.returncode}: "
+            f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
         )
     return result.stdout
 
 
 def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
+    if not isinstance(plan, dict):
+        raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
     env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    if digest(run / env_file) != plan["env_sha256"]:
+    if digest(run / env_file) != plan.get("env_sha256"):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan
 
@@ -534,13 +539,33 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
-        result = subprocess.run(
-            [plan["python_executable"], *arguments],
-            env={**os.environ, **values},
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [plan["python_executable"], *arguments],
+                env={**os.environ, **values},
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as error:
+            # TimeoutExpired retains bytes even when subprocess.run requested text.
+            partial_output = error.stdout or b""
+            errors = error.stderr or b""
+            append_private(
+                run / log,
+                f"runtime check timed out after {error.timeout} seconds\n"
+                + (
+                    partial_output.decode(errors="replace")
+                    if isinstance(partial_output, bytes)
+                    else partial_output
+                )
+                + "\nSTDERR\n"
+                + (errors.decode(errors="replace") if isinstance(errors, bytes) else errors)
+                + "\n",
+            )
+            raise ValueError(
+                f"native runtime check timed out after {error.timeout} seconds; inspect {run / log}"
+            ) from error
         append_private(
             run / log,
             json.dumps({"exit": result.returncode})
@@ -551,8 +576,10 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             + "\n",
         )
         if result.returncode:
+            detail = result.stderr.strip().splitlines()
             raise ValueError(
-                f"native runtime check exited {result.returncode}: {result.stderr[-1000:]}"
+                f"native runtime check exited {result.returncode}: "
+                f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
             )
         output = result.stdout
     else:
@@ -1338,13 +1365,19 @@ def main(argv: list[str] | None = None) -> int:
     shared.add_argument("--backend", choices=("container", "native"), default="container")
     sub.add_parser("stop-native").add_argument("--run", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "start-shared" and args.ready_seconds < 1:
+        parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     os.umask(0o077)
+    target = getattr(args, "run", getattr(args, "out", getattr(args, "plan", "")))
+    context = f"narwhal-engine: {args.command}"
     try:
         if args.command == "prepare":
-            prepare(args.out, dict(os.environ), backend=args.backend)
+            try:
+                prepare(args.out, dict(os.environ), backend=args.backend)
+            except (KeyError, TypeError) as error:
+                input_source = os.environ.get("NARWHAL_ENGINE_LAUNCH_CONFIG", "role environment")
+                parser.exit(2, f"{context}: invalid input in {input_source}: {error}\n")
         elif args.command == "start-shared":
-            if args.ready_seconds < 1:
-                raise ValueError("--ready-seconds must be positive")
             runs = [run.resolve() for run in args.run]
             if args.backend == "native":
                 from narwhal.deployment.native_engine import start_shared as start_native_shared
@@ -1362,7 +1395,10 @@ def main(argv: list[str] | None = None) -> int:
             print("NARWHAL_MODEL_DIMENSIONS=" + json.dumps(runtime_model_dimensions(args.plan)))
         else:
             run = args.run.resolve()
-            plan = load(run)
+            try:
+                plan = load(run)
+            except (OSError, ValueError) as error:
+                parser.exit(2, f"{context}: load run {run}: {error}\n")
             if plan.get("backend") == "native" and args.command not in {
                 "check",
                 "cache-registration",
@@ -1387,14 +1423,13 @@ def main(argv: list[str] | None = None) -> int:
                 "handshake-policy": handshake_policy,
                 "start": start,
             }[args.command](run, plan)
-    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         if isinstance(error, FileExistsError):
-            parser.exit(1, f"{args.command}: artifact already exists: {error.filename or error}\n")
-        if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
-            parser.exit(1, f"{error}\n")
-        parser.exit(
-            1, "Check the role environment, runtime fields, artifact paths and preceding gate.\n"
-        )
+            parser.exit(1, f"{context}: artifact already exists: {error.filename or error}\n")
+        status = 2 if args.command == "prepare" else 1
+        if isinstance(error, subprocess.TimeoutExpired):
+            parser.exit(status, f"{context}: {target}: timed out after {error.timeout} seconds\n")
+        parser.exit(status, f"{context}: {target}: {error}\n")
     return 0
 
 

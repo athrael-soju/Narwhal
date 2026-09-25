@@ -33,7 +33,7 @@ class RouterBindTests(unittest.TestCase):
             redirect_stderr(io.StringIO()) as errors,
         ):
             result = serve(["--fleet", "unused", "--host", "127.0.0.2", "--port", str(port)])
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 1)
         self.assertIn(f"127.0.0.2:{port}", errors.getvalue())
         self.assertIn("already in use", errors.getvalue())
         load.assert_not_called()

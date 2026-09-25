@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,26 @@ from .fixtures import process_group_with_worker
 
 
 class DevTests(unittest.TestCase):
+    def test_removed_plugin_reports_runtime_package_and_instance(self):
+        self.initialize()
+        spec = lifecycle.read(self.root / "template.json")
+        spec["runtime"]["gguf_plugin_python_sha256"] = "a" * 64
+        lifecycle.write(self.root / "template.json", spec)
+        with (
+            patch.object(
+                template.metadata,
+                "distribution",
+                side_effect=metadata.PackageNotFoundError("vllm-gguf-plugin"),
+            ),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 2)
+        self.assertEqual(stdout.getvalue(), "")
+        for text in ("narwhal: dev up", str(self.root), "vllm-gguf-plugin"):
+            self.assertIn(text, stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -589,7 +610,7 @@ class DevTests(unittest.TestCase):
             patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
-            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 2)
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
             state = lifecycle.read(self.root / "lifecycle.json")
             self.assertEqual(state["phase"], "degraded")
             failure = state["verification_failure"]
@@ -640,7 +661,7 @@ class DevTests(unittest.TestCase):
             patch.object(lifecycle.native_engine, "_terminate", side_effect=ValueError("owned")),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 2)
+            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 1)
         state = lifecycle.read(self.root / "lifecycle.json")
         self.assertEqual(state["phase"], "degraded")
         self.assertEqual(state["verification_failure"], failure)

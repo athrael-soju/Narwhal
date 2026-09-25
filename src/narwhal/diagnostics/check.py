@@ -957,18 +957,23 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
         ap.error("choose --evidence-out or --verify-evidence")
-    cfg = FleetConfig.load(args.fleet)
-    if args.verify_evidence is not None:
-        problems = asyncio.run(
-            verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
-        )
-        for problem in problems:
-            print(f"  FAIL  {problem}")
-        if problems:
-            return 1
-        print("directed KV evidence matches the current fleet, profiles, and processes")
-        return 0
+    from ..cli_errors import failure
+
     try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-check", f"load fleet {args.fleet}", exc, 2)
+    try:
+        if args.verify_evidence is not None:
+            problems = asyncio.run(
+                verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
+            )
+            for problem in problems:
+                print(f"  FAIL  {problem}")
+            if problems:
+                return 1
+            print("directed KV evidence matches the current fleet, profiles, and processes")
+            return 0
         return asyncio.run(
             run(
                 cfg,
@@ -980,8 +985,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except ValueError as exc:
-        ap.error(str(exc))
-        return 2
+        return failure("narwhal-check", f"check fleet {args.fleet}", exc, 2)
+    except (OSError, httpx.HTTPError) as exc:
+        return failure("narwhal-check", f"check fleet {args.fleet}", exc, 1)
 
 
 if __name__ == "__main__":

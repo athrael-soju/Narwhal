@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import subprocess
+from importlib import metadata
 from pathlib import Path
 
 import httpx
 
+from ..cli_errors import failure
 from ..cli_support import add_version_argument
 from . import lifecycle, template
 
@@ -61,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
             action.add_argument("--interface", help="Local NIXL/UCX interface (default: eth0)")
     args = parser.parse_args(argv)
     root = args.instance.expanduser().resolve()
+    context = f"dev {args.action} {root}"
+    if args.action != "init":
+        try:
+            lifecycle.instance(root)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return failure("narwhal", f"{context}: load instance", exc, 2)
     try:
         if args.action == "init":
             reused = root.exists()
@@ -87,9 +95,16 @@ def main(argv: list[str] | None = None) -> int:
             result = operation(root)
         print(json.dumps(result, indent=2))
         return 1 if result["status"] == "degraded" else 0
-    except (OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    except metadata.PackageNotFoundError as exc:
+        return failure("narwhal", f"{context}: load runtime package", exc, 2)
+    except (KeyError, TypeError) as exc:
+        if args.action != "init":
+            raise
+        return failure(
+            "narwhal", f"{context}: read template {args.template or 'reference'}", exc, 2
+        )
+    except (OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
+        return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
 
 
 if __name__ == "__main__":
