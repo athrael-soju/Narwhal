@@ -10,6 +10,7 @@ import sys
 
 import uvicorn
 
+from .cli_support import add_version_argument
 from .config import FleetConfig
 from .runtime.listeners import check_http_bind
 from .serving.app import create_app
@@ -28,6 +29,7 @@ LOG_LEVELS = {
 def serve(argv: list[str] | None = None) -> int:
     """Run the serving CLI."""
     ap = argparse.ArgumentParser(description="Run Narwhal over a disaggregated engine fleet")
+    add_version_argument(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)

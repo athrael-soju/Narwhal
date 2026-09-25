@@ -75,7 +75,20 @@ def main(argv=None):
     }
     assert {entry.name for entry in entries} == expected_entries
     for entry in entries:
-        subprocess.run([entry.name, "--help"], check=True, timeout=30, capture_output=True)
+        help_result = subprocess.run(
+            [entry.name, "--help"], check=True, timeout=30, capture_output=True, text=True
+        )
+        assert "--version" in help_result.stdout, entry.name
+        if entry.name == "narwhal":
+            inventory = help_result.stdout.split("Installed commands:\n", 1)[1]
+            purposes = dict(line.strip().split(maxsplit=1) for line in inventory.splitlines())
+            assert set(purposes) == expected_entries, purposes
+            assert all(purposes.values()), purposes
+        version_result = subprocess.run(
+            [entry.name, "--version"], check=True, timeout=30, capture_output=True, text=True
+        )
+        assert version_result.stdout == f"narwhal-inference {distribution.version}\n", entry.name
+        assert version_result.stderr == "", (entry.name, version_result.stderr)
     reference = importlib.resources.files("narwhal.dev").joinpath("reference-v1.json")
     assert (
         reference.read_bytes()

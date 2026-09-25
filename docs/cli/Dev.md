@@ -1,5 +1,7 @@
 # `narwhal`
 
+`narwhal --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
+
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
 Four engines open as two prefill and two decode processes on the selected

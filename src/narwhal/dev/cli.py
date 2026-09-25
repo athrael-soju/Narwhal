@@ -9,12 +9,27 @@ from pathlib import Path
 
 import httpx
 
+from ..cli_support import add_version_argument
 from . import lifecycle, template
 
 
 def main(argv: list[str] | None = None) -> int:
     """Dispatch the local development lifecycle."""
-    parser = argparse.ArgumentParser(prog="narwhal")
+    parser = argparse.ArgumentParser(
+        prog="narwhal",
+        description="Manage a local shared-GPU development fleet",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Installed commands:\n"
+            "  narwhal          Initialize, launch, verify and stop a local development fleet\n"
+            "  narwhal-engine   Prepare and launch checked engine processes\n"
+            "  narwhal-check    Run deployment preflight gates\n"
+            "  narwhal-attest   Serve engine identity and attestation for one vLLM engine\n"
+            "  narwhal-serve    Run a Narwhal router\n"
+            "  narwhal-profile  Measure engine service curves and write router profiles"
+        ),
+    )
+    add_version_argument(parser)
     commands = parser.add_subparsers(dest="command", required=True)
     dev = commands.add_parser("dev", help="Run independent engines on one local NVIDIA GPU")
     actions = dev.add_subparsers(dest="action", required=True)

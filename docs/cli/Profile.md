@@ -1,5 +1,7 @@
 # `narwhal-profile`
 
+`narwhal-profile --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
+
 `narwhal-profile` measures the selected engines and writes their profiles to `profiles.path` from the fleet config.
 
 When `engine_contract` is configured, each fit is bound to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation). Otherwise, it is bound to the live process identity. The `.samples.json` sidecar retains that evidence and the raw observations.

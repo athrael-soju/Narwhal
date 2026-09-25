@@ -19,6 +19,7 @@ from typing import cast
 
 import httpx
 
+from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
@@ -921,6 +922,7 @@ async def run(
 def main(argv: list[str] | None = None) -> int:
     """Run the fleet-check CLI."""
     ap = argparse.ArgumentParser(description="Check a fleet before starting the router")
+    add_version_argument(ap)
     ap.add_argument("--fleet", help="fleet config JSON")
     ap.add_argument("--ring", action="store_true", help="test rotating producer-consumer pairs")
     ap.add_argument("--repeats", type=int, default=1, help="KV transfer probes per pair")

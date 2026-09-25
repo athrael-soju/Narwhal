@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
@@ -974,6 +975,7 @@ async def run(
 def main(argv: list[str] | None = None) -> int:
     """Run the profiling CLI."""
     ap = argparse.ArgumentParser(description="Measure prefill and decode service curves")
+    add_version_argument(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument("--only", action="append", default=[], help="instance id; repeatable")
     ap.add_argument("--refit-samples", type=Path, help="refit TTFT from a saved sample sidecar")

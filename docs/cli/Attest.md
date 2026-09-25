@@ -1,5 +1,7 @@
 # `narwhal-attest`
 
+`narwhal-attest --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
+
 Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serves its attestation over HTTP, and stops when the engine version or process start time changes.
 
 | Option                | Default     | Contract                                                |

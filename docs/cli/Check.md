@@ -1,5 +1,7 @@
 # `narwhal-check`
 
+`narwhal-check --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
+
 With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
 
 `reach` → `contract` → `profile` → `model` → `pace` → `tokenize` → `produce` → `consume` → `slo`

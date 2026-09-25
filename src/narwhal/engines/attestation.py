@@ -17,6 +17,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
+from ..cli_support import add_version_argument
 from ..config import EngineContract
 from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
 
@@ -333,6 +334,7 @@ def build_app(
 def main(argv: list[str] | None = None) -> int:
     """Start one engine attestation sidecar."""
     parser = argparse.ArgumentParser(description=__doc__)
+    add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
     parser.add_argument("--engine-base", required=True, help="vLLM HTTP base URL")
     parser.add_argument("--host", default="127.0.0.1")

@@ -1,5 +1,7 @@
 # `narwhal-serve`
 
+`narwhal-serve --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
+
 `narwhal-serve --fleet PATH` starts one router process from a fleet configuration.
 
 Before reading the fleet config, the command probes `--host` and `--port` using Uvicorn's IPv4, IPv6 and wildcard bind behaviour, exiting with status 2 when the listener is unavailable. Uvicorn binds again at startup to detect any process that claimed the address after the check.

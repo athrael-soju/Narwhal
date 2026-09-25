@@ -1303,6 +1303,11 @@ def capture_cache(run: Path, plan: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # Runtime probes execute a standalone copy inside the engine image.
+    if __package__:
+        from narwhal.cli_support import add_version_argument
+
+        add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
     preparation = sub.add_parser("prepare")
     preparation.add_argument("--out", type=Path, required=True)
