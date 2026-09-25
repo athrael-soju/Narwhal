@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -209,6 +210,36 @@ def check_diagnostics():
             worker.join(timeout=5)
 
 
+def check_stage_supervisor():
+    """Execute the installed helper supervisor through completion and deadline expiry."""
+    from narwhal.deployment import stages
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        completed = stages.run(
+            [sys.executable, "-c", "print('installed helper')"],
+            stage="installed-completion",
+            log=root / "completion.log",
+            timeout=5,
+        )
+        assert completed.returncode == 0, completed
+        assert completed.stdout.strip() == "installed helper", completed
+        try:
+            stages.run(
+                [sys.executable, "-c", "import time; time.sleep(2)"],
+                stage="installed-timeout",
+                log=root / "timeout.log",
+                timeout=0.2,
+            )
+        except stages.StageTimeout as error:
+            record = json.loads(Path(error.context["evidence"]).read_text())
+            assert record["supervisor"] is True, record
+            assert record["status"] == "timeout", record
+            assert record["cleanup"]["surviving_processes"] == {}, record
+        else:
+            raise AssertionError("installed helper must exhaust its execution budget")
+
+
 def main(argv=None):
     """Check distribution identity, bundled files and every installed console command."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -263,6 +294,7 @@ def main(argv=None):
     check_offline_config()
     check_command_results()
     check_diagnostics()
+    check_stage_supervisor()
     asyncio.run(check_http())
     print(f"Installed package passed: {len(entries)} commands, package data and HTTP contracts")
     return 0
