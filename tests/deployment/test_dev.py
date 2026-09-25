@@ -24,6 +24,11 @@ from narwhal.profiling.probe import Sweep, bounded_sweep
 from .fixtures import process_group_with_worker
 
 
+def synthetic_identity(pid=1):
+    """Return a complete identity for tests that substitute process inspection."""
+    return {"pid": pid, "boot_id": "synthetic-boot", "start_ticks": 0}
+
+
 class DevTests(unittest.TestCase):
     def test_removed_plugin_reports_runtime_package_and_instance(self):
         self.initialize()
@@ -188,7 +193,7 @@ class DevTests(unittest.TestCase):
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle.native_engine, "start_shared"),
             patch.object(lifecycle, "finalize_fleet"),
-            patch.object(lifecycle, "_spawn", return_value={"identity": {}}),
+            patch.object(lifecycle, "_spawn", return_value={"identity": synthetic_identity()}),
             patch.object(lifecycle, "_wait"),
             patch.object(lifecycle, "_run") as command,
             contextlib.redirect_stdout(io.StringIO()) as output,
@@ -561,7 +566,9 @@ class DevTests(unittest.TestCase):
             "phase": "ready",
             "run": str(run),
             "verification": str(run / "verify-test"),
-            "processes": [{"name": f"p{i}", "identity": {}} for i in range(9)],
+            "processes": [
+                {"name": f"p{i}", "identity": synthetic_identity(i + 1)} for i in range(9)
+            ],
         }
         lifecycle.write(self.root / "lifecycle.json", state)
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
@@ -586,7 +593,9 @@ class DevTests(unittest.TestCase):
             {
                 "phase": "launched",
                 "run": str(run),
-                "processes": [{"name": f"p{i}", "identity": {}} for i in range(9)],
+                "processes": [
+                    {"name": f"p{i}", "identity": synthetic_identity(i + 1)} for i in range(9)
+                ],
             },
         )
         return run
@@ -748,10 +757,73 @@ class DevTests(unittest.TestCase):
     def test_unexpected_lifecycle_code_error_propagates(self):
         self.initialize()
         with (
-            patch.object(lifecycle, "status", side_effect=KeyError("implementation")),
-            self.assertRaisesRegex(KeyError, "implementation"),
+            patch.object(lifecycle, "status", side_effect=RuntimeError("implementation")),
+            self.assertRaisesRegex(RuntimeError, "implementation"),
         ):
             main(["dev", "status", "--instance", str(self.root)])
+
+    def test_malformed_saved_template_retains_the_input_error_diagnostic(self):
+        self.initialize()
+        lifecycle.write(self.root / "template.json", {})
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 2)
+        self.assertEqual(stdout.getvalue(), "")
+        for text in ("narwhal: dev up", str(self.root), "runtime"):
+            self.assertIn(text, stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_malformed_process_identities_fail_before_native_inspection(self):
+        run = self.launched_instance()
+        state_path = self.root / "lifecycle.json"
+        state = lifecycle.read(state_path)
+        engine = run / "engine-1"
+        engine.mkdir()
+        identity_path = engine / "native-process.json"
+        invalid = [({}, "pid")]
+        invalid.extend(
+            ({**synthetic_identity(), field: value}, field)
+            for field, values in (
+                ("pid", (0, -1, True, "1")),
+                ("boot_id", ("", " ", 123)),
+                ("start_ticks", (-1, False, "0")),
+            )
+            for value in values
+        )
+        for location in ("lifecycle", "engine"):
+            for identity, field in invalid:
+                lifecycle.write(state_path, state)
+                identity_path.unlink(missing_ok=True)
+                if location == "lifecycle":
+                    changed = {**state, "processes": [{"name": "router", "identity": identity}]}
+                    lifecycle.write(state_path, changed)
+                    path = state_path
+                    context = f"processes[0].identity.{field}"
+                else:
+                    lifecycle.write(identity_path, identity)
+                    path = identity_path
+                    context = f"identity.{field}"
+                original = path.read_bytes()
+                for action in ("status", "down"):
+                    with (
+                        self.subTest(location=location, identity=identity, action=action),
+                        patch.object(lifecycle.native_engine, "_owns_process") as owns,
+                        patch.object(lifecycle.native_engine, "_group_members") as groups,
+                        patch.object(lifecycle.native_engine, "_terminate") as terminate,
+                        contextlib.redirect_stdout(io.StringIO()) as stdout,
+                        contextlib.redirect_stderr(io.StringIO()) as stderr,
+                    ):
+                        self.assertEqual(main(["dev", action, "--instance", str(self.root)]), 2)
+                    self.assertEqual(stdout.getvalue(), "")
+                    for text in (f"narwhal: dev {action}", str(path), context):
+                        self.assertIn(text, stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+                    self.assertEqual(path.read_bytes(), original)
+                    owns.assert_not_called()
+                    groups.assert_not_called()
+                    terminate.assert_not_called()
 
     def test_lifecycle_lock_rejects_overlapping_mutations(self):
         self.initialize()

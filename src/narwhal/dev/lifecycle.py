@@ -40,6 +40,24 @@ def read(path: Path) -> dict:
     return value
 
 
+def _validate_identity(identity: dict, path: Path, field: str) -> None:
+    if type(identity.get("pid")) is not int or identity["pid"] < 1:
+        raise LifecycleDocumentError(f"{path}: {field}.pid must be a positive integer")
+    if not isinstance(identity.get("boot_id"), str) or not identity["boot_id"].strip():
+        raise LifecycleDocumentError(f"{path}: {field}.boot_id must be a nonempty string")
+    if type(identity.get("start_ticks")) is not int or identity["start_ticks"] < 0:
+        raise LifecycleDocumentError(f"{path}: {field}.start_ticks must be a nonnegative integer")
+
+
+def _read_identity(path: Path) -> dict:
+    try:
+        identity = read(path)
+    except ValueError as exc:
+        raise LifecycleDocumentError(f"{path}: {exc}") from exc
+    _validate_identity(identity, path, "identity")
+    return identity
+
+
 def _read_state(root: Path) -> dict:
     path = root / "lifecycle.json"
     try:
@@ -60,6 +78,7 @@ def _read_state(root: Path) -> dict:
             raise LifecycleDocumentError(
                 f"{path}: processes[{index}] requires a name string and identity object"
             )
+        _validate_identity(record["identity"], path, f"processes[{index}].identity")
     failure = state.get("verification_failure")
     if failure is not None and (
         not isinstance(failure, dict) or not isinstance(failure.get("reason"), str)
@@ -228,7 +247,7 @@ def _stop(root: Path, state: dict) -> None:
     run = Path(state["run"])
     records = list(state.get("processes", []))
     for path in sorted(run.glob("engine-*/native-process.json")):
-        records.insert(0, {"name": path.parent.name, "identity": read(path)})
+        records.insert(0, {"name": path.parent.name, "identity": _read_identity(path)})
     stopped = []
     for record in reversed(records):
         identity = record["identity"]
@@ -459,7 +478,7 @@ def status(root: Path) -> dict:
         return {"status": "starting", "run": str(run)}
     records = list(state["processes"])
     records.extend(
-        {"name": path.parent.name, "identity": read(path)}
+        {"name": path.parent.name, "identity": _read_identity(path)}
         for path in sorted(run.glob("engine-*/native-process.json"))
     )
     live = [r["name"] for r in records if native_engine._owns_process(r["identity"])]

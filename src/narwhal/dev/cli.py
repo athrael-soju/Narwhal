@@ -149,11 +149,12 @@ def main(argv: list[str] | None = None) -> int:
     except lifecycle.LifecycleDocumentError as exc:
         return failure("narwhal", f"{context}: load lifecycle", exc, 2)
     except (KeyError, TypeError) as exc:
-        if args.action != "init":
-            raise
-        return failure(
-            "narwhal", f"{context}: read template {args.template or 'reference'}", exc, 2
+        input_operation = (
+            f"read template {args.template or 'reference'}"
+            if args.action == "init"
+            else "read instance input"
         )
+        return failure("narwhal", f"{context}: {input_operation}", exc, 2)
     except (OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
         return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
 
