@@ -171,6 +171,49 @@ class CommandResultTests(unittest.TestCase):
             self.assertNotIn(value, rendered)
         self.assertIn("REDACTED", rendered)
 
+    def test_redaction_preserves_wire_identifiers_and_nested_contracts(self):
+        from narwhal.contracts import EFFECTIVE_CONFIG, versioned
+
+        def operation(argv):
+            results.set_data(
+                versioned(
+                    EFFECTIVE_CONFIG,
+                    {
+                        "scope": "fleet_file",
+                        "source_sha256": "a" * 64,
+                        "diagnostic": "credential a",
+                        "credential": "a",
+                    },
+                )
+            )
+            results.record_error(
+                "stage_cancelled", "credential a", stage="stage a", engine="a", field="a"
+            )
+            results.set_status("interrupted")
+            return 130
+
+        with patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": "a"}):
+            document, _ = call(lambda argv: results.invoke("narwhal", argv, operation), [])
+            inspection, _ = call(
+                dev.main, ["config", "inspect", "--fleet", str(ROOT / "tests/data/fleet.json")]
+            )
+        self.assertEqual(document["command"], "narwhal")
+        self.assertEqual(document["status"], "interrupted")
+        self.assertEqual(document["operation"], "run")
+        validate_document(document["data"], EFFECTIVE_CONFIG)
+        self.assertEqual(document["data"]["source_sha256"], "a" * 64)
+        self.assertEqual(document["data"]["scope"], "fleet_file")
+        self.assertEqual(document["data"]["credential"], "[REDACTED]")
+        self.assertEqual(document["data"]["diagnostic"], "credential [REDACTED]")
+        self.assertEqual(document["errors"][0]["code"], "stage_cancelled")
+        self.assertEqual(document["errors"][0]["stage"], "stage a")
+        self.assertEqual(document["errors"][0]["engine"], "a")
+        self.assertEqual(document["errors"][0]["field"], "a")
+        validate_document(inspection["data"], EFFECTIVE_CONFIG)
+        self.assertEqual(inspection["command"], "narwhal")
+        self.assertEqual(inspection["operation"], "config inspect")
+        self.assertEqual(inspection["status"], "success")
+
     def test_custom_credential_environment_names_are_redacted(self):
         cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
         cfg.engine_api_key_env = "FLEET_AUTH"

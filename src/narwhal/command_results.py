@@ -19,7 +19,7 @@ from typing import Any, TextIO
 
 import httpx
 
-from .contracts import COMMAND_RESULT, versioned
+from .contracts import COMMAND_RESULT, CONTRACTS, versioned
 
 EXIT_CODES = {
     "success": 0,
@@ -192,7 +192,12 @@ def _redactor() -> Callable[[str], str]:
         configured = _active.get()
         private = set(secrets) | (configured.secrets if configured is not None else set())
         for secret in sorted(private, key=len, reverse=True):
-            value = value.replace(secret, "[REDACTED]")
+            if len(secret) < 4:
+                value = re.sub(
+                    r"(?<![\w-])" + re.escape(secret) + r"(?![\w-])", "[REDACTED]", value
+                )
+            else:
+                value = value.replace(secret, "[REDACTED]")
         value = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[REDACTED]@", value)
         value = re.sub(r"(?i)(bearer\s+)[^\s\"']+", r"\1[REDACTED]", value)
         return re.sub(
@@ -331,17 +336,36 @@ def invoke(
             },
         )
 
-        # Redact string values before serialization so quotes/newlines in secrets stay intact.
-        def clean(value: Any) -> Any:
+        # Schema identity, status codes and hashes are wire metadata. Apply credential
+        # redaction to operator data and diagnostic text before JSON escaping.
+        schemas = {contract.schema for contract in CONTRACTS.values()}
+
+        def clean(value: Any, key: str = "") -> Any:
             if isinstance(value, str):
+                if key == "schema" and value in schemas:
+                    return value
+                if key.endswith(("sha256", "digest", "fingerprint")) and re.fullmatch(
+                    r"(?:sha256:)?[0-9a-fA-F]{40,128}", value
+                ):
+                    return value
                 return redact(value)
             if isinstance(value, dict):
-                return {key: clean(item) for key, item in value.items()}
+                return {name: clean(item, name) for name, item in value.items()}
             if isinstance(value, (tuple, list)):
                 return [clean(item) for item in value]
             return value
 
-        print(json.dumps(clean(payload), sort_keys=True, allow_nan=False), file=stdout)
+        payload["data"] = clean(result.data)
+        payload["artifacts"] = [{**row, "path": redact(row["path"])} for row in artifacts]
+        payload["errors"] = [
+            {
+                **row,
+                "message": redact(row["message"]),
+                **({"context": clean(row["context"])} if "context" in row else {}),
+            }
+            for row in result.errors
+        ]
+        print(json.dumps(payload, sort_keys=True, allow_nan=False), file=stdout)
         return exit_code
     finally:
         _active.reset(token)
