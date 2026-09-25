@@ -58,11 +58,11 @@ python -m pip show narwhal-inference
 narwhal-check --help
 ```
 
-The wheel installs `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
-## Run locally on an RTX 5090
+## Narwhal dev
 
-Follow [Set up the WSL2 GPU runtime](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to install the pinned runtime and run four engines on one GPU with `narwhal dev init/up/verify/status/down`.
+[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. Its installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
 
 ## Deploy a fleet
 

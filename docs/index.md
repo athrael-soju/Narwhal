@@ -13,7 +13,7 @@ From a management workstation, Narwhal inspects the fleet, derives its configura
 | Goal                                                                                        | Guide                                    |
 | ------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | Install the router commands from PyPI and check their version                               | [Install from PyPI](Install-from-PyPI.md) |
-| Run four engines on an RTX 5090 under WSL2                                                 | [Set up the local GPU runtime](Dev-Runtime.md) |
+| Run a local NVIDIA GPU fleet on Ubuntu or WSL2                                               | [Narwhal dev](Dev-Runtime.md)             |
 | Bring up a new fleet and confirm that requests are routed correctly                         | [Deploy a fleet](Deploy.md)              |
 | Profile the fleet, select measurement ranges, calibrate SLOs, and measure a target workload | [Measure a fleet](Measure.md)            |
 | Export metrics to Prometheus and inspect the fleet in Grafana                               | [Set up observability](Observability.md) |

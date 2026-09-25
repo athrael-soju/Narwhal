@@ -2,12 +2,15 @@
 
 import contextlib
 import hashlib
+import io
+import json
 import os
 import socket
 import subprocess
 import sys
 import tempfile
 import unittest
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,7 +24,32 @@ from narwhal.profiling.probe import Sweep, bounded_sweep
 from .fixtures import process_group_with_worker
 
 
+def synthetic_identity(pid=1):
+    """Return a complete identity for tests that substitute process inspection."""
+    return {"pid": pid, "boot_id": "synthetic-boot", "start_ticks": 0}
+
+
 class DevTests(unittest.TestCase):
+    def test_removed_plugin_reports_runtime_package_and_instance(self):
+        self.initialize()
+        spec = lifecycle.read(self.root / "template.json")
+        spec["runtime"]["gguf_plugin_python_sha256"] = "a" * 64
+        lifecycle.write(self.root / "template.json", spec)
+        with (
+            patch.object(
+                template.metadata,
+                "distribution",
+                side_effect=metadata.PackageNotFoundError("vllm-gguf-plugin"),
+            ),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 2)
+        self.assertEqual(stdout.getvalue(), "")
+        for text in ("narwhal: dev up", str(self.root), "vllm-gguf-plugin"):
+            self.assertIn(text, stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -40,7 +68,7 @@ class DevTests(unittest.TestCase):
         )
         self.spec["runtime"].pop("gguf_plugin_python_sha256", None)
 
-    def initialize(self):
+    def initialize(self, **overrides):
         with (
             patch.object(
                 template,
@@ -60,6 +88,7 @@ class DevTests(unittest.TestCase):
                 model_path=self.gguf,
                 fabric_interface="lo",
                 template=self.spec,
+                **overrides,
             )
 
     def test_four_roles_and_unique_loopback_ports(self):
@@ -71,6 +100,68 @@ class DevTests(unittest.TestCase):
         self.assertTrue(all(e["url"].startswith("http://127.0.0.1:") for e in fleet["engines"]))
         _, ports = template._port_layout(self.spec, 4)
         self.assertEqual(len(ports), 13)
+
+    def test_default_template_accepts_an_eight_gib_cuda_gpu(self):
+        self.spec = template.default_template()
+        self.spec["model"].update(
+            filename=self.gguf.name,
+            sha256=hashlib.sha256(b"synthetic").hexdigest(),
+            tokenizer_sha256={},
+        )
+        self.spec["runtime"].pop("gguf_plugin_python_sha256", None)
+        self.assertEqual(self.spec["allocation"]["engine_count"], 2)
+        self.assertNotIn("product", self.spec["gpu"])
+        self.assertNotIn("minimum_total_mib", self.spec["gpu"])
+        self.assertEqual(self.spec["runtime"]["model_dtype"], "float16")
+        profile = self.spec["profile"]
+        sweep = Sweep(
+            prefill_lens=tuple(profile["prefill_lens"]),
+            decode_input_lens=tuple(profile["decode_input_lens"]),
+            decode_concurrency=tuple(profile["decode_concurrency"]),
+            decode_tokens=profile["decode_tokens"],
+        )
+        runtime = self.spec["runtime"]
+        self.assertEqual(
+            bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"]), sweep
+        )
+        with (
+            patch.object(
+                template,
+                "_gpu_rows",
+                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
+            ),
+            patch.object(template, "gpu_memory", return_value={"total_mib": 8192, "used_mib": 0}),
+            patch.object(template, "_check_runtime"),
+            patch.object(template, "_address", return_value="127.0.0.1"),
+            patch.object(template, "_check_free_ports"),
+        ):
+            template.materialize(
+                self.root,
+                model_dir=self.model,
+                model_path=self.gguf,
+                fabric_interface="lo",
+                template=self.spec,
+            )
+        fleet = lifecycle.read(self.root / "fleet.json")
+        self.assertEqual([engine["role"] for engine in fleet["engines"]], ["prefill", "decode"])
+        self.assertEqual(fleet["hardware"]["accelerator"], "NVIDIA Test GPU")
+
+    def test_measured_reference_requires_its_gpu_product(self):
+        with (
+            patch.object(
+                template,
+                "_gpu_rows",
+                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
+            ),
+            self.assertRaisesRegex(ValueError, "template requires NVIDIA GeForce RTX 5090"),
+        ):
+            template.materialize(
+                self.root,
+                model_dir=self.model,
+                model_path=self.gguf,
+                fabric_interface="lo",
+                template=self.spec,
+            )
 
     def test_init_records_the_engine_credential_reference(self):
         with patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": "synthetic-key"}):
@@ -156,6 +247,41 @@ class DevTests(unittest.TestCase):
         merged = [merge_args[i + 1] for i, arg in enumerate(merge_args) if arg == "--merge"]
         self.assertEqual(set(merged), {str(run / f"profiles-{p}p{4 - p}d.json") for p in (1, 2, 3)})
 
+    def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
+        self.initialize()
+        with (
+            patch.object(lifecycle, "check_plugin"),
+            patch.object(lifecycle, "_check_free_ports"),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle.native_engine, "start_shared"),
+            patch.object(lifecycle, "finalize_fleet"),
+            patch.object(lifecycle, "_spawn", return_value={"identity": synthetic_identity()}),
+            patch.object(lifecycle, "_wait"),
+            patch.object(lifecycle, "_run") as command,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(io.StringIO()) as progress,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 0)
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["status"], "launched")
+        self.assertEqual(Path(result["run"]).parent, self.root)
+        self.assertEqual(result["router"], lifecycle.instance(self.root)["router_url"])
+        self.assertEqual(
+            progress.getvalue().splitlines(),
+            [
+                f"Prepared engine-{number}; review launch.json and run the native runtime check."
+                for number in (1, 2, 3, 4)
+            ]
+            + [f"profiling {prefill} prefill / {4 - prefill} decode" for prefill in (1, 2, 3)],
+        )
+        self.assertEqual(
+            [call.args[3] for call in command.call_args_list],
+            [f"engine-{number}" for number in (1, 2, 3, 4)]
+            + [f"attest-{number}" for number in (1, 2, 3, 4)]
+            + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
+        )
+
     def test_reference_sweep_fits_engine_context_and_concurrency(self):
         profile = self.spec["profile"]
         sweep = Sweep(
@@ -183,6 +309,122 @@ class DevTests(unittest.TestCase):
             )
         self.assertEqual(path.read_text(), "operator edit")
 
+    def test_cli_reuse_reports_all_conflicts_and_preserves_operator_edits(self):
+        self.initialize()
+        (self.root / "fleet.json").write_text("operator fleet edit")
+        (self.root / "notes.txt").write_text("operator notes")
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+            patch.object(template, "_gpu_rows", side_effect=AssertionError("reuse is local")),
+        ):
+            result = main(
+                [
+                    "dev",
+                    "init",
+                    "--instance",
+                    str(self.root),
+                    "--engine-count",
+                    "2",
+                    "--port-base",
+                    "19000",
+                ]
+            )
+        self.assertEqual(result, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("--engine-count", errors.getvalue())
+        self.assertIn("--port-base", errors.getvalue())
+        self.assertIn("narwhal dev init --instance <new-directory>", errors.getvalue())
+        self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
+    def test_cli_reuse_checks_every_explicit_setting(self):
+        self.initialize()
+        changed = lifecycle.read(self.root / "template.json")
+        changed["runtime"]["max_model_len"] += 1
+        template_path = self.parent / "changed-template.json"
+        template_path.write_text(json.dumps(changed))
+        for flag, value, detail in (
+            ("--model", str(self.parent / "other.gguf"), "--model"),
+            ("--model-dir", str(self.parent / "other-model"), "--model-dir"),
+            ("--gpu", "GPU-other", "--gpu"),
+            ("--interface", "eth0", "--interface"),
+            ("--gpu-memory-utilization", "0.11", "--gpu-memory-utilization"),
+            ("--device-allowance", "0.6", "--device-allowance"),
+            ("--template", str(template_path), "--template runtime.max_model_len"),
+        ):
+            with (
+                self.subTest(flag=flag),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(
+                    main(["dev", "init", "--instance", str(self.root), flag, value]), 2
+                )
+                self.assertIn(detail, errors.getvalue())
+                self.assertEqual(output.getvalue(), "")
+
+    def test_cli_matching_and_omitted_settings_reuse_custom_instance(self):
+        self.initialize(engine_count=2, port_base=19000, device_allowance=0.4)
+        (self.root / "fleet.json").write_text("operator fleet edit")
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        matching = [
+            "--model",
+            str(self.gguf),
+            "--model-dir",
+            str(self.model),
+            "--interface",
+            "lo",
+            "--gpu",
+            "GPU-test",
+            "--engine-count",
+            "2",
+            "--port-base",
+            "19000",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--device-allowance",
+            "0.4",
+            "--template",
+            str(self.root / "template.json"),
+        ]
+        for flags in ([], matching, matching):
+            with (
+                self.subTest(flags=flags),
+                patch.object(
+                    template, "default_template", side_effect=AssertionError("use saved settings")
+                ),
+                patch.object(template, "_gpu_rows", side_effect=AssertionError("reuse is local")),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(main(["dev", "init", "--instance", str(self.root), *flags]), 0)
+            self.assertEqual(
+                json.loads(output.getvalue()), {"status": "reused", "instance": str(self.root)}
+            )
+            self.assertEqual(errors.getvalue(), "")
+            self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
+    def test_materialize_rejects_conflicting_explicit_settings(self):
+        self.initialize()
+        with self.assertRaisesRegex(ValueError, "--engine-count"):
+            template.materialize(self.root, engine_count=2)
+        self.spec["allocation"]["engine_count"] = 2
+        with self.assertRaisesRegex(ValueError, "--template allocation.engine_count"):
+            self.initialize()
+
+    def test_init_help_explains_reuse_and_configuration_changes(self):
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            self.assertRaises(SystemExit) as exit,
+        ):
+            main(["dev", "init", "--help"])
+        self.assertEqual(exit.exception.code, 0)
+        help_text = " ".join(output.getvalue().split())
+        self.assertIn("report reused", help_text)
+        self.assertIn("Reuse preserves operator edits", help_text)
+        self.assertIn("select a fresh directory with --instance", help_text)
+
     def test_invalid_memory_and_overlapping_ports_reject_init(self):
         self.spec["allocation"]["device_allowance"] = 0.3
         with self.assertRaisesRegex(ValueError, "budgets exceed"):
@@ -192,6 +434,42 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "collide"):
             self.initialize()
         self.assertFalse(self.root.exists())
+
+    def test_decimal_memory_totals_accept_exact_allowance(self):
+        for count, allowance in ((3, 0.3), (6, 0.6), (4, 0.4)):
+            with self.subTest(count=count, allowance=allowance):
+                self.root = self.parent / f"instance-{count}"
+                self.spec["allocation"].update(
+                    engine_count=count,
+                    gpu_memory_utilization=0.1,
+                    device_allowance=allowance,
+                )
+                self.initialize()
+                fleet = FleetConfig.load(self.root / "fleet.json")
+                self.assertEqual(len(fleet.engines), count)
+                self.assertEqual(
+                    lifecycle.read(self.root / "template.json")["allocation"],
+                    self.spec["allocation"],
+                )
+
+    def test_decimal_memory_totals_reject_strict_overage_and_nonfinite_values(self):
+        for fraction, allowance in (
+            (0.10000000000000002, 0.3),
+            (0.1, 0.29999999999999993),
+            (float("nan"), 0.3),
+            (0.1, float("nan")),
+            (float("inf"), 0.3),
+            (0.1, float("inf")),
+        ):
+            with self.subTest(fraction=fraction, allowance=allowance):
+                self.spec["allocation"].update(
+                    engine_count=3,
+                    gpu_memory_utilization=fraction,
+                    device_allowance=allowance,
+                )
+                with self.assertRaisesRegex(ValueError, "budgets exceed"):
+                    self.initialize()
+                self.assertFalse(self.root.exists())
 
     def test_model_replacement_after_init_rejects_up(self):
         self.initialize()
@@ -350,7 +628,9 @@ class DevTests(unittest.TestCase):
             "phase": "ready",
             "run": str(run),
             "verification": str(run / "verify-test"),
-            "processes": [{"name": f"p{i}", "identity": {}} for i in range(9)],
+            "processes": [
+                {"name": f"p{i}", "identity": synthetic_identity(i + 1)} for i in range(9)
+            ],
         }
         lifecycle.write(self.root / "lifecycle.json", state)
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
@@ -365,11 +645,288 @@ class DevTests(unittest.TestCase):
         self.assertEqual(result["status"], "degraded")
         self.assertIn("consumer process changed", result["problems"])
 
+    def launched_instance(self):
+        self.initialize()
+        run = self.root / "run-test"
+        run.mkdir()
+        (run / "fleet.json").write_bytes((self.root / "fleet.json").read_bytes())
+        lifecycle.write(
+            self.root / "lifecycle.json",
+            {
+                "phase": "launched",
+                "run": str(run),
+                "processes": [
+                    {"name": f"p{i}", "identity": synthetic_identity(i + 1)} for i in range(9)
+                ],
+            },
+        )
+        return run
+
+    def test_failed_canary_survives_status_until_successful_verification(self):
+        run = self.launched_instance()
+        answer = "4"
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": answer}}]}
+            )
+        )
+        client = httpx.Client
+        with (
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run") as preflight,
+            patch.object(
+                lifecycle.httpx, "Client", side_effect=lambda **kwargs: client(transport=transport)
+            ),
+            patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "degraded")
+            failure = state["verification_failure"]
+            self.assertIn("routed arithmetic canary expected 5", errors.getvalue())
+            self.assertIn("routed arithmetic canary expected 5", failure["reason"])
+            evidence = Path(failure["evidence"])
+            self.assertEqual(evidence.parent, run)
+            self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+            self.assertEqual(
+                lifecycle.read(evidence / "completion.json")["choices"][0]["message"]["content"],
+                "4",
+            )
+            for _ in range(2):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 1)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result["status"], "degraded")
+                self.assertEqual(result["verification_failure"], failure)
+                self.assertEqual(result["problems"], [f"verification failed: {failure['reason']}"])
+
+            def inspect_retry(*args):
+                result = lifecycle.status(self.root)
+                self.assertEqual(result["status"], "degraded")
+                self.assertEqual(result["verification_failure"], failure)
+
+            preflight.side_effect = inspect_retry
+            answer = "5"
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["problems"], [])
+            self.assertNotIn("verification_failure", result)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "ready")
+            self.assertNotIn("verification_failure", state)
+            self.assertNotEqual(state["verification"], str(evidence))
+            self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+
+    def test_subprocess_failure_retains_diagnostic_after_progress(self):
+        run = self.launched_instance()
+        profile = run / "profiles.json"
+        profile.write_text("{")
+        (self.parent / "preflight_failure.py").write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "print('profile')\n"
+            "try:\n"
+            "    json.loads(Path(sys.argv[1]).read_text())\n"
+            "except ValueError as error:\n"
+            "    print(f'narwhal-check: profile {sys.argv[1]}: {error}', file=sys.stderr)\n"
+            "    sys.exit(2)\n"
+        )
+        invoke = lifecycle._run
+
+        def preflight(root, module, args, log):
+            invoke(root, "preflight_failure", [str(profile)], log)
+
+        with (
+            patch.dict(os.environ, {"PYTHONPATH": str(self.parent), "PYTHONUNBUFFERED": ""}),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run", side_effect=preflight),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
+        self.assertEqual(stdout.getvalue(), "")
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["phase"], "degraded")
+        failure = state["verification_failure"]
+        evidence = Path(failure["evidence"])
+        log = evidence / "preflight.log"
+        lines = log.read_text().splitlines()
+        self.assertEqual(lines[0], "profile")
+        self.assertIn("Expecting property name enclosed in double quotes", lines[-1])
+        for detail in ("preflight exited 2", str(profile), lines[-1], str(log)):
+            self.assertIn(detail, failure["reason"])
+            self.assertIn(detail, stderr.getvalue())
+        self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+
+    def test_completed_teardown_resolves_failed_verification(self):
+        run = self.launched_instance()
+        state = lifecycle.read(self.root / "lifecycle.json")
+        failure = {"reason": "failed qualification", "evidence": str(run / "verify-test")}
+        state.update(phase="degraded", verification_failure=failure)
+        lifecycle.write(self.root / "lifecycle.json", state)
+        with (
+            patch.object(lifecycle.native_engine, "_group_members", return_value={1: {}}),
+            patch.object(lifecycle.native_engine, "_terminate", side_effect=ValueError("owned")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 1)
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["phase"], "degraded")
+        self.assertEqual(state["verification_failure"], failure)
+        with (
+            patch.object(lifecycle.native_engine, "_group_members", return_value={}),
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=False),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 0)
+        self.assertEqual(json.loads(output.getvalue())["status"], "stopped")
+        self.assertNotIn("verification_failure", lifecycle.read(self.root / "lifecycle.json"))
+
     def test_new_instance_status_and_down_are_stopped(self):
         self.initialize()
         for operation in (lifecycle.status, lifecycle.down, lifecycle.down):
             self.assertEqual(operation(self.root)["status"], "stopped")
         self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 0)
+
+    def test_malformed_lifecycle_reports_its_path_and_field_before_operating(self):
+        self.initialize()
+        path = self.root / "lifecycle.json"
+        for document, field in (
+            ({}, "run"),
+            ({"run": [], "phase": "launched", "processes": []}, "run"),
+            ({"run": str(self.root), "phase": "launched", "processes": {}}, "processes"),
+            (
+                {"run": str(self.root), "phase": "ready", "processes": [], "verification": 123},
+                "verification",
+            ),
+        ):
+            lifecycle.write(path, document)
+            original = path.read_bytes()
+            for action in ("up", "verify", "status", "down"):
+                with (
+                    self.subTest(document=document, action=action),
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    self.assertEqual(main(["dev", action, "--instance", str(self.root)]), 2)
+                self.assertEqual(stdout.getvalue(), "")
+                for text in (f"narwhal: dev {action}", str(path), field):
+                    self.assertIn(text, stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_malformed_completion_retains_failure_and_degraded_status(self):
+        run = self.launched_instance()
+        client = httpx.Client
+        for result in ({}, [], {"choices": []}, {"choices": [{"message": {"content": None}}]}):
+            transport = httpx.MockTransport(
+                lambda request, body=result: httpx.Response(200, json=body)
+            )
+            with (
+                self.subTest(result=result),
+                patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+                patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+                patch.object(lifecycle, "_run"),
+                patch.object(
+                    lifecycle.httpx,
+                    "Client",
+                    side_effect=lambda transport=transport, **kwargs: client(transport=transport),
+                ),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
+                self.assertEqual(stdout.getvalue(), "")
+                state = lifecycle.read(self.root / "lifecycle.json")
+                self.assertEqual(state["phase"], "degraded")
+                failure = state["verification_failure"]
+                evidence = Path(failure["evidence"])
+                self.assertEqual(evidence.parent, run)
+                self.assertEqual(json.loads((evidence / "completion.json").read_text()), result)
+                self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+                self.assertIn("choices[0].message.content", failure["reason"])
+                self.assertIn(str(evidence / "completion.json"), stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                with contextlib.redirect_stdout(io.StringIO()) as status:
+                    self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 1)
+                current = json.loads(status.getvalue())
+                self.assertEqual(current["status"], "degraded")
+                self.assertEqual(current["verification_failure"], failure)
+
+    def test_unexpected_lifecycle_code_error_propagates(self):
+        self.initialize()
+        with (
+            patch.object(lifecycle, "status", side_effect=RuntimeError("implementation")),
+            self.assertRaisesRegex(RuntimeError, "implementation"),
+        ):
+            main(["dev", "status", "--instance", str(self.root)])
+
+    def test_malformed_saved_template_retains_the_input_error_diagnostic(self):
+        self.initialize()
+        lifecycle.write(self.root / "template.json", {})
+        with (
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 2)
+        self.assertEqual(stdout.getvalue(), "")
+        for text in ("narwhal: dev up", str(self.root), "runtime"):
+            self.assertIn(text, stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_malformed_process_identities_fail_before_native_inspection(self):
+        run = self.launched_instance()
+        state_path = self.root / "lifecycle.json"
+        state = lifecycle.read(state_path)
+        engine = run / "engine-1"
+        engine.mkdir()
+        identity_path = engine / "native-process.json"
+        invalid = [({}, "pid")]
+        invalid.extend(
+            ({**synthetic_identity(), field: value}, field)
+            for field, values in (
+                ("pid", (0, -1, True, "1")),
+                ("boot_id", ("", " ", 123)),
+                ("start_ticks", (-1, False, "0")),
+            )
+            for value in values
+        )
+        for location in ("lifecycle", "engine"):
+            for identity, field in invalid:
+                lifecycle.write(state_path, state)
+                identity_path.unlink(missing_ok=True)
+                if location == "lifecycle":
+                    changed = {**state, "processes": [{"name": "router", "identity": identity}]}
+                    lifecycle.write(state_path, changed)
+                    path = state_path
+                    context = f"processes[0].identity.{field}"
+                else:
+                    lifecycle.write(identity_path, identity)
+                    path = identity_path
+                    context = f"identity.{field}"
+                original = path.read_bytes()
+                for action in ("status", "down"):
+                    with (
+                        self.subTest(location=location, identity=identity, action=action),
+                        patch.object(lifecycle.native_engine, "_owns_process") as owns,
+                        patch.object(lifecycle.native_engine, "_group_members") as groups,
+                        patch.object(lifecycle.native_engine, "_terminate") as terminate,
+                        contextlib.redirect_stdout(io.StringIO()) as stdout,
+                        contextlib.redirect_stderr(io.StringIO()) as stderr,
+                    ):
+                        self.assertEqual(main(["dev", action, "--instance", str(self.root)]), 2)
+                    self.assertEqual(stdout.getvalue(), "")
+                    for text in (f"narwhal: dev {action}", str(path), context):
+                        self.assertIn(text, stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+                    self.assertEqual(path.read_bytes(), original)
+                    owns.assert_not_called()
+                    groups.assert_not_called()
+                    terminate.assert_not_called()
 
     def test_lifecycle_lock_rejects_overlapping_mutations(self):
         self.initialize()

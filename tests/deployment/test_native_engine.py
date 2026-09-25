@@ -20,6 +20,7 @@ from narwhal.deployment.native_engine import (
     start_shared,
     stop,
 )
+from tests.runtime.test_listeners import listener
 
 from .fixtures import process_group_with_worker
 
@@ -81,6 +82,70 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         )
                     ]
                 )
+
+    def test_configured_endpoint_conflict_precedes_gpu_inspection_and_launch(self):
+        with listener("127.0.0.2") as port:
+            selected = [
+                (
+                    Path("unused"),
+                    {
+                        "role": "engine-1",
+                        "endpoint": f"http://127.0.0.2:{port}",
+                        "attestation_port": 0,
+                        "side_channel_port": 0,
+                    },
+                )
+            ]
+            with (
+                patch(
+                    "narwhal.deployment.native_engine.validate_shared_runs", return_value=selected
+                ),
+                patch("narwhal.deployment.native_engine.gpu_memory") as memory,
+                patch("narwhal.deployment.native_engine.subprocess.Popen") as popen,
+                self.assertRaisesRegex(ValueError, f"engine port {port}.*127.0.0.2"),
+            ):
+                start_shared([Path("unused")])
+            memory.assert_not_called()
+            popen.assert_not_called()
+
+    def test_each_native_listener_uses_its_configured_address(self):
+        with tempfile.TemporaryDirectory() as folder, listener("127.0.0.1") as port:
+            run = Path(folder)
+            plan = {
+                "role": "engine-1",
+                "endpoint": "http://127.0.0.2:0",
+                "attestation_port": 0,
+                "side_channel_port": 0,
+            }
+            (run / "engine.env").write_text(
+                "VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.3\nVLLM_NIXL_SIDE_CHANNEL_PORT=0\n"
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                plan["endpoint"] = f"http://127.0.0.2:{port}"
+                _ports_free([(run, plan)])
+                plan["endpoint"] = "http://127.0.0.2:0"
+                (run / "engine.env").write_text(
+                    f"VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.3\nVLLM_NIXL_SIDE_CHANNEL_PORT={port}\n"
+                )
+                _ports_free([(run, plan)])
+                (run / "engine.env").write_text(
+                    f"VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.1\nVLLM_NIXL_SIDE_CHANNEL_PORT={port}\n"
+                )
+                with self.assertRaisesRegex(ValueError, f"NIXL port {port}.*127.0.0.1"):
+                    _ports_free([(run, plan)])
+                (run / "engine.env").write_text(
+                    "VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.3\nVLLM_NIXL_SIDE_CHANNEL_PORT=0\n"
+                )
+                plan["attestation_url"] = f"http://127.0.0.2:{port}/v1/attestation"
+                _ports_free([(run, plan)])
+                plan["attestation_url"] = f"http://127.0.0.1:{port}/v1/attestation"
+                with self.assertRaisesRegex(ValueError, f"attestation port {port}.*127.0.0.1"):
+                    _ports_free([(run, plan)])
+                with patch.dict(
+                    os.environ,
+                    {"NARWHAL_NODE_1_ATTESTATION_URL": f"http://127.0.0.2:{port}/v1/attestation"},
+                ):
+                    _ports_free([(run, plan)])
 
     def test_checked_native_engines_record_live_process_and_vllm_identity(self):
         with tempfile.TemporaryDirectory() as folder:

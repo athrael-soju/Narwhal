@@ -4,6 +4,7 @@ Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serv
 
 | Option                | Default     | Contract                                                |
 | --------------------- | ----------- | ------------------------------------------------------- |
+| `--version`           |             | Print the installed distribution version.               |
 | `--document PATH`     | required    | Contract values plus a source for every populated field |
 | `--engine-base URL`   | required    | vLLM base URL queried at `/version` and `/metrics`      |
 | `--host HOST`         | `127.0.0.1` | Sidecar bind address                                    |

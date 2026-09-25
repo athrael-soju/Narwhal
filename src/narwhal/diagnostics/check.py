@@ -19,6 +19,7 @@ from typing import cast
 
 import httpx
 
+from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
@@ -920,24 +921,58 @@ async def run(
 
 def main(argv: list[str] | None = None) -> int:
     """Run the fleet-check CLI."""
-    ap = argparse.ArgumentParser(description="Check a fleet before starting the router")
-    ap.add_argument("--fleet", help="fleet config JSON")
-    ap.add_argument("--ring", action="store_true", help="test rotating producer-consumer pairs")
-    ap.add_argument("--repeats", type=int, default=1, help="KV transfer probes per pair")
-    ap.add_argument("--no-kv", action="store_true", help="skip the two KV gates")
-    ap.add_argument("--evidence-out", type=Path, help="retain process-bound full-mesh KV evidence")
+    ap = argparse.ArgumentParser(
+        description="Check running engines and their measured profiles before starting the "
+        "router. By default, probe the full eligible directed KV mesh; retain it with "
+        "--evidence-out or verify a saved mesh with --verify-evidence.",
+    )
+    add_version_argument(ap)
     ap.add_argument(
-        "--verify-evidence", type=Path, help="verify a saved KV mesh against live processes"
+        "--fleet", help="fleet config JSON; required for preflight and evidence verification"
+    )
+    ap.add_argument(
+        "--ring",
+        action="store_true",
+        help="test rotating producer-consumer pairs (default: full eligible directed mesh)",
+    )
+    ap.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="KV transfer probes per pair, clamped to at least 1 (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--no-kv",
+        action="store_true",
+        help="run reach, contract, profile, model, pace, tokenize and slo gates "
+        "(default: include produce and consume)",
+    )
+    ap.add_argument(
+        "--evidence-out",
+        type=Path,
+        help="fresh JSON path for process-bound full-mesh KV evidence; requires "
+        "engine_contract and full KV mesh; exclusive with --ring, --no-kv and --verify-evidence "
+        "(default: gate output only)",
+    )
+    ap.add_argument(
+        "--verify-evidence",
+        type=Path,
+        help="verify saved KV evidence against the current fleet, profiles and live processes; "
+        "requires engine_contract; exclusive with --evidence-out; "
+        "--ring, --no-kv and --repeats apply to new probes "
+        "(default: run preflight)",
     )
     ap.add_argument(
         "--print-example-config",
         action="store_true",
-        help="print the annotated example fleet config and exit",
+        help="print the annotated example fleet config and exit before fleet loading; "
+        "takes precedence over --print-contract-versions (default: false)",
     )
     ap.add_argument(
         "--print-contract-versions",
         action="store_true",
-        help="print the versioned machine-readable interface registry and exit",
+        help="print the versioned machine-readable interface registry and exit before "
+        "fleet loading (default: false)",
     )
     args = ap.parse_args(argv)
 
@@ -955,18 +990,23 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
         ap.error("choose --evidence-out or --verify-evidence")
-    cfg = FleetConfig.load(args.fleet)
-    if args.verify_evidence is not None:
-        problems = asyncio.run(
-            verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
-        )
-        for problem in problems:
-            print(f"  FAIL  {problem}")
-        if problems:
-            return 1
-        print("directed KV evidence matches the current fleet, profiles, and processes")
-        return 0
+    from ..cli_errors import failure
+
     try:
+        cfg = FleetConfig.load(args.fleet)
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-check", f"load fleet {args.fleet}", exc, 2)
+    try:
+        if args.verify_evidence is not None:
+            problems = asyncio.run(
+                verify_directed_kv_evidence(cfg, Path(args.fleet), args.verify_evidence)
+            )
+            for problem in problems:
+                print(f"  FAIL  {problem}")
+            if problems:
+                return 1
+            print("directed KV evidence matches the current fleet, profiles, and processes")
+            return 0
         return asyncio.run(
             run(
                 cfg,
@@ -978,8 +1018,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except ValueError as exc:
-        ap.error(str(exc))
-        return 2
+        return failure("narwhal-check", f"check fleet {args.fleet}", exc, 2)
+    except (OSError, httpx.HTTPError) as exc:
+        return failure("narwhal-check", f"check fleet {args.fleet}", exc, 1)
 
 
 if __name__ == "__main__":

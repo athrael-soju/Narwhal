@@ -112,7 +112,7 @@ Override policy in `.env` before discovery:
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`. `NARWHAL_ENGINE_ARGS` replaces the default argument array, but discovery still appends `--trust-remote-code` when required and still enforces DS convolutional-state layout. A conflicting `NARWHAL_ENGINE_ENV` value is rejected.
 
-The image check validates custom-code requirements and constructs the mounted checkpoint tokenizer before serving model load. The live HTTP completion probe later exercises that tokenizer.
+The image check validates custom-code requirements and constructs the tokenizer selected by the serving arguments before model load. The live HTTP completion probe later exercises that tokenizer.
 
 ## Access failure handling
 

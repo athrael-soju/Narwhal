@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import math
 import os
 import time
 import uuid
@@ -45,6 +46,10 @@ class FileLease:
     ) -> None:
         if not holder:
             raise ValueError("lease holder must not be empty")
+        if not math.isfinite(ttl_s):
+            raise ValueError("lease ttl must be finite")
+        if not math.isfinite(safety_margin_s):
+            raise ValueError("lease safety margin must be finite")
         if ttl_s <= 0:
             raise ValueError("lease ttl must be positive")
         if safety_margin_s < 0 or safety_margin_s >= ttl_s:
@@ -185,6 +190,8 @@ class FileLease:
         for name, value in (("expires_at", expires_at), ("updated_at", updated_at)):
             if not isinstance(value, int | float) or isinstance(value, bool):
                 raise LeaseError(f"{name} must be a number")
+            if not math.isfinite(value):
+                raise LeaseError(f"{name} must be finite")
         return LeaseRecord(epoch, holder, float(expires_at), float(updated_at))
 
     def _write_unlocked(self, record: LeaseRecord) -> None:
