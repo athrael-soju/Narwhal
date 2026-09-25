@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.0](https://github.com/athrael-soju/Narwhal/compare/v0.2.1...v0.3.0) (2026-09-25)
+
+
+### Features
+
+* add four-engine WSL2 development mode ([8c5b980](https://github.com/athrael-soju/Narwhal/commit/8c5b98051ce83cfebd80149b26694842a0cbfea9))
+* **cli:** add offline inspection, diagnostics and bounded lifecycle ([9df3904](https://github.com/athrael-soju/Narwhal/commit/9df390467a7494f104f2b423a75d5a95c41c0938)), closes [#122](https://github.com/athrael-soju/Narwhal/issues/122) [#123](https://github.com/athrael-soju/Narwhal/issues/123) [#124](https://github.com/athrael-soju/Narwhal/issues/124) [#125](https://github.com/athrael-soju/Narwhal/issues/125) [#126](https://github.com/athrael-soju/Narwhal/issues/126)
+* **docs:** add selectable dark mode ([1c87cae](https://github.com/athrael-soju/Narwhal/commit/1c87cae8d62eb8925ff6ca1d2cd7910c234d6b86))
+* link Grafana icon to Narwhal repository ([ea1d6df](https://github.com/athrael-soju/Narwhal/commit/ea1d6dfc4c5f2057310273920015d90e70bfd045))
+* reproducible benchmark runs ([#55](https://github.com/athrael-soju/Narwhal/issues/55)) ([671bf35](https://github.com/athrael-soju/Narwhal/commit/671bf35bcdc2f549deff60fa29305fa11da4f179))
+
+
+### Fixes
+
+* bind profiles to live engine generations ([4ea5be0](https://github.com/athrael-soju/Narwhal/commit/4ea5be0d9ba0162052785118ce4ea9aed0a23ea7))
+* **ci:** remove release build pip cache ([#77](https://github.com/athrael-soju/Narwhal/issues/77)) ([28fe2e0](https://github.com/athrael-soju/Narwhal/commit/28fe2e072b5eb1639336572d23deeada7d4ab09f))
+* **ci:** validate release SHA before candidate checkout ([1976ef8](https://github.com/athrael-soju/Narwhal/commit/1976ef89089580fc40e1db4fe31ad1670bf0a7b7))
+* **cli:** enforce launch checks and consistent command output ([49133c9](https://github.com/athrael-soju/Narwhal/commit/49133c9eed696de2f8d5cfc1a4b7e80ba9aa493d))
+* include documentation commits in releases ([d6e84bc](https://github.com/athrael-soju/Narwhal/commit/d6e84bc32745793cd9e42f7a3e0dae48eabcc3e3))
+* **serving:** hide upstream exception details from clients ([#75](https://github.com/athrael-soju/Narwhal/issues/75)) ([15482c8](https://github.com/athrael-soju/Narwhal/commit/15482c8c4450dcec28f3cf7977e317e5606783d3))
+
+
+### Documentation
+
+* clarify runbooks and align validation guidance ([#104](https://github.com/athrael-soju/Narwhal/issues/104)) ([9cfe74b](https://github.com/athrael-soju/Narwhal/commit/9cfe74bf4ca8126e7c93599a47e5ccbc596e2052))
+* document issue labels and fix bug template ([d8c37a5](https://github.com/athrael-soju/Narwhal/commit/d8c37a59e8eaad9d75335fe07af3a70170803673))
+* hide page edit action ([04ed085](https://github.com/athrael-soju/Narwhal/commit/04ed085dc5cb9b368c35e306b7a51104d512d340))
+* refresh README installation and references ([1612192](https://github.com/athrael-soju/Narwhal/commit/1612192043f239b92ca5a28417b014e30ca2bc6c))
+* remove obsolete CPU tooling references ([#52](https://github.com/athrael-soju/Narwhal/issues/52)) ([b836a91](https://github.com/athrael-soju/Narwhal/commit/b836a910f6d51d7d0064a74f23987f75e9a313b1))
+* simplify fleet deployment runbook ([#92](https://github.com/athrael-soju/Narwhal/issues/92)) ([bd93aaf](https://github.com/athrael-soju/Narwhal/commit/bd93aaf43d4f0bf9f6cc1abc04dfb397701d53c8))
+
 ## [0.2.1](https://github.com/athrael-soju/Narwhal/compare/v0.2.0...v0.2.1) (2026-09-23)
 
 
