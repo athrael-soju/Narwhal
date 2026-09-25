@@ -1,6 +1,6 @@
 # Benchmark evidence bundle
 
-Run the [ordered benchmark runner](05-Benchmark-Runner.md) on a host that can read the router's append-only JSONL request journal and reach the router and every engine metrics endpoint. The journal path must be the same file used by `narwhal-serve --journal`. Mount or copy no historical rows into a point: the collector records byte offsets before the client starts and after the final drain, then reads exactly that interval.
+Run the [ordered benchmark runner](05-Benchmark-Runner.md) on a host that can read the router's append-only JSONL request journal and reach the router and every engine metrics endpoint. The journal path must be the same file used by `narwhal-serve --journal`. The journal may contain historical rows. The collector records byte offsets before the client starts and after the final drain, then writes only rows from that interval to the point's `journal-rows.json`.
 
 Add `evidence` to the benchmark plan:
 
@@ -28,7 +28,9 @@ Add `evidence` to the benchmark plan:
 }
 ```
 
-This object belongs at the plan's top level, alongside `schema` and `points`. The metrics URLs in the example must be replaced with addresses reachable from the runner host. Keep the plan and entire `runs/` directory private. The collector computes SHA-256 digests of the fleet and profiles before each point and reports if either file changes during the point. It also hashes retained client records, warmup, and summary files when present. The identity fields are operator-declared; compare them with the deployment and preflight records before accepting a GPU result. The router state exposes `journal_run` so metrics samples can be grouped by process even across restart or standby takeover.
+This object belongs at the plan's top level, alongside `schema` and `points`. The metrics URLs in the example must be replaced with addresses reachable from the runner host. Keep the plan and entire `runs/` directory private.
+
+The collector computes SHA-256 digests of the fleet and profiles before each point and reports if either file changes during the point. It also hashes retained client records, warmup, and summary files when present. The identity fields are operator-declared; compare them with the deployment and preflight records before accepting a GPU result. The router state exposes `journal_run` so metrics samples can be grouped by process even across restart or standby takeover.
 
 For each point, the runner writes these files under `runs/<run>/<point>/`:
 

@@ -2,7 +2,9 @@
 
 ## Role control
 
-During regular operation, Narwhal rate-limits role evaluations to one per `controller.reactive.step_s`, then prices adjacent prefill/decode splits from measured demand, projected service times, role floors, and engine eligibility using the worst projected SLO ratio.
+During regular operation, Narwhal rate-limits role evaluations to one per `controller.reactive.step_s`.
+
+It prices each adjacent prefill/decode split by its worst projected SLO ratio, using measured demand and projected service times. Role floors and engine eligibility constrain the available moves.
 
 A move may involve more than one engine when the current pool for one phase is already below its configured minimum size.
 
@@ -118,8 +120,8 @@ When the failed engine later passes readmission, Narwhal assigns its role accord
 
 ### Aggregate fallback from an idle decode engine
 
-If failures or drains empty the prefill pool, the scheduler can select an idle decode-labelled engine as the aggregate fallback.
+If failures or drains empty the prefill pool, the scheduler can select a live decode-labelled engine as the aggregate fallback.
 
-While that engine owns decode work, predictive admission rejects new work because the measured curves price one phase at a time.
+Predictive admission rejects new work on that engine until its resident decode work drains, because the measured curves price one phase at a time.
 
-After resident decode work drains, Narwhal can price the engine for aggregate prefill placement.
+Narwhal can then price the engine for aggregate prefill placement.

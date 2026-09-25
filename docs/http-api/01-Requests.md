@@ -16,7 +16,7 @@ For a non-streaming chat completion, Narwhal returns `object: "chat.completion"`
 
 ## Request contract
 
-Narwhal parses each completion request as a JSON object and validates router-interpreted fields before reserving admission or dispatching engine work.
+Narwhal parses each completion request as a JSON object and validates router-interpreted fields before reserving admission or engine capacity.
 
 ### Validated field types
 
@@ -32,7 +32,7 @@ Non-null values must use the following types:
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 
-Narwhal returns HTTP `400` in an OpenAI error envelope for invalid JSON, body shape, or router-interpreted field type and records one invalid terminal outcome before reserving admission or engine capacity.
+Narwhal returns HTTP `400` in an OpenAI error envelope for invalid JSON, body shape, or router-interpreted field type. It also writes one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
 
 Example:
 
@@ -51,7 +51,7 @@ Fields outside the router validation set pass through unchanged.
 
 ### Model handling
 
-Narwhal compares the requested `model` with the configured model before dispatch, writes the configured served model into a matching engine request, and returns HTTP `404` with `model_not_found` for another name.
+Narwhal checks the requested `model` before dispatch and returns HTTP `404` with `model_not_found` if it names another model. For accepted requests, Narwhal sets the engine request's `model` to the configured model.
 
 ### Sampling width
 

@@ -16,7 +16,7 @@ Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`.
 
 Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model and keep prefix caching disabled.
 
-Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic. Keep the sample sidecar.
+Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic. Keep the `.samples.json` sidecar written alongside the profile store configured by `profiles.path`.
 
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
@@ -26,19 +26,17 @@ Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured engi
 
 ## Run preflight
 
-From the router, use input targets spanning the served context range, including the longest admitted input:
+From the router, keep the engines otherwise idle and run:
 
 ```bash
-.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --handoff-input-tokens 256,4096,8192 \
-  --first-token-observation-s 12
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
-Set the input lengths to the fleet's served context range and the observation bound between `engine.first_token_timeout_s` and `serving.request_timeout_s`. The `consume` gate times each role-permitted crossed handoff through its first decode token; its independent observation bound records a working transfer beyond the serving deadline.
+The `consume` gate uses a fixed prompt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
 
-When a handoff completes after the serving deadline, compare its first-token time plus measured prefill with the TTFT target, set `engine.first_token_timeout_s` within that budget, and rerun preflight against the edited fleet document. An engine error or observation-window expiry identifies the path to diagnose; a wider observation bound within the request deadline can expose a slow transfer. The fleet edit retains the running engines, attestation, and profiles.
+Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. If a transfer fails, retain the failing pair, error, and engine logs. Diagnose the path before changing the timeout; use [separate latency measurements](#calibrate-the-first-token-deadline) when the configured deadline needs calibration.
 
-For a deadline based on a latency distribution, `--repeats 100` collects 100 working samples per path and length; set the deadline above `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`. Model, runtime, transport, or served-context changes require new samples. Retain the command, fleet document, preflight output, process identities, and profile store together.
+`--repeats N` repeats the transfer checks per pair. It reports pass/fail results without recording latency samples or sweeping input lengths. Retain the command, fleet document, preflight output, process identities, and profile store together.
 
 The full preflight runs these gates:
 
@@ -55,5 +53,15 @@ The full preflight runs these gates:
 | `slo`      | Configured TTFT/TPOT targets are feasible against measured profiles.                                                                                                                                        |
 
 Start the router after every required gate passes.
+
+## Calibrate the first-token deadline
+
+Calibration requires instrumented direct-engine probes; `narwhal-check` has no independent observation window. Use a fresh producer handoff for each sample and input lengths spanning the served context range, including the longest admitted input. Record the actual token count, prefill duration, and elapsed time from starting the decode HTTP request to its first generated token. The [Python engine API](../http-api/03-Backend-and-Failures.md#python-api) exposes the prefill and decode calls.
+
+Use a diagnostic first-token observation bound above `engine.first_token_timeout_s` and within `serving.request_timeout_s`. Record engine errors and observation-window expiries with the failed path; diagnose them before selecting a serving deadline.
+
+For each path and input length, collect at least 100 completed samples and retain all failed attempts. Compute `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` separately for each group, then set the candidate deadline above the largest result. Check that the deadline, measured prefill, and router overhead fit the service's client TTFT requirement. Edit `engine.first_token_timeout_s` in the fleet document and rerun preflight with that configuration.
+
+Model, runtime, transport, or served-context changes require new samples. Retain the probe code, commands, raw timings, failures, fleet document, and process identities with the calibration evidence. The [GPU qualification report](../measure/07-GPU-Qualification.md) records one deployment's separate direct-probe measurements.
 
 Continue with [Gate G: Start the service and validate capacity through the private path](07-Serve-and-Measure.md).

@@ -16,7 +16,7 @@ The profile file declares:
 
 With `engine_contract` configured, the profiler reads each engine's process identity and verified attestation before its sweep, repeats the read after the sweep, and saves the attestation digest with the fit. The sample sidecar retains the full attestation response, including the process start, contract fields, and their evidence sources. With `engine_contract` omitted, the same two reads bind the fit to the live `/version` and `/metrics` process identity.
 
-Preflight and router startup read the live generation for every configured engine. A changed digest names the engine and requires a fresh profile before admission; preflight also checks measured decode bounds and error evidence before pricing capacity.
+Preflight and router startup read the live generation for every configured engine. On a digest mismatch, they name the affected engine and require a fresh profile before admission. Preflight also checks measured decode bounds and error evidence before pricing capacity.
 
 A malformed profile aborts the operation with the affected file, engine, and field:
 
@@ -53,7 +53,11 @@ true
 
 `NaN` and `Infinity` abort profile loading during JSON decoding, before the row validator examines engine IDs.
 
-Profile stores written before generation binding retain their schema version and carry rows from an earlier measurement contract. Preflight and router startup reject those rows with `profile has no generation evidence`; run `narwhal-profile` against the current engine processes into a fresh store and keep its `.samples.json` sidecar. Refit accepts saved samples carrying the generation digest and evidence; earlier samples require a fresh sweep to establish process provenance.
+Preflight and router startup reject rows without `generation_digest` with `profile has no generation evidence`, even when the store's schema version is current.
+
+Run `narwhal-profile` against the current engine processes into a fresh store and keep its `.samples.json` sidecar.
+
+Refitting requires both `generation_digest` in each saved profile and a `generation_evidence` object in its sample row. Samples missing either require a fresh sweep; see the [refit procedure](../measure/01-Profile.md#repair-profiles-produced-by-the-earlier-raw-repeat-fitter).
 
 ### Decode capacity derived from the profile
 

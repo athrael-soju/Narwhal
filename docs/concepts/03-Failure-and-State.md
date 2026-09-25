@@ -37,17 +37,9 @@ Restarting the router starts with fresh monitor-failure counters.
 
 ### Connection pools
 
-Prefill, decode, and token counting use the data connection pool bounded by:
+Prefill, decode, and token counting use the data connection pool bounded by `serving.max_connections`.
 
-```text
-serving.max_connections
-```
-
-Health checks, suspect verification, and readmission use the reserved control pool bounded by:
-
-```text
-engine.control_connections
-```
+Health checks, suspect verification, and readmission use the reserved control pool bounded by `engine.control_connections`.
 
 ### Failure evidence
 
@@ -64,7 +56,9 @@ When a streak reaches `recovery.eject_after`, the response depends on the class.
 | Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and probe prefill/decode |
 | Unreadable KV handoff from prefill                                        | `kv_handoff`       | Pause new requests and probe prefill/decode |
 
-An inconclusive inference-probe leg leaves the verification hold active. The monitor schedules another probe while admission sends new work to eligible peers.
+Narwhal pauses new requests to an engine by applying an inference-verification hold before probing prefill and decode.
+
+An inconclusive inference-probe leg leaves the inference-verification hold active. The monitor schedules another probe while admission sends new work to eligible peers.
 
 A successful inference probe clears recorded inference failures.
 
@@ -76,13 +70,7 @@ Liveness has its own per-engine miss counter.
 
 Any successful health response resets that counter.
 
-Narwhal ejects an engine after:
-
-```text
-recovery.liveness_misses
-```
-
-consecutive silent sweeps.
+Narwhal ejects an engine after `recovery.liveness_misses` consecutive silent sweeps.
 
 ### Last-engine protection
 

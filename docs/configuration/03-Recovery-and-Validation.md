@@ -25,34 +25,23 @@ Transport timeouts trigger a health probe first.
 
 First-token timeouts and mid-stream stalls require functional verification of the affected inference path.
 
-If verification is inconclusive, Narwhal keeps the hold and retries on the readmission cadence.
+If verification is inconclusive, Narwhal keeps the engine out of placement and retries on the readmission cadence.
 
-Router handoff keeps both the hold and the failed transfer paths.
+Router handoff preserves this placement hold and records the producer IDs for failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
 
 ### 8.2 Decode drift evidence
 
-The drift tracker compares:
-
-- fresh decode residuals
-- stalled inter-token gaps
-
-against each engine's recent healthy baseline.
+The drift tracker compares fresh decode residuals and stalled inter-token gaps against each engine's recent healthy baseline.
 
 Placement estimates remaining after decode completion are excluded from health evidence.
 
 Local prefill work invalidates the decode-only profile for the affected interval. Narwhal pauses decode correction and drift scoring for gaps that cross a prefill boundary, including prefills that both start and finish between monitor passes.
 
-When pure decode observations return, Narwhal starts a new scoring window while retaining:
-
-- the previous healthy baseline
-- probation state
+When pure decode observations return, Narwhal starts a new scoring window while retaining the previous healthy baseline and probation state.
 
 Client latency, controller pressure, request deadlines, and liveness checks continue to observe mixed work while decode drift scoring is paused.
 
-`/narwhal/state` exposes:
-
-- `health.prefill_paused`
-- `health.prefill_pauses`
+`/narwhal/state` exposes `health.prefill_paused` and `health.prefill_pauses`.
 
 The peer-relative test suppresses ejection during fleet-wide slowdowns.
 
@@ -147,12 +136,7 @@ When this field names a credential during deployment export, the engine role als
 
 The engine launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and supplies that file to Docker.
 
-`/narwhal/state` reports either:
-
-- `boundary`
-- `engine-credential`
-
-under `admission.engine_auth`.
+`/narwhal/state` reports either `boundary` or `engine-credential` under `admission.engine_auth`.
 
 Keep the same authentication mode between workload measurement and production serving.
 

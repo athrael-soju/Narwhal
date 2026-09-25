@@ -2,7 +2,9 @@
 
 ## Confirm router inventory
 
-On the router, confirm that `runs/deployment/fleet.json` names the running engines, their URLs and attestation URLs, the model, initial roles, SLO values, and profile path; `.env.router` resolves the endpoint references. Capture each engine's attestation contract against its Gate C `ENGINE_RUN` and `cache-layout.json`, retaining the container ID and logs with that process record.
+On the router, confirm that `runs/deployment/fleet.json` names the running engines, their URLs and attestation URLs, the model, initial roles, SLO values, and profile path. `.env.router` resolves the endpoint references.
+
+For each engine, use its Gate C `ENGINE_RUN` directory and captured `cache-layout.json` as inputs to attestation. Retain the container ID and logs in that directory.
 
 ## Capture attestation inputs
 
@@ -34,7 +36,9 @@ The fields are `head_size`, `kv_heads`, `hidden_layers`, and `model_architecture
 
 Retain these values with `use_mla`, model-config hash, image identity, application revision, and serving plan hash. The command reads plan and launcher from the live container, checks their hashes against `launch.json`, and records private logs. Run it on every engine.
 
-Capture physical cache grouping:
+Choose one source to capture physical cache grouping. Run `cache-registration` once per `ENGINE_RUN`; it refuses to overwrite an existing capture.
+
+To use the serving startup log:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
@@ -42,7 +46,14 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
 cat "$ENGINE_RUN/cache-registration.json"
 ```
 
-For vLLM v0.29.0 layouts, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`; `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The generated record retains `cross_layers_blocks`, layout name, enum source hash, startup-log hash, checked plan hash, and image identity. The startup log must contain exactly one resolved layout line of the form `Using <layout> KV cache layout.`
+Alternatively, use this engine's resolved layout from `cache-layout.json`:
+
+```bash
+python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
+  --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
+```
+
+For vLLM v0.29.0 layouts, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`; `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The generated record retains `cross_layers_blocks`, layout name, enum source hash, input hash, checked plan hash, and image identity. When using the startup log, it must contain exactly one resolved layout line of the form `Using <layout> KV cache layout.`
 
 Compare live layout with the representative:
 
@@ -62,14 +73,7 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-When `cache-layout.json` supplies the representative's resolved layout, register that capture:
-
-```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
-  --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
-```
-
-A matching group signature and resolved layout allow the representative's page geometry to remain the group's fabric basis. A differing layout requires its own serving capture, budget, and edge comparisons.
+When the group signature, resolved layout, and page geometry match, the group can continue using the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). A differing layout or page geometry requires its own serving capture, budget, and edge comparisons.
 
 Capture transfer direction from the checked connector resolution. In the pinned API, `NixlConnector` aliases `NixlPullConnector`; `kv_both` describes ability to produce and consume KV.
 

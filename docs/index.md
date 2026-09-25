@@ -1,6 +1,8 @@
 # Narwhal documentation
 
-From a management workstation, Narwhal inspects a role-free fleet, derives its configuration, prepares the remote engines, and verifies routed inference over the private deployment path.
+Narwhal runs disaggregated LLM inference and [reassigns prefill and decode roles](Core-Concepts.md) as demand changes. Model weights stay loaded during role changes.
+
+From a management workstation, Narwhal inspects the fleet, derives its configuration, prepares the remote engines, and verifies routed inference over the private deployment path.
 
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="Narwhal, adaptive disaggregated inference on a role-free fleet">

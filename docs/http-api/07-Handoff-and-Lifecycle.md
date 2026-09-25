@@ -155,6 +155,6 @@ HTTP `409` leaves candidates that fail validation blocked.
 
 ### Whole-wave restart policy
 
-With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the wave after every replacement passes validation with a newer start.
+With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the whole wave to service after every replacement passes validation with a newer start.
 
 See [Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) for the external-supervisor restart sequence and whole-wave requirements.

@@ -6,11 +6,7 @@
 
 Confirm that the engine is ejected or quarantined and that surviving engines continue receiving work. Save the engine boot log and supervisor exit reason before restarting the process.
 
-Read:
-
-```text
-recovery.engine_restart_policy
-```
+Check `recovery.engine_restart_policy` and follow the matching procedure below.
 
 For `individual` recovery:
 
@@ -51,15 +47,8 @@ If drain identity capture fails for an engine, use the [unplanned whole-wave pro
 
 Wait for both conditions:
 
-```text
-wave.ready_to_stop: true
-```
-
-and:
-
-```text
-/ready -> HTTP 503
-```
+- `wave.ready_to_stop` is `true`.
+- `/ready` returns HTTP 503.
 
 Stop every engine process tree through the external supervisor.
 

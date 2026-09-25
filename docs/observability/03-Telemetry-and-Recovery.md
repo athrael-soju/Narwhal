@@ -16,12 +16,7 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 
 The target generator labels router scrapes `job="narwhal-router"` and engine scrapes `job="engines"` with `iid=<engine identity>`; the alert rules select targets through those labels.
 
-Production monitoring uses the same rules file and routes:
-
-- `severity="page"`
-- `severity="warn"`
-
-through the deployment's alert manager.
+Production monitoring uses the same rules file and routes alerts with `severity="page"` or `severity="warn"` through the deployment's alert manager.
 
 ## Troubleshooting
 
@@ -35,7 +30,7 @@ through the deployment's alert manager.
 | Grafana returns dashboard 404                          | Use the updated monitoring startup helper and Compose file together, rerun `make observe`, then inspect staged mount permissions and Grafana logs if readiness still fails. Retain the failure output in the private deployment record.                                    |
 | Router target fails                                    | Check `NARWHAL_ROUTER_URL`, verify that Prometheus can route to it from the router host, and inspect Prometheus `/targets`.                                                                                                                                                |
 | An engine replica disappears from charts               | Check the generated target entry, reachability of that engine's metrics endpoint, and its `iid` label.                                                                                                                                                                     |
-| Grafana shows an older dashboard                       | Rerun `make observe` to replace the staged dashboard. The directory mount exposes the replacement to Grafana's provisioner. If the dashboard contract still fails, inspect the provisioning log.                                                                           |
+| Grafana shows an older dashboard                       | Rerun `make observe` to replace the staged dashboard. The directory mount exposes the replacement to Grafana's provisioner. If the [dashboard readiness checks](01-Start-and-Verify.md#readiness-contract) still fail, inspect the provisioning log.                                                                           |
 | An alert evaluates against the wrong scope             | Inspect target relabelling for `job`, `instance`, and `iid`.                                                                                                                                                                                                               |
 
 ## Retain monitoring captures

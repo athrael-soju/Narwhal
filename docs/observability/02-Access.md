@@ -38,16 +38,12 @@ make observe
 
 Grafana derives its `Prometheus` datasource URL from the selected listener. With a wildcard Prometheus bind, Narwhal points Grafana and readiness probes at loopback while the Prometheus socket keeps its configured wildcard address.
 
-For the isolated listener example using `127.0.0.2`, add:
+For the isolated listeners on `127.0.0.2`, open the workstation tunnel with:
 
-```text
---remote-address 127.0.0.2
-```
-
-and forward Prometheus as:
-
-```text
---forward 19090:19090
+```bash
+python3 tools/deployment/deploy_hosts.py tunnel --role router \
+  --remote-address 127.0.0.2 \
+  --forward 13000:3000 --forward 19090:19090
 ```
 
 Review [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md) after confirming dashboard access.

@@ -6,7 +6,11 @@
 
 SSE token accounting includes identified token IDs whose text is empty and tokens emitted only as reasoning output.
 
-Mark a response complete after each output-bearing stream event carries one identified token, the stream reaches a length finish and `[DONE]`, and final usage matches the observed token counts.
+Mark a response complete only when all of these conditions hold:
+
+- Each output-bearing stream event carries one identified token.
+- The stream reaches a length finish and `[DONE]`.
+- Final usage matches the observed token counts.
 
 Client TTFT runs from HTTP dispatch to the first identified output token.
 
@@ -43,6 +47,8 @@ Inspect admission queues and resident work in `state-before.json`, `state-after-
 Each trial writes a new directory with mode `0700` and files with mode `0600`. Running the load helper from the management checkout records its local digest separately from the installed router revision.
 
 After reconciling client and router records, query the dashboard series and run the post-load KV ring described in [Gate G](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
+
+Preflight and the post-load ring establish that the tested role-permitted paths transfer KV and produce tokens. Exact-output correctness across role changes with resident requests requires separate evidence.
 
 ## 13. Record deployment acceptance
 

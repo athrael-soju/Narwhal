@@ -30,7 +30,7 @@ The command checks the selected port before reading the fleet config and exits w
 | `--standby-takeover-after N`        | `4`           | Failed polls required before takeover. Must be at least 1.                                                               |
 | `--standby-max-handoff-age SECONDS` | `30.0`        | Oldest state eligible for takeover. Must be positive.                                                                    |
 | `--lease-path PATH`                 | `""`          | Shared lease file path, required with `--standby-of`; `""` uses local control.                                          |
-| `--router-id NAME`                  | host and port | Stable operator name prefixed to a unique boot holder                                                                    |
+| `--router-id NAME`                  | host and port | Stable router name used as the prefix of its lease-holder token. A new token is generated each time the router starts. |
 | `--lease-ttl SECONDS`               | `5.0`         | Lease lifetime. Must exceed the renewal interval plus the safety margin.                                                 |
 | `--lease-renew-interval SECONDS`    | `1.0`         | Lease renewal interval. Must be positive.                                                                                |
 | `--lease-safety-margin SECONDS`     | `1.0`         | Reserved maximum relative clock skew before local expiry. Must be nonnegative.                                           |

@@ -21,8 +21,6 @@ FastAPI generates `/openapi.json` from Narwhal v0.1.0's routes and serves its in
 
 The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="1"} 1`.
 
-For Arrow research attribution, use [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).
-
 ## HTTP contracts
 
 - [Completion requests](http-api/01-Requests.md)
@@ -49,3 +47,7 @@ For Arrow research attribution, use [CITATION.cff](https://github.com/athrael-so
 `/health` returns HTTP 200 with router status and engine counts; `/ready` returns 200 during client admission and 503 with `Retry-After: 1` when admission is closed.
 
 Restrict `/narwhal/state`, `/narwhal/handoff`, and `/narwhal/lifecycle` (including its action routes) to the trusted control network; these routes publish live scheduler and handoff state and can drain or readmit engines.
+
+## Research attribution
+
+For Arrow research attribution, use [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).

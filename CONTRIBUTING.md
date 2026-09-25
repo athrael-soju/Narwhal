@@ -29,7 +29,13 @@ python3 -m venv .venv
 
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
 
-Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <branch>` when the branch needs a remote check. Release automation also dispatches it for release PRs. The suite runs `make check` on GitHub-hosted runners, the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
+`make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
+
+`make links` checks links and HTML targets in unfenced Markdown, heading anchors and canonical Narwhal URLs against the checkout. `make docs-build` builds the public site in strict mode and reports navigation, asset and rendering errors.
+
+Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <branch>` when the branch needs a remote check. Release automation also dispatches it for release PRs.
+
+The suite runs `make check` on GitHub-hosted runners. It runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 also builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
 
 The CI jobs use synthetic test inputs and a standard read-only GitHub token. For a narrower pass, `make test` runs the unit suite.
 
@@ -69,7 +75,7 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | Engine HTTP client, API dialects, KV connectors and attestation                    | `engines/`                                            |
 | Engine lifecycle, monitoring loop, persisted state, leases and failover            | `runtime/`                                            |
 | Calibration probes, cost-model fitting and profile storage                         | `profiling/`                                          |
-| Fleet preflight and exact-output canaries                                         | `diagnostics/`                                        |
+| Fleet preflight and KV transfer checks                                            | `diagnostics/`                                        |
 | Prometheus metrics and request journals                                            | `observability/`                                      |
 | Config models, JSON loading, validation and serialization                          | `config/`                                             |
 | Serving entry point, versioned document contracts, build identity and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
@@ -83,7 +89,7 @@ Because config models already import scheduling definitions and serving policy, 
 Within those packages:
 
 - `profiling/fitting.py` owns numerical fitting and cross-validation; `model.py` owns profile validation and capacity calculations; `store.py` owns persistence and fleet queries.
-- `engines/stream.py` decodes SSE events and validates token identity for serving, profiling and canaries. HTTP deadlines belong to `engines/client.py`; each consumer owns its timing and completion requirements.
+- `engines/stream.py` decodes SSE events and validates token identity for serving and profiling. HTTP deadlines belong to `engines/client.py`; each consumer owns its timing and completion requirements.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
 - `config/serialization.py` builds fleet documents for file output and CLI printing.
 - `observability/metrics.py` composes section renderers in a fixed order. Metric names, labels, histogram buckets and conditional emission are part of the metrics contract.
@@ -92,15 +98,13 @@ Runtime helpers take `NarwhalRouter` explicitly. Type injected HTTP transports a
 
 Use the installed `narwhal-*` commands in deployment scripts. `python -m narwhal.cli` also starts the router. Internal Python module paths may change between releases. Document schema identifiers such as `narwhal.state` name wire contracts.
 
+### Working files and deployment artifacts
+
 Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers and paper working files outside the tracked source tree. Profiling and preflight commands produce Narwhal-owned deployment evidence; the deployment load toolchain owns workload acceptance.
 
 Store local profiles, journals and run outputs under `runs/`, and use `config/fleet.json` or the ignored `config/fleet.*.json` pattern for working fleet configs. Keep live engine addresses and site paths in those ignored files or reference node URLs from the ignored `.env` through the documented endpoint syntax.
 
 Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
-
-`make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
-
-`make links` checks links and HTML targets in unfenced Markdown, heading anchors and canonical Narwhal URLs against the checkout. `make docs-build` builds the public site in strict mode and reports navigation, asset and rendering errors.
 
 ## Issues
 

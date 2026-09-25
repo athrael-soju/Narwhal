@@ -175,7 +175,15 @@ docker logs "$ENGINE_CONTAINER"
 
 Use the recorded container ID. Trace the failure to a device, model, memory, library, or transport input before creating another plan.
 
-If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, retain the failed evidence, rerun discovery from the corrected approved revision into fresh outputs, prepare a new deployment run, install engine 1 into the new checkout, and validate it before updating the rest. Compare old and new image IDs, model-config hashes, accelerator/TP allocations, runtime settings, and transport. A changed hardware, model, image, cache policy, route, or transport invalidates evidence for that gate.
+If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`:
+
+1. Retain the failed attempt's evidence.
+2. Rerun discovery from the corrected approved revision into fresh outputs.
+3. Prepare a new deployment run.
+4. Install engine 1 into the new checkout.
+5. Validate engine 1 before updating the rest.
+
+Compare old and new image IDs, model-config hashes, accelerator/TP allocations, runtime settings, and transport. A change to hardware, model, image, cache policy, route, or transport invalidates evidence for that gate.
 
 ## Prove the live HTTP process
 
@@ -223,7 +231,9 @@ print("Engine health, version, model, process identity and completion passed.")
 PY_ENGINE
 ```
 
-The probe binds the running endpoint to the checked image by verifying `/health`, exact `/version`, configured model, `process_start_time_seconds`, and one deterministic completion. Treat API-version mismatch first as endpoint ownership; compare the endpoint with the recorded image and container ID. Response captures are immutable, so use new filenames or a new launch directory after repair.
+The probe binds the running endpoint to the checked image by verifying `/health`, exact `/version`, configured model, `process_start_time_seconds`, and one deterministic completion.
+
+If the API version differs, first check which container owns the endpoint. Compare it with the recorded image and container ID. Response captures are immutable, so use new filenames or a new launch directory after repair.
 
 Leave each serving container running through the workload trial. During fabric qualification and profiling, reserve the engines for the probes so the measurements reflect these processes at idle load.
 

@@ -24,15 +24,10 @@ Narwhal buckets completed, failed, expired, and predictively refused requests by
 
 ### Unsized offers
 
-Inside:
+`demand_history.unsized` reports two counts:
 
-```text
-demand_history.unsized
-```
-
-`pending` counts request bodies still being read.
-
-`observations` counts retained offers that terminated before workload sizing.
+- `pending`: request bodies still being read.
+- `observations`: retained offers that terminated before workload sizing.
 
 ### Input-size repricing
 
@@ -70,8 +65,6 @@ Overflow in output history disables learned discounts until the affected observa
 
 A cohort crossing a window boundary contributes its complete count, adding at most one bucket of history.
 
-Consolidation evidence counts observations whose timestamps are known to fall after its cutoff.
-
 `demand_history` and the `narwhal_demand_history_*` metrics expose:
 
 - retained cells
@@ -95,16 +88,19 @@ Output-length estimates and decode correction are built once and reused across b
 
 ### Prefill recovery ratio
 
-With priced prefill waiters, Narwhal sets `recovery_prefill_ratio` to the larger of observed prefill pressure and resident-plus-queued prefill seconds divided by the current prefill engine count and TTFT SLO. For zero priced waiters, it uses observed prefill pressure.
-
-Incomplete-demand decisions expose:
+When `queued_prefill_s > 0` and at least one engine has the prefill role, Narwhal calculates:
 
 ```text
-recovery_prefill_ratio
-queued_prefill_s
+recovery_prefill_ratio = max(
+  observed prefill pressure,
+  (resident prefill seconds + queued prefill seconds)
+    / (current prefill engine count * TTFT SLO seconds)
+)
 ```
 
-along with both observed phase ratios.
+Otherwise, it uses observed prefill pressure.
+
+Incomplete-demand decisions expose `recovery_prefill_ratio` and `queued_prefill_s`, along with both observed phase ratios.
 
 Their `decision_basis` is one of:
 
@@ -127,6 +123,8 @@ Every move is constrained by:
 - physical KV limits
 
 ### Consolidation evidence
+
+Consolidation evidence counts observations whose timestamps are known to fall after its cutoff.
 
 `demand_evidence` exposes:
 
