@@ -83,11 +83,12 @@
       1,
       2
     ],
-    "decode_tokens": 32,
+    "decode_tokens": 128,
     "neighbour_prefill_rps": 0.5,
     "neighbour_decode_rps": 0.25,
     "neighbour_prefill_tokens": 512,
     "neighbour_decode_input_tokens": 128,
-    "neighbour_decode_output_tokens": 32
+    "neighbour_decode_output_tokens": 32,
+    "decode_repeats": 3
   }
 }
