@@ -156,6 +156,8 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 
 The check verifies custom-code requirements, immutable image identity, pinned package versions in a temporary container, connector resolution through `KVConnectorFactory`, tokenizer construction with the plan's `--trust-remote-code` setting, DS convolutional-state layout when required, the plan hash, and `vllm.version.__version__` as `vllm_api_version`. `image-check.log` retains the evidence. The temporary container exits after inspection.
 
+Set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` when the tokenizer lives separately from the model configuration. The check loads the final `--tokenizer` selection from the serving arguments and inspects its custom-code metadata in the selected runtime. Native paths resolve on the host; container paths resolve inside the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. The default tokenizer remains the model directory. A tokenizer load failure stops the check before it writes `checked.json`.
+
 A changed launcher requires a new prepared run so deployed snapshot and digest match the management checkout.
 
 Before start, inspect planned ports with `ss -ltnp`, then:

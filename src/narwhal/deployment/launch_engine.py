@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -109,7 +110,7 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def requires_remote_code(model_dir: Path) -> bool:
+def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> bool:
     def has_auto_map(value: object) -> bool:
         if isinstance(value, dict):
             return bool(value.get("auto_map")) or any(has_auto_map(item) for item in value.values())
@@ -117,7 +118,8 @@ def requires_remote_code(model_dir: Path) -> bool:
             return any(has_auto_map(item) for item in value)
         return False
 
-    for name in ("config.json", "tokenizer_config.json"):
+    names = ("config.json", "tokenizer_config.json") if include_tokenizer else ("config.json",)
+    for name in names:
         path = model_dir / name
         if path.is_file() and has_auto_map(json.loads(path.read_text())):
             return True
@@ -426,7 +428,18 @@ def check(run: Path, plan: dict) -> None:
     """Check the pinned runtime, connector and tokenizer for the selected backend."""
     native = plan.get("backend") == "native"
     env_file = "engine.env" if native else "container.env"
-    if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
+    default_tokenizer = plan["model_dir"] if native else "/model"
+    tokenizer_path = default_tokenizer
+    for index, argument in enumerate(plan["args"]):
+        if argument == "--tokenizer":
+            tokenizer_path = plan["args"][index + 1]
+    trust_remote_code = "--trust-remote-code" in plan["args"]
+    if (
+        requires_remote_code(
+            Path(plan["model_dir"]), include_tokenizer=tokenizer_path == default_tokenizer
+        )
+        and not trust_remote_code
+    ):
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
     if (
@@ -452,7 +465,11 @@ def check(run: Path, plan: dict) -> None:
             matches = expected in inspection.get("RepoDigests", [])
         if not matches:
             raise ValueError("local image identity differs from the launch plan")
-    script = """import importlib.metadata as m, json
+    # Resolve tokenizer metadata in the serving namespace, including image-local paths.
+    script = (
+        "from pathlib import Path\n"
+        + inspect.getsource(requires_remote_code)
+        + """import importlib.metadata as m, json
 expected = json.loads(__import__('sys').argv[1])
 observed = {name: m.version(name) for name in expected}
 print(json.dumps(observed))
@@ -466,9 +483,13 @@ connector = KVConnectorFactory.get_connector_class(config)
 if json.loads(__import__('sys').argv[4]):
     from vllm.model_executor.layers.mamba.mamba_utils import get_conv_state_layout
     assert get_conv_state_layout() == 'DS', 'NIXL convolutional state requires DS layout'
+tokenizer_path = __import__('sys').argv[5]
+trust_remote_code = json.loads(__import__('sys').argv[3])
+if requires_remote_code(Path(tokenizer_path)) and not trust_remote_code:
+    raise ValueError('Tokenizer metadata requires --trust-remote-code in the launch record')
 tokenizer = AutoTokenizer.from_pretrained(
-    __import__('sys').argv[5],
-    trust_remote_code=json.loads(__import__('sys').argv[3]),
+    tokenizer_path,
+    trust_remote_code=trust_remote_code,
     local_files_only=True
 )
 assert tokenizer is not None, 'checkpoint tokenizer did not initialise'
@@ -476,14 +497,15 @@ print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__})
 print('NARWHAL_TOKENIZER_READY=1')
 print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
+    )
     arguments = [
         "-c",
         script,
         json.dumps(plan["expected_packages"]),
         json.dumps(plan["connector"]),
-        json.dumps("--trust-remote-code" in plan["args"]),
+        json.dumps(trust_remote_code),
         json.dumps(ds_required),
-        plan["model_dir"] if native else "/model",
+        tokenizer_path,
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
