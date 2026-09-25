@@ -1,7 +1,5 @@
 # `narwhal`
 
-`narwhal --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
-
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on
 Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a
 selected NVIDIA GPU and targets 8 GB of VRAM or less. The optional
@@ -11,8 +9,8 @@ budget; `gpu.product` pins a model of card when a recipe requires one.
 
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
-The installed template configures one prefill and one decode engine on the
-selected GPU. Repeating `init` preserves the existing files and operator edits,
+The installed template assigns one prefill and one decode role. Repeating
+`init` preserves the existing files and operator edits,
 returning `status: reused` when explicitly supplied settings match the saved
 instance. Omitted settings retain their saved values. Conflicting flags exit
 2 and name the settings that differ. To change initialization settings,
@@ -62,13 +60,14 @@ narwhal dev down
 
 | Flag | Default | Operation |
 | --- | --- | --- |
+| `--version` | Root command | Run as `narwhal --version` to print the installed distribution version. |
 | `--instance` | `runs/dev` | Select the private instance for any subcommand. |
 | `--template` | Installed small-GPU template | Supply versioned model, tokenizer, runtime, profiling and memory settings to `init`. |
 | `--model` | Pinned Hugging Face cache file | Select the GGUF file matching the template checksum. |
 | `--model-dir` | Pinned tokenizer cache directory | Select tokenizer and configuration files. |
 | `--gpu` | Single discovered GPU | Select a physical GPU UUID. |
 | `--engine-count` | Template value, two | Allocate independent engine processes. |
-| `--port-base` | Template ports: router 18000, engine 18101, attestation 18201, NIXL 5701 | Set the router TCP port; engine HTTP, attestation and NIXL ranges start at offsets 1, 101 and 201. All selected ports must be distinct and fit 1..65535. |
+| `--port-base` | Template ports: router 18000, engine 18101, attestation 18201, NIXL 5701 | `--port-base P` sets the router port to `P`, engine HTTP start to `P+1`, attestation start to `P+101` and NIXL start to `P+201`. All selected ports must be distinct and fit 1..65535. |
 | `--gpu-memory-utilization` | Template value, 0.35 | Finite per-engine fraction of total GPU memory, greater than zero and at most 1. |
 | `--device-allowance` | Template value, 0.8 | Finite fraction of total GPU memory, at most 1; bounds the sum of engine fractions and the aggregate observed startup memory increase. |
 | `--interface` | `"eth0"` | Select the local NIXL/UCX interface. |

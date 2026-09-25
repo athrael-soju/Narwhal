@@ -1,7 +1,5 @@
 # `narwhal-profile`
 
-`narwhal-profile --version` prints the distribution name and version from the executable's Python environment, then exits with status 0. [Installation](../Install-from-PyPI.md) covers version reporting from a source checkout.
-
 `narwhal-profile --fleet PATH` measures live engines into the fleet's `profiles.path`, refits TTFT from retained samples, or merges separately measured role mixes. Every mode writes a profile store and a sidecar at the same path with its suffix replaced by `.samples.json`.
 
 Live sweeps bind each fit to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when `engine_contract` is configured, or to the live process identity otherwise, and retain that evidence with the raw observations in the `.samples.json` sidecar.
@@ -12,6 +10,7 @@ Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and 
 
 | Option                 | Default     | Contract                                                                                                                                                                |
 | ---------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--version`            |             | Print the installed distribution version. |
 | `--fleet PATH`         | required    | Fleet config JSON; defines engine membership for all three modes. |
 | `--only IID`           | all engines | Repeatable engine selector for live sweeps. |
 | `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining decode fits. Requires `--out` and samples covering every fleet engine; exclusive with `--only` and `--merge`. |

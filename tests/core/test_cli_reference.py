@@ -75,7 +75,7 @@ class CliReferenceTests(unittest.TestCase):
                             options.add(option)
                 reference = (ROOT / "docs/cli" / REFERENCES[command]).read_text()
                 documented = set(re.findall(r"^\|\s*`(--[\w-]+)[ `]", reference, re.MULTILINE))
-                self.assertEqual(options, documented, command)
+                self.assertEqual(options, documented - {"--version"}, command)
                 if "--version" in parser._option_string_actions:
                     self.assertIn("--version", reference)
 
