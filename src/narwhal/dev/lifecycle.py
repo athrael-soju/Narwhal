@@ -133,7 +133,8 @@ def _busy(root: Path) -> bool:
 
 
 def _run(root: Path, module: str, args: list[str], log: str) -> None:
-    command = [sys.executable, "-m", module, *args]
+    # Preserve write order so buffered progress cannot follow the final diagnostic.
+    command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
     with (root / f"{log}.log").open("w") as output:
         result = subprocess.run(  # noqa: S603 - installed modules and explicit argv

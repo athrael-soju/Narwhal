@@ -659,6 +659,47 @@ class DevTests(unittest.TestCase):
             self.assertNotEqual(state["verification"], str(evidence))
             self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
 
+    def test_subprocess_failure_retains_diagnostic_after_progress(self):
+        run = self.launched_instance()
+        profile = run / "profiles.json"
+        profile.write_text("{")
+        (self.parent / "preflight_failure.py").write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "print('profile')\n"
+            "try:\n"
+            "    json.loads(Path(sys.argv[1]).read_text())\n"
+            "except ValueError as error:\n"
+            "    print(f'narwhal-check: profile {sys.argv[1]}: {error}', file=sys.stderr)\n"
+            "    sys.exit(2)\n"
+        )
+        invoke = lifecycle._run
+
+        def preflight(root, module, args, log):
+            invoke(root, "preflight_failure", [str(profile)], log)
+
+        with (
+            patch.dict(os.environ, {"PYTHONPATH": str(self.parent), "PYTHONUNBUFFERED": ""}),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run", side_effect=preflight),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
+        self.assertEqual(stdout.getvalue(), "")
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["phase"], "degraded")
+        failure = state["verification_failure"]
+        evidence = Path(failure["evidence"])
+        log = evidence / "preflight.log"
+        lines = log.read_text().splitlines()
+        self.assertEqual(lines[0], "profile")
+        self.assertIn("Expecting property name enclosed in double quotes", lines[-1])
+        for detail in ("preflight exited 2", str(profile), lines[-1], str(log)):
+            self.assertIn(detail, failure["reason"])
+            self.assertIn(detail, stderr.getvalue())
+        self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+
     def test_completed_teardown_resolves_failed_verification(self):
         run = self.launched_instance()
         state = lifecycle.read(self.root / "lifecycle.json")
