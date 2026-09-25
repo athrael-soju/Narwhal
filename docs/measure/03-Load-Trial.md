@@ -51,6 +51,17 @@ Each run manifest records:
 * httpx version;
 * selected limits.
 
+Before each measured run, the helper:
+
+1. waits for empty router admission queues and zero resident work;
+2. sends one unscored warmup request using the complete workload shape;
+3. drains the fleet again;
+4. schedules all 200 offers independently of response completion.
+
+The helper allows 64 concurrent requests and 50 ms scheduling lag by default; exceeding either limit records a terminal `client_schedule_miss` and marks `client_schedule_valid: false`. The client sends each offer once and keeps HTTP refusals, stream errors, and timeouts in the 200-offer denominator.
+
+Use CPU, memory, network, and scheduling measurements to establish client saturation before raising its limits.
+
 ## 8. Measure 0.5 request/s
 
 Run:
@@ -74,7 +85,7 @@ Interpret the helper exit code as follows:
 | Exit  | Meaning                                                             | Required action                                                                                                                                                                                                                                                                        |
 | ----- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`   | Schedule validity and candidate attainment both passed              | Drain the router, then continue to the next rate                                                                                                                                                                                                                                       |
-| `2`   | Candidate attainment or client scheduling missed                    | Inspect `client_schedule_valid` in `summary.json`. A scheduled run with latency misses or HTTP refusals measures that rate. For missed client starts, inspect `requests.jsonl`, repair scheduling, and repeat the rate                                                     |
+| `2`   | Candidate attainment or client scheduling missed                    | Inspect `client_schedule_valid` in `summary.json`. If true, the rate missed the target: retain the result and end the sweep. If false, inspect `requests.jsonl`, repair client scheduling, and repeat the rate. |
 | `1`   | The helper reported a blocking error                                | Diagnose the reported failure and retained artefacts before retrying                                                                                                                                                                                                                   |
 | `130` | The run was interrupted and partial artefacts were preserved        | Inspect the partial record before retrying                                                                                                                                                                                                                                             |
 
@@ -93,16 +104,5 @@ After the router has fully drained:
   --attainment 0.95 \
   --out "$TRIAL_DIR/rate-1"
 ```
-
-Before each measured run, the helper:
-
-1. waits for empty router admission queues and zero resident work;
-2. sends one unscored warmup request using the complete workload shape;
-3. drains the fleet again;
-4. schedules all 200 offers independently of response completion.
-
-The helper allows 64 concurrent requests and 50 ms scheduling lag by default; exceeding either limit records a terminal `client_schedule_miss` and marks `client_schedule_valid: false`. The client sends each offer once and keeps HTTP refusals, stream errors, and timeouts in the 200-offer denominator.
-
-Use CPU, memory, network, and scheduling measurements to establish client saturation before raising its limits.
 
 Continue with [client and router reconciliation](04-Reconcile-and-Accept.md).

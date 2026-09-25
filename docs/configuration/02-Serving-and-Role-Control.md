@@ -40,13 +40,7 @@ The loader rejects admission overrides above `serving.max_connections`, keeping 
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size, enforced while reading.                                                                                                                                                         |
 | `serving.max_response_bytes`  | `16777216` | Maximum retained bytes for each non-streaming attempt and the streaming pre-output metadata buffer.                                                                                                             |
 
-While Narwhal is reading request bodies, waiting for admission, or writing responses, it retains at most:
-
-```text
-serving.max_connections + serving.queue_capacity
-```
-
-completion requests.
+While Narwhal is reading request bodies, waiting for admission, or writing responses, it retains at most `serving.max_connections + serving.queue_capacity` completion requests.
 
 Reaching this ceiling returns HTTP 429 before body parsing. The request is recorded as an unsized offer.
 
@@ -90,13 +84,7 @@ Prefill failures and non-streaming decode failures return HTTP errors.
 
 Streaming responses commit HTTP 200 before decode starts. A later decode failure is therefore reported as a terminal stream error event, including a failure that occurs before the first generated token.
 
-When the overall request deadline expires, Narwhal emits:
-
-```text
-code: expired
-```
-
-and closes the stream.
+When the overall request deadline expires, Narwhal emits `code: expired` and closes the stream.
 
 Client backpressure closes the connection immediately.
 
@@ -149,11 +137,11 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
 | `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                               |
 
-Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range.
+Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range. Collect those timings with [instrumented direct-engine probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline); `narwhal-check` validates transfers using the configured timeout but does not record a latency distribution.
 
 `serving.request_timeout_s` bounds the entire request, including decode streaming.
 
-`engine.first_token_timeout_s` starts when the decode HTTP stream opens and ends when the first generated token arrives.
+`engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends when the first generated token arrives, so connection and response-header delays consume the same budget.
 
 After the first token, `engine.decode_read_timeout_s` bounds the silent gap between transport chunks. Partial SSE lines and metadata chunks reset that timer.
 
@@ -207,7 +195,9 @@ Prefill load is:
 predicted prefill work / TTFT target
 ```
 
-Decode load uses the observed token interval above the corrected idle floor, divided by the remaining TPOT budget.
+The corrected idle floor is the profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields), multiplied by the engine's bounded ratio of live to profiled decode latency. The remaining TPOT budget is the TPOT target minus this floor.
+
+Decode load divides the observed token interval above the floor by that remaining budget, with a minimum load of zero.
 
 If the idle floor itself reaches the TPOT target, Narwhal uses the raw interval-to-target ratio.
 
@@ -249,7 +239,7 @@ Engine restart and operator drain mark the engine unavailable.
 
 ### 7.4 Advisory rollout
 
-Run:
+Run Narwhal against recorded traffic with advisory mode enabled before allowing production role movement:
 
 ```json
 {
@@ -258,8 +248,6 @@ Run:
   }
 }
 ```
-
-against recorded traffic before enabling production role movement.
 
 `/narwhal/state` and Prometheus expose proposed prefill/decode counts, caller, reason, and result.
 
@@ -287,13 +275,13 @@ max(
 
 This rule also applies when demand evidence is complete.
 
-Any change in:
+Any change to the following resets the confirmation sequence:
 
 - proposed split
 - demand completeness
 - eligibility rule
 
-resets the confirmation sequence. A failed eligibility check clears the candidate.
+A failed eligibility check clears the candidate.
 
 Prefill-to-decode moves require prefill pressure at or below `shrink` and obey the decode cooldown.
 
@@ -310,7 +298,11 @@ The window closes when either condition is met:
 
 Decode demand must also be stable.
 
-Consolidation pauses when the short-horizon estimate exceeds the long-horizon estimate by more than `controller.reactive.demand_rise_tolerance`.
+Once the short horizon contains at least `controller.reactive.evidence_min_arrivals` samples, consolidation pauses when:
+
+```text
+short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_rise_tolerance)
+```
 
 Candidate pricing uses the larger demand estimate and includes resident plus pending decode work.
 
@@ -345,12 +337,6 @@ State and metrics expose:
 | `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on live/profile decode correction. At least the minimum.                                                                                                         |
 | `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction. Range `(0, 1]`.                                                                                    |
 | `controller.reactive.decode_correction_min_samples` | `8`     | Required decode gaps before a window updates the correction. At least 1.                                                                                                     |
-
-Consolidation is blocked when short-horizon demand exceeds long-horizon demand by more than:
-
-```text
-1 + controller.reactive.demand_rise_tolerance
-```
 
 Demand pricing uses the mean profile across configured engines.
 

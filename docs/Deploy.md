@@ -1,6 +1,6 @@
 # Narwhal fleet deployment runbook
 
-Discovery records the hardware, model, and launch inputs before installation places the approved revision on each host. Start every engine from its checked plan, capture its live cache, and measure the directed fabric paths while traffic is idle. Attest and profile those processes, then start the router after preflight passes.
+Discovery records the hardware, model, and launch inputs before installation places the approved revision on each host. Start every engine from its checked plan, capture its live cache, and measure the directed fabric paths while traffic is idle. [Attest](deploy/05-Attest.md) and profile those processes, then start the router after preflight passes.
 
 Prometheus and Grafana run on the router host for the initial trial.
 
@@ -61,7 +61,7 @@ Repeat work when its measured input changes:
 | Offered rate or request count within the profiled workload range | Run the next trial point after router drain. Keep the engine profiles, fabric samples, and full preflight. |
 | SLO or first-token deadline | `narwhal-check` tests the revised limits against saved profiles and live handoffs before the router loads the edited fleet. |
 | Router restart with the same fleet document | Narwhal matches each saved profile to its live engine generation before the restarted router accepts traffic. |
-| Engine process with the same launch plan | Capture its live cache and attestation, profile the new generation, and run full preflight. Recalculate its fabric budget when the captured geometry changes. |
+| Engine restart with the same launch plan | Capture its live cache and attestation, profile the new generation, and run full preflight. Recalculate its fabric budget when the captured geometry changes. |
 | Fabric route, host assignment, or transport | Measure the affected directed links against the source budget, then exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index

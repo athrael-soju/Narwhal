@@ -18,7 +18,7 @@ http://10.0.0.11:8010/v1/attestation
 
 Use the ports actually configured by engine deployment.
 
-For generated deployment inputs, provide:
+For generated deployment inputs, provide these values in `.env`:
 
 ```text
 NARWHAL_FABRIC_INTERFACE
@@ -26,15 +26,7 @@ NARWHAL_ENGINE_PORT
 NARWHAL_ATTEST_PORT
 ```
 
-in `.env`.
-
-Discovery reads the chosen interface on each engine host and writes its unique global address as:
-
-```text
-NARWHAL_NODE_<n>_IP
-```
-
-into `config/deployment.env`.
+Discovery reads the chosen interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `config/deployment.env`.
 
 It derives engine and attestation URLs from that address and uses IPv6 host brackets where required.
 
@@ -114,28 +106,13 @@ To change GPU allocation or runtime policy, change the corresponding `.env` poli
 
 `prepare` validates every assigned engine record before it creates the output directory.
 
-It derives:
-
-- GPU visibility
-- `UCX_NET_DEVICES`
-
-under `environment`, and writes:
-
-```text
---tensor-parallel-size
-```
-
-under `vllm_args`.
+It derives GPU visibility and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
 
 `install` copies the selected launch record into the engine checkout's `config/` directory. The role environment points to that file.
 
 The delivered launcher combines these recorded arguments and device mappings with runtime fields, then records the complete container command.
 
-Launch records and their supporting extracts remain private in ignored mode-0600:
-
-```text
-config/engine-launch.*.json
-```
+Launch records and their supporting extracts use mode `0600` and remain in Git-ignored files matching `config/engine-launch.*.json`.
 
 Keep real allocation and runtime evidence in private files.
 
@@ -206,13 +183,7 @@ Before model startup, the image check:
 5. constructs the checkpoint tokenizer,
 6. checks the pinned image's convolutional-state layout for SSM models.
 
-The check records:
-
-```text
-vllm.version.__version__
-```
-
-as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID.
+The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID.
 
 The HTTP probe compares `/version` with that captured value.
 

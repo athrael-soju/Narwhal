@@ -13,7 +13,7 @@
 | Admission queue is full                                                      | `429` | `Retry-After: 1`                                                 |
 | Admission wait expires before response headers                               | `504` | Terminal expiry                                                  |
 | Original request deadline expires before response headers                    | `504` | Terminal expiry                                                  |
-| Predictive admission prices queued work above the TTFT budget                | `429` | `Retry-After` contains the rounded queue overrun                 |
+| Predictive admission projects total TTFT above the budget although the prompt alone fits | `429` | `Retry-After` contains the rounded budget overrun, at least 1 s   |
 | Prompt alone exceeds the TTFT budget                                         | `429` | Error envelope; shorten the prompt or raise the target           |
 | Scheduler finds zero placement-eligible engines                              | `503` | `backend_unavailable`, `Retry-After: 1`                          |
 | Router is standby, fenced, in whole-wave maintenance, or monitoring-degraded | `503` | Retryable refusal, `Retry-After: 1`; `/ready` reports the reason |

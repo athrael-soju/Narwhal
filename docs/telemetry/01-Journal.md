@@ -25,7 +25,7 @@ Narwhal closes each original completion request with one terminal row, attaching
 | `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
 | `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
 | `token_accounting`                           | Decode-output accounting mode. `token_ids` provides exact per-token identity; every other dialect reports `unavailable`.                                              |
-| `refused`, `refused_cause`                   | Predictive refusal state and the priced cause.                                                                                                                        |
+| `refused`, `refused_cause`                   | Predictive refusal flag and reason: `prompt` (prompt alone exceeds the TTFT budget), `queue` (total predicted TTFT exceeds the budget although the prompt alone fits), or `aggregate_unpriced` (no calibrated aggregate prefill price). See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
 | `cancelled`, `cancelled_phase`               | Client disconnect and the phase in which it occurred: `admission`, `queue`, `backoff`, `prefill`, or `decode`.                                                        |
 | `terminal`                                   | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.                                                              |
 | `input_sized`                                | Whether local input sizing completed. When false, the body terminated before sizing and `input_len: 0` records that early exit.                                       |
@@ -52,7 +52,7 @@ Narwhal retains at most `serving.max_attempts` failure entries and caps messages
 
 ### Attainment accounting
 
-Journal attainment scores completed requests alongside these missed terminal outcomes:
+SLO attainment measures how often requests meet their [TTFT and TPOT targets](../configuration/01-Fleet-Schema.md#2-minimal-fleet-definition). When scoring journal records, include completed requests and count these terminal outcomes as misses:
 
 - invalid requests;
 - capacity rejections;

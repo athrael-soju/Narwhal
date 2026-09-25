@@ -29,17 +29,9 @@ Load `.env` and `config/deployment.env` before reusing saved discovery inputs.
 
 Engine inspection in [Deploy](../deploy/03-Validate-Engines.md#inspect-every-engine-host) checks current host, image, and model configuration before launch.
 
-Prepared workstation files live under ignored:
+Prepared workstation files live in the Git-ignored `runs/deployment-env/` directory.
 
-```text
-runs/deployment-env/
-```
-
-Remote role environments and the effective fleet live under ignored:
-
-```text
-runs/deployment/
-```
+Remote role environments and the effective fleet live in the Git-ignored `runs/deployment/` directory.
 
 ### 12.1 Source revision and deployment bundle
 
@@ -100,19 +92,7 @@ NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json
 
 Per-node overrides insert `NODE_<n>_` after `NARWHAL_`.
 
-For example:
-
-```text
-NARWHAL_NODE_2_ENGINE_PORT
-```
-
-becomes:
-
-```text
-NARWHAL_ENGINE_PORT
-```
-
-inside `.env.engine-2`.
+For example, `NARWHAL_NODE_2_ENGINE_PORT` becomes `NARWHAL_ENGINE_PORT` inside `.env.engine-2`.
 
 An empty override for a required field is an error against that field.
 
@@ -124,23 +104,15 @@ Management destinations, passwords, SSH identities, and host keys remain in the 
 
 ### 12.3 Profiling limits
 
-Deployment preparation writes:
-
-```text
-profiling-limits.json
-```
-
-beside the router's effective fleet.
+Deployment preparation writes `profiling-limits.json` beside the router's effective fleet.
 
 Each engine limit comes from the generated launch record's `--max-num-seqs`.
 
-Run profiling with:
+Run profiling with the generated limits to bind decode cohorts to those launch settings:
 
 ```bash
 narwhal-profile --limits runs/deployment/profiling-limits.json
 ```
-
-to bind decode cohorts to those launch settings.
 
 ### 12.4 Role shells
 
@@ -164,12 +136,7 @@ A host serving both router and engine roles keeps both files in one checkout. Ea
 config/hosts.local.json
 ```
 
-Discovery groups identical values of:
-
-- `NARWHAL_NODE_<n>_SSH`
-- `NARWHAL_ROUTER_SSH`
-
-into a single physical-host record.
+Discovery groups roles with identical `NARWHAL_NODE_<n>_SSH` or `NARWHAL_ROUTER_SSH` destinations into a single physical-host record.
 
 Each `hosts` entry contains:
 
@@ -194,13 +161,13 @@ All roles on one physical host share that host's access record.
 
 ### 13.1 Inventory validation
 
-Run:
+Run the inventory validation command:
 
 ```bash
 tools/deployment/deploy_hosts.py plan
 ```
 
-to validate:
+It checks:
 
 - unique host IDs
 - unique role ownership

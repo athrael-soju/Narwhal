@@ -27,7 +27,7 @@ status: degraded
 reason: no available engines
 ```
 
-New completion requests receive a retryable:
+New completion requests receive a retryable error:
 
 ```text
 backend_unavailable
@@ -41,21 +41,21 @@ A whole-wave lifecycle hold places the router in:
 status: maintenance
 ```
 
-The status includes the lifecycle reason. Completion requests receive:
+The status includes the lifecycle reason. Completion requests receive HTTP 503 with error code:
 
 ```text
 standby
 ```
 
-at HTTP 503.
+A whole-wave hold pauses background monitoring until readmission.
 
 ### Temporary holds
 
 Performance-drift and temporary-quarantine holds retain the last eligible engine in service. Failed health or inference probes may still exclude that engine.
 
-During backend outages and managed maintenance, the router retains control.
+### Router control and replacement
 
-A whole-wave hold pauses background monitoring until readmission.
+During backend outages and managed maintenance, the router retains control.
 
 Standby routers use `control_ready` to copy the current handoff state.
 

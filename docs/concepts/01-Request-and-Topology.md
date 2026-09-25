@@ -11,38 +11,38 @@ Each engine implements the same runtime contract:
 - pass preflight validation before entering service;
 - pass lifecycle readmission checks after a hold, drain, failure, or maintenance event.
 
-For vLLM engines with effective `kv_both` behaviour, an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
+For vLLM engines with effective [`kv_both` behaviour](../deploy/05-Attest.md#capture-attestation-inputs), an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
 
 ## How a request executes
 
-1. **Admission**
-   The router receives the request and assigns one of the available serving seats.
+1. **Admission:**
+    The router receives the request and assigns an available serving seat: one slot under its [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission).
 
-   When all seats are occupied, the request enters a bounded FIFO and keeps its original deadline. Once the FIFO reaches its configured limit, Narwhal returns a retryable refusal.
+    When all seats are occupied, the request enters a bounded FIFO and keeps its original deadline. Once the FIFO reaches its configured limit, Narwhal returns a retryable refusal.
 
-2. **Prefill pricing**
-   Narwhal counts prompt tokens and evaluates eligible prefill engines using their measured performance curves and current resident work.
+2. **Prefill pricing:**
+    Narwhal counts prompt tokens and evaluates eligible prefill engines using their measured performance curves and current resident work.
 
-3. **Predictive admission**
-   Before dispatch, Narwhal can reject a request whose cheapest available prefill path projects TTFT beyond the request budget.
+3. **Predictive admission:**
+    Before dispatch, Narwhal can reject a request whose cheapest available prefill path projects TTFT beyond the request budget.
 
-4. **Prefill**
-   The selected engine processes the prompt and returns a typed KV handoff owned by the producer.
+4. **Prefill:**
+    The selected engine processes the prompt and returns a typed KV handoff owned by the producer.
 
-5. **Decode placement**
-   Narwhal selects a decode engine. Decode may remain on the prefill engine or consume the KV handoff on another eligible engine.
+5. **Decode placement:**
+    Narwhal selects a decode engine. Decode may remain on the prefill engine or consume the KV handoff on another eligible engine.
 
-6. **Streaming**
-   Decode tokens stream to the client while Narwhal tracks token timing and resident work.
+6. **Streaming:**
+    Decode tokens stream to the client while Narwhal tracks token timing and resident work.
 
-7. **Journal**
-   The request journal records admission, placement, retries, transfer activity, timing, and final outcome.
+7. **Journal:**
+    The request journal records admission, placement, retries, transfer activity, timing, and final outcome.
 
 Every retry obtains fresh KV ownership.
 
 ## Fleet topology
 
-| Topology             | Role assignment                                               | Cost of changing the split                                                                    |
+| Topology             | Role assignment                                               | Operational implications                                                                      |
 | -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Aggregated           | Every engine executes prefill and decode with local KV        | Long prefills occupy the same scheduler as decode batches                                    |
 | Static disaggregated | Separate fixed prefill and decode pools                       | Operator must manually change pool membership                                                 |
