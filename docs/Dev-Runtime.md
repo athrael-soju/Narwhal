@@ -121,6 +121,12 @@ growth, and longer outputs to exercise decode growth. The controller prices
 each move from the profiles and resident work. The 4,096-token engine context
 limit bounds input plus output.
 
+The reference uses a 1-second TTFT budget and a 125-ms TPOT budget. Narwhal
+samples engines every 100 ms and evaluates role changes every 250 ms, using
+a 30-second demand window and three confirmations for ordinary moves. After
+`verify`, fill one demand window with representative traffic before
+assessing role changes.
+
 Keep four engines for the default RTX 5090 setup. Changing engine count,
 model, context length or memory fractions requires a matching template and
 a fresh `up` and `verify` cycle. Export the installed reference to edit it:
