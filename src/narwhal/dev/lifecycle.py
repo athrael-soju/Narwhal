@@ -278,6 +278,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],
+            f"NARWHAL_NODE_{number}_ATTESTATION_URL": engine["attestation_url"],
             "NARWHAL_ENGINE_MODEL_NAME": fleet["model"],
             "NARWHAL_ENGINE_API_KEY": engine_key or "",
             "NARWHAL_DEPLOYMENT_REVISION": digest(root / "template.json"),

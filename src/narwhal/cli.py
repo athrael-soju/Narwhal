@@ -8,10 +8,10 @@ import math
 import socket
 import sys
 
-import httpx
 import uvicorn
 
 from .config import FleetConfig
+from .runtime.listeners import check_http_bind
 from .serving.app import create_app
 
 # Map uvicorn's trace level to logging's DEBUG.
@@ -120,9 +120,9 @@ def serve(argv: list[str] | None = None) -> int:
     # httpx emits one INFO line per engine leg. Keep it only for debug runs.
     if LOG_LEVELS[args.log_level] != "DEBUG":
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    if (holder := _port_in_use(args.port)) is not None:
+    if (error := _port_in_use(args.port, args.host)) is not None:
         print(
-            f"Port {args.port} is already in use ({holder}).",
+            f"Cannot bind {args.host}:{args.port}: {error}",
             file=sys.stderr,
         )
         return 2
@@ -190,23 +190,12 @@ def serve(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _port_in_use(port: int) -> str | None:
-    """Describe the process listening on `port`, or return None."""
-    for family, addr in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
-        with socket.socket(family, socket.SOCK_STREAM) as s:
-            s.settimeout(1.0)
-            try:
-                s.connect((addr, port))
-            except OSError:
-                continue
-        try:
-            r = httpx.get(
-                f"http://[{addr}]:{port}/health" if ":" in addr else f"http://{addr}:{port}/health",
-                timeout=2.0,
-            )
-            return f"answering /health with {r.text[:60]}"
-        except httpx.HTTPError:
-            return "accepting connections"
+def _port_in_use(port: int, host: str = "127.0.0.1") -> str | None:
+    """Return the configured listener's bind failure, or None when it binds."""
+    try:
+        check_http_bind(host, port)
+    except OSError as error:
+        return str(error)
     return None
 
 

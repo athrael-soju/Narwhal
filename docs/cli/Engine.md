@@ -22,6 +22,8 @@ The container backend records each container ID, Linux PID, image ID and serving
 
 The native backend records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision and arguments. A failed invocation terminates its current process and stops previously ready process groups using their recorded identities. The failing engine's `shared-start.json` retains its startup cause, cleanup errors and post-cleanup GPU reading; `native-stop.json` records successful stops of previously ready engines.
 
+Native port checks bind the HTTP endpoint from `launch.json` and the NIXL address from `engine.env`, preserving vLLM's kernel IPv6 default and NIXL's dual-stack bind. Supply `NARWHAL_NODE_<n>_ATTESTATION_URL` at preparation or shared startup to check the sidecar's configured address through Uvicorn's event loop; the startup environment takes precedence over the prepared URL. `narwhal-dev` supplies the URL from the instance fleet. Each process binds again at startup to detect an address claimed after the check.
+
 `native-capture` applies the recorded engine environment to Narwhal's model, cache, NIXL and handshake checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` verifies the recorded process identity and waits for owned workers through group-leader exit, escalating survivors to SIGKILL.
 
 When starting engines through Windows OpenSSH, keep a WSL terminal open for

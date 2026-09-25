@@ -41,10 +41,12 @@ class EngineLauncherTests(unittest.TestCase):
             _, env = launcher_inputs(root)
             env.pop("NARWHAL_ENGINE_IMAGE")
             env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            env["NARWHAL_NODE_1_ATTESTATION_URL"] = "http://192.0.2.12:8010/v1/attestation"
             run = root / "launch"
             prepare(run, env, backend="native")
             plan = load(run)
             self.assertEqual(plan["backend"], "native")
+            self.assertEqual(plan["attestation_url"], env["NARWHAL_NODE_1_ATTESTATION_URL"])
             model_arg = plan["args"][plan["args"].index("--model") + 1]
             self.assertEqual(model_arg, env["NARWHAL_MODEL_DIR"])
             self.assertEqual(plan["connector"]["kv_connector"], "NixlConnector")

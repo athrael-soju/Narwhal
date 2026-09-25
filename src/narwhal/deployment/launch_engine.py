@@ -337,6 +337,8 @@ def build(
             model_revision=model_revision,
             python_executable=sys.executable,
         )
+        if attestation_url := env.get(f"NARWHAL_NODE_{node}_ATTESTATION_URL"):
+            plan["attestation_url"] = attestation_url
     return plan, values
 
 
