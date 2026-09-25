@@ -159,6 +159,41 @@ class DevTests(unittest.TestCase):
         merged = [merge_args[i + 1] for i, arg in enumerate(merge_args) if arg == "--merge"]
         self.assertEqual(set(merged), {str(run / f"profiles-{p}p{4 - p}d.json") for p in (1, 2, 3)})
 
+    def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
+        self.initialize()
+        with (
+            patch.object(lifecycle, "check_plugin"),
+            patch.object(lifecycle, "_check_free_ports"),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle.native_engine, "start_shared"),
+            patch.object(lifecycle, "finalize_fleet"),
+            patch.object(lifecycle, "_spawn", return_value={"identity": {}}),
+            patch.object(lifecycle, "_wait"),
+            patch.object(lifecycle, "_run") as command,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(io.StringIO()) as progress,
+        ):
+            self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 0)
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["status"], "launched")
+        self.assertEqual(Path(result["run"]).parent, self.root)
+        self.assertEqual(result["router"], lifecycle.instance(self.root)["router_url"])
+        self.assertEqual(
+            progress.getvalue().splitlines(),
+            [
+                f"Prepared engine-{number}; review launch.json and run the native runtime check."
+                for number in (1, 2, 3, 4)
+            ]
+            + [f"profiling {prefill} prefill / {4 - prefill} decode" for prefill in (1, 2, 3)],
+        )
+        self.assertEqual(
+            [call.args[3] for call in command.call_args_list],
+            [f"engine-{number}" for number in (1, 2, 3, 4)]
+            + [f"attest-{number}" for number in (1, 2, 3, 4)]
+            + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
+        )
+
     def test_reference_sweep_fits_engine_context_and_concurrency(self):
         profile = self.spec["profile"]
         sweep = Sweep(

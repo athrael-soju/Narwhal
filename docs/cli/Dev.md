@@ -32,7 +32,12 @@ SIGKILL. Successful teardown reports `stopped`; a subsequent `up` creates
 another run directory with fresh profiles. Earlier logs and measurements
 stay beside it.
 
-Lifecycle commands exit 0 for `initialized`, `reused`, `starting`, `launched`, `ready`
+Lifecycle commands write their returned result as one JSON document to stdout
+and send preparation progress, profiling progress and error diagnostics to
+stderr. Use `narwhal dev up > result.json` to retain the result while progress
+remains visible.
+
+Commands exit 0 for `initialized`, `reused`, `starting`, `launched`, `ready`
 or `stopped`, 1 when the returned status is `degraded`, and 2 when the command
 raises an operational or validation error. A failed `verify` exits 2; querying
 that retained failure with `status` exits 1, including when HTTP checks pass.

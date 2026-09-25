@@ -174,7 +174,9 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         for key, value in spec["profile"].items():
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
             args.extend(["--" + key.replace("_", "-"), rendered])
-        print(f"profiling {prefill} prefill / {count - prefill} decode", flush=True)
+        print(
+            f"profiling {prefill} prefill / {count - prefill} decode", file=sys.stderr, flush=True
+        )
         _run(run, "narwhal.profiling.probe", args, f"profile-{prefill}p{count - prefill}d")
         sources.append(profile)
     if len(sources) == 1:
@@ -281,7 +283,8 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_DEPLOYMENT_REVISION": digest(root / "template.json"),
         }
         engine_run = run / name
-        prepare(engine_run, env, backend="native")
+        with contextlib.redirect_stdout(sys.stderr):
+            prepare(engine_run, env, backend="native")
         _run(run, "narwhal.deployment.launch_engine", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
     native_engine.start_shared(runs)
