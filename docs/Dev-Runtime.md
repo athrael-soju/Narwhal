@@ -1,95 +1,110 @@
-# WSL2 RTX 5090 runtime
+# Set up the WSL2 GPU runtime
 
-On 25 September 2026, two independent vLLM processes loaded Qwen3.5-0.8B
-Q4_K_M on one RTX 5090, exported its hybrid cache through NIXL, and consumed
-each other's descriptors through Narwhal's preflight. A request through the
-router returned `5` for `2 + 3` in 268 ms. The run used the installed native
-launch and attestation helpers developed in [PR #57](https://github.com/athrael-soju/Narwhal/pull/57).
+Use Ubuntu under WSL2, Python 3.12 and an RTX 5090 with 32 GB VRAM.
+Check GPU access from the WSL2 shell:
 
-## Runtime pins
+```bash
+nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv
+uname -r
+```
 
-| Component | Selected version |
-| --- | --- |
-| GPU | NVIDIA GeForce RTX 5090, 32,607 MiB |
-| Windows NVIDIA driver | 616.92 |
-| WSL2 kernel | 6.6.87.2-microsoft-standard-WSL2 |
-| Python | 3.12.3 |
-| PyTorch / CUDA | 2.13.0 / 13.0 |
-| vLLM | 0.29.0 |
-| NIXL / nixl-cu13 | 1.4.1 / 1.4.1 |
-| Transformers | 5.17.0 |
-| GGUF plugin | 0.0.5 CUDA wheel, Python sources at `d4c1f0d082fc7cd4350da56689109a01c1f29d6c` |
+Keep the model, virtual environment and instance directory on the WSL2
+Linux filesystem. The default allocation uses four engines, a 4,096-token
+context limit, four active sequences per engine and a 0.1 vLLM memory
+fraction. Launch checks reserve another 2,048 MiB of free VRAM and enforce
+an aggregate device allowance of 0.5.
 
-The model file is `Qwen3.5-0.8B-Q4_K_M.gguf` from
-[`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/tree/e524882462b3f2a9fe83be967c654c4322abb2f6),
-revision `e524882462b3f2a9fe83be967c654c4322abb2f6`, SHA-256
-`bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517`.
-The tokenizer and config match
-[`Qwen/Qwen3.5-0.8B`](https://huggingface.co/Qwen/Qwen3.5-0.8B/tree/2fc06364715b967f1860aea9cf38778875588b17)
-revision `2fc06364715b967f1860aea9cf38778875588b17` byte for byte.
+## Install the runtime
 
-The [GGUF plugin source](https://github.com/vllm-project/vllm-gguf-plugin/tree/d4c1f0d082fc7cd4350da56689109a01c1f29d6c)
-supplies the Qwen3.5 loader used in this run. Its installed Python tree hashes
-to `b08b2ffdf18e4314ed7e4a8cfd49de3520edd5d9bc9be4564d8a71b2265771e0`;
-the `_C_gguf.abi3.so` extension hashes to
-`64521127698503e4b72053cd06adc9aa0448debb07715b2663b1250a816b2c1e`.
-The tree digest concatenates each sorted relative `.py` path, a NUL byte,
-its contents, and a NUL byte.
+From the Narwhal checkout:
 
-## Engine and transfer settings
+```bash
+python3.12 -m venv .venv-dev
+source .venv-dev/bin/activate
+python -m pip install .
+python -m pip install 'vllm==0.29.0' 'torch==2.13.0' \
+  'transformers==5.17.0' 'nixl==1.4.1' 'nixl-cu13==1.4.1'
+python -m pip install \
+  'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
+```
 
-Each engine used tensor parallelism 1, BF16 compute, automatic KV dtype,
-block size 128, context limit 4,096, four active sequences, eager execution,
-and GPU memory utilization 0.1. The loader used `--load-format gguf`,
-`--language-model-only`, and the pinned tokenizer directory for both
-`--tokenizer` and `--hf-config-path`.
+Apply the pinned GGUF loader sources over the wheel's Python files,
+keeping its CUDA extension:
 
-`NixlConnector` ran with `kv_role=kv_both`, pull transfer,
-`kv_load_failure_policy=fail`, the UCX backend, and handshake compatibility
-enforcement. `VLLM_SSM_CONV_STATE_LAYOUT=DS` selected the convolution-state
-layout; `VLLM_USE_V2_MODEL_RUNNER=0` and `VLLM_USE_FLASHINFER_SAMPLER=0`
-selected the tested runner and sampler. Prefix caching was disabled.
-`UCX_TLS=tcp,sm,self,cuda_copy` and `UCX_NET_DEVICES=eth0` selected the
-WSL2 transport. The live cache contained both `MambaSpec` and attention groups.
+```bash
+mkdir -p runs
+git clone https://github.com/vllm-project/vllm-gguf-plugin.git runs/gguf-plugin
+git -C runs/gguf-plugin checkout d4c1f0d082fc7cd4350da56689109a01c1f29d6c
+python - <<'PY'
+from importlib.metadata import distribution
+from pathlib import Path
+import shutil
 
-| Listener | Producer | Consumer |
-| --- | ---: | ---: |
-| Engine HTTP | 18301 | 18302 |
-| Attestation HTTP | 18401 | 18402 |
-| NIXL side channel | 5901 | 5902 |
+source = Path('runs/gguf-plugin/vllm_gguf_plugin')
+target = Path(distribution('vllm-gguf-plugin').locate_file('vllm_gguf_plugin'))
+for path in source.rglob('*.py'):
+    destination = target / path.relative_to(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, destination)
+PY
+```
 
-The router used port 18007; UCX used TCP ports 41000 through 41999.
-Engine launch plans retained the effective argument arrays, environment,
-model hashes, GPU UUID, boot ID, PID and kernel start ticks.
+`dev init` checks the plugin's Python tree and CUDA extension hashes against
+the installed template. Reapply these pinned sources after reinstalling the
+plugin wheel.
 
-## Pair qualification
+## Download the model and tokenizer
 
-Full preflight checked current profiles and process identities, then sent
-Narwhal's producer request and passed its returned KV descriptor to the
-other process. Each directed transfer incremented the consumer's NIXL
-transfer counter and returned three identified output tokens.
+```bash
+hf download unsloth/Qwen3.5-0.8B-GGUF \
+  --revision e524882462b3f2a9fe83be967c654c4322abb2f6 \
+  Qwen3.5-0.8B-Q4_K_M.gguf mmproj-F16.gguf
+hf download Qwen/Qwen3.5-0.8B \
+  --revision 2fc06364715b967f1860aea9cf38778875588b17 \
+  --include '*.json' '*.txt' '*.jinja'
+```
 
-| Directed path | NIXL transfers | NIXL transfer time |
-| --- | ---: | ---: |
-| Engine 1 → engine 2 | 1 | 179.397 ms |
-| Engine 2 → engine 1 | 1 | 171.475 ms |
+The default template resolves these revisions in the Hugging Face cache.
+For a custom cache location, pass the GGUF file with `--model` and the
+configuration/tokenizer directory with `--model-dir`.
 
-The pair started in 127.9 seconds. Whole-device VRAM was 2,647 MiB before
-launch, reached 10,074 MiB during startup sampling at 500 ms intervals,
-and measured 10,366 MiB after profiling and inference. Teardown stopped
-the recorded router, sidecars and engine process groups and returned
-whole-device use to 2,625 MiB.
+## Launch and verify
 
-The per-engine vLLM fraction reserves 3,260.7 MiB for its internal memory
-accounting; whole-device measurements include CUDA and process overhead.
-Four engines at the observed per-engine increment project roughly 15,438 MiB of
-additional use. The four-engine template therefore allows a 0.5 aggregate
-device fraction (16,303.5 MiB) and checks another 2,048 MiB of free reserve
-before launch. The installed four-engine run in
-[#96](https://github.com/athrael-soju/Narwhal/issues/96) measures that projection.
+```bash
+narwhal dev init
+narwhal dev up
+narwhal dev verify
+narwhal dev status
+```
 
-The retained private bundle is `runs/milestone7/pair-evidence.tar.gz`, with
-launch logs, package identities, tokenizer hashes, cache layouts,
-attestations, profile samples, both directed transfers, router response,
-metrics, VRAM samples and teardown. Results cover one execution of the
-two-engine topology at the settings above.
+`up` starts and profiles the engines, then starts the router and reports
+`launched`. `verify` runs all 12 eligible directed KV transfers, checks the
+current engine profiles, and sends a routed arithmetic request before
+reporting `ready`.
+
+The router listens on `127.0.0.1:18000`. Engine HTTP ports start at 18101,
+attestation ports at 18201, and NIXL side-channel ports at 5701. Select
+another port layout with `dev init --port-base`, or another instance with
+`--instance` on each command.
+
+```bash
+curl http://127.0.0.1:18000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3.5-0.8B-GGUF-Q4_K_M","messages":[{"role":"user","content":"Reply with only the number: 2 + 3 = ?"}],"temperature":0,"max_tokens":32}'
+```
+
+Expect the response content `5`. Inspect `runs/dev/run-*/router.log` and
+`engine-*/startup.log` when startup or inference fails. The same run
+directory contains profiles, transfer evidence, metrics and VRAM samples.
+
+## Stop or restart
+
+```bash
+narwhal dev down
+narwhal dev status
+```
+
+Expect `stopped`. `down` signals the process groups recorded for this
+instance and preserves its logs. Run `up` and `verify` again after changing
+the runtime or restarting an engine so profiles and transfer checks bind
+to the new processes.
