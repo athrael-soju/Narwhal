@@ -2,6 +2,8 @@
 
 import contextlib
 import hashlib
+import io
+import json
 import os
 import socket
 import subprocess
@@ -400,6 +402,104 @@ class DevTests(unittest.TestCase):
             result = lifecycle.status(self.root)
         self.assertEqual(result["status"], "degraded")
         self.assertIn("consumer process changed", result["problems"])
+
+    def launched_instance(self):
+        self.initialize()
+        run = self.root / "run-test"
+        run.mkdir()
+        (run / "fleet.json").write_bytes((self.root / "fleet.json").read_bytes())
+        lifecycle.write(
+            self.root / "lifecycle.json",
+            {
+                "phase": "launched",
+                "run": str(run),
+                "processes": [{"name": f"p{i}", "identity": {}} for i in range(9)],
+            },
+        )
+        return run
+
+    def test_failed_canary_survives_status_until_successful_verification(self):
+        run = self.launched_instance()
+        answer = "4"
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": answer}}]}
+            )
+        )
+        client = httpx.Client
+        with (
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run") as preflight,
+            patch.object(
+                lifecycle.httpx, "Client", side_effect=lambda **kwargs: client(transport=transport)
+            ),
+            patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 2)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "degraded")
+            failure = state["verification_failure"]
+            self.assertIn("routed arithmetic canary expected 5", errors.getvalue())
+            self.assertIn("routed arithmetic canary expected 5", failure["reason"])
+            evidence = Path(failure["evidence"])
+            self.assertEqual(evidence.parent, run)
+            self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+            self.assertEqual(
+                lifecycle.read(evidence / "completion.json")["choices"][0]["message"]["content"],
+                "4",
+            )
+            for _ in range(2):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(["dev", "status", "--instance", str(self.root)]), 1)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result["status"], "degraded")
+                self.assertEqual(result["verification_failure"], failure)
+                self.assertEqual(result["problems"], [f"verification failed: {failure['reason']}"])
+
+            def inspect_retry(*args):
+                result = lifecycle.status(self.root)
+                self.assertEqual(result["status"], "degraded")
+                self.assertEqual(result["verification_failure"], failure)
+
+            preflight.side_effect = inspect_retry
+            answer = "5"
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["problems"], [])
+            self.assertNotIn("verification_failure", result)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "ready")
+            self.assertNotIn("verification_failure", state)
+            self.assertNotEqual(state["verification"], str(evidence))
+            self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+
+    def test_completed_teardown_resolves_failed_verification(self):
+        run = self.launched_instance()
+        state = lifecycle.read(self.root / "lifecycle.json")
+        failure = {"reason": "failed qualification", "evidence": str(run / "verify-test")}
+        state.update(phase="degraded", verification_failure=failure)
+        lifecycle.write(self.root / "lifecycle.json", state)
+        with (
+            patch.object(lifecycle.native_engine, "_group_members", return_value={1: {}}),
+            patch.object(lifecycle.native_engine, "_terminate", side_effect=ValueError("owned")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 2)
+        state = lifecycle.read(self.root / "lifecycle.json")
+        self.assertEqual(state["phase"], "degraded")
+        self.assertEqual(state["verification_failure"], failure)
+        with (
+            patch.object(lifecycle.native_engine, "_group_members", return_value={}),
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=False),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 0)
+        self.assertEqual(json.loads(output.getvalue())["status"], "stopped")
+        self.assertNotIn("verification_failure", lifecycle.read(self.root / "lifecycle.json"))
 
     def test_new_instance_status_and_down_are_stopped(self):
         self.initialize()

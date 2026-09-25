@@ -12,12 +12,25 @@ engine, and starts the router. It reports `launched`.
 the profiles against current processes, sends an arithmetic request through
 the router, and retains router and engine metrics before reporting `ready`.
 
-`status` derives `starting`, `launched`, `ready`, `degraded` or `stopped` from
-process ownership, HTTP health and current transfer evidence. `down` checks
-the recorded boot ID and start ticks, then waits for the group's workers
-through leader exit and escalates surviving owned processes to SIGKILL.
-A subsequent `up` creates another run directory with fresh profiles; earlier
-logs and measurements stay beside it.
+`status` reports `launched` while owned processes pass HTTP health checks,
+then reports `ready` after successful verification with current transfer
+evidence. A failed `verify` saves its reason, evidence directory and
+failure time in `lifecycle.json` and the attempt's `failure.json`. Subsequent
+`status` calls report `degraded`, include that record as `verification_failure`
+and add its reason to `problems` until a successful verification or completed
+`down` resolves the failure. A verification retry retains the earlier failure
+while its checks execute.
+
+`down` checks the recorded boot ID and start ticks, then waits for the group's
+workers through leader exit and escalates surviving owned processes to
+SIGKILL. Successful teardown reports `stopped`; a subsequent `up` creates
+another run directory with fresh profiles. Earlier logs and measurements
+stay beside it.
+
+Lifecycle commands exit 0 for `initialized`, `starting`, `launched`, `ready`
+or `stopped`, 1 when the returned status is `degraded`, and 2 when the command
+raises an operational or validation error. A failed `verify` exits 2; querying
+that retained failure with `status` exits 1, including when HTTP checks pass.
 
 ```bash
 narwhal dev init --model /path/to/model.gguf --model-dir /path/to/tokenizer

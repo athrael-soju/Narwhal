@@ -203,6 +203,8 @@ def _stop(root: Path, state: dict) -> None:
             except (OSError, ValueError) as exc:
                 errors.append(f"{record['name']}: {exc}")
     state.update(phase="degraded" if errors else "stopped", stopped=stopped, errors=errors)
+    if not errors:
+        state.pop("verification_failure", None)
     write(root / "lifecycle.json", state)
     write(run / "teardown.json", {"time": time.time(), "stopped": stopped, "errors": errors})
     if errors:
@@ -332,8 +334,9 @@ def verify(root: Path) -> dict:
         if state.get("phase") not in {"launched", "ready", "degraded"}:
             raise ValueError("dev verify requires a launched instance")
         run = Path(state["run"])
-        state["phase"] = "launched"
+        state["phase"] = "degraded" if state.get("verification_failure") else "launched"
         state.pop("verification", None)
+        state.pop("verified_at", None)
         write(root / "lifecycle.json", state)
         evidence = run / f"verify-{uuid.uuid4().hex[:12]}"
         evidence.mkdir(mode=0o700)
@@ -379,16 +382,23 @@ def verify(root: Path) -> dict:
                         (evidence / f"{name}-metrics.txt").write_text(metrics.text)
                     client.get(config["router_url"] + "/ready").raise_for_status()
             state.update(phase="ready", verification=str(evidence), verified_at=time.time())
+            state.pop("verification_failure", None)
             write(root / "lifecycle.json", state)
-        except BaseException:
-            state["phase"] = "degraded"
+        except BaseException as exc:
+            failure = {
+                "reason": str(exc) or type(exc).__name__,
+                "evidence": str(evidence),
+                "failed_at": time.time(),
+            }
+            state.update(phase="degraded", verification_failure=failure)
             write(root / "lifecycle.json", state)
+            write(evidence / "failure.json", failure)
             raise
     return status(root)
 
 
 def status(root: Path) -> dict:
-    """Derive readiness from current owned processes, HTTP health and saved KV evidence."""
+    """Combine process and HTTP health with retained qualification outcomes and KV evidence."""
     config = instance(root)
     if not (root / "lifecycle.json").exists():
         return {"status": "stopped"}
@@ -433,6 +443,9 @@ def status(root: Path) -> dict:
             client.get(config["router_url"] + "/ready").raise_for_status()
         except httpx.HTTPError as exc:
             problems.append(f"router readiness: {exc}")
+    failure = state.get("verification_failure")
+    if failure:
+        problems.append(f"verification failed: {failure['reason']}")
     if evidence := state.get("verification"):
         problems.extend(
             asyncio.run(
@@ -449,6 +462,7 @@ def status(root: Path) -> dict:
         "processes": live,
         "surviving_processes": survivors,
         "problems": problems,
+        **({"verification_failure": failure} if failure else {}),
     }
 
 
