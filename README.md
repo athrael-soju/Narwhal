@@ -58,7 +58,7 @@ python -m pip show narwhal-inference
 narwhal-check --help
 ```
 
-The wheel installs `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
 ## Run locally on an RTX 5090
 

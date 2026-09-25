@@ -1,4 +1,4 @@
-"""Prepare, inspect and launch one pinned vLLM/NIXL container from its engine record."""
+"""Prepare, inspect and launch pinned vLLM/NIXL engines with container or native backends."""
 
 from __future__ import annotations
 
@@ -1335,16 +1335,47 @@ def main(argv: list[str] | None = None) -> int:
         from narwhal.cli_support import add_version_argument
 
         add_version_argument(parser)
-    sub = parser.add_subparsers(dest="command", required=True)
-    preparation = sub.add_parser("prepare")
-    preparation.add_argument("--out", type=Path, required=True)
-    preparation.add_argument("--backend", choices=("container", "native"), default="container")
-    sub.add_parser("_cache-probe", help=argparse.SUPPRESS).add_argument(
-        "--plan", type=Path, required=True
+    descriptions = {
+        "prepare": "Pin launch inputs from NARWHAL_ENGINE_LAUNCH_CONFIG and the deployment "
+        "environment into a fresh directory; supports container and native backends.",
+        "check": "Check the prepared model, tokenizer, runtime packages and connector; "
+        "write checked.json for the plan's container or native backend.",
+        "measure-cache": "Run a temporary sizing container from a checked, unused plan; "
+        "write cache-layout.json and remove the completed sizing container (container only).",
+        "model-dimensions": "Inspect model dimensions using a checked plan; "
+        "write model-dimensions.json (container only).",
+        "handshake-policy": "Inspect the installed NIXL compatibility policy using a checked "
+        "plan; write handshake-policy.json (container and native).",
+        "start": "Start one serving container from a checked plan and record container.id; "
+        "verify HTTP readiness separately (container only).",
+        "capture-cache": "Capture cache-layout.json from the running container recorded by "
+        "a checked plan (container only).",
+        "cache-registration": "Resolve cache block grouping from a checked plan and a startup "
+        "log or runtime layout; write cache-registration.json (container and native).",
+        "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
+        "engine's readiness and memory allowance, and record shared-start.json "
+        "(container and native).",
+        "stop-native": "Stop owned process groups after validating the recorded native "
+        "process identities in the run directory (native only).",
+    }
+    sub = parser.add_subparsers(
+        dest="command", required=True, metavar="{" + ",".join(descriptions) + "}"
     )
-    sub.add_parser("_model-dimensions", help=argparse.SUPPRESS).add_argument(
-        "--plan", type=Path, required=True
+    public = {
+        name: sub.add_parser(name, help=description, description=description)
+        for name, description in descriptions.items()
+    }
+    preparation = public["prepare"]
+    preparation.add_argument("--out", type=Path, required=True, help="fresh launch directory")
+    preparation.add_argument(
+        "--backend",
+        choices=("container", "native"),
+        default="container",
+        help="launch backend (default: %(default)s)",
     )
+    # Omitting help hides the choice rows; the explicit metavar hides internal names in usage.
+    sub.add_parser("_cache-probe").add_argument("--plan", type=Path, required=True)
+    sub.add_parser("_model-dimensions").add_argument("--plan", type=Path, required=True)
     for command in (
         "check",
         "measure-cache",
@@ -1353,17 +1384,38 @@ def main(argv: list[str] | None = None) -> int:
         "start",
         "capture-cache",
     ):
-        sub.add_parser(command).add_argument("--run", type=Path, required=True)
-    registration = sub.add_parser("cache-registration")
-    registration.add_argument("--run", type=Path, required=True)
+        public[command].add_argument(
+            "--run", type=Path, required=True, help="prepared launch directory"
+        )
+    registration = public["cache-registration"]
+    registration.add_argument("--run", type=Path, required=True, help="checked launch directory")
     source = registration.add_mutually_exclusive_group(required=True)
-    source.add_argument("--startup-log", type=Path)
-    source.add_argument("--runtime-layout", type=Path)
-    shared = sub.add_parser("start-shared")
-    shared.add_argument("--run", type=Path, action="append", required=True)
-    shared.add_argument("--ready-seconds", type=int, default=180)
-    shared.add_argument("--backend", choices=("container", "native"), default="container")
-    sub.add_parser("stop-native").add_argument("--run", type=Path, required=True)
+    source.add_argument("--startup-log", type=Path, help="serving log with a resolved KV layout")
+    source.add_argument("--runtime-layout", type=Path, help="captured runtime cache layout JSON")
+    shared = public["start-shared"]
+    shared.add_argument(
+        "--run",
+        type=Path,
+        action="append",
+        required=True,
+        help="checked launch directory; repeat for two to eight engines on the same GPU; "
+        "sum of per-engine memory fractions must be <= device_allowance",
+    )
+    shared.add_argument(
+        "--ready-seconds",
+        type=int,
+        default=180,
+        help="readiness budget in seconds per engine, at least 1 (default: %(default)s)",
+    )
+    shared.add_argument(
+        "--backend",
+        choices=("container", "native"),
+        default="container",
+        help="backend shared by every selected plan (default: %(default)s)",
+    )
+    public["stop-native"].add_argument(
+        "--run", type=Path, required=True, help="native launch directory with process records"
+    )
     args = parser.parse_args(argv)
     if args.command == "start-shared" and args.ready_seconds < 1:
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")

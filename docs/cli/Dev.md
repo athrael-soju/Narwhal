@@ -4,8 +4,8 @@
 
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
-Four engines open as two prefill and two decode processes on the selected
-GPU. Repeating `init` preserves the existing files and operator edits,
+The reference template configures four engines, two prefill and two decode,
+on the selected GPU. Repeating `init` preserves the existing files and operator edits,
 returning `status: reused` when explicitly supplied settings match the saved
 instance. Omitted settings retain their saved values. Conflicting flags exit
 2 and name the settings that differ. To change initialization settings,
@@ -61,14 +61,16 @@ narwhal dev down
 | `--model-dir` | Pinned tokenizer cache directory | Select tokenizer and configuration files. |
 | `--gpu` | Single discovered GPU | Select a physical GPU UUID. |
 | `--engine-count` | Template value, four | Allocate independent engine processes. |
-| `--port-base` | Template ports | Set the router port; engine HTTP, attestation and NIXL ranges start at offsets 1, 101 and 201. |
-| `--gpu-memory-utilization` | Template value, 0.1 | Set each engine's vLLM memory fraction. |
-| `--device-allowance` | Template value, 0.5 | Bound the aggregate observed GPU memory increase. |
+| `--port-base` | Template ports: router 18000, engine 18101, attestation 18201, NIXL 5701 | Set the router TCP port; engine HTTP, attestation and NIXL ranges start at offsets 1, 101 and 201. All selected ports must be distinct and fit 1..65535. |
+| `--gpu-memory-utilization` | Template value, 0.1 | Finite per-engine fraction of total GPU memory, greater than zero and at most 1. |
+| `--device-allowance` | Template value, 0.5 | Finite fraction of total GPU memory, at most 1; bounds the sum of engine fractions and the aggregate observed startup memory increase. |
 | `--interface` | `"eth0"` | Select the local NIXL/UCX interface. |
 
-Initialization compares the decimal total of the per-engine fractions with
-the device allowance, matching shared startup: three engines at `0.1` fit
-an allowance of `0.3`; a total above the allowance rejects initialization.
+Initialization accepts two to eight engines and compares the decimal total of
+their per-engine fractions with the device allowance: three engines at `0.1`
+fit an allowance of `0.3`; a total above the allowance rejects initialization.
+The free-memory check reserves the allowance times total device memory plus
+the template's `gpu.reserve_mib` (2048 MiB in the installed reference).
 
 Model and runtime changes belong in a custom template, selected with
 `--template`. Runtime and tokenizer checksums bind the default template to

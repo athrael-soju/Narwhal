@@ -32,9 +32,14 @@ def serve(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Run Narwhal over a disaggregated engine fleet")
     add_version_argument(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--log-level", default="info", choices=sorted(LOG_LEVELS))
+    ap.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
+    ap.add_argument("--port", type=int, default=8000, help="TCP port (default: %(default)s)")
+    ap.add_argument(
+        "--log-level",
+        default="info",
+        choices=sorted(LOG_LEVELS),
+        help="logging threshold (default: %(default)s)",
+    )
     ap.add_argument(
         "--journal",
         default="",
@@ -52,7 +57,7 @@ def serve(argv: list[str] | None = None) -> int:
         "--graceful-timeout",
         type=int,
         default=None,
-        help="seconds for in-flight requests to finish on shutdown "
+        help="nonnegative integer seconds for in-flight requests to finish on shutdown "
         "(default: the config's graceful_timeout_s)",
     )
     ap.add_argument(
@@ -67,19 +72,19 @@ def serve(argv: list[str] | None = None) -> int:
         "--standby-probe-interval",
         type=float,
         default=None,
-        help="seconds between standby probes of the primary (default 0.25)",
+        help="finite positive seconds between standby probes of the primary (default 0.25)",
     )
     ap.add_argument(
         "--standby-takeover-after",
         type=int,
         default=None,
-        help="consecutive failed probes before the standby takes over (default 4)",
+        help="consecutive failed probes before the standby takes over, at least 1 (default 4)",
     )
     ap.add_argument(
         "--standby-max-handoff-age",
         type=float,
         default=30.0,
-        help="maximum age of state eligible for automatic takeover (default 30)",
+        help="finite positive maximum state age in seconds for automatic takeover (default 30)",
     )
     ap.add_argument(
         "--lease-path",
@@ -91,18 +96,25 @@ def serve(argv: list[str] | None = None) -> int:
         default="",
         help="stable router name reported with its unique lease holder token",
     )
-    ap.add_argument("--lease-ttl", type=float, default=5.0, help="lease lifetime in seconds")
+    ap.add_argument(
+        "--lease-ttl",
+        type=float,
+        default=5.0,
+        help="finite lease lifetime in seconds, must exceed --lease-renew-interval plus "
+        "--lease-safety-margin (default: %(default)s)",
+    )
     ap.add_argument(
         "--lease-renew-interval",
         type=float,
         default=1.0,
-        help="seconds between lease renewals",
+        help="finite positive seconds between lease renewals (default: %(default)s)",
     )
     ap.add_argument(
         "--lease-safety-margin",
         type=float,
         default=1.0,
-        help="maximum relative clock skew reserved before expiry (default 1)",
+        help="finite nonnegative relative clock skew in seconds reserved before expiry "
+        "(default: %(default)s)",
     )
     ap.add_argument(
         "--resume",

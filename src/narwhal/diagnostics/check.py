@@ -921,25 +921,58 @@ async def run(
 
 def main(argv: list[str] | None = None) -> int:
     """Run the fleet-check CLI."""
-    ap = argparse.ArgumentParser(description="Check a fleet before starting the router")
+    ap = argparse.ArgumentParser(
+        description="Check running engines and their measured profiles before starting the "
+        "router. By default, probe the full eligible directed KV mesh; retain it with "
+        "--evidence-out or verify a saved mesh with --verify-evidence.",
+    )
     add_version_argument(ap)
-    ap.add_argument("--fleet", help="fleet config JSON")
-    ap.add_argument("--ring", action="store_true", help="test rotating producer-consumer pairs")
-    ap.add_argument("--repeats", type=int, default=1, help="KV transfer probes per pair")
-    ap.add_argument("--no-kv", action="store_true", help="skip the two KV gates")
-    ap.add_argument("--evidence-out", type=Path, help="retain process-bound full-mesh KV evidence")
     ap.add_argument(
-        "--verify-evidence", type=Path, help="verify a saved KV mesh against live processes"
+        "--fleet", help="fleet config JSON; required for preflight and evidence verification"
+    )
+    ap.add_argument(
+        "--ring",
+        action="store_true",
+        help="test rotating producer-consumer pairs (default: full eligible directed mesh)",
+    )
+    ap.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="KV transfer probes per pair, clamped to at least 1 (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--no-kv",
+        action="store_true",
+        help="run reach, contract, profile, model, pace, tokenize and slo gates "
+        "(default: include produce and consume)",
+    )
+    ap.add_argument(
+        "--evidence-out",
+        type=Path,
+        help="fresh JSON path for process-bound full-mesh KV evidence; requires "
+        "engine_contract and full KV mesh; exclusive with --ring, --no-kv and --verify-evidence "
+        "(default: gate output only)",
+    )
+    ap.add_argument(
+        "--verify-evidence",
+        type=Path,
+        help="verify saved KV evidence against the current fleet, profiles and live processes; "
+        "requires engine_contract; exclusive with --evidence-out; "
+        "--ring, --no-kv and --repeats apply to new probes "
+        "(default: run preflight)",
     )
     ap.add_argument(
         "--print-example-config",
         action="store_true",
-        help="print the annotated example fleet config and exit",
+        help="print the annotated example fleet config and exit before fleet loading; "
+        "takes precedence over --print-contract-versions (default: false)",
     )
     ap.add_argument(
         "--print-contract-versions",
         action="store_true",
-        help="print the versioned machine-readable interface registry and exit",
+        help="print the versioned machine-readable interface registry and exit before "
+        "fleet loading (default: false)",
     )
     args = ap.parse_args(argv)
 

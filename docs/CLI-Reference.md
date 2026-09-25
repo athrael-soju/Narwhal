@@ -1,6 +1,6 @@
 # Narwhal CLI reference
 
-`narwhal-inference` installs the commands below. Each accepts `-h` and `--help`, and resolves relative paths from the process working directory.
+`narwhal-inference` installs the commands below. Each executable accepts `-h`, `--help` and `--version`, and resolves relative paths from the process working directory. `narwhal --help` lists all six installed commands.
 
 Use the installed `narwhal-*` commands in deployment scripts because internal Python module paths can change between releases. `python -m narwhal.cli` also starts a router.
 

@@ -33,33 +33,82 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_version_argument(parser)
     commands = parser.add_subparsers(dest="command", required=True)
-    dev = commands.add_parser("dev", help="Run independent engines on one local NVIDIA GPU")
+    dev = commands.add_parser(
+        "dev",
+        help="Run independent engines on one local NVIDIA GPU",
+        description="Use the native Linux/WSL2 runtime: init writes checked instance inputs, "
+        "up reports launched after engine profiling and router startup, and verify reports "
+        "ready after directed KV checks and a routed request.",
+    )
     actions = dev.add_subparsers(dest="action", required=True)
-    for name in ("init", "up", "verify", "status", "down"):
-        action = actions.add_parser(name)
-        action.add_argument("--instance", type=Path, default=Path("runs/dev"))
+    descriptions = {
+        "init": "Check pinned model files, native runtime and GPU allocation, then write an "
+        "initialized instance, or report reused when explicit settings match an existing "
+        "instance. Reuse preserves operator edits.",
+        "up": "Start an initialized instance, capture attestations, profile role splits and "
+        "start its router; reports launched. Requires the pinned native runtime and GPU.",
+        "verify": "Check a launched instance's directed KV paths, profiles and routed "
+        "arithmetic response; retain metrics and evidence before reporting ready.",
+        "status": "Inspect an initialized instance's recorded processes and HTTP health; "
+        "report launched or verified ready, retaining verification failures as degraded.",
+        "down": "Stop an instance's recorded native process groups after validating their "
+        "identities; retain logs and measurements and report stopped.",
+    }
+    for name, description in descriptions.items():
+        action = actions.add_parser(name, help=description, description=description)
+        action.add_argument(
+            "--instance",
+            type=Path,
+            default=Path("runs/dev"),
+            help="private instance directory (default: %(default)s)",
+        )
         if name == "init":
             action.description = (
-                "Create an instance, or report reused when explicit settings match an existing "
-                "instance. Reuse preserves operator edits. To change settings, select a fresh "
-                "directory with --instance."
+                description + " To change settings, select a fresh directory with --instance. "
+                "Omitted options use the saved instance or the selected template."
             )
             action.add_argument(
-                "--template", type=Path, help="Versioned model and runtime settings"
+                "--template",
+                type=Path,
+                help="versioned model and runtime settings (default: installed reference)",
             )
-            action.add_argument("--model", type=Path, help="Local GGUF file")
             action.add_argument(
-                "--model-dir", type=Path, help="Pinned tokenizer and model config directory"
+                "--model",
+                type=Path,
+                help="local GGUF matching the template checksum (default: pinned HF cache file)",
             )
-            action.add_argument("--gpu", help="Physical GPU UUID")
-            action.add_argument("--engine-count", type=int)
+            action.add_argument(
+                "--model-dir",
+                type=Path,
+                help="pinned tokenizer and model config directory (default: pinned HF cache)",
+            )
+            action.add_argument("--gpu", help="physical GPU UUID (default: single discovered GPU)")
+            action.add_argument(
+                "--engine-count",
+                type=int,
+                help="independent engines, 2 to 8 (default: template value, reference 4)",
+            )
             action.add_argument(
                 "--port-base",
                 type=int,
-                help="Router port; HTTP, attestation and NIXL use +1, +101 and +201",
+                help="router TCP port; engine HTTP, attestation and NIXL ranges start at "
+                "+1, +101 and +201; all ports must fit 1..65535 and be distinct "
+                "(default: template ports, reference router 18000)",
             )
-            action.add_argument("--gpu-memory-utilization", type=float)
-            action.add_argument("--device-allowance", type=float)
+            action.add_argument(
+                "--gpu-memory-utilization",
+                type=float,
+                help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
+                "engine-count * fraction <= device-allowance "
+                "(default: template value, reference 0.1)",
+            )
+            action.add_argument(
+                "--device-allowance",
+                type=float,
+                help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
+                "engine fractions; bounds startup memory increase "
+                "(default: template value, reference 0.5)",
+            )
             action.add_argument("--interface", help="Local NIXL/UCX interface (default: eth0)")
     args = parser.parse_args(argv)
     root = args.instance.expanduser().resolve()
