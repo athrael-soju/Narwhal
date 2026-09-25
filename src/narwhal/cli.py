@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import socket
 import sys
 
@@ -134,6 +135,16 @@ def serve(argv: list[str] | None = None) -> int:
         )
     if args.resume:
         cfg.resume = True
+    for name in (
+        "lease_ttl",
+        "lease_renew_interval",
+        "lease_safety_margin",
+        "standby_probe_interval",
+        "standby_max_handoff_age",
+    ):
+        value = getattr(args, name)
+        if value is not None and not math.isfinite(value):
+            ap.error(f"--{name.replace('_', '-')} must be finite")
     if args.standby_probe_interval is not None and args.standby_probe_interval <= 0:
         ap.error("--standby-probe-interval must be positive")
     if args.standby_takeover_after is not None and args.standby_takeover_after < 1:

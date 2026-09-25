@@ -39,6 +39,18 @@ class LeaseTests(unittest.TestCase):
             with self.subTest(holder=holder, ttl=ttl, margin=margin), self.assertRaises(ValueError):
                 FileLease(self.path, holder, ttl, safety_margin_s=margin)
 
+    def test_constructor_rejects_nonfinite_timings_before_creating_files(self):
+        """Each timing must be finite before a holder can touch shared state."""
+        for value in (float("nan"), float("inf"), float("-inf")):
+            for field in ("ttl_s", "safety_margin_s"):
+                options = {"ttl_s": 10, "safety_margin_s": 2, field: value}
+                with (
+                    self.subTest(field=field, value=value),
+                    self.assertRaisesRegex(ValueError, "finite"),
+                ):
+                    FileLease(self.path, "a", **options)
+        self.assertEqual(list(self.path.parent.iterdir()), [])
+
     def test_competing_holder_waits_until_expiry_and_advances_epoch(self):
         """Takeover at the expiry boundary fences renewal by the previous holder."""
         self.assertIsNone(self.a.read())
@@ -162,3 +174,24 @@ class LeaseTests(unittest.TestCase):
         with patch("narwhal.runtime.lease.os.replace", side_effect=OSError("disk")):
             self.a.release()
         self.assertFalse(self.a.valid())
+
+    def test_nonfinite_timestamps_fail_read_claim_and_renew(self):
+        """Invalid persisted timestamps preserve the shared record and block renewal."""
+        for field in ("expires_at", "updated_at"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value):
+                    self.path.unlink(missing_ok=True)
+                    self.assertTrue(self.a.claim())
+                    body = json.loads(self.path.read_text())
+                    body[field] = value
+                    self.path.write_text(json.dumps(body))
+                    previous = self.path.read_bytes()
+                    with self.assertRaisesRegex(LeaseError, f"{field}.*finite"):
+                        self.a.read()
+                    with self.assertRaisesRegex(LeaseError, f"{field}.*finite"):
+                        self.b.claim()
+                    self.assertFalse(self.b.owned)
+                    self.assertFalse(self.a.renew())
+                    self.assertEqual(self.path.read_bytes(), previous)
+                    self.mono += 10
+                    self.assertFalse(self.a.valid())
