@@ -650,13 +650,15 @@ class SharedEngineStartTests(unittest.TestCase):
 
             def start_container(run, plan):
                 events.append(("start", plan["role"]))
-                (run / "container.id").write_text("c" * 64)
+                return "c" * 64
 
             def ready(run, plan, cid, seconds):
                 events.append(("ready", plan["role"]))
                 self.assertEqual(cid, "c" * 64)
 
             def inspect(command, run, log):
+                if command[0] == "start":
+                    return "started"
                 if command[2] == "{{json .State}}":
                     return json.dumps({"Running": True, "Pid": 1234})
                 if command[2] == "{{json .Config.Cmd}}":
@@ -666,7 +668,9 @@ class SharedEngineStartTests(unittest.TestCase):
             with (
                 patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
                 patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
-                patch("tools.deployment.launch_engine.start", side_effect=start_container),
+                patch(
+                    "tools.deployment.launch_engine._create_container", side_effect=start_container
+                ),
                 patch("tools.deployment.launch_engine.wait_ready", side_effect=ready),
                 patch("tools.deployment.launch_engine.docker", side_effect=inspect),
             ):
@@ -703,9 +707,11 @@ class SharedEngineStartTests(unittest.TestCase):
 
             def start_container(run, plan):
                 started.append(plan["role"])
-                (run / "container.id").write_text("c" * 64)
+                return "c" * 64
 
             def inspect(command, run, log):
+                if command[0] in {"start", "rm"}:
+                    return "done"
                 if command[2] == "{{json .State}}":
                     return json.dumps({"Running": True, "Pid": 1234})
                 if command[2] == "{{json .Config.Cmd}}":
@@ -715,7 +721,9 @@ class SharedEngineStartTests(unittest.TestCase):
             with (
                 patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
                 patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
-                patch("tools.deployment.launch_engine.start", side_effect=start_container),
+                patch(
+                    "tools.deployment.launch_engine._create_container", side_effect=start_container
+                ),
                 patch("tools.deployment.launch_engine.wait_ready"),
                 patch("tools.deployment.launch_engine.docker", side_effect=inspect),
                 self.assertRaisesRegex(ValueError, "engine-2:.*29000/30000.*free GPU memory"),
