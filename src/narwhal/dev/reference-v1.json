@@ -72,12 +72,12 @@
   "profile": {
     "prefill_lens": [
       128,
-      512,
-      1024
+      1024,
+      3840
     ],
     "decode_input_lens": [
       128,
-      512
+      3840
     ],
     "decode_concurrency": [
       1,

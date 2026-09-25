@@ -114,10 +114,12 @@ curl http://127.0.0.1:18000/metrics
 
 The four engines open with two prefill and two decode roles. Startup
 profiles 1P:3D, 2P:2D and 3P:1D so the controller can price changes in both
-directions from the current processes. Decode profiles cover
-128 to 512 input tokens at concurrency one and two; prefill profiles extend
-to 1,024 tokens. Use requests within those bounds when exercising role
-control. The 4,096-token engine context limit bounds input plus output.
+directions from the current processes. Prefill and decode sweeps cover
+128 to 3,840 input tokens, with decode concurrency one and two and up to
+128 output tokens. Use long inputs with short outputs to exercise prefill
+growth, and longer outputs to exercise decode growth. The controller prices
+each move from the profiles and resident work. The 4,096-token engine context
+limit bounds input plus output.
 
 Keep four engines for the default RTX 5090 setup. Changing engine count,
 model, context length or memory fractions requires a matching template and
