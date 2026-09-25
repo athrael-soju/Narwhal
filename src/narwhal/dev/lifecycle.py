@@ -51,11 +51,13 @@ def write(path: Path, value: dict) -> None:
 
 
 def instance(root: Path) -> dict:
-    """Require the supported local configuration and its original interpreter."""
+    """Require the supported local configuration and its original Python environment."""
     value = read(root / "instance.json")
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
-    if value.get("python_executable") != sys.executable:
+    expected = Path(value["python_executable"])
+    current = Path(sys.executable)
+    if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):
         raise ValueError("run this instance with the Python environment used by dev init")
     return value
 

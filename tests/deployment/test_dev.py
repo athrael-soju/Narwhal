@@ -98,6 +98,26 @@ class DevTests(unittest.TestCase):
             lifecycle.up(self.root)
         self.assertFalse((self.root / "lifecycle.json").exists())
 
+    def test_interpreter_aliases_share_an_environment_but_other_venvs_do_not(self):
+        self.initialize()
+        config = lifecycle.read(self.root / "instance.json")
+        aliases = self.parent / "venv" / "bin"
+        aliases.mkdir(parents=True)
+        for name in ("python", "python3"):
+            (aliases / name).symlink_to(sys.executable)
+        config["python_executable"] = str(aliases / "python3")
+        lifecycle.write(self.root / "instance.json", config)
+        with patch.object(lifecycle.sys, "executable", str(aliases / "python")):
+            self.assertEqual(lifecycle.instance(self.root), config)
+        other = self.parent / "other" / "bin"
+        other.mkdir(parents=True)
+        (other / "python").symlink_to(sys.executable)
+        with (
+            patch.object(lifecycle.sys, "executable", str(other / "python")),
+            self.assertRaisesRegex(ValueError, "Python environment"),
+        ):
+            lifecycle.instance(self.root)
+
     def test_occupied_port_rejects_up_before_process_creation(self):
         self.initialize()
         with socket.socket() as occupied:
