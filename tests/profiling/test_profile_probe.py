@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.config.model import SharedDeviceAllocation
 from narwhal.profiling import probe
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
@@ -78,6 +79,78 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(measured["prefill_rps"], 0)
         self.assertGreater(measured["decode_rps"], 0)
         self.assertLess(measured["completed_prefill"] + measured["completed_decode"], len(calls))
+        for iid in ("p", "d"):
+            self.assertGreater(measured["peers"][iid]["completed"], 0)
+            self.assertGreater(measured["peers"][iid]["rps"], 0)
+            self.assertIsNone(measured["peers"][iid]["error"])
+
+    async def test_colocated_load_requires_completions_from_each_same_role_peer(self):
+        """Every decoder contributes completed requests during the measurement window."""
+        good_completed = probe.asyncio.Event()
+
+        async def answer(request):
+            if request.url.host == "stalled":
+                await probe.asyncio.Event().wait()
+            good_completed.set()
+            return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            load = probe.NeighbourLoad(
+                client,
+                [("d1", "http://good", Role.DECODE), ("d2", "http://stalled", Role.DECODE)],
+                "stub",
+                probe.VllmDialect(),
+                3.8,
+                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+            )
+            with (
+                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+            ):
+                await load.start()
+            good_completed.clear()
+            await probe.asyncio.wait_for(good_completed.wait(), timeout=1)
+            with self.assertRaisesRegex(RuntimeError, "d2: completed 0 requests"):
+                await load.stop()
+        measured = load.evidence()
+        self.assertGreater(measured["peers"]["d1"]["completed"], 0)
+        self.assertEqual(measured["peers"]["d2"]["completed"], 0)
+        self.assertIn("completed 0 requests", measured["peers"]["d2"]["error"])
+        self.assertTrue(all(task.done() for task in load.tasks))
+
+    async def test_colocated_load_retains_a_peer_task_exception(self):
+        """A malformed response fails qualification after earlier peer completions."""
+        fail = False
+        failed = probe.asyncio.Event()
+
+        async def answer(request):
+            if fail and request.url.host == "failing":
+                failed.set()
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            load = probe.NeighbourLoad(
+                client,
+                [("d1", "http://good", Role.DECODE), ("d2", "http://failing", Role.DECODE)],
+                "stub",
+                probe.VllmDialect(),
+                3.8,
+                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+            )
+            with (
+                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+            ):
+                await load.start()
+            await probe.asyncio.sleep(0.02)
+            fail = True
+            await probe.asyncio.wait_for(failed.wait(), timeout=1)
+            with self.assertRaisesRegex(RuntimeError, "d2: AttributeError"):
+                await load.stop()
+        measured = load.evidence()
+        self.assertGreater(measured["peers"]["d2"]["completed"], 0)
+        self.assertIn("AttributeError", measured["peers"]["d2"]["error"])
 
     async def test_merge_keeps_both_measured_role_mixes(self):
         """Separate profiling runs retain distinct rows for one engine."""
@@ -455,6 +528,55 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(cfg.profiles_path.exists())
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("profile rejected", saved["engines"]["e0"]["error"])
+
+    async def test_run_retains_per_peer_evidence_when_a_neighbour_stalls(self):
+        """Rejected role-mix measurements retain each neighbour's traffic and error."""
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "colocated.json"
+            allocation = SharedDeviceAllocation("gpu", "uuid", 0.5, 0.1)
+            cfg.engines = [replace(spec, shared_device=allocation) for spec in cfg.engines]
+            cfg.engines.append(replace(cfg.engines[1], iid="e4", url="http://stalled"))
+            completed = probe.asyncio.Event()
+
+            async def answer(request):
+                if request.url.path == "/health":
+                    return httpx.Response(200)
+                if request.url.host == "stalled":
+                    await probe.asyncio.Event().wait()
+                completed.set()
+                return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
+
+            async def measured(*args, **kwargs):
+                completed.clear()
+                await probe.asyncio.wait_for(completed.wait(), timeout=1)
+                return profile("e0")
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
+            with (
+                patch.object(probe.httpx, "AsyncClient", return_value=client),
+                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {})),
+                ),
+                patch.object(probe, "profile_instance", side_effect=measured),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(RuntimeError, "e4: completed 0 requests"),
+            ):
+                await probe.run(
+                    cfg,
+                    {"e0"},
+                    colocated_workload=probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                )
+            self.assertFalse(cfg.profiles_path.exists())
+            saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
+            peers = saved["engines"]["e0"]["colocated_load"]["peers"]
+            self.assertGreater(peers["e3"]["completed"], 0)
+            self.assertEqual(peers["e4"]["completed"], 0)
+            self.assertIn("completed 0 requests", peers["e4"]["error"])
 
     async def test_run_retains_prefill_samples_when_fit_fails(self):
         with tempfile.TemporaryDirectory() as folder:

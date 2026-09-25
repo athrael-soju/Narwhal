@@ -196,7 +196,7 @@ def _stop(root: Path, state: dict) -> None:
     stopped = []
     for record in reversed(records):
         identity = record["identity"]
-        if native_engine._owns_process(identity):
+        if native_engine._group_members(identity):
             try:
                 native_engine._terminate(identity)
                 stopped.append(record["name"])
@@ -244,9 +244,13 @@ def up(root: Path) -> dict:
 def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> None:
     fleet = read(root / "fleet.json")
     fleet.pop("engine_contract", None)
+    settings = fleet.setdefault("engine", {})
+    if not settings.get("engine_api_key_env") and os.environ.get("NARWHAL_ENGINE_API_KEY"):
+        settings["engine_api_key_env"] = "NARWHAL_ENGINE_API_KEY"
     fleet["profiles"]["path"] = str(run / "profiles.json")
     fleet["recovery"] = {"state_path": str(run / "router-state.json")}
     write(run / "fleet.json", fleet)
+    engine_key = FleetConfig.load(run / "fleet.json").resolve_engine_key()
     allocation = read(root / "engine-launch.json")
     hook = Path(cache_capture_hook.__file__)
     runs = []
@@ -271,6 +275,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],
             "NARWHAL_ENGINE_MODEL_NAME": fleet["model"],
+            "NARWHAL_ENGINE_API_KEY": engine_key or "",
             "NARWHAL_DEPLOYMENT_REVISION": digest(root / "template.json"),
         }
         engine_run = run / name
@@ -397,9 +402,18 @@ def status(root: Path) -> dict:
         for path in sorted(run.glob("engine-*/native-process.json"))
     )
     live = [r["name"] for r in records if native_engine._owns_process(r["identity"])]
-    if state["phase"] == "stopped" and not live:
+    survivors = {
+        r["name"]: sorted(members)
+        for r in records
+        if r["name"] not in live and (members := native_engine._group_members(r["identity"]))
+    }
+    if state["phase"] == "stopped" and not live and not survivors:
         return {"status": "stopped", "run": str(run)}
     problems = [r["name"] + " process identity expired" for r in records if r["name"] not in live]
+    problems.extend(
+        f"{name}: surviving group PIDs {pids} require operator inspection"
+        for name, pids in survivors.items()
+    )
     if len(live) != 2 * config["engine_count"] + 1:
         problems.append(
             "owned process count differs from the configured engines, sidecars and router"
@@ -433,6 +447,7 @@ def status(root: Path) -> dict:
         "run": str(run),
         "router": config["router_url"],
         "processes": live,
+        "surviving_processes": survivors,
         "problems": problems,
     }
 

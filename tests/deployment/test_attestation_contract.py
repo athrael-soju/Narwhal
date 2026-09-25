@@ -314,6 +314,45 @@ class AttestationContractTests(unittest.TestCase):
                         capture_nixl(run)
                     self.assertFalse(output.exists())
 
+    def test_native_nixl_capture_uses_recorded_environment_for_connector_import(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run, _, process = self.native_evidence(root)
+            (run / "nixl-connector-version.json").unlink()
+            paths = {}
+            for name, version in (("parent", 11), ("engine", 22)):
+                base = root / name
+                package = base
+                for component in [
+                    "vllm",
+                    "distributed",
+                    "kv_transfer",
+                    "kv_connector",
+                    "v1",
+                    "nixl",
+                ]:
+                    package /= component
+                    package.mkdir(parents=True)
+                    (package / "__init__.py").write_text("")
+                (package / "metadata.py").write_text(
+                    f"NIXL_CONNECTOR_VERSION = {version}\n"
+                    "import os\n"
+                    "assert os.environ['NARWHAL_CAPTURE_CACHE'] == '0'\n"
+                )
+                paths[name] = base
+            (run / "engine.env").write_text(f"PYTHONPATH={paths['engine']}\n")
+            with (
+                patch("tools.deployment.attestation_contract.live_native", return_value=process),
+                patch.dict(
+                    os.environ,
+                    {"PYTHONPATH": str(paths["parent"]), "NARWHAL_CAPTURE_CACHE": "1"},
+                ),
+            ):
+                record = read_json(capture_nixl(run))
+            self.assertEqual(record["nixl_connector_version"], 22)
+            self.assertTrue(Path(record["module_file"]).is_relative_to(paths["engine"]))
+            self.assertEqual(record["process"], process)
+
     def test_live_dimensions_complete_an_old_plan_without_restarting_its_container(self):
         with tempfile.TemporaryDirectory() as folder:
             run, log = self.engine_evidence(Path(folder))

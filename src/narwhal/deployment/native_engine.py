@@ -39,6 +39,53 @@ def _owns_process(identity: dict) -> bool:
         return False
 
 
+def _process_stat(pid: int) -> tuple[str, int, int, int]:
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    return fields[0], int(fields[2]), int(fields[3]), int(fields[19])
+
+
+def _group_members(identity: dict) -> dict[int, int]:
+    """Find live group members; an absent leader leaves their ownership unresolved."""
+    if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != identity["boot_id"]:
+        return {}
+    leader = identity["pid"]
+    try:
+        _, group, session, started = _process_stat(leader)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    else:
+        if (group, session, started) != (leader, leader, identity["start_ticks"]):
+            return {}
+    members = {}
+    for path in Path("/proc").iterdir():
+        if not path.name.isdecimal():
+            continue
+        pid = int(path.name)
+        try:
+            state, group, session, started = _process_stat(pid)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if state not in {"Z", "X"} and group == session == leader:
+            members[pid] = started
+    return members
+
+
+def _signal_members(members: dict[int, int], sig: signal.Signals) -> None:
+    for pid, started in members.items():
+        try:
+            descriptor = os.pidfd_open(pid)
+        except ProcessLookupError:
+            continue
+        try:
+            # A pidfd targets this process even if its numeric PID is reused later.
+            if _process_stat(pid)[3] == started:
+                signal.pidfd_send_signal(descriptor, sig)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+        finally:
+            os.close(descriptor)
+
+
 def _checked_plan(run: Path, plan: dict) -> dict:
     if plan.get("backend") != "native":
         raise ValueError("native start requires a native launch plan")
@@ -67,6 +114,7 @@ def _environment(run: Path) -> dict[str, str]:
     values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
     return {
         **os.environ,
+        "VLLM_API_KEY": "",
         **values,
         "NARWHAL_CAPTURE_CACHE": "1",
         "NARWHAL_CACHE_PLAN": str(run / "hook/launch.json"),
@@ -115,15 +163,37 @@ def _wait_ready(run: Path, plan: dict, identity: dict, seconds: int) -> None:
     raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
 
 
-def _terminate(identity: dict, grace_seconds: int = 10) -> None:
+def _terminate(identity: dict, grace_seconds: float = 10.0) -> None:
+    members = _group_members(identity)
     if not _owns_process(identity):
-        raise ValueError("native engine PID or start time changed; refusing to signal")
-    os.killpg(identity["pid"], signal.SIGTERM)
+        detail = (
+            f"; surviving group PIDs {sorted(members)} require operator inspection"
+            if members
+            else ""
+        )
+        raise ValueError("native engine PID or start time changed; refusing to signal" + detail)
+    owned = members
+    _signal_members(owned, signal.SIGTERM)
     deadline = time.monotonic() + grace_seconds
-    while _owns_process(identity) and time.monotonic() < deadline:
+    escalated = False
+    while members := _group_members(identity):
+        # A surviving recorded member anchors this group through leader exit.
+        if not any(members.get(pid) == started for pid, started in owned.items()):
+            raise ValueError(
+                f"group ownership expired; surviving group PIDs {sorted(members)} "
+                "require operator inspection"
+            )
+        newcomers = {pid: started for pid, started in members.items() if pid not in owned}
+        owned.update(members)
+        if time.monotonic() >= deadline:
+            if escalated:
+                raise ValueError(f"owned group PIDs {sorted(members)} survived SIGKILL")
+            _signal_members(members, signal.SIGKILL)
+            deadline = time.monotonic() + 5.0
+            escalated = True
+        elif newcomers:
+            _signal_members(newcomers, signal.SIGKILL if escalated else signal.SIGTERM)
         time.sleep(0.1)
-    if _owns_process(identity):
-        os.killpg(identity["pid"], signal.SIGKILL)
 
 
 def stop(run: Path) -> None:
@@ -215,7 +285,7 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
             except (OSError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as error:
                 record.update(status="failed", error=str(error))
                 try:
-                    if identity is not None and _owns_process(identity):
+                    if identity is not None and _group_members(identity):
                         _terminate(identity)
                     elif process is not None and process.poll() is None:
                         os.killpg(process.pid, signal.SIGTERM)

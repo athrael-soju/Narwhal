@@ -13,8 +13,9 @@ the profiles against current processes, sends an arithmetic request through
 the router, and retains router and engine metrics before reporting `ready`.
 
 `status` derives `starting`, `launched`, `ready`, `degraded` or `stopped` from
-process ownership, HTTP health and current transfer evidence. `down` signals
-only process groups whose boot ID and start ticks match the instance record.
+process ownership, HTTP health and current transfer evidence. `down` checks
+the recorded boot ID and start ticks, then waits for the group's workers
+through leader exit and escalates surviving owned processes to SIGKILL.
 A subsequent `up` creates another run directory with fresh profiles; earlier
 logs and measurements stay beside it.
 
@@ -43,6 +44,10 @@ Model and runtime changes belong in a custom template, selected with
 `--template`. Runtime and tokenizer checksums bind the default template to
 its measured GGUF loader. Model overrides require their matching template
 checksums and serving limits.
+
+Export `NARWHAL_ENGINE_API_KEY` before `up` to authenticate engine requests.
+The generated fleet references that environment variable for profiling,
+verification and routing; keep it set when using those commands.
 
 Each `run-*` directory contains the fleet used by the router, effective
 commands, engine logs, cache layouts, attestations, measured profiles,

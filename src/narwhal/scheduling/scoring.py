@@ -86,9 +86,7 @@ class SplitSnapshot:
     resident_decode_requests: int
     pending_decode_tokens: float
     pending_decode_requests: int
-    pending_decode_max_tokens: float
-    pending_decode_work_s: float
-    pending_decode_profile_covered: bool
+    pending_decode_shapes: tuple[tuple[int, int], ...]
     decode_correction: float
     resident_profile_covered: bool
     queued_prefill_s: float = 0.0
@@ -162,6 +160,26 @@ class SplitSnapshot:
             self.profiles,
         )
         correction = self.decode_correction
+        pending_work_s = 0.0
+        pending_covered = bool(profiles)
+        if include_resident:
+            for input_len, output_len in self.pending_decode_shapes:
+                context = input_len + output_len / 2.0
+                capacities = [
+                    p.decode_rps(self.tpot_slo, context, output_len, correction=correction)
+                    for p in profiles
+                ]
+                if (
+                    not capacities
+                    or not all(capacities)
+                    or not all(
+                        p.covers_prefill(input_len) and p.covers_decode(1, context)
+                        for p in profiles
+                    )
+                ):
+                    pending_covered = False
+                else:
+                    pending_work_s += len(capacities) / sum(capacities)
         capacity = (
             sum(p.max_tokens(self.tpot_slo / correction, active_requests) for p in profiles)
             / len(profiles)
@@ -181,7 +199,7 @@ class SplitSnapshot:
         )
         covered = not include_resident or (
             bool(profiles)
-            and self.pending_decode_profile_covered
+            and pending_covered
             and all(
                 profile.covers_prefill(length)
                 for profile in profiles
@@ -198,9 +216,7 @@ class SplitSnapshot:
             covered = covered and self.resident_profile_covered
         if not covered:
             tpot_ratio = float("inf")
-        decode_queue_ratio = (
-            self.pending_decode_work_s / (decode * self.ttft_slo) if include_resident else 0.0
-        )
+        decode_queue_ratio = pending_work_s / (decode * self.ttft_slo) if include_resident else 0.0
         if include_resident:
             tpot_ratio = max(tpot_ratio, self.decode_pressure * self.current_decode / decode)
             if profiles:
@@ -379,28 +395,10 @@ class SplitScorer:
             profile.covers_prefill(request.input_len) for request in pending for profile in profiles
         )
         estimates = self.demand._output_estimates() if estimates is None else estimates
-        pending_tokens = sum(
-            r.input_len + self.demand._expected_output(r.input_len, r.wanted_len, estimates) / 2.0
+        pending_shapes = tuple(
+            (r.input_len, self.demand._expected_output(r.input_len, r.wanted_len, estimates))
             for r in pending
         )
-        pending_max_tokens = 0.0
-        pending_work_s = 0.0
-        pending_covered = bool(profiles)
-        for request in pending:
-            output = self.demand._expected_output(request.input_len, request.wanted_len, estimates)
-            context = request.input_len + output / 2.0
-            pending_max_tokens = max(pending_max_tokens, context)
-            capacity = self.scheduler.profiles.mean_decode_rps(
-                self.scheduler.slo.tpot_s,
-                context,
-                output,
-                correction=1.0 if correction is None else correction,
-                iids=self.monitor.instances,
-            )
-            if not capacity or not all(p.covers_decode(1, context) for p in profiles):
-                pending_covered = False
-            else:
-                pending_work_s += 1.0 / capacity
         current_prefill = sum(inst.role is Role.PREFILL for inst in instances)
         profile_options_list: list[tuple[int, tuple[Profile, ...]]] = []
         for prefill in range(1, len(instances)):
@@ -452,11 +450,11 @@ class SplitScorer:
             resident_prefill_s=resident_prefill,
             resident_decode_tokens=sum(i.decode_tokens() for i in instances),
             resident_decode_requests=sum(len(i.decode) for i in instances),
-            pending_decode_tokens=pending_tokens,
+            pending_decode_tokens=sum(
+                input_len + output / 2.0 for input_len, output in pending_shapes
+            ),
             pending_decode_requests=len(pending),
-            pending_decode_max_tokens=pending_max_tokens,
-            pending_decode_work_s=pending_work_s,
-            pending_decode_profile_covered=pending_covered,
+            pending_decode_shapes=pending_shapes,
             decode_correction=(
                 self.demand._decode_correction() if correction is None else correction
             ),

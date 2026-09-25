@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -273,7 +274,14 @@ def materialize(
         },
         "profiles": {"path": str(output / "profiles.json")},
         "recovery": {"state_path": str(output / "router-state.json")},
-        "engine": {"first_token_timeout_s": 10.0},
+        "engine": {
+            "first_token_timeout_s": 10.0,
+            **(
+                {"engine_api_key_env": "NARWHAL_ENGINE_API_KEY"}
+                if os.environ.get("NARWHAL_ENGINE_API_KEY")
+                else {}
+            ),
+        },
     }
     for index in range(count):
         number = index + 1

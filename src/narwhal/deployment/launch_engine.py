@@ -973,6 +973,41 @@ def gpu_memory(gpu_uuid: str) -> dict[str, int]:
     raise ValueError(f"GPU memory inspection did not find usable device {gpu_uuid}")
 
 
+def validate_shared_gpu(run: Path, plan: dict) -> None:
+    """Bind the serving CUDA selection to the UUID used for shared memory accounting."""
+    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
+    values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
+    selected = values.get("CUDA_VISIBLE_DEVICES", "")
+    expected = plan["shared_device"]["gpu_uuid"]
+    if selected == expected:
+        return
+    if not (
+        re.fullmatch(r"[0-9]+", selected)
+        or (selected.startswith("GPU-") and expected.startswith(selected))
+    ):
+        raise ValueError(
+            f"{plan['role']}: CUDA_VISIBLE_DEVICES={selected!r} differs from shared GPU {expected}"
+        )
+    # Resolve CUDA ordinals in the serving runtime; NVML indices can use another order.
+    script = """import torch
+from uuid import UUID
+if torch.cuda.device_count() != 1:
+    raise ValueError('shared launch requires exactly one visible CUDA device')
+device = torch.cuda.get_device_properties(0)
+print('NARWHAL_SHARED_GPU=GPU-' + str(UUID(bytes=bytes(device.uuid.bytes))))
+"""
+    output = run_runtime_script(run, plan, script, [], f"shared-gpu-{uuid.uuid4().hex}.log")
+    prefix = "NARWHAL_SHARED_GPU="
+    observed = [
+        line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if observed != [expected]:
+        raise ValueError(
+            f"{plan['role']}: CUDA_VISIBLE_DEVICES={selected!r} resolved to {observed!r}, "
+            f"expected shared GPU {expected}"
+        )
+
+
 def validate_shared_runs(
     runs: list[Path], *, backend: str = "container"
 ) -> list[tuple[Path, dict]]:
@@ -1009,6 +1044,7 @@ def validate_shared_runs(
             shared[key] != group[key] for key in ("group", "gpu_uuid", "device_allowance")
         ):
             raise ValueError(f"{plan['role']}: shared GPU identity or allowance differs")
+        validate_shared_gpu(run, plan)
         role = plan["role"]
         if role in roles:
             raise ValueError(f"{role}: duplicate engine role in shared GPU start")

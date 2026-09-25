@@ -286,14 +286,17 @@ def capture_nixl(run: Path) -> Path:
     identity = live_native(run, plan, checked) if native else live_container(run, checked)
     if native:
         command = [plan["python_executable"], "-c", NIXL_CAPTURE]
+        values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
     else:
         assert isinstance(identity, str)
         command = ["docker", "exec", identity, "python3", "-c", NIXL_CAPTURE]
+        values = {}
     result = subprocess.run(
         command,
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"} if native else None,
     )
     record = parse_nixl_capture(result.stdout)
     if (

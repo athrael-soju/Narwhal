@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from tools.deployment.launch_engine import (
     start,
     start_shared,
     validate_runtime,
+    validate_shared_gpu,
     validate_shared_runs,
 )
 
@@ -477,6 +479,7 @@ class SharedEngineStartTests(unittest.TestCase):
             run.mkdir()
             (run / "launch.json").write_text("{}")
             (run / "checked.json").write_text(json.dumps({"image_id": "sha256:test"}))
+            (run / "container.env").write_text("CUDA_VISIBLE_DEVICES=GPU-test\n")
             selected.append(
                 (
                     run,
@@ -497,6 +500,114 @@ class SharedEngineStartTests(unittest.TestCase):
                 )
             )
         return selected
+
+    def test_shared_start_rejects_visibility_on_another_gpu_for_both_backends(self):
+        for backend in ("container", "native"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                selected = self.fixture(Path(folder))
+                for run, plan in selected:
+                    if backend == "native":
+                        plan.update(backend="native", python_executable=sys.executable)
+                        (run / "engine.env").write_text("CUDA_VISIBLE_DEVICES=GPU-test\n")
+                        (run / "checked.json").write_text(
+                            json.dumps(
+                                {
+                                    "backend": "native",
+                                    "python_executable": sys.executable,
+                                    "plan_sha256": digest(run / "launch.json"),
+                                }
+                            )
+                        )
+                env_file = "engine.env" if backend == "native" else "container.env"
+                (selected[1][0] / env_file).write_text("CUDA_VISIBLE_DEVICES=GPU-another\n")
+                plans = dict(selected)
+                with (
+                    patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
+                    patch("tools.deployment.launch_engine.require_checked"),
+                    patch("tools.deployment.launch_engine.run_runtime_script") as inspect,
+                    self.assertRaisesRegex(ValueError, "engine-2:.*differs from shared GPU"),
+                ):
+                    validate_shared_runs([run for run, _ in selected], backend=backend)
+                inspect.assert_not_called()
+
+    def test_native_cuda_ordinal_resolves_through_recorded_runtime_environment(self):
+        expected = "GPU-11111111-1111-1111-1111-111111111111"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            (runtime / "torch.py").write_text(
+                "import os\n"
+                "from types import SimpleNamespace\n"
+                "assert os.environ['NARWHAL_CAPTURE_CACHE'] == '0'\n"
+                "assert os.environ['CUDA_DEVICE_ORDER'] == 'FASTEST_FIRST'\n"
+                "def properties(index):\n"
+                "    assert index == 0\n"
+                "    value = '11' if os.environ['CUDA_VISIBLE_DEVICES'] == '1' else '22'\n"
+                "    uuid = SimpleNamespace(bytes=bytes.fromhex(value * 16))\n"
+                "    return SimpleNamespace(uuid=uuid)\n"
+                "cuda = SimpleNamespace(device_count=lambda: 1, get_device_properties=properties)\n"
+            )
+            selected = self.fixture(root)
+            for run, plan in selected:
+                plan.update(backend="native", python_executable=sys.executable)
+                plan["shared_device"]["gpu_uuid"] = expected
+                (run / "checked.json").write_text(
+                    json.dumps(
+                        {
+                            "backend": "native",
+                            "python_executable": sys.executable,
+                            "plan_sha256": digest(run / "launch.json"),
+                        }
+                    )
+                )
+                (run / "engine.env").write_text(f"CUDA_VISIBLE_DEVICES=1\nPYTHONPATH={runtime}\n")
+            plans = dict(selected)
+            with (
+                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
+                patch.dict(os.environ, {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}),
+            ):
+                self.assertEqual(
+                    validate_shared_runs([run for run, _ in selected], backend="native"), selected
+                )
+                (selected[1][0] / "engine.env").write_text(
+                    f"CUDA_VISIBLE_DEVICES=0\nPYTHONPATH={runtime}\n"
+                )
+                with self.assertRaisesRegex(ValueError, "engine-2:.*resolved to.*GPU-2222"):
+                    validate_shared_runs([run for run, _ in selected], backend="native")
+
+    def test_container_cuda_selection_queries_the_serving_image(self):
+        expected = "GPU-11111111-1111-1111-1111-111111111111"
+        for selection in ("1", "GPU-1111"):
+            with self.subTest(selection=selection), tempfile.TemporaryDirectory() as folder:
+                run, plan = self.fixture(Path(folder))[0]
+                plan.update(common=["--env-file", str(run / "container.env")], image="sha256:test")
+                plan["shared_device"]["gpu_uuid"] = expected
+                (run / "container.env").write_text(f"CUDA_VISIBLE_DEVICES={selection}\n")
+                cuda = Mock()
+                cuda.device_count.return_value = 1
+                cuda.get_device_properties.return_value.uuid.bytes = bytes.fromhex("11" * 16)
+                torch = ModuleType("torch")
+                torch.cuda = cuda
+
+                def inspect(command, directory, log, run=run, torch=torch):
+                    index = command.index("-c")
+                    self.assertEqual(command[:2], ["run", "--rm"])
+                    self.assertIn(str(run / "container.env"), command)
+                    self.assertEqual(command[index - 1], "sha256:test")
+                    with (
+                        patch.dict(sys.modules, {"torch": torch}),
+                        contextlib.redirect_stdout(io.StringIO()) as output,
+                    ):
+                        exec(command[index + 1], {})
+                    return output.getvalue()
+
+                with patch("tools.deployment.launch_engine.docker", side_effect=inspect):
+                    validate_shared_gpu(run, plan)
+                    cuda.get_device_properties.assert_called_once_with(0)
+                    cuda.device_count.return_value = 2
+                    with self.assertRaisesRegex(ValueError, "exactly one visible CUDA device"):
+                        validate_shared_gpu(run, plan)
 
     def test_preflight_checks_ports_and_total_budget_before_start(self):
         with tempfile.TemporaryDirectory() as folder:

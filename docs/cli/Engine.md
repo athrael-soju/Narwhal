@@ -14,7 +14,9 @@ python -m narwhal.deployment.attestation_contract native-capture --run runs/engi
 narwhal-engine stop-native --run runs/engine-1
 ```
 
-`start-shared` checks every selected role, port and GPU budget before launching sequentially. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. It checks observed fleet GPU use against `shared_device.device_allowance` after each start. `native-capture` uses Narwhal's model, cache, NIXL and handshake checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` signals only the recorded process group when its identity still matches.
+`start-shared` checks every selected role, port and GPU budget before launching sequentially. The selected CUDA device must resolve to `shared_device.gpu_uuid`; numeric ordinals and UUID prefixes resolve inside the checked runtime with its recorded environment. It records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision, arguments and GPU memory. It checks observed fleet GPU use against `shared_device.device_allowance` after each start.
+
+`native-capture` applies the recorded engine environment to Narwhal's model, cache, NIXL and handshake checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` verifies the recorded process identity and waits for owned workers through group-leader exit, escalating survivors to SIGKILL.
 
 When starting engines through Windows OpenSSH, keep a WSL terminal open for
 the fleet's lifetime. Closing the final `wsl.exe` session can stop the WSL

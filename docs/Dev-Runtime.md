@@ -165,7 +165,12 @@ narwhal dev down
 narwhal dev status
 ```
 
-Expect `stopped`. `down` signals the process groups recorded for this
-instance and preserves its logs. Run `up` and `verify` again after changing
-the runtime or restarting an engine so profiles and transfer checks bind
-to the new processes.
+`down` waits for the recorded process groups to exit before reporting
+`stopped`, escalating owned workers that survive SIGTERM to SIGKILL and
+preserving the instance logs. If a leader exited before teardown could
+establish worker ownership, it reports surviving group members as
+`degraded`. Inspect the PIDs in `teardown.json`, stop workers confirmed to
+belong to this instance, then repeat `down`.
+
+Run `up` and `verify` again after changing the runtime or restarting an
+engine so profiles and transfer checks bind to the new processes.

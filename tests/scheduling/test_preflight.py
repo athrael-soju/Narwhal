@@ -565,6 +565,127 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             failures = await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path)
         self.assertTrue(any("changed since KV qualification" in failure for failure in failures))
 
+    async def test_directed_qualification_binds_the_full_mesh_and_profiles(self):
+        """Each passed document verifies immediately against its unchanged fleet."""
+        digest = "sha256:" + "a" * 64
+        for restart_at, repeats, changed_file in (
+            (None, 1, None),
+            (None, 2, None),
+            (4, 1, None),
+            (4, 2, None),
+            (0, 1, None),
+            (8, 1, None),
+            (None, 1, "profiles"),
+            (None, 1, "fleet"),
+        ):
+            with self.subTest(restart_at=restart_at, repeats=repeats, changed_file=changed_file):
+                store = ProfileStore(self.cfg.profiles_path, load=False)
+                for spec in self.cfg.engines:
+                    store.put(profile(spec.iid, generation_digest=digest))
+                fleet_path = self.cfg.profiles_path.parent / "fleet.json"
+                self.cfg.save(fleet_path)
+                evidence_path = fleet_path.parent / "mesh.json"
+                evidence_path.unlink(missing_ok=True)
+                snapshots = 0
+
+                async def snapshot(
+                    cfg,
+                    iid,
+                    restart_at=restart_at,
+                    changed_file=changed_file,
+                    fleet_path=fleet_path,
+                ):
+                    nonlocal snapshots
+                    restarted = iid == "e0" and restart_at is not None and snapshots >= restart_at
+                    transfers = snapshots // 4 + (snapshots % 4 >= 2)
+                    snapshots += 1
+                    if changed_file is not None and snapshots == 5:
+                        path = cfg.profiles_path if changed_file == "profiles" else fleet_path
+                        path.write_text(path.read_text() + "\n")
+                    return {
+                        "iid": iid,
+                        "vllm_version": "0.29.0",
+                        "process_start_time_seconds": 101.0 if restarted else 100.0,
+                        "attestation_digest": "sha256:" + "b" * 64 if restarted else digest,
+                        "nixl_transfer_count": transfers,
+                        "nixl_transfer_seconds_sum": transfers * 0.2,
+                    }
+
+                async def output(*args, **kwargs):
+                    yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+
+                result = NixlConnector().prefill_result(
+                    {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+                    url=self.cfg.engines[0].url,
+                    endpoint="/v1/completions",
+                    request_id="request",
+                )
+                client = SimpleNamespace(
+                    prefill=AsyncMock(return_value=result), decode=output, aclose=AsyncMock()
+                )
+                report = Report()
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(check, "EngineClient", return_value=client))
+                    for name, value in (
+                        ("reach", {"e0", "e3"}),
+                        ("contract", set()),
+                        ("model", set()),
+                        ("pace", set()),
+                        ("tokenize", None),
+                        ("produce", {"e0": result, "e3": result}),
+                    ):
+                        stack.enter_context(
+                            patch.object(check, f"gate_{name}", new=AsyncMock(return_value=value))
+                        )
+                    stack.enter_context(
+                        patch.object(
+                            check,
+                            "read_generation",
+                            new=AsyncMock(return_value=GenerationEvidence(digest, {})),
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(check, "_pair_snapshot", new=AsyncMock(side_effect=snapshot))
+                    )
+                    code = await check.run(
+                        self.cfg,
+                        mesh=True,
+                        skip_kv=False,
+                        repeats=repeats,
+                        report=report,
+                        evidence_out=evidence_path,
+                        fleet_path=fleet_path,
+                    )
+                    saved = json.loads(evidence_path.read_text())
+                    if restart_at is None and changed_file is None:
+                        self.assertEqual(code, 0, report.failed)
+                        self.assertEqual(saved["status"], "passed")
+                        self.assertEqual(
+                            await check.verify_directed_kv_evidence(
+                                self.cfg, fleet_path, evidence_path
+                            ),
+                            [],
+                        )
+                    else:
+                        self.assertEqual(code, 1)
+                        self.assertEqual(saved["status"], "failed")
+                        if restart_at == 4:
+                            self.assertTrue(
+                                any("differs across directed KV probes" in p for p in report.failed)
+                            )
+                        elif restart_at == 0:
+                            self.assertTrue(
+                                any("profile generation differs" in p for p in report.failed)
+                            )
+                        elif changed_file is not None:
+                            self.assertTrue(
+                                any(
+                                    "changed during directed KV qualification" in p
+                                    for p in report.failed
+                                )
+                            )
+                client.aclose.assert_awaited_once()
+
     def test_pairs_respect_role_sets_and_cover_consumers(self):
         """Ring construction covers permitted consumers with eligible producers."""
         self.assertEqual(pairs_of([], ["d"], False), [])
@@ -623,3 +744,60 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             report = Report()
             gate_slo(replace(self.cfg, slo=slo), store, report)
             self.assertEqual(len(report.failed), 2)
+
+    def test_slo_gate_prices_the_measured_request_and_kv_minimum(self):
+        """TPOT feasibility and reported capacity charge the active request cohort."""
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        store = ProfileStore(self.cfg.profiles_path)
+        for request_slope, token_slope, minimum_requests, minimum_tokens, passes in (
+            (1.0, 0.000001, 1, 1, False),
+            (0.1, 0.000001, 8, 1, False),
+            (0.0, 0.00001, 1, 100_000, False),
+            (0.0, 0.000001, 1, 100_000, True),
+            (0.0, 0.000001, 1, 1, True),
+            (0.1, 0.000001, 2, 1, True),
+        ):
+            with self.subTest(request_slope=request_slope, minimum_requests=minimum_requests):
+                for spec in self.cfg.engines:
+                    store.put(
+                        profile(
+                            spec.iid,
+                            tpot_request_slope=request_slope,
+                            tpot_slope=token_slope,
+                            decode_min_requests=minimum_requests,
+                            decode_min_kv_tokens=minimum_tokens,
+                        )
+                    )
+                report = Report()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    gate_slo(self.cfg, store, report)
+                if passes:
+                    self.assertEqual(report.failed, [])
+                    self.assertIn(f"across {minimum_requests} requests", output.getvalue())
+                else:
+                    self.assertEqual(len(report.failed), 2)
+                    self.assertIn(f"at {minimum_requests} requests", report.failed[0])
+
+    def test_slo_capacity_and_profile_equation_include_the_request_coefficient(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid, tpot_request_slope=0.01, tpot_slope=0.0001))
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        output = io.StringIO()
+        report = Report()
+        with redirect_stdout(output):
+            gate_profile(self.cfg, report)
+            gate_slo(self.cfg, store, report)
+        self.assertEqual(report.failed, [])
+        self.assertIn("tpot=1.00e-02q+1.00e-04b+0.0010", output.getvalue())
+        self.assertIn("4890 batch tokens across 1 requests", output.getvalue())
+
+    def test_slo_gate_accepts_a_flat_profile_at_the_measured_boundary(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid, tpot_slope=0, tpot_request_slope=0, tpot_intercept=0.5))
+        report = Report()
+        gate_slo(self.cfg, store, report)
+        self.assertEqual(report.failed, [])

@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import os
 import socket
 import subprocess
 import sys
@@ -12,9 +13,12 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.config import FleetConfig
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
 from narwhal.profiling.probe import Sweep, bounded_sweep
+
+from .fixtures import process_group_with_worker
 
 
 class DevTests(unittest.TestCase):
@@ -67,6 +71,67 @@ class DevTests(unittest.TestCase):
         self.assertTrue(all(e["url"].startswith("http://127.0.0.1:") for e in fleet["engines"]))
         _, ports = template._port_layout(self.spec, 4)
         self.assertEqual(len(ports), 13)
+
+    def test_init_records_the_engine_credential_reference(self):
+        with patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": "synthetic-key"}):
+            self.initialize()
+            fleet_path = self.root / "fleet.json"
+            fleet = FleetConfig.load(fleet_path)
+            self.assertEqual(fleet.engine_api_key_env, "NARWHAL_ENGINE_API_KEY")
+            self.assertEqual(fleet.engine_headers(), {"authorization": "Bearer synthetic-key"})
+            self.assertNotIn("synthetic-key", fleet_path.read_text())
+
+    def test_up_uses_the_same_credential_for_engines_and_fleet_clients(self):
+        with patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": ""}):
+            self.initialize()
+
+        class Prepared(Exception):
+            pass
+
+        for key_env in ("NARWHAL_ENGINE_API_KEY", "CUSTOM_ENGINE_KEY"):
+            with self.subTest(key_env=key_env):
+                fleet = lifecycle.read(self.root / "fleet.json")
+                if key_env == "CUSTOM_ENGINE_KEY":
+                    fleet["engine"]["engine_api_key_env"] = key_env
+                    lifecycle.write(self.root / "fleet.json", fleet)
+                run = self.root / key_env
+                run.mkdir()
+
+                def inspect_preparation(runs, run=run, key_env=key_env):
+                    cfg = FleetConfig.load(run / "fleet.json")
+                    self.assertEqual(cfg.engine_api_key_env, key_env)
+                    for engine_run in runs:
+                        values = dict(
+                            line.split("=", 1)
+                            for line in (engine_run / "engine.env").read_text().splitlines()
+                        )
+                        self.assertEqual(
+                            cfg.engine_headers(),
+                            {"authorization": f"Bearer {values['VLLM_API_KEY']}"},
+                        )
+                    raise Prepared()
+
+                with (
+                    patch.dict(
+                        os.environ,
+                        {
+                            "NARWHAL_ENGINE_API_KEY": "synthetic-default-key",
+                            "CUSTOM_ENGINE_KEY": "synthetic-custom-key",
+                        },
+                    ),
+                    patch.object(lifecycle, "_run"),
+                    patch.object(
+                        lifecycle.native_engine, "start_shared", side_effect=inspect_preparation
+                    ),
+                    self.assertRaises(Prepared),
+                ):
+                    lifecycle._launch(
+                        self.root,
+                        run,
+                        lifecycle.instance(self.root),
+                        self.spec,
+                        {"run": str(run), "processes": []},
+                    )
 
     def test_four_engine_profiles_cover_both_adjacent_splits(self):
         self.initialize()
@@ -220,6 +285,61 @@ class DevTests(unittest.TestCase):
         )
         self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
         self.assertIsNone(process.poll())
+
+    def test_down_waits_for_workers_after_the_leader_exits(self):
+        self.initialize()
+        with process_group_with_worker() as (leader, _):
+            identity = lifecycle.native_engine.process_identity(leader.pid)
+            run = self.root / "run-test"
+            run.mkdir()
+            lifecycle.write(
+                self.root / "lifecycle.json",
+                {
+                    "phase": "launched",
+                    "run": str(run),
+                    "processes": [{"name": "router", "identity": identity}],
+                },
+            )
+            terminate = lifecycle.native_engine._terminate
+            with patch.object(
+                lifecycle.native_engine,
+                "_terminate",
+                side_effect=lambda owned: terminate(owned, grace_seconds=0.05),
+            ):
+                self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
+            self.assertEqual(lifecycle.native_engine._group_members(identity), {})
+            self.assertEqual(lifecycle.read(run / "teardown.json")["stopped"], ["router"])
+
+    def test_exited_leader_keeps_surviving_workers_visible_in_status_and_down(self):
+        self.initialize()
+        with process_group_with_worker() as (leader, worker):
+            identity = lifecycle.native_engine.process_identity(leader.pid)
+            leader.terminate()
+            leader.wait(timeout=5)
+            run = self.root / "run-test"
+            run.mkdir()
+            (run / "fleet.json").write_bytes((self.root / "fleet.json").read_bytes())
+            lifecycle.write(
+                self.root / "lifecycle.json",
+                {
+                    "phase": "stopped",
+                    "run": str(run),
+                    "processes": [{"name": "router", "identity": identity}],
+                },
+            )
+            transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+            with patch.object(
+                lifecycle.httpx, "Client", return_value=httpx.Client(transport=transport)
+            ):
+                result = lifecycle.status(self.root)
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["surviving_processes"], {"router": [worker]})
+            with self.assertRaisesRegex(ValueError, "require operator inspection"):
+                lifecycle.down(self.root)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "degraded")
+            self.assertIn(str(worker), state["errors"][0])
+            self.assertIn(worker, lifecycle.native_engine._group_members(identity))
 
     def test_saved_ready_state_requires_current_kv_evidence(self):
         self.initialize()

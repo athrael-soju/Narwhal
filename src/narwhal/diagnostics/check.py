@@ -585,7 +585,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
         if problems:
             continue
         quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}"
-        interval = f"{p.tpot_slope:.2e}b+{p.tpot_intercept:.4f}"
+        interval = f"{p.tpot_request_slope:.2e}q+{p.tpot_slope:.2e}b+{p.tpot_intercept:.4f}"
         rep.ok(
             f"{spec.iid} ttft={quadratic} tpot={interval} "
             f"decode_fit_mape={p.decode_fit_mape:.4f} "
@@ -643,27 +643,33 @@ async def gate_profile_generation(
 
 
 def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
-    """Check that each profile can meet the configured latency targets.
-
-    The TPOT target must exceed each engine's fitted `tpot_intercept`.
-    """
+    """Price the smallest measured decode cohort against the configured targets."""
     print("slo")
     for spec in cfg.engines:
         p = store.get(spec.iid)
         if p is None:
             rep.skip(f"{spec.iid} slo: no profile")
             continue
-        if cfg.slo.tpot_s <= p.tpot_intercept:
+        requests = p.decode_min_requests
+        tokens = p.decode_min_kv_tokens
+        if requests is None or tokens is None:
+            rep.fail(f"{spec.iid} TPOT qualification requires measured request and KV bounds")
+            continue
+        interval = p.token_interval(tokens, requests)
+        if interval > cfg.slo.tpot_s:
             rep.fail(
-                f"{spec.iid} tpot floor {p.tpot_intercept * 1000:.1f} ms is at or above the "
-                f"{cfg.slo.tpot_s * 1000:.1f} ms target; unreachable at any fleet size"
+                f"{spec.iid} tpot {interval * 1000:.1f} ms at {requests} requests and "
+                f"{tokens} KV tokens exceeds the {cfg.slo.tpot_s * 1000:.1f} ms target"
             )
             continue
-        headroom = p.max_tokens(cfg.slo.tpot_s)
+        headroom = p.max_tokens(cfg.slo.tpot_s, requests)
         if cfg.slo.ttft_s <= p.prefill_time(1):
             rep.fail(f"{spec.iid} ttft target is below its own single-token prefill time")
             continue
-        rep.ok(f"{spec.iid} holds {headroom:.0f} batch tokens at the TPOT target")
+        rep.ok(
+            f"{spec.iid} holds {headroom:.0f} batch tokens across {requests} requests "
+            "at the TPOT target"
+        )
 
 
 async def verify_directed_kv_evidence(
@@ -771,6 +777,12 @@ async def run(
             )
         if evidence_out.exists():
             raise ValueError(f"directed KV evidence already exists: {evidence_out}")
+    fleet_hash = sha256(fleet_path.read_bytes()).hexdigest() if fleet_path is not None else None
+    profile_hash = (
+        sha256(cfg.profiles_path.read_bytes()).hexdigest()
+        if evidence_out is not None and cfg.profiles_path.exists()
+        else None
+    )
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
@@ -827,18 +839,42 @@ async def run(
                 if passed < max(1, repeats):
                     rep.fail(f"{src} -> {dst}: no current passing directed KV evidence")
             first_generation: dict[str, dict[str, object]] = {}
+            generation_failures: set[str] = set()
             for row in rep.pairs:
                 for side in ("producer", "consumer"):
-                    snapshot = row.get(f"{side}_before")
-                    if isinstance(snapshot, dict):
-                        first_generation[str(row[side])] = snapshot
+                    iid = str(row[side])
+                    for phase in ("before", "after"):
+                        snapshot = row.get(f"{side}_{phase}")
+                        if isinstance(snapshot, dict):
+                            first = first_generation.setdefault(iid, snapshot)
+                            if not _same_generation(first, snapshot):
+                                generation_failures.add(
+                                    f"{iid} process generation differs across directed KV probes"
+                                )
             for iid, before in first_generation.items():
                 try:
                     current = await _pair_snapshot(cfg, iid)
                     if not _same_generation(before, current):
-                        rep.fail(f"{iid} process changed after directed KV probes")
+                        generation_failures.add(f"{iid} process changed after directed KV probes")
+                    for profile in store.profiles_for_engine(iid):
+                        problem = generation_problem(
+                            iid, profile.generation_digest, str(current["attestation_digest"])
+                        )
+                        if problem:
+                            generation_failures.add(problem)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                    rep.fail(f"{iid} current process verification failed: {exc}")
+                    generation_failures.add(f"{iid} current process verification failed: {exc}")
+            for problem in sorted(generation_failures):
+                rep.fail(problem)
+            if fleet_path is None or sha256(fleet_path.read_bytes()).hexdigest() != fleet_hash:
+                rep.fail("fleet changed during directed KV qualification")
+            current_profile_hash = (
+                sha256(cfg.profiles_path.read_bytes()).hexdigest()
+                if cfg.profiles_path.exists()
+                else None
+            )
+            if current_profile_hash != profile_hash or profile_hash is None:
+                rep.fail("profile store changed during directed KV qualification")
     finally:
         await client.aclose()
 
@@ -850,12 +886,8 @@ async def run(
             "schema": "narwhal.directed-kv-evidence",
             "schema_version": 1,
             "captured_at_unix": time.time(),
-            "fleet_sha256": sha256(fleet_path.read_bytes()).hexdigest(),
-            "profile_sha256": (
-                sha256(cfg.profiles_path.read_bytes()).hexdigest()
-                if cfg.profiles_path.exists()
-                else None
-            ),
+            "fleet_sha256": fleet_hash,
+            "profile_sha256": profile_hash,
             "model": cfg.model,
             "contract_fingerprint": contract.fingerprint(),
             "expected_pairs": [list(pair) for pair in validation_pairs(cfg.engines, mesh=True)],

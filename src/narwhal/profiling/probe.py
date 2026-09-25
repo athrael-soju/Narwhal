@@ -14,6 +14,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -500,9 +501,10 @@ class NeighbourLoad:
         self.chars_per_token = chars_per_token
         self.workload = workload
         self.tasks: list[asyncio.Task[None]] = []
-        self.counts = {Role.PREFILL: 0, Role.DECODE: 0}
-        self.errors: list[str] = []
+        self.counts = {iid: 0 for iid, _, _ in peers}
+        self.errors: dict[str, str] = {}
         self.started = 0.0
+        self.elapsed: float | None = None
 
     async def start(self) -> None:
         """Tokenize each peer's request shape before starting the timed load."""
@@ -527,12 +529,13 @@ class NeighbourLoad:
         # Observe a full period before fitting the target. Reset counters so
         # stored rates describe only the same interval as the latency sweep.
         await asyncio.sleep(max(1.0 / job[3] for job in jobs))
+        self._collect_task_errors()
         if self.errors:
             for task in self.tasks:
                 task.cancel()
             await asyncio.gather(*self.tasks, return_exceptions=True)
-            raise RuntimeError("neighbour load failed during warmup: " + "; ".join(self.errors))
-        self.counts = {Role.PREFILL: 0, Role.DECODE: 0}
+            raise RuntimeError("neighbour load failed during warmup: " + self._error_detail())
+        self.counts = dict.fromkeys(self.counts, 0)
         self.started = time.monotonic()
 
     async def _serve(
@@ -559,31 +562,59 @@ class NeighbourLoad:
                     or result.get("usage", {}).get("completion_tokens") != output
                 ):
                     raise RuntimeError("incomplete neighbour completion")
-                self.counts[role] += 1
+                self.counts[iid] += 1
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
-                self.errors.append(f"{iid}: {exc}")
+                self.errors[iid] = str(exc)
                 return
             next_at = max(next_at + interval, time.monotonic())
 
-    async def stop(self) -> dict[str, float | int]:
-        """Return achieved per-role request rates and fail closed on peer errors."""
-        elapsed = max(time.monotonic() - self.started, 1e-9)
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-        if self.errors:
-            raise RuntimeError("neighbour load failed: " + "; ".join(self.errors))
-        if any(self.counts[role] == 0 for role in Role if any(p[2] is role for p in self.peers)):
-            raise RuntimeError("neighbour load produced no completed requests")
+    def _collect_task_errors(self) -> None:
+        for (iid, _, _), task in zip(self.peers, self.tasks, strict=True):
+            if task.done() and not task.cancelled() and (error := task.exception()) is not None:
+                self.errors[iid] = f"{type(error).__name__}: {error}"
+
+    def _error_detail(self) -> str:
+        return "; ".join(f"{iid}: {error}" for iid, error in self.errors.items())
+
+    def evidence(self) -> dict[str, Any]:
+        """Retain completed traffic and errors for every configured neighbour."""
+        elapsed = self.elapsed or max(time.monotonic() - self.started, 1e-9)
+        counts = {
+            role: sum(self.counts[iid] for iid, _, peer_role in self.peers if peer_role is role)
+            for role in Role
+        }
         return {
             "elapsed_s": elapsed,
             "offered_prefill_rps_per_peer": self.workload.prefill_rps,
             "offered_decode_rps_per_peer": self.workload.decode_rps,
-            "completed_prefill": self.counts[Role.PREFILL],
-            "completed_decode": self.counts[Role.DECODE],
-            "prefill_rps": self.counts[Role.PREFILL] / elapsed,
-            "decode_rps": self.counts[Role.DECODE] / elapsed,
+            "completed_prefill": counts[Role.PREFILL],
+            "completed_decode": counts[Role.DECODE],
+            "prefill_rps": counts[Role.PREFILL] / elapsed,
+            "decode_rps": counts[Role.DECODE] / elapsed,
+            "peers": {
+                iid: {
+                    "role": role.value,
+                    "completed": self.counts[iid],
+                    "rps": self.counts[iid] / elapsed,
+                    "error": self.errors.get(iid),
+                }
+                for iid, _, role in self.peers
+            },
         }
+
+    async def stop(self) -> dict[str, Any]:
+        """Require completed traffic from each peer before retaining its role mix."""
+        self.elapsed = max(time.monotonic() - self.started, 1e-9)
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        self._collect_task_errors()
+        for iid, count in self.counts.items():
+            if count == 0:
+                self.errors.setdefault(iid, "completed 0 requests during measurement")
+        if self.errors:
+            raise RuntimeError("neighbour load failed: " + self._error_detail())
+        return self.evidence()
 
 
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
@@ -831,8 +862,9 @@ async def run(
                 neighbour_load = NeighbourLoad(
                     client, peers, cfg.model, dialect, cfg.chars_per_token, colocated_workload
                 )
-                await neighbour_load.start()
             try:
+                if neighbour_load is not None:
+                    await neighbour_load.start()
                 generation = await read_generation(
                     spec,
                     cfg.engine_contract,
@@ -896,6 +928,7 @@ async def run(
                     for task in neighbour_load.tasks:
                         task.cancel()
                     await asyncio.gather(*neighbour_load.tasks, return_exceptions=True)
+                    engine_evidence["colocated_load"] = neighbour_load.evidence()
                 engine_evidence["error"] = str(exc)
                 evidence_rows[spec.iid] = engine_evidence
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)

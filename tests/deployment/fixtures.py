@@ -1,13 +1,77 @@
 """Reusable synthetic engine allocation and serving inputs."""
 
+import contextlib
+import ctypes
 import hashlib
 import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 from tools.deployment.engine_launch import selected_launch
 from tools.deployment.launch_engine import digest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@contextlib.contextmanager
+def process_group_with_worker():
+    """Reap a synthetic leader and its SIGTERM-ignoring worker after each test."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous = ctypes.c_int()
+    if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) or libc.prctl(36, 1, 0, 0, 0):
+        raise OSError(ctypes.get_errno(), "could not enable test child reaping")
+    worker = None
+    leader = None
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            ready = Path(folder) / "worker.json"
+            child_script = (
+                "import os, pathlib, signal, sys, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "ready = pathlib.Path(sys.argv[1]); "
+                "pending = ready.with_suffix('.tmp'); "
+                "pending.write_text(str(os.getpid())); pending.replace(ready); "
+                "time.sleep(60)"
+            )
+            leader_script = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]]); "
+                "time.sleep(60)"
+            )
+            leader = subprocess.Popen(
+                [sys.executable, "-c", leader_script, child_script, str(ready)],
+                start_new_session=True,
+            )
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            worker = int(ready.read_text())
+            yield leader, worker
+    finally:
+        if worker is None and leader is not None:
+            # Setup has retained the unreaped leader PID, including a failed leader.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(leader.pid, signal.SIGKILL)
+        if worker is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(worker, signal.SIGKILL)
+        if leader is not None:
+            if leader.poll() is None:
+                leader.kill()
+            leader.wait(timeout=5)
+        if worker is not None:
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(worker, 0)
+        elif leader is not None:
+            with contextlib.suppress(ChildProcessError):
+                while True:
+                    os.waitpid(-leader.pid, 0)
+        libc.prctl(36, previous.value, 0, 0, 0)
 
 
 def launch_document():
