@@ -49,6 +49,8 @@ def _read_state(root: Path) -> dict:
     for name, kind in (("run", str), ("phase", str), ("processes", list)):
         if not isinstance(state.get(name), kind):
             raise LifecycleDocumentError(f"{path}: {name} must be {kind.__name__}")
+    if "verification" in state and not isinstance(state["verification"], str):
+        raise LifecycleDocumentError(f"{path}: verification must be a path string")
     for index, record in enumerate(state["processes"]):
         if (
             not isinstance(record, dict)

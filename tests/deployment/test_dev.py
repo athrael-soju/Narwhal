@@ -687,6 +687,10 @@ class DevTests(unittest.TestCase):
             ({}, "run"),
             ({"run": [], "phase": "launched", "processes": []}, "run"),
             ({"run": str(self.root), "phase": "launched", "processes": {}}, "processes"),
+            (
+                {"run": str(self.root), "phase": "ready", "processes": [], "verification": 123},
+                "verification",
+            ),
         ):
             lifecycle.write(path, document)
             original = path.read_bytes()
