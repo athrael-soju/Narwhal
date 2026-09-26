@@ -98,6 +98,7 @@ nav:
       - Role control and capacity floors: concepts/02-Role-Control.md
       - Failure, readmission, and state: concepts/03-Failure-and-State.md
   - Reference:
+      - MCP fleet operations contract (planned): design/MCP-Fleet-Operations.md
       - Configuration:
           - Overview: Configuration.md
           - Fleet schema and contract: configuration/01-Fleet-Schema.md

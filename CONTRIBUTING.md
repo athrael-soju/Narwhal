@@ -74,13 +74,16 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | Placement, role control, demand, cost scoring and engine availability              | `scheduling/`                                         |
 | Engine HTTP client, API dialects, KV connectors and attestation                    | `engines/`                                            |
 | Engine lifecycle, monitoring loop, persisted state, leases and failover            | `runtime/`                                            |
+| Deployment stage execution, plans, gate order and recovery                        | `deployment/`                                         |
+| Local development instance state, locking and lifecycle                           | `dev/`                                                |
+| Proposed MCP tool schemas, stdio dispatch and result mapping                       | `mcp/` (planned)                                      |
 | Calibration probes, cost-model fitting and profile storage                         | `profiling/`                                          |
 | Fleet preflight and KV transfer checks                                            | `diagnostics/`                                        |
 | Prometheus metrics and request journals                                            | `observability/`                                      |
 | Config models, JSON loading, validation and serialization                          | `config/`                                             |
 | Serving entry point, versioned document contracts, build identity and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
 
-Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
+Paths in this table are relative to `src/narwhal/`. The planned MCP contract is specified in [MCP fleet operations](docs/design/MCP-Fleet-Operations.md); the `mcp/` package is not yet present. Site automation under `tools/deployment/` owns workstation discovery, SSH installation and access. `tools/observability/` owns monitoring startup and provisioned assets. An MCP adapter delegates to those owners and declares how its installed package can reach their required assets. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
 
 Keep package initializers light and cross-package imports explicit. Use `TYPE_CHECKING` for type-only imports across the serving/runtime boundary.
 
@@ -118,13 +121,15 @@ Review the diff and commit messages and run the local checks before pushing.
 
 Push your branch to your fork and open a pull request against `athrael-soju/Narwhal:main`. Maintainers use short-lived branches in the same repository. Keep the branch limited to one coherent change, and open a draft while implementation or evidence gathering continues.
 
+For [MCP Fleet Operations #147](https://github.com/athrael-soju/Narwhal/issues/147), create sub-issue branches from `milestone/11-mcp-fleet-operations-v1` and open draft PRs against that integration branch. The final integration PR targets `main` after the milestone acceptance gates pass.
+
 Describe the problem, the resulting behaviour, and how you checked it. Link the relevant issue. Include reproduction steps for a bug fix and identify any checks that require hardware. Sanitize logs and configuration before attaching them.
 
 Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The required PR title check validates the prefix before squash merge, and the prefix determines the release impact.
 
 Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
 
-Bring the branch up to date with `main` and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
+Bring the branch up to date with its target branch and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
 
 A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
 
