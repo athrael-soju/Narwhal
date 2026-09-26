@@ -22,7 +22,7 @@ The deployment client must retain, for every scheduled request:
 * TPOT
 * terminal error information
 
-Refused and failed scored requests remain in the SLO denominator.
+Refused, failed, and cancelled scored requests remain in the SLO denominator.
 
 Narwhal includes empty-text and reasoning-only token IDs in output length and computes TPOT for requests with at least two identified tokens. Retain the stream-accounting rule with each result set and use the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to compare runs with the same denominator and terminal classes.
 
