@@ -25,20 +25,27 @@ plugins/narwhal-operator/
 
 `plugin.json` will contain these fields. Package paths use forward slashes relative to the package root.
 
-| Field | Type and value | Purpose |
+| Required field | Type and value | Purpose |
 | --- | --- | --- |
-| `format` | String, `narwhal.operator-plugin` | Identify the portable descriptor. |
-| `format_version` | Integer, `1` | Select descriptor validation rules. |
-| `name` | String, `narwhal-operator` | Identify the package. |
-| `version` | Release version string | Identify the packaged skill revision. |
-| `contract` | Relative path, `references/Operator-Plugin.md` | Locate this contract in the package. |
-| `skills` | Map of `inspect`, `deploy`, `operate`, and `diagnose` to relative `SKILL.md` paths | Locate each workflow. |
-| `requires.cli_versions` | List of exact Narwhal CLI versions qualified for that package release | Select compatible command implementations. |
-| `requires.command_result` | Schema `narwhal.command-result`, version `1` | Select the command-result parser. |
+| `format` | String, exactly `narwhal.operator-plugin` | Identify the portable descriptor. |
+| `format_version` | Integer, exactly `1` | Select these validation rules. |
+| `name` | String, exactly `narwhal-operator` | Identify the package. |
+| `version` | Nonempty release identifier string | Identify the packaged skill revision. |
+| `contract` | Relative path, exactly `references/Operator-Plugin.md` | Locate this contract in the package. |
+| `skills` | Object with exactly `inspect`, `deploy`, `operate`, and `diagnose` | Map each workflow to its `skills/<name>/SKILL.md` file. |
+| `requires.cli_versions` | Nonempty array of distinct, exact Narwhal distribution version strings | Select qualified command implementations. |
+| `requires.command_result` | Object with `schema: narwhal.command-result` and integer `schema_version: 1` | Select the command-result parser. |
+| `capabilities` | Object with the same four keys as `skills` | Declare each workflow's permitted action classes below. |
 
-The package builder must validate path types and symlink targets within the package root. A host adapter installs the skills, grants tools, resolves credentials, and enforces approvals. At invocation, the skills receive fleet addresses and deployment inputs. A manual adapter produces a plan and handoff for a human operator.
+The `requires` object contains exactly `cli_versions` and `command_result`; `command_result` contains exactly `schema` and `schema_version`. The descriptor parser must reject duplicate JSON keys, additional fields at every level, wrong types, unsupported format versions, and empty or duplicate array values. It must resolve each `contract` and `skills` path within the package root, reject absolute paths and parent traversal, and require a regular file at each resolved path. Symlinks must resolve inside the package root. The package build copies this canonical document from `docs/Operator-Plugin.md` to `references/Operator-Plugin.md` and verifies equal SHA-256 digests.
 
-Before execution, compare each installed command's `--version` output with the package's `requires.cli_versions` and the approved deployment set. Check `narwhal-check`, `narwhal-profile`, `narwhal-engine`, and `narwhal` in the environment that will run each one. `narwhal-check --print-contract-versions` must advertise `narwhal.command-result` with readable version 1 and the persisted contracts required by the workflow. Record the installed artifact identity and source revision with the deployment set. After installation or deployment-set changes, repeat these checks. On a mismatch, record `unsupported` and stop the dependent workflow.
+The `capabilities` arrays declare upper bounds. The host adapter reads this project descriptor, translates it into host-specific installation metadata, and grants the intersection of those classes with site policy. Active probes, Narwhal mutations, and site-supervised handoffs also require action-specific invocation approval. The adapter installs the skills, resolves credentials, and enforces those grants. At invocation, the skills receive fleet addresses and deployment inputs. A manual adapter produces a plan and handoff for a human operator.
+
+Before execution, compare each installed command's `--version` output with the package's `requires.cli_versions` and the approved deployment set. Check `narwhal-check`, `narwhal-profile`, `narwhal-engine`, and `narwhal` in the environment that will run each one. The host adapter must verify that each executable resolves to the approved installation. Compare its installed artifact digest with the approved receipt, or compare its full source revision and clean checkout with the approved bundle hash and revision. Gate B's prepared manifest supplies the bundle hash and revision for runbook installations; other installation methods need an equivalent site receipt. Record `blocked` when installed build identity cannot be established, and `unsupported` when a verified build differs from the approved one.
+
+Validate the `narwhal.contract-manifest` envelope returned by `narwhal-check --print-contract-versions`. It must advertise `narwhal.command-result` with readable version 1 and the persisted contracts required by the workflow. Repeat build and contract checks after installation or deployment-set changes.
+
+At package release, populate `requires.cli_versions` with exact versions that pass conformance checks against their installed artifacts. For each listed version, retain fixtures for the command surface used by the skills, the contract manifest, and the `narwhal.command-result` status and exit-code mapping. Store the fixture digests with the package release. The package metadata carries the qualified version list; this document defines the selection and validation rules.
 
 Run finite `narwhal-check`, `narwhal-profile`, `narwhal-engine`, and `narwhal dev` operations with `--format json`. The [command-result contract](Command-Results.md) defines one stdout object with `schema`, `schema_version`, `command`, `operation`, `status`, `exit_code`, `data`, `artifacts`, and `errors`; progress goes to stderr. Preserve both streams and the process exit, validate the envelope and status/exit-code pairing, then interpret `data`. Inspect running `narwhal-serve` and `narwhal-attest` processes through their HTTP and persisted-state interfaces. Interpret deployment helper and fabric tool outputs according to their own documented exit codes. On an unrecognised schema version, incomplete result, or incompatible build, record `unsupported` and stop the dependent workflow.
 
@@ -48,13 +55,24 @@ For diagnostic collection, validate the `narwhal.diagnostic-bundle` version 1 ma
 
 Each invocation supplies a workflow ID, deployment ID, approved source revision and deployment-set references, private evidence root, permitted hosts and endpoints, mode (`plan`, `observe`, or `execute`), time and workload budget, and caller authorization context. A deployment set binds the release, fleet configuration, profile store, model, engine image and process generations, topology, and applicable evidence. Procedure-specific inputs appear below. When a required input is absent, record `blocked` and name the input needed to proceed.
 
-| Action                                | Examples                                                                                                                                                                            | Owner and authorization                                                                                           |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Passive read                          | Inspect approved files; bounded GET `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, `/metrics`                                                                         | Operator within its read scope. These GETs can expose private operational state.                                  |
-| Private evidence write                | Create run records and snapshots under the approved evidence root                                                                                                                   | Operator. This changes local files, including in `observe` mode.                                                  |
-| Active probe                          | `narwhal-check`, live profiling, fabric tests, engine and ingress completions, load trials                                                                                          | Narwhal or the documented test tool, under an explicit workload and time budget. These requests consume capacity. |
-| Narwhal state change                  | POST `/narwhal/lifecycle/drain` or `/narwhal/lifecycle/readmit`; `attestation_contract finalize-fleet`; profile output replacement through documented `narwhal-profile --overwrite` | Narwhal's documented interface, with action-specific approval and preconditions.                                  |
-| Site process or infrastructure change | Install releases, start/stop engines, sidecars or routers, open tunnels or ingress, change monitoring or load-balancer configuration                                                | Site supervisor. The plugin records the request, receipt, and observed postconditions.                            |
+| Action class | Examples | Owner and authorization |
+| --- | --- | --- |
+| `observe` | Approved files; bounded GET `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, `/metrics` | Operator within its read scope. |
+| `evidence-write` | Run records and snapshots under the approved evidence root | Operator within its private write scope. |
+| `active-probe` | `narwhal-check`, live profiling, fabric tests, completions, load trials | Narwhal or the documented test tool under a workload and time budget. |
+| `narwhal-mutate` | POST lifecycle drain/readmit; `attestation_contract finalize-fleet`; `narwhal-profile --overwrite` | Narwhal's documented interface under action-specific approval. |
+| `site-supervised` | Install releases; start/stop processes; change tunnels, ingress, monitoring or load balancers | Site supervisor. The Operator records its receipt and postconditions. |
+
+`plugin.json` assigns these action-class upper bounds:
+
+| Skill | `capabilities` array |
+| --- | --- |
+| `inspect` | `observe`, `evidence-write` |
+| `deploy` | `observe`, `evidence-write`, `active-probe`, `narwhal-mutate`, `site-supervised` |
+| `operate` | `observe`, `evidence-write`, `active-probe`, `narwhal-mutate`, `site-supervised` |
+| `diagnose` | `observe`, `evidence-write` |
+
+The descriptor parser must reject an unknown action class or a class outside the listed upper bound for its skill. An action that spans classes requires each applicable grant; profiling, for example, uses `active-probe` and `evidence-write`.
 
 `plan` produces an action sequence and required approvals. `observe` reads approved state and writes private evidence. `execute` runs approved active probes and Narwhal actions and requests site-supervised steps. Approval binds target, parameters, deployment-set digest, scope, validity window, and disruption budget. The host adapter enforces approval and serializes mutation workflows within one maintenance scope. Narwhal's lease controls router admission.
 
