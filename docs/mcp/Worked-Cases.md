@@ -1,10 +1,13 @@
 # MCP contract worked cases
 
-These **proposed, unreleased version 1 cases** define the observable behaviour
-required by [issue #148](https://github.com/athrael-soju/Narwhal/issues/148).
-They are specification examples, not measured deployments. The
-[tool catalogue](Tools.md), [operation lifecycle](Operations.md) and
-[deployment contract](Deployment.md) define the complete field contracts.
+These cases specify how the proposed version 1 management executor responds
+to successful work, failures, retries and interruptions. The operation tools
+are not yet available. The cases provide inputs, expected states and retained
+evidence for implementation checks; they contain no live fleet measurements.
+
+Use the [tool catalogue](Tools.md) for argument and result fields, the
+[operation lifecycle](Operations.md) for state transitions, and the
+[deployment contract](Deployment.md) for plan bindings and gate requirements.
 
 The examples use registered target alias `trial-fleet` and these illustrative UUIDs:
 
@@ -19,15 +22,16 @@ The examples use registered target alias `trial-fleet` and these illustrative UU
 | Resumption request | `10000000-0000-4000-8000-000000000008` |
 | Resumed operation | `10000000-0000-4000-8000-000000000009` |
 
-`trial-v1` is an operator-registered deployment recipe with resolved inputs,
-finite budgets and a fixed acceptance workload. It is an example identifier,
-not a shipped recipe. Each case starts with its stated conditions; the cases
-do not describe one continuous deployment.
+The illustrative recipe `trial-v1` has resolved inputs, finite budgets and a
+fixed acceptance workload. It is not a shipped recipe; an operator would
+register the recipe before calling the tools. Each case starts with its own
+stated conditions.
 
 ## 1. Successful deployment
 
-The target permits the deployment action, its recipe and required capabilities.
-The agent calls `plan_prepare` with this complete request:
+The operator has registered `trial-fleet` with the deployment action,
+`trial-v1` recipe and required capabilities. The agent asks the executor to
+prepare a plan:
 
 ```json
 {
@@ -38,7 +42,7 @@ The agent calls `plan_prepare` with this complete request:
 }
 ```
 
-The complete accepted tool result is:
+After persisting the preparation operation, the executor returns this receipt:
 
 ```json
 {
@@ -55,12 +59,14 @@ The complete accepted tool result is:
 }
 ```
 
-Preparation transitions `queued → running → succeeded`. Its inspected summary
-has `result_status: "success"` and `result_data.plan_id` naming the original
-plan. The agent calls `plan_inspect` and reads its input/snapshot exports through
-`artifact_read` to inspect recorded hosts, GPU allocations and pinned artifacts.
-The plan supplies the action, stages and budgets. The agent reads these before
-execution. It then calls `plan_execute`:
+The executor moves preparation through `queued → running → succeeded`.
+`operation_inspect` then returns `result_status: "success"`, with
+`result_data.plan_id` identifying the prepared plan.
+
+The agent calls `plan_inspect` to read the action, stages and budgets. It uses
+`artifact_read` to read the exported inputs and preparation snapshot, including
+the host identities, GPU allocations and pinned artifacts. After reviewing
+those inputs, it submits the plan for execution:
 
 ```json
 {
@@ -70,31 +76,34 @@ execution. It then calls `plan_execute`:
 }
 ```
 
-The accepted result contains the execution operation ID. The executor rechecks
-the plan and records Gates A through G in order. It may start engines on
-disjoint GPUs concurrently, measures fabric one directed edge at a time, and
-starts service only after the required profile and preflight evidence passes.
+The executor returns the execution operation ID, rechecks the plan and records
+Gates A through G in order. It may start engines on disjoint GPUs concurrently.
+It measures one directed fabric edge at a time and starts service only after
+the required profile and preflight evidence passes.
 
-Execution transitions `queued → running → succeeded`, with terminal
-`result.status: "success"`. `result.data.summary_artifact_id` identifies the
-action result, including the completed gates and retained services. Evidence
-includes discovery, source identity, engine launch and live cache captures,
-fabric comparisons, attestation, profiles, preflight and the reconciled
-workload trial. Gate G leaves the recorded engines, sidecars, router and
-monitoring services running. The agent can inspect status and scrape health;
-teardown requires a separate cleanup plan.
+The operation moves through `queued → running → succeeded` and finishes with
+`result.status: "success"`. The client can read the completed gates and
+retained services from the action result identified by
+`result.data.summary_artifact_id`.
+
+The executor retains the discovery and source records, engine launch and live
+cache captures, fabric comparisons, attestations, profiles and preflight
+result. Gate G adds the workload trial and its reconciliation evidence. The
+engines, sidecars, router and monitoring services remain running. The agent
+can inspect their status and scrape health; teardown requires a separate
+cleanup plan.
 
 ## 2. Failed gate, correction and resumption
 
-The execution reaches Gate D and one directed sample is below its source
-budget. The executor stops at that gate, removes its temporary measurement
-listener and records the running engines as retained resources. The operation
-transitions `running → failed`, with `result.status: "failed_gate"` and the
-underlying gate error retained. The failed sample remains an artifact.
+At Gate D, one measured directed link falls below its source budget. The
+executor stops at that gate, removes its temporary measurement listener and
+records the running engines as retained resources. It changes the operation
+from `running` to `failed` and records `result.status: "failed_gate"`. The
+underlying gate error and failed sample remain available for inspection.
 
-The operator corrects the observed routing fault. Fresh preparation records the
-new route fingerprint in the corrected plan. The agent calls
-`operation_resume` with this complete request:
+The operator corrects the observed routing fault. The agent requests fresh
+preparation, which records the new route fingerprint in a corrected plan. It
+then asks the executor to resume the failed operation with that plan:
 
 ```json
 {
@@ -105,8 +114,8 @@ new route fingerprint in the corrected plan. The agent calls
 }
 ```
 
-The accepted response names the resumed operation. The following is a
-projection of its stored operation document:
+The receipt identifies the new child operation. Its stored document includes
+these fields:
 
 ```json
 {
@@ -118,41 +127,44 @@ projection of its stored operation document:
 }
 ```
 
-The child reuses only stages whose evidence remains valid, collects a new
-sample for the changed route and continues through Gates E to G. Its
-transition is `queued → running → succeeded`. The parent stays `failed`.
-Both route fingerprints, both samples, the corrected plan and the evidence
-reuse decisions remain inspectable.
+The executor reuses only stages whose evidence remains valid. It collects a
+new sample for the changed route and continues through Gates E to G. The child
+operation moves through `queued → running → succeeded`; the parent stays
+`failed`.
+
+The client can inspect both route fingerprints, both samples and the corrected
+plan. The child's stage records identify which evidence the executor reused
+and why it remained valid.
 
 ## 3. Duplicate and conflicting submissions
 
-The agent resends the exact `plan_execute` request from case 1 after losing
-its response. The server finds the registered target and execution request
-in its deduplication store. It returns `outcome: "accepted"` with the original
-execution operation ID. The operation's state does not change and no second
-worker starts.
+The agent loses the response to the `plan_execute` request from case 1 and
+resends the same request. The executor finds its target and request ID in the
+deduplication store. It returns `outcome: "accepted"` with the original
+operation ID. The operation keeps its current state, and the executor does
+not start another worker.
 
 If the agent substitutes the corrected plan ID while keeping the same request
-ID, admission returns `request_id_conflict`. This is a request error with no
-new operation or external effect. The canonical requests differ in `plan_id`.
-The same rule applies if a caller changes the tool or a defaulted action
-parameter. A different response `timeout_s` does not change the operation.
+ID, the executor returns `request_id_conflict` before creating work. The
+canonical requests differ in `plan_id`. The same rule applies if the caller
+changes the tool or an action parameter after defaults have been applied.
+Changing the response `timeout_s` does not change the requested operation.
 
-Submitting the original plan through the same tool with a new request ID also
-returns the existing operation: a plan permits one execution. That new request
-key is bound to the same operation. Changing tool or parent/source scope for
-an already consumed plan returns `plan_scope_mismatch`.
+If the agent submits the original plan through the same tool with a new request
+ID, the executor returns the existing operation and binds the new key to it.
+A plan permits one execution. Changing the tool, parent operation or source
+operation for a consumed plan returns `plan_scope_mismatch`.
 
-The existing canonical request and operation evidence remain retained. The
-agent may inspect that operation, resend its original request, or submit the
-different plan with a new request ID. Deduplication remains valid after the
-original operation reaches a terminal state.
+The executor retains the canonical request and operation evidence. The agent
+can inspect the operation, resend its original request, or submit a different
+plan with a new request ID. Deduplication continues after the original
+operation reaches a terminal state.
 
 ## 4. Client disconnect and reconnect
 
-The execution is `running` in Gate F when the client closes its stdio
-connection. The durable worker continues within the recorded budgets. Closing
-the client does not change operation state.
+The operation is `running` in Gate F when the client closes its stdio
+connection. The worker continues within the recorded budgets. The disconnect
+does not change the operation's state.
 
 After reconnecting, the agent calls `operation_inspect`:
 
@@ -163,119 +175,145 @@ After reconnecting, the agent calls `operation_inspect`:
 }
 ```
 
-The response outcome is `success`; its summary reports the latest committed
-state and revision, and `record_artifact_id` identifies the matching complete
-snapshot. The agent may observe `running`, or a terminal state reached while it
-was disconnected. It can inspect stage evidence through `artifact_read` and
-request cancellation if needed. If it lost the operation ID, an identical
-submission or `operation_list` recovers it.
+`operation_inspect` returns `success` with the latest committed state and
+revision. Its `record_artifact_id` identifies the complete snapshot used for
+that response. The operation may still be `running`, or it may have reached a
+terminal state while the client was disconnected.
+
+The agent can inspect stage evidence with `artifact_read` and request
+cancellation if needed. If it also lost the operation ID, it can recover it
+by repeating the original submission or calling `operation_list`.
 
 ## 5. Worker or workstation interruption
 
 The worker dies after issuing an engine launch but before persisting its
-completion receipt. On executor startup, the saved worker identity fails the
-boot-ID/PID/start-tick check. The operation transitions
-`running → recovery_required` and retains its resource exclusions. The
-reconciliation scanner checks the adapter's launch intent and live engine
-identity under a finite inspection budget.
+completion receipt. On startup, the coordinator compares the saved worker's
+boot ID, PID and process start ticks with the live host. The identity check
+fails, so it moves the operation from `running` to `recovery_required` and
+retains its resource reservations.
 
-`operation_inspect` returns a successful tool response containing state
-`recovery_required`, null terminal result fields and the recovery error codes.
-The full snapshot identifies the unresolved launch and retained evidence. An
-unreachable host keeps this state; resubmission does not relaunch the engine.
+The coordinator inspects the adapter's recorded launch intention and the live
+engine identity within a finite inspection budget.
 
-When the host is reachable and the adapter proves that the intended engine
-exists, that its supervisor has stopped the interrupted helper and that no
-further action can be issued by the dead worker, reconciliation records the
-engine as retained. Because later gates are incomplete, it transitions
-`recovery_required → failed` with `result.status: "error"`.
-The agent can prepare a fresh plan and resume. If a helper remains active,
-explicit `operation_cancel` can request bounded cleanup after matching its
-identity. Inspection itself never stops a process.
+`operation_inspect` returns `success`, with state `recovery_required`, null
+terminal result fields and the recovery error codes. The full snapshot
+identifies the unresolved launch and retained evidence. If the host is
+unreachable, the operation stays in that state. Repeating the submission
+does not relaunch the engine.
 
-The retained evidence includes the pre-action intent, process identity,
-reconciliation attempts, adapter observations and any missing-receipt
-diagnostic. A PID reused by an unrelated process cannot authorize cleanup.
+Once the host is reachable, the adapter confirms that the intended engine
+exists and that its supervisor stopped the interrupted helper. The coordinator
+also confirms that the dead worker cannot issue further actions. It records
+the engine as retained and changes the operation from `recovery_required` to
+`failed`, with `result.status: "error"`, because later gates remain incomplete.
+
+The agent can now prepare a fresh plan and resume. If a helper remains active,
+the agent can call `operation_cancel` to request cleanup within its recorded
+budget after the executor verifies its identity. Inspection itself never
+stops a process.
+
+The executor retains the intention recorded before launch, the process
+identity, reconciliation attempts and adapter observations. It also retains
+any diagnostic reporting the missing receipt. A PID reused by an unrelated
+process cannot authorise cleanup.
 
 ## 6. Cancellation with partial effects
 
-The deployment has completed engine startup and is measuring Gate D. The
-agent calls `operation_cancel` for the execution operation using the same
-target and operation IDs as case 4. Its result returns the operation summary
-and snapshot reference. The transition is `running → cancelling`.
+The executor has started the engines and is measuring Gate D. The agent calls
+`operation_cancel` using the target and operation IDs from case 4. The tool
+returns the operation summary and snapshot reference, and the operation moves
+from `running` to `cancelling`.
 
-The worker stops further stages, terminates the identified measurement helper
-within its cleanup budget, and removes the temporary listener it owns. Once
-the adapter confirms these effects, the operation transitions
-`cancelling → cancelled` with `result.status: "interrupted"`. Completed
-engine launches remain recorded as running resources. Stage logs, partial
-samples, cleanup receipts and engine ownership remain retained.
+The worker stops starting stages, terminates the identified measurement helper
+within its cleanup budget, and removes its temporary listener. After the
+adapter confirms those effects, the executor moves the operation from
+`cancelling` to `cancelled` and records `result.status: "interrupted"`.
 
-If cleanup cannot prove that a helper stopped, the transition is
-`cancelling → recovery_required`. The reservations remain held and the
-snapshot names the unresolved resource. Repeated cancellation returns the
-current state without starting another cleanup concurrently. After successful
-reconciliation the operation becomes `cancelled`.
+The engines started by completed stages remain running. The executor retains
+their ownership records together with stage logs, partial samples and cleanup
+receipts.
 
-The agent may prepare a resumption plan for reconciled work, or a
-`deployment_cleanup` plan identifying the recorded deployment resources.
-Cancellation alone does not promise teardown of completed stages.
+If the adapter cannot prove that a helper stopped, the executor moves the
+operation from `cancelling` to `recovery_required`. It keeps the reservations
+and identifies the unresolved resource in the snapshot. Repeating cancellation
+returns the current state without starting another cleanup concurrently.
+After reconciliation establishes that the helper stopped and its effects are
+known, the operation becomes `cancelled`.
+
+The agent can prepare a new plan to resume reconciled work. To remove the
+resources retained from completed stages, it must prepare a
+`deployment_cleanup` plan that identifies them. Cancellation alone leaves
+those resources in place.
 
 ## 7. Stale engine generation or changed inputs
 
 After preparation, an engine restarts with the same launch configuration.
-`plan_execute` revalidation detects that its live generation differs from the
-plan binding. Admission returns `stale_plan` before executing stages. If the
-change happens after admission, the queued or running operation fails at the
-next precondition check with `result.status: "failed_gate"`; unresolved
-external work first requires reconciliation.
+When the agent calls `plan_execute`, the executor detects that the live
+generation differs from the plan binding. It returns `stale_plan` before
+executing any stage.
 
-Fresh preparation records the new generation. The next execution captures its
-live cache, obtains attestation, profiles that generation and runs full
-preflight. A changed cache geometry requires a recalculated fabric budget.
-Existing directed samples are reusable only when their documented link
-fingerprints match and the samples meet the new budget. An engine restart by
-itself does not require collecting every directed bandwidth sample again.
+If the generation changes after the executor accepts the operation, the next
+precondition check fails. The queued or running operation finishes with
+`result.status: "failed_gate"`, after reconciliation if any external work
+remains unresolved.
 
-Changing the source revision, image, model, recipe or deployment configuration
-also invalidates the corresponding plan binding. The agent must inspect and
-execute a freshly prepared plan. Old plans, old profiles and invalidation
-reasons remain retained; no artifact is overwritten to make it appear current.
+The agent requests fresh preparation to record the new generation. In the
+next execution, the executor captures its live cache, obtains attestation,
+profiles that generation and runs full preflight. If the cache geometry
+changed, it recalculates the fabric budget.
+
+The executor may reuse an existing directed sample when its documented link
+fingerprint still matches and the sample meets the new budget. An engine
+restart alone therefore does not require another measurement of every
+directed link.
+
+Changes to the source revision, image, model, recipe or deployment
+configuration also invalidate the corresponding plan binding. The agent must
+inspect and execute a freshly prepared plan. The executor preserves the old
+plans and profiles together with the reasons they became invalid.
 
 ## 8. Missing adapter prerequisite
 
-Preparation discovers that the selected adapter lacks the verified asset
-bundle required to execute the recipe's monitoring stage. The preparation
-operation transitions `queued → running → failed`, with
-`result.status: "failed_gate"` and `adapter_prerequisite_missing` identifying
-the bundle and required version. No executable plan is returned, and no
-installation, launch or monitoring mutation has started.
+During preparation, the adapter finds that its verified asset bundle is
+missing. The recipe needs that bundle for its monitoring stage. The executor
+moves the preparation operation through `queued → running → failed` and
+records `result.status: "failed_gate"`. The `adapter_prerequisite_missing`
+error identifies the bundle and required version.
+
+The executor returns no executable plan. It has not installed software,
+launched services or changed monitoring.
 
 The action result retains the capability manifest, prerequisite observations
-and missing asset reference. The agent can report the prerequisite and repeat
-preparation with a new request ID after it is corrected. It cannot interpret
-an undeclared source checkout as a replacement for the registered asset bundle.
-If a prerequisite disappears after successful preparation, execution
-revalidation fails before the first mutation.
+and missing asset reference. After the operator supplies the required bundle,
+the agent can repeat preparation with a new request ID. An undeclared source
+checkout cannot satisfy the registered bundle requirement.
+
+If a prerequisite disappears after successful preparation, the executor's
+revalidation fails before it makes the first change.
 
 ## 9. Conflicting entry points and a busy fleet
 
-A supported CLI operation holds the canonical GPU reservation for a local
-instance. An MCP `plan_execute` targets the same physical GPU through another
-registered alias. Admission returns `resource_busy` and the owner's operation
-reference when visible to the caller. No deployment starts. The CLI operation
-and its evidence remain available for inspection; a different target name
-cannot bypass the reservation.
+A supported CLI operation holds a GPU reservation for a local instance. The
+agent calls MCP `plan_execute` through another registered alias that resolves
+to the same physical GPU. The coordinator returns `resource_busy` before
+starting the deployment. If the caller may inspect the owning operation, the
+error includes its reference.
 
-After that operation completes, preparation of a `fleet_profile` plan succeeds
-but the router is serving requests. Execution checks admission, resident work
-and transfer leases before sending probes. It returns `fleet_busy`; if already
-admitted, the operation becomes `failed` with `result.status: "failed_gate"`.
-It retains the observed fleet state and sends no profiling traffic.
+The CLI operation and its evidence remain available for inspection. Selecting
+a different target name cannot bypass the reservation.
 
-The agent may wait for the current owner, select genuinely disjoint resources,
-or prepare a permitted maintenance plan that explicitly includes admission
-control and drain. It then submits a new request after the idle requirement
-is satisfied. During fabric qualification, any second directed measurement
-must wait within the same deployment scheduler or fail admission as a
-conflicting operation. Exactly one directed edge is measured at a time.
+After the CLI operation completes, the agent prepares a `fleet_profile` plan
+while the router is serving requests. Preparation succeeds. Before sending
+probes, the executor checks admission, resident work and transfer leases.
+It returns `fleet_busy`; if it already accepted the operation, it marks the
+operation `failed` with `result.status: "failed_gate"`. The executor retains
+the observed fleet state and sends no profiling traffic.
+
+The agent can wait for the current owner, select resources that do not overlap,
+or prepare an authorised maintenance plan that includes admission control
+and drain. Once the engines satisfy the idle requirement, it submits a new
+request.
+
+During fabric qualification, the deployment scheduler measures exactly one
+directed edge at a time. A second measurement in that deployment waits for
+the first. A conflicting operation submitted separately fails admission.

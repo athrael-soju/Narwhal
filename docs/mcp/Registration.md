@@ -1,14 +1,19 @@
 # Registration and permissions (proposed)
 
-This page defines the planned local management registry used by the
-[MCP contract](../MCP-Contracts.md). The operator creates and maintains it on
-the management workstation. MCP tools select registered identifiers;
-registration itself is an operator action outside the MCP tool catalogue.
+The operator uses a local registry to name the fleets and dev instances that
+MCP tools may access. Each entry binds a target ID to its input files, endpoint
+references and allowed actions. Create and maintain this file on the management
+workstation; MCP tools cannot edit it.
+
+The unreleased [server command](../cli/MCP.md) validates this document at
+startup. The permissions and shared execution rules below define the planned
+operations in the [MCP contract](../MCP-Contracts.md).
 
 ## Registry document
 
-The proposed server accepts one explicit `--registry PATH` at startup. Relative
-registry paths resolve against its startup directory. The registry is JSON,
+The server accepts one explicit `--registry PATH` at startup, with
+`NARWHAL_MANAGEMENT_REGISTRY` as the fallback. Relative registry paths resolve
+against its startup directory. The registry is JSON,
 with schema `narwhal.management-registry`, version `1`. It is not a fleet
 document and does not change the `NARWHAL_FLEET` serving contract.
 
@@ -19,18 +24,22 @@ document and does not change the `NARWHAL_FLEET` serving contract.
 | `state_dir` | Absolute local directory for the executor, deduplication index, reservations, plans and operations. |
 | `targets` | Array of target entries, at most 100; unique `id` values. |
 
-The registry and private files require mode `0600`, private directories `0700`,
-and ownership by the executor's operating-system user. The server refuses a
-registry writable by another user. Network filesystems without the required
-atomic writes and locks are unsupported for `state_dir` in v1. Startup
-validates the complete document before exposing tools.
+The registry requires mode `0600` and ownership by the server's operating-system
+user. It must be a regular file at most 1 MiB; the loader rejects a symlink at
+the final path component and duplicate JSON keys. Planned executor private files
+require mode `0600`, private directories `0700`, and the same ownership.
+The executor requires atomic writes and locks in `state_dir`. V1 does not
+support network filesystems that cannot provide them. The server validates the
+complete registry before exposing tools.
 
-The operator registers a new deployment using paths to prepared local inputs
-and host aliases. Engines and their profiles need not exist yet. Registering
-an existing deployment points to its actual fleet document and site settings;
-registering an existing dev instance points to its instance directory. This
-does not adopt or authorise termination of any process. Ownership is established
-from the instance or deployment records and live identities.
+For a new deployment, register the paths to prepared local inputs and the host
+aliases. Engines and profiles need not exist yet. For an existing deployment,
+register its fleet document and site settings; for an existing dev instance,
+register its instance directory.
+
+Registration does not authorise the executor to terminate an existing process.
+Before acting on a process, the executor must establish ownership from the
+instance or deployment records and the process's live identity.
 
 ## Target entry
 
@@ -44,40 +53,68 @@ snapshot and artifact IDs are UUID strings.
 | --- | --- |
 | `id` | Stable alias, required. |
 | `kind` | `dev` or `fleet`, required. |
-| `working_directory` | Required absolute directory; all invoked commands use it. |
-| `artifact_root` | Required absolute private directory for management evidence and frozen exports. Original CLI evidence remains at the registered instance/deployment source locations. |
-| `fleet_file` | Required absolute path or `null`; may name the expected file before creation. A fleet target requires a path. For dev, the instance owns its generated fleet. |
-| `instance_dir` | Required absolute path for `dev`; `null` for `fleet`. May be absent before `dev_init`. |
-| `adapter` | Required object `{id, settings_path}`; `id` is `local-dev-v1` for dev or `ssh-v1` for fleet. `settings_path` is an absolute private adapter settings file, or `null` for a dev target using only its registered recipe. |
+| `working_directory` | Absolute directory used by invoked commands. |
+| `artifact_root` | Absolute private directory for management evidence and frozen exports. |
+| `fleet_file` | Absolute path or `null`; a fleet target requires a path. |
+| `instance_dir` | Absolute path for `dev`; `null` for `fleet`. |
+| `adapter` | Object `{id, settings_path}`; see adapter rules below. |
 | `endpoints` | Object with optional `router_env`, `prometheus_env`, `grafana_env` environment-variable names; default `{}`. |
 | `credential_env` | Distinct environment-variable names available to this target's subprocesses; default `[]`, maximum 64. |
 | `capabilities` | Distinct values from `inspect`, `measure`, `mutate`; default `["inspect"]`. |
 | `actions` | Distinct allowed [plan actions](Tools.md#plan-actions); default `[]`. |
-| `recipes` | Array of `{id, kind, path}`; default `[]`, maximum 100. `kind` is `dev` or `fleet`, matching the target; `path` is an absolute operator-owned input file. IDs are unique within a target. |
-| `queries` | Array of `{id, expression, kind}`; default `[]`, maximum 100. `expression` is fixed PromQL, 1–4096 characters; `kind` is `instant` or `range`. |
-| `logs` | Array of `{id, host_id, source}`; default `[]`, maximum 100. `source` is an absolute regular-file path on the registered host. A dev host uses alias `local`. |
+| `recipes` | Array of `{id, kind, path}`; default `[]`, maximum 100. |
+| `queries` | Array of `{id, expression, kind}`; default `[]`, maximum 100. |
+| `logs` | Array of `{id, host_id, source}`; default `[]`, maximum 100. |
 | `freshness_s` | Integer 1–3600, default `60`; observation age beyond this is stale. |
-| `allow_request_content` | Boolean, default `false`; permits an explicitly requested diagnostic export with request content. Credential redaction always applies. |
-| `preparation` | Optional object with `timeout_ms=300000`, `term_grace_ms=10000`, `kill_grace_ms=5000`, `reconcile_ms=30000`. Each field is an integer `1..86400000`; missing fields use these proposed defaults. These budgets apply even when the action selects no recipe. |
+| `allow_request_content` | Boolean, default `false`; permits request content in an explicitly requested diagnostic export. |
+| `preparation` | Optional object containing the time budgets listed below. |
+
+The operator may register `fleet_file` before the file exists and `instance_dir`
+before `dev_init` creates the instance. A dev instance owns its generated fleet
+document. CLI commands retain their original evidence at the registered source
+locations; `artifact_root` stores the management copies and exports.
+
+The adapter ID is `local-dev-v1` for a dev target and `ssh-v1` for a fleet target.
+Its `settings_path` names an absolute private settings file. A dev target that
+uses only its registered recipe may set `settings_path` to `null`.
+
+Each recipe has an ID unique within its target, a `kind` matching the target's
+`dev` or `fleet` kind, and an absolute path to an operator-owned input file.
+Each query has a fixed PromQL `expression` of 1–4096 characters and a `kind` of
+`instant` or `range`. Each log names an absolute regular-file `source` on its
+registered host; a dev target uses host alias `local`.
+
+Preparation uses these budgets, in milliseconds. Each accepts an integer in
+`1..86400000`; omitted fields use their listed defaults. The budgets apply even
+when an action selects no recipe.
+
+| Field | Default |
+| --- | ---: |
+| `timeout_ms` | 300000 |
+| `term_grace_ms` | 10000 |
+| `kill_grace_ms` | 5000 |
+| `reconcile_ms` | 30000 |
 
 Paths are literal absolute paths, without shell expansion. Relative paths
 inside a fleet file retain Narwhal's existing working-directory semantics.
 Config inspection may resolve those paths before the files exist; subsequent
 actions check containment and identity when accessing them.
 
-Endpoint variables must resolve to HTTP(S) URLs at call time. Embedded URL
-credentials are rejected. Only registered origins and the engine endpoints
-resolved from this target's fleet are accessible. Redirects to other origins
-are rejected. Environment names match `[A-Za-z_][A-Za-z0-9_]*`.
-Credential values are resolved by the executor/adapter and excluded from
-tool arguments, plans and responses. Missing endpoint variables affect the
-tools that require them; offline config validation remains available.
+At call time, the executor resolves each endpoint variable to an HTTP(S) URL.
+It rejects embedded URL credentials and redirects to unregistered origins.
+Tools may access only registered origins and engine endpoints resolved from
+the target's fleet. Environment names match `[A-Za-z_][A-Za-z0-9_]*`.
 
-For a fleet, host aliases and SSH trust bindings come from the adapter settings
-and its discovery snapshot. Tools cannot supply an SSH destination, port
-forward, executable, environment override or arbitrary URL. The operator
-selects query expressions that constrain results to the registered fleet;
-MCP arguments select a query ID without inserting expressions or label values.
+The executor or adapter resolves credentials locally and excludes their values
+from tool arguments, plans and responses. Credential redaction applies even
+when `allow_request_content` is true. A missing endpoint variable fails the
+tools that require it; offline config validation remains available.
+
+For a fleet, the adapter settings and discovery snapshot supply host aliases
+and SSH trust bindings. Tools cannot supply an SSH destination, port forward,
+executable, environment override or arbitrary URL. The operator must choose
+query expressions that constrain results to the registered fleet. MCP arguments
+select a query ID and cannot insert expressions or label values.
 
 ### Example dev registration
 
@@ -117,74 +154,85 @@ example are filled before the registration digest is computed.
 
 ## Permission evaluation
 
-`inspect` permits configuration reads, GET requests, selected log/inventory
-collection and creation of private diagnostic artifacts. Those artifact writes
-do not confer authority to change a deployment. `measure` permits active
-profiling, transfer checks and verification. `mutate` permits the specific
-registered lifecycle/deployment actions. Capabilities are independent;
-`mutate` does not imply `measure`.
+The executor checks the target's capability grants before each operation:
 
-Every target tool requires `inspect`. Plan preparation also requires the
-capabilities and action grant needed by its requested action. Preparation can
-discover and freeze inputs but cannot install software remotely, launch an
-engine, drain traffic or run active measurements. Execution checks the same
-grants again against the current registry and selected immutable plan.
+- `inspect` allows configuration reads, GET requests, selected log and inventory
+  collection, and private diagnostic artifacts. It does not permit changes to
+  the deployment.
+- `measure` allows active profiling, transfer checks and verification.
+- `mutate` allows the lifecycle and deployment actions listed in `actions`.
 
-Preparation records the exact proposed changes. Execution through
-`plan_execute` is an explicit request to apply that plan within the configured
-authority; no tool can grant itself additional authority or change registry
-permissions. A client may ask its user to review the plan before that call.
-The executor enforces authority even when a client omits that UI step.
+Grant each capability separately. `mutate` does not imply `measure`.
 
-Execution cancellation and resumption require the original action's current
-grants. Cancelling preparation requires only `inspect` to stop its bounded
-inspection helpers.
-Inspection can still report an operation whose execution grants were revoked.
-Revocation prevents new stages or resumed work; the executor records the
-blocked state and residual resources. Cleanup that needs revoked authority
-requires operator action through the site automation boundary.
+Every target tool requires `inspect`. Before preparing a plan, the executor
+also checks the capabilities and action grant needed to execute it. Preparation
+may discover and freeze inputs, but must not install software remotely, launch
+an engine, drain traffic or run active measurements. Before execution, the
+executor checks those grants again against the current registry and the saved
+plan.
+
+The prepared plan records the proposed changes. A `plan_execute` call requests
+those changes within the configured grants. No tool can change registry
+permissions or grant itself further access. A client may ask the user to review
+the plan before calling `plan_execute`; the executor checks permissions whether
+or not the client provides that review step.
+
+Before cancelling or resuming execution, the executor checks that the original
+action's grants still exist. Cancelling preparation requires only `inspect`
+because it stops inspection helpers.
+
+If the operator revokes an execution grant, inspection can still report the
+operation. The executor prevents new stages and resumption, records the blocked
+state and lists remaining resources. If cleanup requires a revoked grant, the
+operator must handle that cleanup through site automation.
 
 ## Registry changes and retention
 
-V1 uses one management authority and local coordinator store for each managed
-resource set. Cooperating MCP frontends and CLI invocations use the same
-registry and `state_dir`. Independent registries/workstations do not provide a
-distributed exclusion guarantee; site automation must direct these operations
-through the designated authority.
+V1 coordinates each managed resource set through one registry and local
+`state_dir`. All MCP frontends and CLI invocations acting on those resources
+must use that same store. Independent registries or workstations cannot exclude
+conflicting work. Site automation must direct operations through the designated
+registry and coordinator.
 
-The proposed `NARWHAL_MANAGEMENT_REGISTRY` environment variable selects that
-registry for supported finite management CLI commands. The selected fleet file
-or dev instance resolves to exactly one registered target by canonical path;
-missing or ambiguous matches fail before the operation. Commands retain their
-existing arguments and result contracts. Direct registered commands create a
-recorded plan/operation internally and enforce the same capabilities and locks.
-Nested commands inherit an executor-authenticated local operation context and
-join the parent instead of submitting duplicate work. An environment variable
-claiming an operation ID is insufficient to bypass coordination.
+The planned finite management CLI commands use `NARWHAL_MANAGEMENT_REGISTRY`
+to select the registry. The command resolves its fleet file or dev instance by
+canonical path to exactly one target. Missing or ambiguous matches fail before
+the operation starts.
 
-For the proposed MCP server, explicit `--registry` takes precedence over
+These commands retain their existing arguments and result contracts. A direct
+command creates a plan and operation record internally, then checks the same
+capabilities and locks as an MCP call. A nested command joins its parent
+operation using local context authenticated by the executor. An environment
+variable containing an operation ID cannot establish that authority.
+
+For the MCP server, explicit `--registry` takes precedence over
 `NARWHAL_MANAGEMENT_REGISTRY`; absence of both is a startup error. Existing CLI
 invocations without that variable retain their current behaviour and are
-outside the shared-coordination guarantee. These bindings are implementation
-work for #151, not available CLI settings in the current release.
+outside the shared-coordination guarantee. The MCP startup binding is part of
+the unreleased server. The proposed finite management CLI bindings and
+shared coordination remain implementation work for #151.
 
-The server loads a registry snapshot on startup. Operator edits take effect
-through executor reload/restart, validated atomically; other connected MCP
-frontends use that same executor snapshot. The executor checks permissions
-and the registration digest at every stage boundary. Running subprocesses
-retain their recorded bounded action/cleanup semantics.
+The server loads a registry snapshot on startup; restart it after editing the
+registry. The planned executor validates edits atomically during reload or
+restart, then supplies the same snapshot to connected MCP frontends. At each
+stage boundary, it checks permissions and the registration digest. A subprocess
+already running follows the action limits and cleanup rules recorded for it.
 
-The registration digest covers the default-populated target entry, registry
-ID, resolved nonsecret endpoints, adapter settings and recipe input identities.
-It excludes secret values. Rebinding an alias invalidates its old plans.
-Changing a credential value without changing its reference requires fresh
-access checks, without rewriting the plan as if hardware/model inputs changed.
+To calculate the registration digest, the executor fills in target defaults,
+then includes the target entry, registry ID, resolved nonsecret endpoints,
+adapter settings and recipe input identities. It excludes secret values.
+Rebinding an alias invalidates plans prepared for the previous binding.
 
-Do not reuse a target ID for a different deployment. Removing a target with
-active, cancelling or recovery-required work is rejected; completed records
-retain the target snapshot. Plans, operation records, deduplication entries
-and failed-attempt evidence have no automatic expiry in v1. Explicit operator
-archival may remove evidence after resolving ownership and dependencies;
-request-ID tombstones remain so an old retry cannot create another operation.
-Tools report `artifact_missing` for removed evidence rather than treating its
-absence as success.
+When only a credential's value changes, the executor repeats access checks.
+The unchanged credential reference does not count as a change to the plan's
+hardware or model inputs.
+
+Do not reuse a target ID for a different deployment. The executor rejects
+removal while the target has active, cancelling or recovery-required work.
+Completed records retain their target snapshot.
+
+V1 does not automatically expire plans, operation records, deduplication entries
+or evidence from failed attempts. The operator may archive evidence after
+resolving its ownership and dependencies. Request-ID tombstones remain so an
+old retry cannot create another operation. Tools report removed evidence as
+`artifact_missing`.
