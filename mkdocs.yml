@@ -133,5 +133,3 @@ nav:
           - Metrics and controller state: telemetry/03-Metrics-and-Control.md
           - Monitoring and engine failures: telemetry/04-Failures.md
           - Interface versions and compatibility: telemetry/05-Compatibility.md
-  - Development:
-      - Operator plugin contract: Operator-Plugin.md
