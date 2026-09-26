@@ -133,3 +133,11 @@ nav:
           - Metrics and controller state: telemetry/03-Metrics-and-Control.md
           - Monitoring and engine failures: telemetry/04-Failures.md
           - Interface versions and compatibility: telemetry/05-Compatibility.md
+  - Planned interfaces:
+      - MCP fleet operations:
+          - Contract overview: MCP-Contracts.md
+          - Registration and permissions: mcp/Registration.md
+          - Tools and results: mcp/Tools.md
+          - Plans and site adapters: mcp/Deployment.md
+          - Operations and recovery: mcp/Operations.md
+          - Worked cases: mcp/Worked-Cases.md

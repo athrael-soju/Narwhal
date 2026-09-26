@@ -1,0 +1,401 @@
+# MCP deployment plans and site adapters
+
+This is the proposed v1 contract for implementers of the MCP milestone. It is
+not an available deployment interface. The current operator procedure remains
+[Deploy a fleet](../Deploy.md).
+
+A plan fixes the inputs, stages and execution budgets for one registered target.
+The deployment executor checks that binding before it starts work. Site adapters
+perform host operations and return evidence; the executor owns gate ordering,
+exclusion, operation state and recovery.
+
+## Prepare and execute a plan
+
+`plan_prepare(target_id, action, parameters, request_id)` starts an operation
+that resolves the [registered target and recipe](Registration.md), checks the
+adapter prerequisites, and collects current inputs. Successful completion
+returns `result.data.plan_id`. Preparation may write private local evidence and
+run bounded remote inspection helpers. It must finish cleanup of those helpers
+before returning a usable plan. The adapter manifest declares each bounded
+inspection call. Host inventory may query devices through `nvidia-smi` or
+`rocminfo` over the registered SSH connection; it must not allocate a workload,
+change device state or alter host configuration.
+
+Image-introspection containers receive no GPUs, disable network access and use
+only read-only host mounts. Their writable state is restricted to their own
+disposable container filesystem. Preparation records ownership and finite
+cleanup budgets. An image helper needing device exposure, host writes or a
+workload requires a separately authorised action or suitable retained
+introspection evidence; it cannot run as an inspection helper.
+
+Current discovery runs a temporary `docker run --rm --network none` container
+with a Python entry point to read image package metadata. The adapter must add
+the recorded ownership and deadlines required here before exposing that helper
+through plan preparation.
+
+`plan_inspect(target_id, plan_id)` returns the plan's public projection: action, target,
+input identities, stages, budgets and expected resource changes.
+Its result includes `input_artifacts: [{name, artifact_id}]` for every bound
+input and `snapshot_artifact_id` for the preparation snapshot. These immutable
+redacted exports are readable with `artifact_read`. They retain host aliases,
+GPU allocations, tensor-parallel shape, model/image identity, effective
+nonsecret configuration, workload and budget details needed to review the
+plan. Private destinations and secret values are excluded. If required review
+evidence is missing, inspection reports that failure before execution is offered.
+`plan_execute(target_id, plan_id, request_id)` checks the plan digest and current binding
+under the required locks, then returns an execution operation. A plan binds one
+execution; repeating its execution returns that operation. A new attempt needs
+a new plan. Request deduplication, cancellation and recovery follow
+[Operations](Operations.md).
+
+The executor also checks each stage's prerequisites immediately before that
+stage. A passed preparation check does not reserve a port, guarantee remote
+access, or prove that a model directory remains unchanged. A changed binding
+stops execution before the affected side effect and identifies the input that
+requires a fresh plan.
+
+Expected changes produced by earlier stages are checked against their recorded
+receipts. For example, a newly launched engine is checked against that launch's
+identity, then its captured cache becomes an input to fabric qualification.
+An unexplained process replacement cannot be treated as an expected stage effect.
+
+## Immutable plan record
+
+Every writer emits the required fields below. Readers retain compatible added
+fields within the supported version and include them when checking the stored
+payload digest; they reject unsupported document versions.
+
+| Field | Type and meaning |
+| --- | --- |
+| `schema` | Literal `narwhal.deployment-plan`. |
+| `schema_version` | Integer `1`. |
+| `plan_id` | UUID assigned when the plan is committed. |
+| `plan_digest` | Lowercase SHA-256 hex digest of canonical `payload`. |
+| `created_at` | UTC RFC 3339 timestamp. |
+| `payload` | Object containing exactly `action`, `target_id`, `binding`, `parameters`, `stages`. |
+
+Canonical payload bytes use UTF-8 JSON with sorted object keys, no insignificant
+whitespace, `ensure_ascii=false`, and no trailing newline. Arrays retain their
+recorded order. Only strings, booleans, null, integers, arrays and objects are
+allowed; floating-point numbers are rejected. Numeric durations use integer
+milliseconds. Input documents that contain other numeric values are stored as
+immutable byte blobs and bound by SHA-256, preserving their existing contracts.
+
+`action` is one of the actions below. `target_id` is a registered alias.
+`parameters` is the validated object from the tool request. `stages` is a
+nonempty ordered array generated by the versioned adapter recipe. Neither tool
+arguments nor a resumed operation can replace individual stages.
+
+The following is a structural projection, with digest values abbreviated:
+
+```json
+{
+  "schema": "narwhal.deployment-plan",
+  "schema_version": 1,
+  "plan_id": "8bc35a67-ae35-4c79-a214-0b623225f21e",
+  "plan_digest": "<64 lowercase hex characters>",
+  "created_at": "2026-09-26T12:00:00Z",
+  "payload": {
+    "action": "fleet_deploy",
+    "target_id": "trial-fleet",
+    "binding": "<binding object defined below>",
+    "parameters": {"recipe_id": "trial-v1"},
+    "stages": ["<ordered stage records defined below>"]
+  }
+}
+```
+
+Plans are committed atomically to the private state store, with each input blob
+addressed by its SHA-256 digest. Plan inspection redacts private destinations,
+paths and credential references according to [Tools](Tools.md). Its returned
+`plan_digest` identifies the private canonical payload, not the redacted JSON.
+Execution resolves the stored private record rather than accepting an inspected
+projection back from the caller.
+
+### Binding fields
+
+All fields below are required. Nullable values are allowed only where stated.
+
+| Field | Contract |
+| --- | --- |
+| `registration_digest` | SHA-256 of the target registration and referenced adapter settings at preparation, excluding credential values. |
+| `adapter` | `{id, version, assets_sha256}`: registered adapter, exact implementation version, digest of its asset manifest. |
+| `source` | `{commit, distribution_version, wheel_sha256, bundle_sha256}`: full approved Git commit, Narwhal version and artifact digests. An unused wheel or bundle digest is null; at least one is present. |
+| `recipe` | `{recipe_id, sha256}` for the selected immutable recipe; null for actions whose stages derive entirely from the registered target and retained deployment. |
+| `snapshot_id` | UUID of the preparation snapshot. |
+| `snapshot_sha256` | Digest of that snapshot's immutable bytes. |
+| `identity_sha256` | Digest of the snapshot's stable identity projection, using the plan's canonical JSON encoding. |
+| `inputs` | Array of `{name, sha256}` records, sorted by unique `name`, referencing the private input store. |
+
+Input names are `fleet_config`, `launch_config`, `host_inventory`,
+`model_identity`, `runtime_identity`, `network`, `service_policy`,
+`measurement_recipe`, `load_recipe`, `credential_refs`, `resource_ownership` and
+`cleanup_selection`. The action's required inputs must be present. Inapplicable
+inputs are omitted. No input contains credential values.
+
+The stored input documents retain these identities:
+
+- `host_inventory`: stable host aliases, host boot and SSH host-key identities,
+  role placement, observed accelerator products, GPU UUID or PCI identity,
+  selected device mappings and tensor-parallel shape.
+- `model_identity`: source and immutable revision, served name, configuration
+  digest, checkpoint manifest and `model_tree_sha256`. For a non-Git model source,
+  the revision is its immutable object version and manifest digest.
+- `runtime_identity`: image content identity and registry digest when present,
+  runtime package versions, model arguments, environment policy and current
+  engine generation identities when the action requires running engines.
+- `network`: fabric interfaces, addresses, routes, transport, transfer devices,
+  HCA/port/GID selections where applicable, planned listeners and access path.
+- `service_policy`: exact SLOs, first-token and request deadlines, profile error
+  policy, and qualification acceptance criteria.
+- `measurement_recipe` and `load_recipe`: fixed workload, sequence/concurrency
+  points, rate points, request counts, sample limits and finite stage budgets.
+- `resource_ownership`: recorded deployment/instance ownership for existing
+  processes, containers, services and remote paths affected by the action.
+- `cleanup_selection`: exact resources eligible for cleanup and their owning
+  operation; required only for `deployment_cleanup`.
+
+`fleet_config`, `launch_config` and `credential_refs` preserve the resolved
+nonsecret documents and environment variable references used by the adapter.
+Image tags, a branch name and a mutable model alias do not satisfy identity
+requirements. An installed distribution's version alone does not establish its
+source commit: preparation requires matching artifact provenance. The MCP
+milestone must supply and verify that provenance before enabling the action.
+
+The preparation snapshot has schema `narwhal.management-snapshot`, version `1`,
+with `snapshot_id`, `observed_at`, `identity` and `observations`. `identity`
+contains stable host/boot/SSH trust identities, selected GPU identities and
+allocations, model/runtime identities, bound configuration digests, network
+configuration and applicable engine generations, as enumerated above.
+`observations` records readiness, free memory, counters, resident work and
+per-source timestamps. The adapter version fixes the projection fields and
+their normalisation; missing required identity fields fail preparation.
+
+`snapshot_sha256` and input byte digests check retained-record integrity.
+Revalidation compares the stable `identity` projection and bound configuration
+against current observations. It separately reevaluates volatile preconditions
+such as free memory, admission and resident work. New timestamps, advancing
+counters and changed current load do not by themselves change plan identity.
+The same distinction applies to stage reuse: retained bytes must pass integrity
+checks and stable prerequisites must still match, while fresh readiness/idleness
+checks determine whether the next action may run. A fresh snapshot is retained
+with its own hash; it does not replace the original evidence.
+
+### Stage fields
+
+Each stage contains exactly these fields:
+
+| Field | Contract |
+| --- | --- |
+| `stage_id` | Unique alias within the plan. |
+| `gate` | `A` through `G` for fleet deployment; null for standalone actions. |
+| `operation` | Adapter operation identifier from its versioned capability manifest. |
+| `depends_on` | Array of earlier stage IDs; cycles and unknown IDs are invalid. |
+| `subjects` | Array of registered host/engine aliases or the target alias. |
+| `input_names` | Names from `binding.inputs` required by this stage. |
+| `timeout_ms` | Positive integer execution budget. |
+| `cleanup` | `{policy, term_grace_ms, kill_grace_ms, reconcile_ms}`. Policy is `temporary_only` or `owned_stage_resources`; all budgets are positive integers. |
+| `retain_on_success` | Array of resource kinds to transfer into the deployment's ownership record. Empty when nothing persists. |
+
+Resource kinds are `engine`, `attestation`, `router`, `monitoring`, `tunnel`,
+`measurement_helper`, `installation` and `private_artifact`. Cleanup policy
+controls only resources created by that stage. Existing services require an
+explicit action with verified ownership. Artifact retention follows
+[Operations](Operations.md); cancellation does not erase failure evidence.
+
+The adapter's capability manifest fixes the meaning, expected output and
+exclusion requirements of each operation identifier. A recipe selects supported
+operations and budgets; it cannot supply shell text or executable paths. Before
+acceptance, the executor verifies that every operation and resource kind is
+supported by the exact adapter version.
+
+The existing stage helper defaults to 300 seconds for execution, 10 seconds for
+SIGTERM cleanup and 5 seconds for SIGKILL cleanup. Docker reconciliation has a
+separate 30-second default. See [stage deadlines](../Dev-Runtime.md#stage-deadlines-and-recovery)
+for their current scope. The adapter records the resolved values in the plan
+and preserves bounded nested helpers. Fleet recipes must declare budgets for
+the additional remote and measurement stages. An agent cannot increase them,
+concurrency or batch sizes based only on available headroom.
+
+The overall execution budget is the sum of every stage's `timeout_ms`,
+`term_grace_ms`, `kill_grace_ms` and `reconcile_ms`. It starts when execution
+begins. Each stage must fit within the remaining budget before it starts;
+permitted concurrency may shorten the actual operation. The recorded outer
+budgets must include nested commands and their cleanup, including an interrupted
+Docker client's final termination grace.
+
+## Actions and gate results
+
+| Action | Parameters | Completion establishes |
+| --- | --- | --- |
+| `dev_init` | `{recipe_id}` | The selected installed recipe produced a validated private instance. |
+| `dev_up` | `{}` | Startup, attestation, profiling and router launch completed for the current instance. |
+| `dev_verify` | `{}` | Current dev verification passed, including directed KV preflight and a routed completion. |
+| `dev_down` | `{}` | The current instance's recorded ownership set was stopped and inspected. |
+| `fleet_deploy` | `{recipe_id}` | Every required gate A–G passed for the recorded workload and inputs. |
+| `fleet_profile` | `{engine_ids?}` | Selected idle engine generations were profiled with the registered recipe. |
+| `fleet_preflight` | `{}` | Full configured preflight passed against the current fleet and profiles. |
+| `engine_replace` | `{engine_id}` | The selected replacement generation passed requalification before eligibility was restored. |
+| `monitoring_start` | `{}` | The selected monitoring stack passed identity, scrape and dashboard checks. |
+| `deployment_cleanup` | `{operation_id}` | Only the plan's enumerated resources owned by that operation were removed or verified absent. |
+
+For `fleet_profile`, omitted `engine_ids` selects all configured engines; a supplied
+list must be nonempty and contain unique configured engine IDs. Publication of
+profiles preserves unaffected engines and refuses a combined store with stale
+generations. The executor establishes engine idleness and excludes conflicting
+operations before profiling or transfer qualification.
+
+The `fleet_deploy` recipe expands into the following ordered gates. Parallel
+work is permitted only inside a gate where the runbook permits it.
+
+| Gate | Required result |
+| --- | --- |
+| [A: Discover](../deploy/01-Discover.md) | Inputs, host inventory, access, image and complete checkpoint identity agree. |
+| [B: Install](../deploy/02-Install.md) | Approved source and prepared role artifacts are verified on each host. Prove installation on engine 1's host before the remaining hosts. |
+| [C: Engines](../deploy/03-Validate-Engines.md) | Allocations and listeners are validated; each checked engine starts and its live cache is captured. |
+| [D: Fabric](../deploy/04-Qualify-Fabric.md) | Required directed links pass against budgets derived from the serving cache. Measure one edge at a time while engines remain idle. |
+| [E: Attest](../deploy/05-Attest.md) | Attestations bind the current processes, cache, model and transfer contract. |
+| [F: Profile and preflight](../deploy/06-Profile-and-Preflight.md) | Current generations have usable profiles and every required preflight gate passes with the bound SLOs. |
+| [G: Serve and measure](../deploy/07-Serve-and-Measure.md) | Routed load, client/journal reconciliation, Prometheus scrapes, required Grafana series and the post-load KV ring all pass. |
+
+Gate G binds the trial path and both initial rate points from its selected
+recipe. It retains client resource observations to identify load-generator or
+SSH-path saturation. Merely reaching router readiness cannot complete this
+gate. Success retains engines, attestation sidecars, router and monitoring for
+service; temporary clients and tunnels are stopped according to the plan.
+
+Live cache geometry, process identities, fabric budgets, profiles and gate
+outputs are operation evidence produced after execution starts. Each output
+records the plan digest and exact upstream evidence digests. These derived
+records do not modify the immutable plan. If profiling shows that the selected
+SLOs need revision, the operation stops with that evidence; selecting revised
+SLOs requires a new plan.
+
+## Invalidation and evidence reuse
+
+Changing any bound input requires a newly prepared plan. Resumption creates a
+new operation with `parent_operation_id` and a fresh, unconsumed plan, preserving
+the original failed or cancelled attempt. An interrupted attempt must first reconcile its effects and
+reach one of those terminal states. An executor may reuse a completed stage only
+when its evidence has a passing verdict and each input digest, applicable live
+identity, adapter version and prerequisite verdict still matches. Missing or
+ambiguous evidence cannot satisfy a gate.
+
+| Changed input | Evidence that must be refreshed |
+| --- | --- |
+| Engine process generation with unchanged launch inputs | Live cache capture, attestation, that generation's profile and full preflight; recompute fabric budget if cache geometry changes. |
+| Checkpoint, image, runtime, allocation, cache or launch policy | Affected discovery and launch checks, engine generation and all downstream dependent measurements. |
+| Fabric route, host assignment or transport | Affected directed link samples and live KV preflight. |
+| SLO or first-token deadline | Preflight for the revised policy; unchanged generation profiles remain eligible. |
+| Offered rate/count within measured coverage | New load evidence and post-load checks after drain; qualifying engine/fabric/profile evidence remains eligible. |
+| Router restart with the same fleet document | Live profile-generation match, router readiness and affected service checks. |
+| Credential value rotation under the same reference | Recheck access; input identity is unchanged when destination, principal and capabilities still match. |
+
+A restarted engine cannot inherit its predecessor's profile solely because its
+logical `engine_id` and image match. A surviving process after interrupted
+launch requires identity reconciliation before retrying launch or releasing its
+GPU and port reservation.
+
+## Site adapter contract
+
+The proposed adapters are `local-dev-v1` and `ssh-v1`.
+`local-dev-v1` calls the installed [dev commands](../cli/Dev.md) for the supported
+Ubuntu/WSL2 CUDA runtime and registered recipe. `ssh-v1` operates existing,
+registered Linux hosts over verified SSH, following Gates A–G. Cloud account
+provisioning and allocation of new virtual machines require a separate adapter.
+
+Every adapter publishes an immutable manifest containing `id`, `version`,
+supported actions, operation identifiers, required platform capabilities,
+resource kinds, asset hashes and available recovery methods. It also names and
+ships versioned JSON Schemas for its settings and recipe input formats. The executor
+selects capabilities before mutation; absent prerequisites or unsupported
+actions return a named failure with retained inspection evidence.
+
+For `local-dev-v1`, the registered recipe is the existing `narwhal.dev-template`
+version 1 document consumed by dev initialization. The adapter's settings schema
+limits initialization overrides to the [dev CLI inputs](../cli/Dev.md), including
+model/tokenizer paths, GPU selection and interface; a null settings file selects
+the documented CLI defaults. For `ssh-v1`, the recipe supplies the nonsecret
+[deployment environment inputs](../configuration/04-Deployment-Inputs.md) and
+references the existing host, launch and fleet documents. Its settings schema
+declares source location, SSH trust, supervision method, fixed measurement/load
+recipes and stage budgets. The manifest must enumerate those accepted fields,
+their defaults and validators; unsupported settings fail before preparation.
+Secret-bearing environment files remain outside the immutable input store;
+preparation captures their nonsecret values and credential references separately.
+
+All adapter calls receive an internal context containing target and operation
+IDs, the plan digest where one exists, stage ID, fencing token, absolute deadline
+and a private output directory. Credential values are resolved only in the
+worker environment. Responses contain typed `data`, artifact references,
+observed resource identities and a structured error or null. Every invoked CLI
+result is retained unchanged under the command result contract.
+
+| Interface | Inputs beyond context | Required output |
+| --- | --- | --- |
+| `snapshot` | Registered target and recipe references | Immutable host, artifact, runtime and access observations with a snapshot ID/digest. |
+| `check` | Snapshot or plan binding and selected capability | Named prerequisite verdicts, tool versions, supported/unsupported action details. |
+| `prepare` | Validated plan and stage | Verified package/role artifacts, hashes and destination manifest. |
+| `launch` | Checked stage inputs and unique launch token | Owned process/container/service identity, launch evidence and readiness result. |
+| `status` | Recorded resource identities | Observation time and `present`, `absent`, `mismatch` or `unknown` for each identity. |
+| `measure` | Fixed recipe, current engine identities and required exclusion token | Samples, bounds, provenance and gate verdict; no automatic tuning. |
+| `collect` | Registered evidence kind, subjects and byte/time limits | Bounded artifact manifest and explicit omissions/truncation. |
+| `stop` | Enumerated owned identities and cleanup budgets | Removed, absent, surviving or unknown resources and cleanup evidence. |
+
+These are Python adapter interfaces, not new public shell commands. Installation,
+attestation, router supervision, monitoring and tunnels use operation identifiers
+declared by the adapter manifest. Resource creation records ownership before
+later stages depend on the resource. Linux identities include host boot ID,
+PID and start ticks; container ownership includes daemon host, container ID and
+Narwhal launch/operation labels. Failed observation returns `unknown`; it never
+proves absence or authorizes an unrelated process to be stopped.
+
+Each resource receipt contains `resource_id` (the coordinator's canonical key),
+`kind` (one of the stage resource kinds), `host_id` (registered alias),
+`owner` (`{operation_id, stage_id, launch_token}`), `identity`, `effect` and
+`observed_at`. `launch_token` is null for resources that are not launched.
+`effect` is `confirmed`, `absent` or `unknown`; `observed_at` is a UTC RFC 3339
+timestamp. `identity` contains the kind-specific PID/container/service identity
+or path and digest for an installation/artifact, and is null only when the
+intended resource's identity has not been established. An unknown receipt keeps
+the operation in `recovery_required` until reconciliation establishes its effect.
+
+### Prerequisites and installed assets
+
+The current SSH runbook requires Git, Bash, Python 3.11+, OpenSSH and supplied
+access helpers on the management workstation. Password SSH additionally requires
+`sshpass`. Hosts running Narwhal commands require Python 3.11+ with `venv`, Git,
+Make and curl. Discovery also needs Docker, `ip`, `rocminfo` or `nvidia-smi`, the
+pinned engine image and staged model. Engine hosts need the selected driver,
+container/device access and transfer devices. Fabric qualification needs
+`iperf3` for TCP or `ib_write_bw` from `perftest` for RDMA. The monitoring host
+needs Docker Engine and the Compose plugin. Listener, route, device and host-key
+checks use the exact target host, as specified in the runbook.
+
+`local-dev-v1` instead checks the registered recipe's native CUDA, Python package,
+model, tokenizer, GPU and interface requirements through the installed dev
+implementation. See [CUDA runtime preparation](../dev/CUDA-Runtime.md). A passed
+synthetic adapter test cannot establish GPU fit, transfer compatibility or
+recovery on that runtime.
+
+An installed MCP wheel must not assume a repository `tools/` directory exists.
+The first `ssh-v1` implementation uses an explicitly registered, verified source
+checkout or extracted approved source bundle for the existing deployment,
+measurement and observability helpers. Preparation checks its full commit and
+all required assets before any remote installation. Missing assets disable the
+affected action with their names in the error.
+
+The asset manifest must include deployment/discovery/access helpers and their
+package dependencies; the engine launcher and cache capture hook; fabric budget
+tooling; load and evidence helpers; the Compose file, Prometheus configuration
+and rules; the Grafana dashboard and provisioning files. Package-backed launcher
+symlinks in a checkout must resolve to verified files when producing a bundle.
+Installed dev templates are read through package resources. A later adapter may
+package the remaining assets, but must retain the same manifest and installed
+artifact verification contract.
+
+Qualification must exercise the server outside a checkout, missing prerequisites
+before mutation, supported host/recipe combinations, full Gate G evidence, and
+interrupted operation recovery against real process ownership. Live GPU and
+fleet qualification remains required before declaring a deployment recipe
+supported; [worked cases](Worked-Cases.md) define the contract scenarios to test.
