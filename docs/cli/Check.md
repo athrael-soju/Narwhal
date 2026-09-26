@@ -7,16 +7,21 @@ With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
 | Option                      | Default                | Contract                                                                                    |
 | --------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
 | `--version`                 |                        | Print the installed distribution version. |
-| `--fleet PATH`              | required for preflight or evidence verification | Native fleet config JSON |
+| `--fleet PATH`              | required for preflight, calibration, or evidence verification | Native fleet config JSON |
 | `--ring`                    | mesh                   | Mesh tests every eligible ordered pair; `--ring` uses ring coverage for `consume`.           |
 | `--repeats N`               | `1`                    | Transfer probes per pair, clamped to a minimum of 1.                                        |
 | `--no-kv`                   | false                  | Runs `reach`, `contract`, `profile`, `model`, `pace`, `tokenize`, and `slo`.                |
 | `--evidence-out PATH` | gate output only | Write process-bound full-mesh KV evidence to a fresh JSON path. Requires a fleet `engine_contract`; exclusive with `--ring`, `--no-kv` and `--verify-evidence`. |
 | `--verify-evidence PATH` | run preflight | Verify saved directed KV evidence against current fleet/profile hashes and live process generations. Requires a fleet `engine_contract`; exclusive with `--evidence-out`. `--ring`, `--no-kv` and `--repeats` apply to new probes. |
+| `--calibrate-first-token` | false | Measure fresh directed handoffs across specified input lengths with a diagnostic first-token bound. Exclusive with directed KV evidence modes, `--ring`, `--no-kv`, and nondefault `--repeats`. |
+| `--input-tokens LIST` | required for calibration | Comma-separated positive target input lengths. Include the longest input admitted by the service. |
+| `--samples N` | `100` | Fresh handoffs per pair and input length. At least 100 completed attempts per group are required for qualifying evidence. |
+| `--observation-timeout-s SECONDS` | required for calibration | Diagnostic bound above `engine.first_token_timeout_s` and no greater than `serving.request_timeout_s`. |
+| `--calibration-out PATH` | required for calibration | Write raw samples and group summaries to a fresh JSON path under `runs/`. |
 | `--print-example-config`    | false                  | Prints the packaged annotated config before resolving the input config, then exits. Takes precedence over `--print-contract-versions`. |
 | `--print-contract-versions` | false                  | Prints the versioned JSON interface registry before resolving the input config, then exits. |
 
-KV checks use the fixed prompt `"benchmark " * 64`, whose token count depends on the model tokenizer. Each `consume` probe creates a fresh handoff and requests up to four output tokens from a distinct, role-permitted peer. Decode uses the fleet's `engine.first_token_timeout_s` and must return generated output followed by a valid stream termination.
+KV checks use the fixed prompt `"benchmark " * 64`, whose token count depends on the model tokenizer. Each `consume` probe creates a fresh handoff and requests up to four output tokens from a distinct, role-permitted peer. Decode uses the fleet's `engine.first_token_timeout_s` and must return generated output followed by a valid stream termination. Prefill and decode together remain bounded by `serving.request_timeout_s`. The gate reports elapsed time to the first generated token. An expired first-token deadline leaves the transfer unconfirmed and names calibration as the next check.
 
 When writing directed KV evidence, qualification requires each engine's
 process generation to match across all pairs and repeats and to retain its
@@ -34,7 +39,7 @@ The `slo` gate prices each profile's smallest measured decode cohort,
 including its active-request and KV-token costs. Capacity output states the
 request count used for the TPOT calculation.
 
-Measure first-token latency across input lengths with [instrumented calibration probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+Use [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before qualifying a fleet. Calibration writes completed timings, observation expiries, transfer failures, process generations, p99, observed maxima, and a candidate deadline. It retains an incomplete artifact when any attempt fails, fewer than 100 samples complete in a group, a generation changes, or the candidate does not fit the request deadline. Calibration uses `--observation-timeout-s` for first output and `serving.request_timeout_s` for the complete attempt.
 
 In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
 

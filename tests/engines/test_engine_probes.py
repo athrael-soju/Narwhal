@@ -97,6 +97,51 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await self.client.token_count("http://engine", {}, 1))
             self.assertEqual(len(self.calls), before)
 
+    async def test_phase_calls_preserve_connection_and_pool_limits(self):
+        seen = {}
+
+        def handle(request):
+            seen[request.url.path] = request.extensions["timeout"]
+            if request.url.path == "/health":
+                return httpx.Response(200)
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": 2})
+            return httpx.Response(
+                200,
+                json={"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            )
+
+        client = EngineClient(
+            transport=httpx.MockTransport(handle),
+            connect_timeout_s=0.2,
+            pool_timeout_s=0.1,
+            health_timeout_s=0.5,
+            prefill_timeout_s=0.4,
+        )
+        self.addAsyncCleanup(client.aclose)
+        self.assertTrue(await client.healthy("http://engine"))
+        self.assertEqual(await client.token_count("http://engine", {"prompt": "x"}, 0.3), 2)
+        await client.prefill("http://engine", "/v1/completions", {"prompt": "x"}, {})
+        for path in ("/health", "/tokenize", "/v1/completions"):
+            self.assertEqual(seen[path]["connect"], 0.2)
+            self.assertEqual(seen[path]["pool"], 0.1)
+        self.assertEqual(seen["/v1/completions"]["read"], 0.4)
+
+    async def test_strict_tokenizer_fails_before_fallback(self):
+        self.responses["tokenize"] = httpx.ReadTimeout("slow tokenizer")
+        with self.assertRaisesRegex(EngineError, "exact count exceeded 1s"):
+            await self.client.token_count("http://engine", {"prompt": "x"}, 1, strict=True)
+
+    async def test_prefill_uses_one_elapsed_budget(self):
+        async def slow(request):
+            await asyncio.sleep(0.08)
+            return httpx.Response(200, json={})
+
+        client = EngineClient(transport=httpx.MockTransport(slow), prefill_timeout_s=0.02)
+        self.addAsyncCleanup(client.aclose)
+        with self.assertRaisesRegex(httpx.ReadTimeout, "prefill exceeded its 0.02s"):
+            await client.prefill("http://engine", "/v1/completions", {"prompt": "x"}, {})
+
     async def test_cross_engine_probe_binds_one_fresh_prompt_and_producer_descriptor(self):
         """Both legs share a unique prompt and the consumer receives the fresh handoff."""
         result = await self.client.probe_inference("http://decode", prefill_url="http://prefill")

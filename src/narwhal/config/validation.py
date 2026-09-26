@@ -37,6 +37,15 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     for name, value in positive:
         if value <= 0:
             problems.append(f"{name} must be positive, got {value}")
+    for name, value in (
+        ("serving.prefill_timeout_s", config.prefill_timeout_s),
+        ("engine.first_token_timeout_s", config.first_token_timeout_s),
+    ):
+        if value > config.request_timeout_s:
+            problems.append(
+                f"{name} {value} exceeds serving.request_timeout_s "
+                f"{config.request_timeout_s}: the request expires before this phase limit"
+            )
     not_negative = [
         ("controller.thresholds.shrink", config.thresholds.shrink),
         ("controller.thresholds.cooldown_s", config.thresholds.cooldown_s),
@@ -51,6 +60,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     for name, value in not_negative:
         if value < 0:
             problems.append(f"{name} must be nonnegative, got {value}")
+    if not float(config.graceful_timeout_s).is_integer():
+        problems.append("serving.graceful_timeout_s must be whole seconds")
 
     if config.thresholds.panic_ratio != 0.0 and config.thresholds.panic_ratio < 1.0:
         problems.append(

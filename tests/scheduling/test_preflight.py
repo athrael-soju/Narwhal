@@ -1,5 +1,6 @@
 """Check preflight gate results and permitted KV-transfer pairs."""
 
+import asyncio
 import io
 import json
 import tempfile
@@ -27,7 +28,7 @@ from narwhal.diagnostics.check import (
     gate_tokenize,
 )
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
-from narwhal.engines.client import EngineError
+from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
@@ -59,8 +60,18 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(live, {"e0"})
         self.assertEqual(len(report.failed), 1)
         await gate_tokenize(self.cfg, live, client, report)
-        self.assertEqual(len(report.skipped), 2)
+        self.assertEqual(len(report.failed), 2)
+        self.assertEqual(len(report.skipped), 1)
         self.assertEqual(client.token_count.await_count, 1)
+
+    async def test_disabled_token_counting_skips_exact_count_gate(self):
+        self.cfg.tokenize = False
+        client = SimpleNamespace(token_count=AsyncMock())
+        report = Report()
+        await gate_tokenize(self.cfg, {"e0", "e3"}, client, report)
+        self.assertEqual(report.failed, [])
+        self.assertIn("engine.tokenize is disabled", report.skipped[0])
+        client.token_count.assert_not_awaited()
 
     async def test_contract_marks_only_unsafe_engines(self):
         """A stale process attestation excludes the affected engine from KV transfer."""
@@ -443,6 +454,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.pairs[0]["status"], "passed")
         self.assertEqual(report.pairs[0]["nixl_transfer_seconds"], 0.2)
         self.assertEqual(report.pairs[0]["remote_port"], 5701)
+        self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)
 
         with (
             patch.object(check, "validation_pairs", return_value=pair),
@@ -471,6 +483,67 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(report.pairs[0]["status"], "failed")
         self.assertIn("process or attestation changed", report.failed[0])
+
+    async def test_consume_bounds_stalled_stream_when_gap_timeout_is_disabled(self):
+        """A first token cannot leave preflight waiting indefinitely for termination."""
+        self.cfg.request_timeout_s = 0.02
+        self.cfg.decode_read_timeout_s = 0
+        src, dst = self.cfg.engines[0].iid, self.cfg.engines[1].iid
+        closed = asyncio.Event()
+
+        class StalledStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"choices":[{"text":"x","token_ids":[1]}]}\n\n'
+                await asyncio.Event().wait()
+
+            async def aclose(self):
+                closed.set()
+
+        payload = {"kv_transfer_params": {"remote_engine_id": "engine", "remote_block_ids": [0]}}
+
+        def answer(request):
+            if json.loads(request.content).get("stream"):
+                return httpx.Response(200, stream=StalledStream())
+            return httpx.Response(200, json=payload)
+
+        client = EngineClient(
+            read_timeout_s=self.cfg.decode_read_timeout_s,
+            transport=httpx.MockTransport(answer),
+        )
+        result = NixlConnector().prefill_result(
+            payload,
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+        try:
+            with (
+                patch.object(check, "validation_pairs", return_value=[(src, dst)]),
+                patch.object(
+                    check, "_pair_snapshot", new=AsyncMock(return_value={"iid": src})
+                ) as snapshot,
+            ):
+                report = Report()
+                await asyncio.wait_for(
+                    gate_consume(
+                        self.cfg,
+                        {src, dst},
+                        {src: result, dst: result},
+                        client,
+                        report,
+                        True,
+                        evidence=report.pairs,
+                    ),
+                    timeout=0.5,
+                )
+        finally:
+            await client.aclose()
+        self.assertEqual(snapshot.await_count, 2)
+        self.assertTrue(closed.is_set())
+        self.assertEqual(report.pairs[0]["status"], "failed")
+        self.assertEqual(report.pairs[0]["failure_kind"], "request_deadline_exceeded")
+        self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)
+        self.assertIn("request deadline", report.failed[0])
 
     async def test_directed_kv_evidence_reports_side_channel_and_layout_failures(self):
         connector = NixlConnector()

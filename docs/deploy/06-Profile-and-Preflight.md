@@ -24,6 +24,25 @@ At preflight and router startup, Narwhal matches each saved profile to the live 
 
 Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured engine curves before preflight, keeping TPOT above the measured per-token floor. A target edit changes the preflight budget while the curves continue to describe the same engines.
 
+## Calibrate the first-token deadline
+
+From the router host, keep the engines idle. For a service admitting inputs up to 16,384 tokens, run:
+
+```bash
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
+  --calibrate-first-token --input-tokens 256,8192,16384 \
+  --samples 100 --observation-timeout-s 20 \
+  --calibration-out runs/deployment/first-token-calibration.json
+```
+
+Choose input lengths that span the served range and include its longest admitted input. Set the observation bound above the current `engine.first_token_timeout_s` and within `serving.request_timeout_s`. The command gives each prompt a unique prefix, sizes it with the live tokenizer, then creates a fresh handoff for every sample on every role-permitted directed pair. It records actual input tokens, prefill time, elapsed time from starting decode to the first generated token, failed sizing or transfer attempts, and observation expiries. The output path must be new and should remain under the ignored `runs/` tree.
+
+A complete artifact has at least 100 successful samples and no failed attempts per pair and input length, with unchanged engine generations. For each group, the command computes `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`; its printed candidate is the largest group result. Diagnose failed transfers and observation expiries before using the candidate. A larger observation bound changes only the diagnostic run.
+
+Each attempt, including prompt sizing, prefill, and decode completion, remains bounded by `serving.request_timeout_s`. An attempt that expires after producing its first token is retained as `request_expired` and excluded from the candidate calculation.
+
+Set `engine.first_token_timeout_s` strictly above the candidate and set `engine.first_token_calibration_path` to the artifact path. Check that the selected deadline, measured prefill, and router overhead fit the service's client TTFT requirement. Model, engine generation, transport, and served-context changes require new samples. Retain the fleet document, raw artifact, command, and process identities together. The [GPU qualification report](../measure/07-GPU-Qualification.md) records one deployment's separate measurements.
+
 ## Run preflight
 
 From the router, keep the engines otherwise idle and run:
@@ -34,7 +53,9 @@ From the router, keep the engines otherwise idle and run:
 
 The `consume` gate uses a fixed prompt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
 
-Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. If a transfer fails, retain the failing pair, error, and engine logs. Diagnose the path before changing the timeout.
+Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. Each consume attempt's prefill and decode must complete within `serving.request_timeout_s`. The consume gate reports first-token time for a passing transfer. A deadline expiry means that the transfer remains unconfirmed; check the calibration artifact and configured deadline. Retain the failing pair, error, and engine logs for other transfer failures.
+
+Preflight warns when no calibration path is configured and fails when configured evidence is stale or the deadline does not exceed its candidate. Router startup follows the same evidence check and logs a warning for an unconfigured path.
 
 `--repeats N` runs fixed transfer probes for each pair and reports their verdicts. Retain the command, fleet document, preflight output, process identities, and profile store together.
 
@@ -53,15 +74,5 @@ The full preflight runs these gates:
 | `slo`      | Configured TTFT/TPOT targets are feasible against measured profiles.                                                                                                                                        |
 
 Start the router after every required gate passes.
-
-## Calibrate the first-token deadline
-
-Calibrate the deadline with instrumented direct-engine probes. Use a fresh producer handoff for each sample and input lengths spanning the served context range, including the longest admitted input. Record the actual token count, prefill duration, and elapsed time from starting the decode HTTP request to its first generated token. The [Python engine API](../http-api/03-Backend-and-Failures.md#python-api) exposes the prefill and decode calls.
-
-Use a diagnostic first-token observation bound above `engine.first_token_timeout_s` and within `serving.request_timeout_s`. Record engine errors and observation-window expiries with the failed path; diagnose them before selecting a serving deadline.
-
-For each path and input length, collect at least 100 completed samples and retain all failed attempts. Compute `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` separately for each group, then set the candidate deadline above the largest result. Check that the deadline, measured prefill, and router overhead fit the service's client TTFT requirement. Edit `engine.first_token_timeout_s` in the fleet document and rerun preflight with that configuration.
-
-Model, runtime, transport, or served-context changes require new samples. Retain the probe code, commands, raw timings, failures, fleet document, and process identities with the calibration evidence. The [GPU qualification report](../measure/07-GPU-Qualification.md) records one deployment's separate direct-probe measurements.
 
 Continue with [Gate G: Start the service and validate capacity through the private path](07-Serve-and-Measure.md).

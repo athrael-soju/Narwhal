@@ -231,15 +231,21 @@ class NarwhalRouter:
     async def input_length(self, body: dict[str, Any]) -> int:
         """Return the exact or estimated input token count.
 
-        One engine is
-        queried per request. A failed probe rotates the preferred engine for
-        the next request and uses the estimate immediately.
+        One engine is queried per request. A failed exact-count call fails the
+        request and rotates the preferred engine for the next request. Disabled
+        or unavailable token counting uses the local estimate.
         """
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
                 k = next((j for j, i in enumerate(live) if i.iid == self._tokenizer), 0)
-                got = await self.engines.token_count(live[k].url, body, self.cfg.tokenize_timeout_s)
+                try:
+                    got = await self.engines.token_count(
+                        live[k].url, body, self.cfg.tokenize_timeout_s, strict=True
+                    )
+                except EngineError:
+                    self._tokenizer = live[(k + 1) % len(live)].iid
+                    raise
                 if got is not None:
                     self._tokenizer = live[k].iid
                     return got

@@ -28,6 +28,11 @@
     "ttft_s": 10.0,
     "tpot_s": 0.125
   },
+  "_engine": "Run narwhal-check --calibrate-first-token for the served input range. Set first_token_timeout_s above its candidate and first_token_calibration_path to the completed artifact under runs/. An empty path reports an uncalibrated warning.",
+  "engine": {
+    "first_token_timeout_s": 2.5,
+    "first_token_calibration_path": ""
+  },
   "controller": {
     "min_prefill": 1,
     "min_decode": 1,

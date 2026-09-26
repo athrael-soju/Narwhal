@@ -230,6 +230,8 @@ class FleetConfig:
     decode_read_timeout_s: float = 60.0
     # Set above the measured crossed-handoff p99 for the served context range.
     first_token_timeout_s: float = 2.5
+    # Ignored run output containing process-bound crossed-handoff measurements.
+    first_token_calibration_path: Path | None = None
     # Hold a failed engine out of placement while health checks catch up.
     failure_quarantine_s: float = 0.0
     # Predictive admission returns 429 when every placement exceeds the TTFT

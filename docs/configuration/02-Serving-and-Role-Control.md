@@ -124,20 +124,29 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | ------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `profiles.path`                 | `"runs/profiles.json"` | Profile store read by the router and written by `narwhal-profile`.                                                                      |
 | `serving.request_timeout_s`     | `600.0`                | End-to-end completion deadline from HTTP ingress through response delivery. Positive.                                                   |
-| `serving.prefill_timeout_s`     | `120.0`                | Prefill-leg deadline. Positive.                                                                                                         |
+| `serving.prefill_timeout_s`     | `120.0`                | Elapsed prefill-leg deadline. Positive and no greater than `serving.request_timeout_s`.                                                 |
 | `recovery.failure_quarantine_s` | `0.0`                  | Time a failed engine remains excluded from placement. `0` disables quarantine.                                                          |
 | `engine.decode_read_timeout_s`  | `60.0`                 | Maximum silent interval between decode chunks. `0` disables the gap limit.                                                              |
-| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token and for each functional-verification leg. Positive.                                                  |
+| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token and for each functional-verification leg. Positive and no greater than `serving.request_timeout_s`. |
+| `engine.first_token_calibration_path` | `""` | Path to a completed first-token calibration artifact under `runs/`. An empty value means no evidence is configured. |
 | `engine.tokenize`               | `true`                 | Requests exact input length from the dialect tokenisation endpoint.                                                                     |
-| `engine.tokenize_timeout_s`     | `2.0`                  | Exact-token-count deadline. Positive.                                                                                                   |
+| `engine.tokenize_timeout_s`     | `2.0`                  | Elapsed exact-token-count deadline. Positive. A failed available tokenizer route fails the request before placement.                  |
 | `engine.chars_per_token`        | `3.8`                  | Character-to-token fallback ratio. Positive.                                                                                            |
 | `engine.pool_timeout_s`         | `5.0`                  | Maximum wait for an engine HTTP connection on serving or control pools. Probe exhaustion leaves the engine verdict unchanged. Positive. |
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
-| `engine.health_timeout_s`       | `5.0`                  | Deadline for preflight, breaker, and readmission health probes. Positive.                                                               |
+| `engine.health_timeout_s`       | `5.0`                  | HTTP I/O timeout for preflight, breaker, and readmission health probes. Positive.                                                       |
 
-Set `engine.first_token_timeout_s` above measured crossed-handoff p99 over the fleet's supported context range. Collect those timings with [instrumented direct-engine probes](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline); `narwhal-check` applies the configured timeout to its transfer checks.
+Set `engine.first_token_timeout_s` above the candidate in a [completed crossed-handoff calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and set `engine.first_token_calibration_path` to that artifact. `narwhal-check` checks the artifact against the configured value and current engine generations. If the path is absent, preflight reports a warning and router startup logs one. A stale or insufficient artifact fails preflight and blocks router startup.
+
+When `engine.tokenize` is enabled and the dialect provides an exact-count route, that route must answer within `engine.tokenize_timeout_s`. A failed call returns an engine error to the client. Disabled token counting and dialects without that route use `engine.chars_per_token`; measure the ratio for the served tokenizer.
+
+Set `serving.prefill_timeout_s` from the longest admitted inputs and supported load. `narwhal-profile --observation-timeout-s` can extend diagnostic HTTP probes without changing serving limits. Set `engine.health_timeout_s` from health and identity latency measured under the intended load; a timed-out health probe counts as a failed liveness observation. Size `engine.decode_read_timeout_s` from observed inter-chunk gaps and the service's failure budget. Metadata chunks reset this transport-gap timer, so the end-to-end request deadline remains the final bound on generated output.
+
+Check connection setup and local pool waits under workload load before setting `engine.connect_timeout_s` and `engine.pool_timeout_s`. Local pool exhaustion is inconclusive for engine health. Set `serving.request_timeout_s` from the supported output length and client deadline; the configured prefill and first-token limits cannot exceed it.
 
 `serving.request_timeout_s` bounds the entire request, including decode streaming.
+
+Engine prefill, tokenisation, and health calls retain the configured connection and pool limits when they apply their own phase timeout. The smaller phase budget controls if it expires first.
 
 `engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends when the first generated token arrives, so connection and response-header delays consume the same budget.
 

@@ -258,6 +258,11 @@ def load(path: str | Path) -> FleetConfig:
             ),
             enforce_handshake_compat=handshake,
         )
+    calibration_path_value = _read_str(
+        problems,
+        "engine.first_token_calibration_path",
+        engine_raw.get("first_token_calibration_path", ""),
+    )
     cfg = FleetConfig(
         model=_read_str(problems, "model", raw["model"]),
         engines=engines,
@@ -464,6 +469,9 @@ def load(path: str | Path) -> FleetConfig:
             "engine.first_token_timeout_s",
             engine_raw.get("first_token_timeout_s", 2.5),
         ),
+        first_token_calibration_path=Path(calibration_path_value)
+        if calibration_path_value
+        else None,
         state_path=Path(
             _read_str(
                 problems,
@@ -583,6 +591,7 @@ _ENGINE_KEYS = {
     "health_timeout_s",
     "decode_read_timeout_s",
     "first_token_timeout_s",
+    "first_token_calibration_path",
 }
 _RECOVERY_KEYS = {
     "eject_after",

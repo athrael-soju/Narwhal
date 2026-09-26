@@ -81,6 +81,11 @@ def document(config: FleetConfig) -> dict[str, Any]:
             "health_timeout_s": config.health_timeout_s,
             "decode_read_timeout_s": config.decode_read_timeout_s,
             "first_token_timeout_s": config.first_token_timeout_s,
+            "first_token_calibration_path": (
+                str(config.first_token_calibration_path)
+                if config.first_token_calibration_path is not None
+                else ""
+            ),
         },
         "recovery": {
             "eject_after": config.eject_after,

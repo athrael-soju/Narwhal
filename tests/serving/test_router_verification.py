@@ -28,15 +28,17 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.router.engines.aclose)
 
     async def test_input_length_rotates_after_failure_and_reuses_a_successful_tokenizer(self):
-        """Failed tokenization rotates the preferred engine and returns the local estimate."""
+        """Failed exact counting fails this request and rotates the preferred engine."""
         self.cfg.tokenize = True
         with patch.object(
-            self.router.engines, "token_count", new=AsyncMock(side_effect=[None, 9, 10])
+            self.router.engines,
+            "token_count",
+            new=AsyncMock(
+                side_effect=[EngineError("tokenize", "http://engine", 504, "late"), 9, 10]
+            ),
         ) as count:
-            self.assertEqual(
-                await self.router.input_length({"prompt": "hello"}),
-                self.router.estimate_length({"prompt": "hello"}),
-            )
+            with self.assertRaisesRegex(EngineError, "late"):
+                await self.router.input_length({"prompt": "hello"})
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 9)
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 10)
         self.assertNotEqual(count.call_args_list[0].args[0], count.call_args_list[1].args[0])

@@ -21,6 +21,7 @@ from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
 from ..observability.metrics import render
+from ..profiling.calibration import verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
@@ -116,6 +117,15 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Open and close router resources around the ASGI lifespan."""
+        if cfg.first_token_calibration_path is None:
+            log.warning(
+                "first-token deadline is uncalibrated; run narwhal-check "
+                "--calibrate-first-token and set engine.first_token_calibration_path"
+            )
+        else:
+            calibration_failures = await verify_calibration(cfg)
+            if calibration_failures:
+                raise RuntimeError("; ".join(calibration_failures))
         missing, extra = router.profile_set_diff()
         if missing or extra:
             detail = []

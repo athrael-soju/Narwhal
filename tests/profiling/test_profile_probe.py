@@ -44,6 +44,31 @@ def token(index, *, finish=None):
 class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     """HTTP fixtures exercise measurement validation with controlled token arrivals."""
 
+    async def test_colocated_sizing_uses_observation_timeout(self):
+        """The override reaches both prompt fitting and neighbour limit discovery."""
+        timeouts = []
+
+        async def answer(request):
+            self.assertEqual(request.url.path, "/tokenize")
+            timeouts.append(request.extensions["timeout"])
+            return httpx.Response(200, json={"count": 32, "max_model_len": 32})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            load = probe.NeighbourLoad(
+                client,
+                [("p", "http://prefill", Role.PREFILL)],
+                "stub",
+                probe.VllmDialect(),
+                3.8,
+                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                observation_timeout_s=75.0,
+            )
+            with self.assertRaisesRegex(ValueError, "exceeds max_model_len"):
+                await load.start()
+        self.assertEqual(len(timeouts), 2)
+        for timeout in timeouts:
+            self.assertEqual(set(timeout.values()), {75.0})
+
     async def test_colocated_load_records_completed_peer_traffic(self):
         """A mix label is backed by requests to both neighbouring engine roles."""
         calls = []
@@ -256,7 +281,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        async def prompt(client, url, model, target, dialect, chars_per_token):
+        async def prompt(client, url, model, target, dialect, chars_per_token, **kwargs):
             return "x" * target, target
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
