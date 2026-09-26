@@ -43,7 +43,8 @@ def _main(argv: list[str]) -> int:
             "  narwhal-check    Run deployment preflight gates\n"
             "  narwhal-attest   Serve engine identity and attestation for one vLLM engine\n"
             "  narwhal-serve    Run a Narwhal router\n"
-            "  narwhal-profile  Measure engine service curves and write router profiles"
+            "  narwhal-profile  Measure engine service curves and write router profiles\n"
+            "  narwhal-mcp      Start the optional MCP stdio server (requires the mcp extra)"
         ),
     )
     add_version_argument(parser)

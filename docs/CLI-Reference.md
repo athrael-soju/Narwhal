@@ -1,6 +1,6 @@
 # Narwhal CLI reference
 
-`narwhal-inference` installs the commands below. Each executable accepts `-h`, `--help` and `--version`, and resolves relative paths from the process working directory. `narwhal --help` lists all six installed commands.
+`narwhal-inference` installs the commands below. Each executable accepts `-h`, `--help` and `--version`, and resolves relative paths from the process working directory. `narwhal --help` lists the installed commands.
 
 Use the installed `narwhal-*` commands in deployment scripts because internal Python module paths can change between releases. `python -m narwhal.cli` also starts a router.
 
@@ -22,5 +22,10 @@ subprocess output in the run's diagnostic logs.
 | [`narwhal-serve`](cli/Serve.md)     | Run a Narwhal router                                                    |
 | [`narwhal-profile`](cli/Profile.md) | Measure engine behaviour and write the profile store used by the router |
 | [`narwhal-check`](cli/Check.md)     | Run deployment preflight gates                                          |
+| [`narwhal-mcp`](cli/MCP.md)         | Start the optional local MCP stdio server (unreleased)                   |
 
 Finite commands accept `--format json` for [versioned command results](Command-Results.md), including failures, artifact references and a documented status-to-exit-code mapping.
+
+`narwhal-mcp` requires the `mcp` extra to serve a session. It uses MCP messages
+on stdout and diagnostics on stderr; its startup options and exit codes are
+documented in the [MCP command reference](cli/MCP.md).

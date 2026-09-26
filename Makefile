@@ -12,7 +12,7 @@ BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 .venv/bin/python:
 	$(PYTHON) -m venv .venv
-	.venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
+	.venv/bin/pip install -e '.[dev,mcp]' -c constraints-dev.txt
 
 setup: .venv/bin/python
 

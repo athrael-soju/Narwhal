@@ -21,6 +21,8 @@ ATTESTATION = "attestation"
 CLI = "cli"
 COMMAND_RESULT = "command_result"
 DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
+MANAGEMENT_REGISTRY = "management_registry"
+MANAGEMENT_RESULT = "management_result"
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ CONTRACTS: dict[str, Contract] = {
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
+    MANAGEMENT_REGISTRY: Contract("narwhal.management-registry"),
+    MANAGEMENT_RESULT: Contract("narwhal.management-result"),
 }
 
 

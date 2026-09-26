@@ -20,6 +20,7 @@ REFERENCES = {
     "narwhal-attest": "Attest.md",
     "narwhal-serve": "Serve.md",
     "narwhal-profile": "Profile.md",
+    "narwhal-mcp": "MCP.md",
 }
 
 
@@ -144,5 +145,5 @@ class CliReferenceTests(unittest.TestCase):
 
     def test_readme_inventory_matches_installed_commands(self):
         readme = (ROOT / "README.md").read_text()
-        inventory = re.search(r"The wheel installs (.+?)\.", readme).group(1)
+        inventory = re.search(r"The wheel built from this branch installs (.+?)\.", readme).group(1)
         self.assertEqual(set(re.findall(r"`(narwhal[\w-]*)`", inventory)), set(self.scripts))

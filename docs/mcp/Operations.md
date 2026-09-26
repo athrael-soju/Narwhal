@@ -1,63 +1,73 @@
 # MCP operation lifecycle
 
-This is the **proposed, unreleased version 1 contract** for durable management
-operations. It specifies the execution and recovery behaviour to implement for
-[MCP Fleet Operations v1](../MCP-Contracts.md). The existing stage runner and
-local development lifecycle supply process evidence and local locking; they do
-not yet implement this operation store or shared resource coordination.
+The management executor records long operations so that a client can inspect
+their progress, reconnect after a disconnect, and recover interrupted work.
+This page defines the proposed version 1 operation contract for
+[MCP fleet operations](../MCP-Contracts.md). The operation store and shared
+coordinator are not yet available; the existing stage runner and dev lifecycle
+provide process evidence and local locks for their own commands.
 
 ## Submission and lookup
 
-`plan_prepare`, `plan_execute` and `operation_resume` persist an operation before
-returning an accepted result. An accepted result proves admission and durable
-recording. Read its operation to learn whether execution succeeded.
+When a client calls `plan_prepare`, `plan_execute` or `operation_resume`, the
+executor persists an operation before returning `outcome: "accepted"`. This
+receipt confirms that the executor accepted and recorded the work. Call
+`operation_inspect` with the returned operation ID to check its progress and
+eventual result.
 
 `operation_inspect(target_id, operation_id)` returns a bounded summary in
-`data.operation` and a `record_artifact_id` for a frozen, redacted snapshot of
-the complete document. Its tool outcome is `success` when the snapshot was read,
-including when the stored operation failed. The summary's `state` and
-`result_status` report execution progress and outcome. Use `artifact_read` to
-read the complete snapshot in bounded chunks.
+`data.operation`. It also returns `record_artifact_id`, which identifies a
+frozen, redacted copy of the complete operation document. The tool reports
+`success` when it reads the document, including when the operation itself
+failed. Read the summary's `state` and `result_status` to distinguish these
+outcomes. Use `artifact_read` to read the complete document in bounded chunks.
 
 `operation_list(target_id, cursor, limit)` returns summaries and an opaque
 `next_cursor`. The default limit is 20; accepted limits are integers from 1 to
-100. Results use a stable snapshot ordered by creation time, newest first, with
-operation ID as the tie breaker. A cursor is bound to the target and snapshot;
-an invalid cursor returns `invalid_input`. Each summary contains
+100. The executor captures one snapshot for the list and orders its operations
+by creation time, newest first, using the operation ID to break ties. The cursor
+identifies that target and snapshot. An invalid cursor returns `invalid_input`.
+A client that loses its submission response can use this list to recover the
+operation ID.
+
+Each summary contains
 `operation_id`, `parent_operation_id`, `action`, `plan_id`, `state`,
 `current_stage`, `revision`, `created_at`, `updated_at`, `finished_at`,
 `result_status`, `result_data`, `error_codes`, `error_count`, `stage_count` and
-`resource_count`. `result_status` and `result_data` are null before terminal
-completion. `error_codes` contains the first ten codes; `error_count` reports
-the full count. Successful preparation has `result_data: {"plan_id": "UUID"}`;
-execution and resumption use `{"summary_artifact_id": "UUID"}` to identify
-their complete action result. A client can recover an operation ID through the
-list after losing its submission response.
+`resource_count`. Before the operation reaches a terminal state, `result_status`
+and `result_data` are null. The summary includes the first ten error codes in
+`error_codes` and the total number in `error_count`.
+
+Successful preparation returns `result_data: {"plan_id": "UUID"}`. Execution
+and resumption return `{"summary_artifact_id": "UUID"}`, which identifies the
+complete action result.
 
 ## Operation document
 
-The document identifier is `narwhal.management-operation`, version `1`. All
-fields below are required; explicitly nullable fields use JSON `null`. Operation, request, plan and artifact IDs are UUID strings; registered target
-IDs are aliases. Timestamps are RFC 3339 UTC strings. Recorded plan budgets
-use integer milliseconds.
-Unknown compatible fields are retained; an unsupported schema version is
-rejected before any execution or recovery action.
+The executor stores operations as `narwhal.management-operation`, version `1`.
+Every field below is required. A field accepts JSON `null` only where its entry
+allows it. Operation, request, plan and artifact IDs are UUID strings;
+registered target IDs are aliases. Timestamps are RFC 3339 UTC strings, and
+plan budgets are integer milliseconds.
+
+Readers retain unknown compatible fields. The executor rejects an unsupported
+schema version before executing or recovering work.
 
 | Field | Type and meaning |
 | --- | --- |
 | `schema`, `schema_version` | Literal `narwhal.management-operation`, integer `1`. |
-| `operation_id` | UUID assigned atomically with admission. Never reused. |
+| `operation_id` | The executor assigns this UUID atomically when it accepts the operation and never reuses it. |
 | `target_id`, `request_id` | Registered target and caller's deduplication UUID. |
 | `parent_operation_id` | Source operation for resumption; otherwise null. |
 | `tool` | `plan_prepare`, `plan_execute` or `operation_resume`. |
 | `action` | Action from the [tool catalogue](Tools.md). |
 | `plan_id`, `plan_digest` | Executed plan UUID and SHA-256 digest; both null for preparation. Preparation returns its new plan identity in `result.data`. |
 | `state` | One of the states in the transition table below. |
-| `revision` | Positive integer incremented for every committed record change. |
+| `revision` | A positive integer that the executor increments whenever it commits a record change. |
 | `created_at`, `updated_at` | Admission and latest committed update times. |
 | `started_at`, `finished_at` | First execution and terminal times; null until reached. |
 | `deadline_at` | Overall execution deadline; null while queued. Preparation uses its persisted preparation budgets. |
-| `preparation_budgets` | For preparation, the default-populated target's `preparation` object, persisted before worker start. Null for execution/resumption. Preparation's overall budget is the sum of these action and cleanup budgets. |
+| `preparation_budgets` | The target's `preparation` object, with defaults applied. The executor stores it before starting preparation; execution and resumption use null. The overall preparation budget is the sum of its action and cleanup budgets. |
 | `current_stage` | Stage ID from the plan, or null before execution and after terminal completion. Preparation uses `discovery`. |
 | `stages` | Ordered records in the format below. |
 | `resources` | Reservation records for canonical resources and current ownership. |
@@ -67,25 +77,28 @@ rejected before any execution or recovery action.
 | `result` | Terminal result below; null until terminal. |
 | `artifacts` | All retained evidence references currently available to the caller. |
 
-`worker_id` and `boot_id` are UUIDs. Worker `host_id` is the stable management
-host alias; `pid` and `start_ticks` are positive integers. `fence` is a monotonically increasing integer assigned by the
-coordinator. A worker must hold the current fence before every new stage or
-external effect. Expired ownership alone never proves that remote work stopped.
+`worker_id` and `boot_id` are UUIDs. The worker's `host_id` identifies the
+management host by its stable alias; `pid` and `start_ticks` are positive
+integers. The coordinator assigns a monotonically increasing integer to
+`fence`. Before starting a stage or causing an external effect, the worker must
+hold the current fence. When ownership expires, the coordinator still has to
+check whether remote work stopped.
 
 Each stage record contains `stage_id`, `state`, `started_at`, `finished_at`,
-`command_result`, `artifacts`, `effects` and `reused_from`. Stage state is
+`command_result`, `artifacts`, `effects` and `reused_from`. A stage's state is
 `pending`, `running`, `succeeded`, `failed`, `cancelled` or `reused`.
-`command_result` is the original versioned command envelope when available;
-adapter-only stages use null. `reused_from` is null or an object with
-`operation_id`, `stage_id` and the verified evidence digests. A plan must list
-all required work; an omitted required gate cannot be represented as a
-successful stage.
+`command_result` holds the original versioned command envelope when a stage
+invokes a command. Stages performed entirely by an adapter use null.
+`reused_from` is null or an object with `operation_id`, `stage_id` and the
+verified evidence digests. A plan must list all required work. The executor
+cannot report success for a required gate that the plan omitted.
 
-Stage `effects` contains adapter receipts identifying created or changed
-resources, their ownership and whether the effect is `confirmed`, `absent` or
-`unknown`. Each receipt follows the [site adapter contract](Deployment.md).
-Starting a stage persists its intention before invoking a command. Completion
-persists the receipt, result and evidence before advancing to another stage.
+The stage's `effects` array contains adapter receipts. Each receipt identifies
+a created or changed resource, records its owner, and reports the effect as
+`confirmed`, `absent` or `unknown`, following the
+[site adapter contract](Deployment.md). Before invoking a command, the executor
+persists the intended effect. After the command finishes, it persists the
+receipt, result and evidence before advancing to another stage.
 
 A terminal result has these fields:
 
@@ -97,206 +110,248 @@ A terminal result has these fields:
 | `artifacts` | References to retained successful and failed-attempt evidence. |
 | `command_result` | Last underlying `narwhal.command-result`, or null when none exists. Every earlier command result remains in its stage record. |
 
-`succeeded` uses `success` or `degraded`. A strict deployment cannot succeed with
-a skipped required gate, even if an underlying command returned `degraded`.
-`failed` uses `failed_gate`, `invalid_input` or `error`. `cancelled` uses
-`interrupted`. Known retained engines or services are compatible with a terminal
-state when their identities and ownership are recorded. Unknown effects require
-`recovery_required` with `result: null`.
+An operation in `succeeded` has result status `success` or `degraded`.
+A deployment cannot succeed when it skipped a required gate, even if the
+underlying command returned `degraded`. An operation in `failed` has result
+status `failed_gate`, `invalid_input` or `error`; an operation in `cancelled`
+has result status `interrupted`.
+
+The executor may leave engines or services running when it records a terminal
+result, provided it knows their identities and ownership. If it cannot
+establish an effect, it records `recovery_required` and leaves `result: null`.
 
 ## State transitions
 
-Only the transitions below are legal. `succeeded`, `failed` and `cancelled` are
-terminal; resumption creates a different operation.
+The executor must use the transitions below. The states `succeeded`, `failed`
+and `cancelled` are terminal. Resuming work creates a separate operation.
 
-A terminal commit releases the operation's execution reservations. Retained
-services keep their deployment ownership records, and their observed activity
-remains a precondition for subsequent measurements or mutations.
+When the executor commits a terminal result, it releases the operation's
+execution reservations. It retains ownership records for services left
+running. Later operations must check those services before measuring or
+changing the deployment.
 
 | From | To | Required condition |
 | --- | --- | --- |
-| Admission | `queued` | Durable request, operation and applicable reservations committed together. Preparation does not reserve deployment resources. No external effect has started. |
-| `queued` | `running` | Worker acquired, permissions and plan binding rechecked, required exclusions established. |
-| `queued` | `failed` | Permission, binding, prerequisite or deadline validation failed before execution. |
-| `queued` | `cancelled` | Cancellation persisted before a worker started. |
-| `running` | `succeeded` | Every required stage accepted; final evidence and residual-resource inventory committed. |
-| `running` | `failed` | A gate, input check or action failed; active helpers are stopped and effects are known. |
-| `running` | `cancelling` | Cancellation requested, including a worker handling an interrupt. |
-| `running` | `recovery_required` | Worker lost, ownership uncertain, cleanup incomplete or an effect cannot be reconciled. |
-| `cancelling` | `cancelled` | Current work stopped, temporary resources reconciled, retained resources reported. |
-| `cancelling` | `recovery_required` | Cleanup exceeded its budget or an owned process/effect remains uncertain. |
-| `recovery_required` | `succeeded` | Reconciliation proves every required stage completed and persisted evidence qualifies the result. |
-| `recovery_required` | `failed` | Reconciliation establishes known effects and stopped helpers; work is incomplete without a cancellation request. |
-| `recovery_required` | `cancelled` | Reconciliation establishes known effects and stopped helpers after cancellation. |
+| Admission | `queued` | The executor commits the request, operation and applicable reservations together, before any external effect. Preparation does not reserve deployment resources. |
+| `queued` | `running` | The worker has acquired ownership, rechecked permissions and the plan binding, and established the required resource exclusions. |
+| `queued` | `failed` | The executor rejects a permission, binding, prerequisite or deadline check before execution. |
+| `queued` | `cancelled` | The executor records cancellation before a worker starts. |
+| `running` | `succeeded` | The executor accepts every required stage and commits the final evidence and inventory of remaining resources. |
+| `running` | `failed` | A gate, input check or action fails. The executor has stopped active helpers and established their effects. |
+| `running` | `cancelling` | The client requests cancellation, or the worker handles an interrupt. |
+| `running` | `recovery_required` | The executor loses the worker, cannot establish ownership or an effect, or cannot complete cleanup. |
+| `cancelling` | `cancelled` | The executor has stopped current work, reconciled temporary resources and reported retained resources. |
+| `cancelling` | `recovery_required` | Cleanup exceeds its budget, or the executor cannot establish a process's identity or an action's effect. |
+| `recovery_required` | `succeeded` | Reconciliation proves that every required stage completed and the retained evidence qualifies the result. |
+| `recovery_required` | `failed` | Reconciliation establishes the effects and confirms that helpers stopped. Required work remains incomplete and cancellation was not requested. |
+| `recovery_required` | `cancelled` | After cancellation, reconciliation establishes the effects and confirms that helpers stopped. |
 
-An operation in `recovery_required` retains its reservations. The runner records
-every reconciliation attempt and stops each attempt at its recorded deadline.
-It retries inspection after worker or host connectivity is restored. Inspection
-tools remain available. A client cannot clear a reservation by retrying a plan,
-changing target aliases or deleting a lock file.
+An operation in `recovery_required` retains its reservations. The executor
+records each reconciliation attempt and stops it at its recorded deadline.
+When it regains connectivity to the worker or host, it retries inspection.
+Clients can continue to use inspection tools while recovery is unresolved.
+Retrying a plan, changing a target alias or deleting a lock file cannot clear
+the operation's reservation.
 
 ## Duplicate submissions
 
-The deduplication namespace is `(registry_id, target_id, request_id)`. Admission
-stores the canonical request together with its operation in one transaction.
-Canonicalization validates types, applies documented defaults and sorts object
-keys. The request includes the tool name, action, normalized parameters and
-plan identity where applicable. It excludes the tool response `timeout_s`, which
-does not change the work. Hash comparison must be followed by comparison of the
-canonical request to avoid treating different requests as identical.
+The executor identifies a submission by
+`(registry_id, target_id, request_id)`. Before accepting it, the executor
+validates its types, applies documented defaults and sorts object keys to
+produce a canonical request. It records that request and its operation in one
+transaction.
 
-An identical submission returns the original operation ID in an accepted
-response, whether the operation is queued, active or terminal. It never creates
-another worker or repeats a stage. A changed canonical request using the same
-key returns `request_id_conflict` without creating work. The key has no time
-expiry while records are retained. A new attempt or changed input needs a new
-request ID. Authorization is checked before returning the existing record.
+The canonical request includes the tool name, action, normalised parameters
+and plan identity where applicable. It excludes `timeout_s`, which limits the
+tool response without changing the requested work. When checking a duplicate,
+the executor compares the request hashes and then the canonical requests
+themselves.
 
-A plan is consumed by one execution. Submitting that plan again through the
-same tool and parent/source scope with a new request ID returns the existing
-operation and binds the new key to it. It cannot launch another attempt. A
-different tool or parent/source scope returns `plan_scope_mismatch`.
-`operation_resume` requires a fresh, unconsumed plan; resending its identical
-request still resolves through deduplication to its original child operation.
+For an identical submission, the executor returns `accepted` with the original
+operation ID, whether that operation is queued, active or terminal. It checks
+the caller's authorisation before returning the record. It does not create
+another worker or repeat a stage.
 
-The store retains operations, deduplication records and evidence indefinitely by
-default. Operator cleanup must preserve a tombstone containing the key,
-canonical request, its digest and original operation ID; a retry whose record was removed returns
-`operation_record_removed` and cannot execute again. Removal of evidence does
-not make that evidence valid for resumption.
+If the canonical request differs but uses the same key, the executor returns
+`request_id_conflict` without creating work. The key does not expire while its
+record is retained. A client must use a new request ID for a new attempt or
+changed input.
+
+A plan permits one execution. If a client submits it again through the same
+tool, with the same parent or source operation where applicable, the executor
+returns the existing operation. A new request ID is bound to that operation.
+Changing the tool, parent operation or source operation returns
+`plan_scope_mismatch`.
+
+`operation_resume` requires a freshly prepared plan that no execution has
+consumed. If the client repeats an identical resume request, deduplication
+returns the child operation created by the original request.
+
+The store retains operations, deduplication records and evidence indefinitely
+by default. If the operator removes an operation record, cleanup must preserve
+a tombstone containing its key, canonical request, request digest and original
+operation ID. A later retry returns `operation_record_removed` and cannot
+execute again. Removed evidence cannot qualify work for resumption.
 
 ## Deadlines and cancellation
 
-The recorded plan fixes the overall operation budget and each stage's action
-and cleanup budgets. All durations must be finite and positive. The overall
-deadline starts when a worker begins execution; execution admission reserves
-the required resources and does not queue behind a conflicting operation.
-Before each stage, the runner verifies sufficient remaining time for its action
-and cleanup budgets. It fails before starting a stage that cannot fit.
+The plan records the overall operation budget and each stage's action and
+cleanup budgets. Every duration must be finite and positive. The overall
+deadline starts when the worker begins execution. The executor reserves the
+required resources when it accepts execution; it does not queue work behind a
+conflicting operation. Before starting each stage, the worker checks that
+enough time remains for its action and cleanup budgets. If those budgets do
+not fit, the operation fails before that stage starts.
 
-The action budget bounds the command or adapter call. Cleanup has separate
-grace and forced-stop budgets, following existing
-[stage deadline and recovery behaviour](../Dev-Runtime.md#stage-deadlines-and-recovery). A
-deadline failure has code `stage_timeout` or `operation_timeout`; it becomes
-`failed` only after effects are known and cleanup is complete. The command
-response timeout bounds admission or inspection and never changes those budgets.
+The action budget limits the command or adapter call. Cleanup has separate
+budgets for graceful and forced termination, following the existing
+[stage deadline and recovery behaviour](../Dev-Runtime.md#stage-deadlines-and-recovery).
+When a deadline expires, the executor records `stage_timeout` or
+`operation_timeout`. It can mark the operation `failed` only after establishing
+the effects and completing cleanup. The tool response timeout limits submission
+or inspection without changing these execution budgets.
 
-`operation_cancel` records cancellation idempotently and returns the current
-bounded summary and snapshot artifact. It rechecks the original action's
-capabilities and allowlist before requesting cleanup; preparation cancellation
-requires inspection permission. Repeated cancellation has no additional effect. A request received
-after terminal completion returns that terminal snapshot. A running worker
-stops admitting new stages, signals only its identified helpers, and spends
-the recorded cleanup budget on the active stage. For `recovery_required`, an
-explicit cancellation can request bounded cleanup after identity verification;
-the state stays `recovery_required` until effects are known. A cancellation request does
-not remove engines or services retained by completed stages. The result lists
-those resources and links their evidence.
+`operation_cancel` records the cancellation request and returns the current
+bounded summary and snapshot artifact. Before requesting cleanup, the executor
+rechecks the original action's capabilities and allowlist. Cancelling
+preparation requires inspection permission. Repeating a cancellation has no
+additional effect; cancelling a terminal operation returns its terminal
+snapshot.
 
-An underlying action may already include its own cleanup. For example, the
-current `dev up` failure path attempts to stop the instance's owned processes.
-The executor records the observed outcome of that cleanup; it cannot promise
-that every resource present before cancellation remains running.
+When the worker receives cancellation, it stops starting stages and signals
+only helpers whose identities it has verified. It uses the active stage's
+recorded cleanup budget. An explicit cancellation can also request cleanup
+for an operation in `recovery_required`, after verifying the affected
+identities. That operation remains in `recovery_required` until the executor
+establishes the effects.
 
-Explicit `dev_down` and `deployment_cleanup` plans perform teardown within their
-recorded ownership scope. They preserve evidence and reject resources whose
-identity no longer matches the deployment's ownership receipts.
+Cancellation leaves engines or services retained by completed stages in place.
+The result lists those resources and links to their evidence.
+
+An underlying action may perform its own cleanup. For example, when the
+current `dev up` command fails, it attempts to stop the instance's owned
+processes. The executor records what that cleanup did. Resources present
+before cancellation may therefore have stopped as part of the action.
+
+To tear down retained resources, prepare a `dev_down` or `deployment_cleanup`
+plan. The executor limits teardown to the plan's recorded ownership scope,
+preserves evidence, and rejects any resource whose identity no longer matches
+the deployment's ownership receipts.
 
 ## Disconnect, interruption and recovery
 
-The durable worker runs independently of the stdio MCP process. Closing the
-client connection does not cancel admitted work. Cancellation of an MCP request
-before admission prevents work; after durable admission the client must use
-`operation_cancel` to stop the operation. Loss of the admission response is
-resolved through the deduplication key or operation list.
+The worker runs independently of the stdio MCP process. Closing the client
+connection leaves accepted work running. Cancelling an MCP request before the
+executor accepts it prevents that work from starting. After the executor
+records the operation, the client must use `operation_cancel` to stop it. If
+the client loses its submission response, it can repeat the request with the
+same key or use `operation_list` to recover the operation ID.
 
-On startup, the coordinator reads stored ownership before accepting conflicting
-work. A matching live worker keeps its operation. A dead or mismatched worker
-puts active work in `recovery_required`. Local identities include boot ID, PID
-and process start ticks; remote services use the adapter's resource identities.
-A reused PID or a changed engine generation cannot establish ownership.
+On startup, the coordinator reads the stored ownership records before accepting
+conflicting work. If the recorded worker is alive and its identity matches,
+it keeps the operation. If the worker is dead or its identity differs, the
+coordinator marks active work `recovery_required`.
 
-Reconciliation inspects persisted intentions, receipts, helper identities and
-live state. The startup and restored-connectivity scanner performs bounded
-read-only checks; operation inspection never starts cleanup. Explicit
-cancellation can recover identified temporary helpers under the action's
-current authorization. Reconciliation must establish whether an interrupted installation or launch
-took effect before any replay. A receipt absent from disk is not proof that a
-remote action did not happen. Unreachable hosts and incomplete identity evidence
-keep the operation in `recovery_required`.
+For local processes, the coordinator compares the host boot ID, PID and process
+start ticks. For remote services, it uses the adapter's resource identities.
+A reused PID or a different engine generation cannot establish ownership.
 
-The coordinator fences the previous worker and confirms it cannot issue more
-effects before transferring ownership. After reconciliation reaches a terminal
-state, a fresh plan and `operation_resume` may continue eligible work. Recovery
-does not automatically repeat a mutating command.
+During reconciliation, the coordinator inspects recorded intentions, receipts,
+helper identities and live state. It performs bounded, read-only checks on
+startup and when connectivity returns. Reading an operation never starts
+cleanup. Explicit cancellation can request cleanup of identified temporary
+helpers under the action's current authorisation.
+
+Before repeating an interrupted installation or launch, the coordinator must
+establish whether the original action took effect. A remote action may have
+completed before its receipt was written to disk. If a host remains unreachable
+or the available evidence cannot establish identity, the operation stays in
+`recovery_required`.
+
+Before transferring ownership, the coordinator fences the previous worker and
+confirms that it cannot cause further effects. Once reconciliation reaches a
+terminal state, the client can prepare a new plan and call `operation_resume`
+to continue eligible work. Recovery does not automatically repeat a command
+that changes the deployment.
 
 ## Resumption and evidence reuse
 
 `operation_resume(target_id, operation_id, plan_id, request_id)` accepts a
-`failed` or `cancelled` operation with reconciled effects. It creates a queued
-child with `parent_operation_id` identifying the previous attempt. Preparation,
-successful operations, running operations and unresolved recovery cannot be
-resumed; they return `operation_not_resumable` or `recovery_required`.
+`failed` or `cancelled` operation whose effects have been reconciled. It creates
+a queued child operation with `parent_operation_id` identifying the previous
+attempt. The executor rejects preparation, successful or running operations,
+and operations that still require recovery. It returns
+`operation_not_resumable` or `recovery_required` for those requests.
 
 The new plan must name the same target and action. Every resumed attempt
-requires fresh preparation, including when the intended inputs are unchanged. Execution revalidates permissions, bindings, prerequisites and
-resource state exactly as a new plan execution does. A retained successful
-stage may become `reused` only when its input fingerprints, engine identities,
-artifact digests and documented qualification rules still match. Failed and
-incomplete evidence is retained for diagnosis and cannot qualify a stage.
+requires fresh preparation, including when the intended inputs have not
+changed. The executor rechecks permissions, plan bindings, prerequisites and
+resource state using the same checks as a new execution.
 
-The child writes fresh stage records and artifacts for repeated work. It links
-reused evidence to the parent's immutable stage record. Generation changes and
-other input changes invalidate dependent stages according to the
-[deployment invalidation rules](Deployment.md). An execution never rewinds the
-parent's state or overwrites its failed evidence.
+The executor may mark a completed stage `reused` only when its input
+fingerprints, engine identities, artifact digests and documented qualification
+rules still match. It retains failed and incomplete evidence for diagnosis;
+that evidence cannot qualify a stage.
+
+The child operation writes new stage records and artifacts for work it repeats.
+For reused work, it links the evidence to the parent's immutable stage record.
+If an engine generation or another input changes, the executor invalidates
+dependent stages according to the [deployment invalidation rules](Deployment.md).
+The parent's state and failed evidence remain unchanged.
 
 ## Resource exclusion across entry points
 
-The deployment package owns a coordinator shared by MCP tools and supported
-CLI entry points. Target registration resolves aliases to canonical host,
-physical GPU, engine, fabric and service identities. A different target name or
-instance directory does not permit conflicting use of the same GPU. Each
-reservation records `resource_id`, `mode`, `operation_id`, `fence` and
-`acquired_at`; v1 reservation `mode` is `exclusive` for mutation or measurement.
-Bounded inspections read committed snapshots without reserving deployment
-resources, and can therefore observe state while a mutation runs.
+MCP tools and supported CLI entry points share the deployment package's
+coordinator. The registry resolves their target aliases to canonical host,
+physical GPU, engine, fabric and service identities. The coordinator therefore
+detects conflicting use of a GPU even when callers select different target
+names or instance directories.
 
-Before execution admission, the coordinator atomically reserves the complete
-resource set resolved during preparation, in canonical order. A conflict returns `resource_busy` with the owning
-operation reference when the caller may inspect it. It does not start a partial
-deployment. Within one operation the scheduler may start engines on disjoint
-GPU allocations concurrently; overlapping allocations are serialized. Fabric
-measurement runs one directed edge at a time. Attestation can run concurrently
-after fabric qualification, as specified by the [deployment runbook](../Deploy.md).
+Each reservation records `resource_id`, `mode`, `operation_id`, `fence` and
+`acquired_at`. Version 1 uses reservation mode `exclusive` for measurements and
+changes to a deployment. Inspection tools read committed snapshots without
+reserving deployment resources, so clients can inspect state while a change
+runs.
+
+Before accepting execution, the coordinator atomically reserves all resources
+resolved during preparation, in canonical order. If a resource is already
+reserved, it returns `resource_busy` before starting any part of the deployment.
+The error includes the owning operation's reference when the caller may
+inspect it.
+
+Within one operation, the scheduler may start engines concurrently when their
+GPU allocations are disjoint. It serialises work on overlapping allocations
+and measures one directed fabric edge at a time. After fabric qualification,
+it may attest engines concurrently, as specified by the
+[deployment runbook](../Deploy.md).
 
 | Activity | Required coordination |
 | --- | --- |
-| Configuration, status, operation and bounded evidence reads | Read the committed snapshot. Reads can run alongside mutations; observation time and partial failures remain visible. |
-| Install, launch, replace, stop or cleanup | Exclusive ownership of affected host installation, engine, GPU, port and service resources. |
-| Profiling, KV preflight and verification traffic | Exclusive measurement ownership of affected fleet resources; verify idle serving state and control admission for the recorded measurement. |
-| Fabric qualification | Fleet-wide measurement exclusion, idle engines and one directed edge at a time. |
-| Capacity trial | Exclusive workload ownership; only the recorded trial may introduce traffic. |
-| Monitoring startup | Exclusive ownership of its services, ports and configuration; bounded queries remain readable. |
+| Configuration, status, operation and bounded evidence reads | The reader uses a committed snapshot and reports its observation time and partial failures. Reads may run alongside changes. |
+| Install, launch, replace, stop or cleanup | The executor reserves the affected host installation, engines, GPUs, ports and services exclusively. |
+| Profiling, KV preflight and verification traffic | The executor reserves the affected fleet resources for measurement, verifies that serving is idle and controls admission for the recorded measurement. |
+| Fabric qualification | The executor excludes other fleet measurements, verifies idle engines and measures one directed edge at a time. |
+| Capacity trial | The executor reserves the workload exclusively. Only the recorded trial may introduce traffic. |
+| Monitoring startup | The executor reserves the monitoring services, ports and configuration exclusively. Clients may continue bounded queries. |
 
-Measurement preparation may inspect a busy fleet. Execution returns
-`fleet_busy` before probes when serving traffic or leases violate the action's
-idle requirement. A plan that includes draining must describe that mutation and
-require its permission. The executor cannot infer permission to interrupt
-traffic from a request to profile.
+Preparation may inspect a busy fleet. Before sending probes, the executor
+checks whether serving traffic or leases violate the action's requirement for
+idle engines. If they do, it returns `fleet_busy`. A plan that drains traffic
+must describe that change and require the corresponding permission. A request
+to profile does not itself authorise the executor to interrupt traffic.
 
 The existing `dev` instance lock continues to protect its lifecycle document.
-The proposed coordinator is acquired before that lock, and nested CLI work
-inherits a verified operation context to avoid conflicting with its own parent.
-Direct supported CLI invocations using the proposed
+The executor acquires the coordinator before that lock. CLI commands invoked
+within an operation inherit a verified operation context and use their
+parent's reservation. Supported CLI invocations
+using the
 [`NARWHAL_MANAGEMENT_REGISTRY` binding](Registration.md#registry-changes-and-retention)
-enter the same coordinator and receive their own operation identity. V1 requires
-one management authority per resource set. This requires changes in the owning
-packages during implementation; the current CLI does not provide that
-fleet-wide exclusion.
+enter the same coordinator and receive their own operation identity. Version 1
+requires one management authority for each resource set.
 
-Commands from older installations or manual host changes cannot be prevented by
-the coordinator. The adapter must check current process ownership and serving
-activity before measurements and effects, stop on a mismatch, and retain the
-observation. The guarantee covers cooperating entry points; live precondition
-checks identify interference outside that boundary.
+The coordinator cannot prevent commands from older installations or manual
+changes on a host. Before measurements or changes, the adapter must check
+current process ownership and serving activity. If they differ from the
+expected state, it stops and retains the observation. The coordinator's
+exclusion guarantee covers cooperating entry points; live checks can detect
+interference from other callers.

@@ -39,6 +39,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+  "mcp>=2.2.0,<2.3",
+]
 dev = [
   "coverage==7.16.1",
   "ruff==0.16.7",
@@ -58,6 +61,7 @@ narwhal-check = "narwhal.diagnostics.check:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe:main"
+narwhal-mcp = "narwhal.mcp.cli:main"
 
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"

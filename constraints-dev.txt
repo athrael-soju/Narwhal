@@ -1,5 +1,5 @@
 # Development and runtime dependencies, pinned for the repository gates.
-# Install: pip install -e '.[dev]' -c constraints-dev.txt
+# Install: pip install -e '.[dev,mcp]' -c constraints-dev.txt
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -63,3 +63,6 @@ urllib3==2.7.0
 uvicorn==0.52.4
 virtualenv==21.7.9
 zipp==4.1.0
+
+# Optional MCP transport qualified by the protocol and installed-wheel tests.
+mcp==2.2.0

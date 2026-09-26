@@ -24,8 +24,10 @@ make check
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
+.venv/bin/pip install -e '.[dev,mcp]' -c constraints-dev.txt
 ```
+
+The contributor environment includes the optional MCP SDK for protocol tests and type checking. The base installation does not require that SDK.
 
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
 
@@ -76,6 +78,7 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | Engine lifecycle, monitoring loop, persisted state, leases and failover            | `runtime/`                                            |
 | Checked engine launch, bounded deployment stages and site automation integration | `deployment/`                                         |
 | Local development instance configuration, lifecycle and resource ownership        | `dev/`                                                |
+| MCP stdio transport, discovery, tool schemas, dispatch and result mapping          | `mcp/`                                                |
 | Calibration probes, cost-model fitting and profile storage                         | `profiling/`                                          |
 | Fleet preflight and KV transfer checks                                            | `diagnostics/`                                        |
 | Prometheus metrics and request journals                                            | `observability/`                                      |
@@ -84,14 +87,15 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 
 Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
 
-The [proposed MCP contract](docs/MCP-Contracts.md) assigns management target
-registration, immutable plans, persistent operations and the site adapter
-interface to `deployment/`. Its proposed `mcp/` package owns protocol setup,
-tool schemas, dispatch and result mapping. These interfaces are planned work;
-the MCP package and shared operation runner are not present yet. Existing
-config, diagnostic, profiling, observability and runtime operations keep the
-owners listed above. Site automation retains credentials, remote installation,
-network preparation and process supervision behind the adapter interface.
+The [MCP contract](docs/MCP-Contracts.md) assigns management registration to
+`deployment/` and protocol handling to `mcp/`. The server currently validates
+registries and provides an empty tool list. Planned deployment plans, persisted
+operations and the site adapter interface belong to `deployment/`.
+
+When adding a tool, keep its operation with the existing package owner and
+put only its MCP schema, dispatch and result mapping in `mcp/`. Site automation
+retains credentials, remote installation, network preparation and process
+supervision behind the adapter interface.
 
 Keep package initializers light and cross-package imports explicit. Use `TYPE_CHECKING` for type-only imports across the serving/runtime boundary.
 

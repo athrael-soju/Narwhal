@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - run: pip install -e '.[dev,mcp]' -c constraints-dev.txt
       - run: make check VENV_PYTHON=python
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - run: pip install -e '.[dev,mcp]' -c constraints-dev.txt
       - run: make unit VENV_PYTHON=python
 
   package:
@@ -68,6 +68,15 @@ jobs:
           python "$source_root/tools/maintenance/check_installed.py" \
             --expected-version "$EXPECTED_VERSION" --source-root "$source_root"
 
+      - name: Smoke-test the optional MCP wheel outside the checkout
+        run: |
+          for wheel in dist/*.whl; do
+            python -m pip install "${wheel}[mcp]" -c constraints-dev.txt
+          done
+          source_root="$PWD"
+          cd "$(mktemp -d)"
+          python "$source_root/tools/maintenance/check_mcp_installed.py" --source-root "$source_root"
+
       - name: Build docs and run unit tests from the source distribution
         if: matrix.python == '3.12'
         run: |
@@ -78,7 +87,7 @@ jobs:
           git init -q
           git add -A
           git -c user.name='Narwhal CI' -c user.email='ci@narwhal.invalid' commit -qm 'test: stage source archive for deployment bundle checks'
-          python -m pip install '.[dev,docs]' -c constraints-dev.txt
+          python -m pip install '.[dev,docs,mcp]' -c constraints-dev.txt
           make docs-build VENV_PYTHON=python
           make test VENV_PYTHON=python
 

@@ -27,5 +27,12 @@ Current interfaces are:
 | Command result       | `narwhal.command-result`    |       1 |
 | Contract manifest    | `narwhal.contract-manifest` |       1 |
 | Diagnostic bundle    | `narwhal.diagnostic-bundle` |       1 |
+| Management registry (unreleased) | `narwhal.management-registry` | 1 |
+| Management result (unreleased) | `narwhal.management-result` | 1 |
+
+The unreleased [MCP server](../cli/MCP.md) reads management registries and
+validates the results returned by registered adapters. Its production tool list
+is empty. Deployment plans and operation records remain planned contracts and
+do not appear in the installed manifest.
 
 Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

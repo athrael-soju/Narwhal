@@ -95,8 +95,11 @@ import sys
 
 class BlockGPU(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'torch', 'vllm', 'transformers', 'nixl', 'cupy'}:
-            raise AssertionError(f'CLI imported GPU runtime: {fullname}')
+        if fullname.split('.')[0] in {
+            'torch', 'vllm', 'transformers', 'nixl', 'cupy',
+            'mcp', 'mcp_types', 'jsonschema', 'httpx2',
+        }:
+            raise AssertionError(f'CLI imported optional runtime: {fullname}')
 
 sys.meta_path.insert(0, BlockGPU())
 module, function = sys.argv[1].split(':')

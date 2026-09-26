@@ -357,9 +357,17 @@ def main(argv=None):
         "narwhal-check",
         "narwhal-engine",
         "narwhal-profile",
+        "narwhal-mcp",
         "narwhal-serve",
     }
     assert {entry.name for entry in entries} == expected_entries
+    # This smoke runs before installing the extra, preserving the base wheel boundary.
+    assert importlib.util.find_spec("mcp") is None, "base installation unexpectedly includes MCP"
+    optional = subprocess.run(["narwhal-mcp"], capture_output=True, text=True, timeout=30)
+    assert optional.returncode == 2, optional
+    assert optional.stdout == "", optional.stdout
+    assert "narwhal-inference[mcp]" in optional.stderr, optional.stderr
+    assert "Traceback" not in optional.stderr, optional.stderr
     for entry in entries:
         help_result = subprocess.run(
             [entry.name, "--help"], check=True, timeout=30, capture_output=True, text=True
