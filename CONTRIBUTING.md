@@ -98,10 +98,6 @@ Runtime helpers take `NarwhalRouter` explicitly. Type injected HTTP transports a
 
 Use the installed `narwhal-*` commands in deployment scripts. `python -m narwhal.cli` also starts the router. Internal Python module paths may change between releases. Document schema identifiers such as `narwhal.state` name wire contracts.
 
-When adding a Narwhal Operator skill, follow the
-[operator plugin contract](docs/Operator-Plugin.md) for command selection, result
-handling, and process supervision.
-
 ### Working files and deployment artifacts
 
 Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers and paper working files outside the tracked source tree. Profiling and preflight commands produce Narwhal-owned deployment evidence; the deployment load toolchain owns workload acceptance.

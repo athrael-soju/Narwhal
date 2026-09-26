@@ -8,7 +8,7 @@ For each engine, use its Gate C `ENGINE_RUN` directory and captured `cache-layou
 
 ## Capture attestation inputs
 
-On each engine host, run these commands from the installed checkout with its role environment loaded. Use the `ENGINE_RUN` directory from Gate C:
+For each live engine:
 
 ```bash
 export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
@@ -19,7 +19,7 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 Capture NIXL connector protocol version:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract capture-nixl --run "$ENGINE_RUN"
+.venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
 `contract.nixl_connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION`; it is distinct from the pinned `nixl_version` package and participates in the peer compatibility hash. Image ID and serving container ID bind the capture to the deployed build.
@@ -28,7 +28,7 @@ Capture compatibility-hash model dimensions from the installed runtime:
 
 ```bash
 umask 077
-.venv/bin/python -m narwhal.deployment.attestation_contract capture-model-dimensions --run "$ENGINE_RUN"
+.venv/bin/python tools/deployment/attestation_contract.py capture-model-dimensions --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
@@ -141,7 +141,7 @@ The pinned NIXL worker resolves `kv_transfer_config.get_from_extra_config("enfor
 Generate the role-specific document:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract generate \
+.venv/bin/python tools/deployment/attestation_contract.py generate \
   --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
@@ -151,7 +151,7 @@ Before sidecar start, reconfirm engine `/health`, `/version`, and `process_start
 Start the sidecar:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract serve --run "$ENGINE_RUN"
+.venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
 Discovery has already placed the role's attestation URL in the router fleet. Verify `/health` and `/v1/attestation` from the router over the trusted control network.
@@ -206,7 +206,7 @@ PY_ATTEST_CHECK
 Run this for every engine. After all sidecars pass, finalise once from the router shell:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract finalize-fleet --fleet runs/deployment/fleet.json
+.venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
 ```
 
 The command reads every live engine and sidecar, verifies process identity and full contract, requires the same contract on every engine, retains the prior fleet document under `runs/`, and writes `engine_contract` into `runs/deployment/fleet.json`.
