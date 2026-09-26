@@ -74,6 +74,8 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | Placement, role control, demand, cost scoring and engine availability              | `scheduling/`                                         |
 | Engine HTTP client, API dialects, KV connectors and attestation                    | `engines/`                                            |
 | Engine lifecycle, monitoring loop, persisted state, leases and failover            | `runtime/`                                            |
+| Checked engine launch, bounded deployment stages and site automation integration | `deployment/`                                         |
+| Local development instance configuration, lifecycle and resource ownership        | `dev/`                                                |
 | Calibration probes, cost-model fitting and profile storage                         | `profiling/`                                          |
 | Fleet preflight and KV transfer checks                                            | `diagnostics/`                                        |
 | Prometheus metrics and request journals                                            | `observability/`                                      |
@@ -81,6 +83,15 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | Serving entry point, versioned document contracts, build identity and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
 
 Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
+
+The [proposed MCP contract](docs/MCP-Contracts.md) assigns management target
+registration, immutable plans, persistent operations and the site adapter
+interface to `deployment/`. Its proposed `mcp/` package owns protocol setup,
+tool schemas, dispatch and result mapping. These interfaces are planned work;
+the MCP package and shared operation runner are not present yet. Existing
+config, diagnostic, profiling, observability and runtime operations keep the
+owners listed above. Site automation retains credentials, remote installation,
+network preparation and process supervision behind the adapter interface.
 
 Keep package initializers light and cross-package imports explicit. Use `TYPE_CHECKING` for type-only imports across the serving/runtime boundary.
 
