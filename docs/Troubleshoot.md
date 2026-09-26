@@ -57,7 +57,7 @@ Continue with the procedure for the affected path:
 
 Read `admission`, `serving`, `resident`, and pool load from `/narwhal/state` to trace overload to immediate concurrency rejection, queue-full shedding, queue expiry, or predictive refusal.
 
-When reconciling load-test attainment, divide router completions by admitted requests and client successes by all offered requests, including predictive refusals.
+When reconciling load-test outcomes, divide router completions by admitted requests. For [deployment attainment](measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal), divide SLO-qualified client completions by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
 
 Reduce offered traffic at ingress or add a fleet whose deployment passed validation.
 

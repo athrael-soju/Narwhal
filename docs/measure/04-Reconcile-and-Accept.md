@@ -26,6 +26,8 @@ Compute latency percentiles from complete responses.
 
 Join deployment-client records to the router journal on `client_rid`, assigning each sent offer exactly one terminal class.
 
+Use the client `summary.json` for deployment attainment: `within_candidate_limits / offered`. The numerator counts completed client responses within the TTFT limit and, for responses with more than one output token, the TPOT limit. The denominator counts every scheduled scored offer, including unsent scheduling misses. A timeout or disconnect after partial output is a miss even when timing and output counts were recorded. The separate `warmup.json` request is unscored. Use the joined journal rows to explain sent offers, not to reconstruct the denominator.
+
 ## 11. Check throughput denominators and client limits
 
 `summary.json` divides completed requests, completed output tokens, and SLO-qualified requests by elapsed time through the final response drain to report their throughput.

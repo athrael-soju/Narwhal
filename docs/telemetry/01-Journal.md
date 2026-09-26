@@ -52,16 +52,22 @@ Narwhal retains at most `serving.max_attempts` failure entries and caps messages
 
 ### Attainment accounting
 
-SLO attainment measures how often requests meet their [TTFT and TPOT targets](../configuration/01-Fleet-Schema.md#2-minimal-fleet-definition). When scoring journal records, include completed requests and count these terminal outcomes as misses:
+For deployment acceptance, score the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) against its TTFT and TPOT limits. Only completed client responses within the applicable limits pass. All other scored offers are misses. The client includes unsent offers in the denominator and excludes the unscored warmup; an unfiltered journal cannot reconstruct that population.
+
+Join sent, scored offers to terminal journal rows by `client_rid` to diagnose misses. Journal outcomes that represent misses include:
 
 - invalid requests;
 - capacity rejections;
+- predictive refusals;
 - expiries;
 - engine failures;
+- cancellations, including those with partial output and measured timing;
 - terminal requests whose `output_len` is null;
 - terminal requests whose `ttft_s` is null.
 
-Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request.
+Completed responses above an applicable client latency limit also miss. Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request. A non-null `output_len` or `ttft_s` does not turn that cancellation into a pass.
+
+The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) excludes cancelled, rejected, and invalid requests. It has a different population from deployment acceptance and cannot replace the client's all-offer score.
 
 ### Separate transfer and decode queueing
 
