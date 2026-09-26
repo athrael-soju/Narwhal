@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/athrael-soju/Narwhal/compare/v0.3.0...v0.3.1) (2026-09-26)
+
+
+### Documentation
+
+* clarify cancellation in deployment attainment ([#139](https://github.com/athrael-soju/Narwhal/issues/139)) ([2215401](https://github.com/athrael-soju/Narwhal/commit/2215401bb045f23f93c4ea3a3b44008f0d5d0e5a))
+* remove repeated guidance and clarify benchmark scope ([27b573c](https://github.com/athrael-soju/Narwhal/commit/27b573cb034d35eae31e546c8e59135c1752ac74))
+
 ## [0.3.0](https://github.com/athrael-soju/Narwhal/compare/v0.2.1...v0.3.0) (2026-09-25)
 
 
