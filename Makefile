@@ -7,9 +7,11 @@ VENV_PYTHON ?= .venv/bin/python
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 TEST_ARGS ?=
+DOCS_PORT ?= 8000
 
 .PHONY: setup sync test unit lint format types links publication versions check docs-build observe
 .PHONY: coverage
+.PHONY: docs-setup docs-serve
 
 .venv/bin/python:
 	$(PYTHON) -m venv .venv
@@ -51,6 +53,12 @@ versions:
 
 # Keep this order aligned with `.github/workflows/ci.yml`.
 check: publication versions lint format types unit links
+
+docs-setup: $(BOOTSTRAP)
+	$(VENV_PYTHON) -m pip install -e '.[docs]' -c constraints-dev.txt
+
+docs-serve: $(BOOTSTRAP)
+	$(VENV_PYTHON) -m mkdocs serve --dev-addr 127.0.0.1:$(DOCS_PORT)
 
 docs-build: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m mkdocs build --strict --clean
