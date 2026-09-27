@@ -3,8 +3,14 @@
 `narwhal-mcp` starts a local Model Context Protocol (MCP) server over stdio.
 This command is **unreleased work on the MCP milestone branch**. It exposes six
 inspection tools: `target_list`, `config_inspect`, `config_validate`,
-`fleet_status`, `diagnostics_collect` and `artifact_read`. Deployment, active
-measurement and recovery remain planned in the [MCP contract](../MCP-Contracts.md).
+`fleet_status`, `diagnostics_collect` and `artifact_read`. Four more tools read
+retained plans and operations or record cancellation: `plan_inspect`,
+`operation_list`, `operation_inspect` and `operation_cancel`.
+
+The operation store and coordinator are available, but the distribution has no
+execution adapters. `plan_prepare`, `plan_execute` and `operation_resume` are
+absent from discovery. Deployment and measurement remain planned in the
+[MCP contract](../MCP-Contracts.md).
 
 The client supplies the model and conversation, then launches the server under
 your local account. The server exchanges messages through stdin and stdout.
@@ -164,7 +170,7 @@ asyncio.run(main())
 PY
 ```
 
-A successful check prints the negotiated protocol version, the six inspection
+A successful check prints the negotiated protocol version, the ten available
 tools, `targets: ['example-fleet']` and `config_validate: success`. The client then
 closes the session. This check verifies registry loading, target discovery and
 a successful call to the installed offline configuration validator. The example
@@ -193,11 +199,19 @@ the registry.
 A normally closed session exits 0. Ctrl+C exits 130; an unexpected server
 failure exits 4 and writes a diagnostic to stderr.
 
-Inspection writes private audit receipts and target-list snapshots under
-`state_dir`. Diagnostic collection and oversized responses also create redacted
+Inspection writes private audit receipts and listing snapshots under
+`state_dir`. The coordinator retains operation records, request deduplication
+and resource reservations there, together with immutable plans and their inputs.
+Diagnostic collection and oversized responses also create redacted
 exports under `artifact_root`; `artifact_read` retrieves them by ID. See
 [Tools and results](../mcp/Tools.md) for endpoint requirements, content policy
 and collection limits.
+
+Setting `NARWHAL_MANAGEMENT_REGISTRY` also opts supported finite CLI commands
+into the [management binding](../mcp/Registration.md#registry-changes-and-retention).
+Commands that change a deployment or write measurement artifacts fail with
+`adapter_unavailable` until their execution adapters are installed. Configuration,
+diagnostic and status reads remain available.
 
 To remove this example after closing the session, delete its `runs/mcp`
 directory, including the copied fleet, registry and inspection records. For

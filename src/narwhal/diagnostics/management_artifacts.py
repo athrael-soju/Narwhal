@@ -125,6 +125,7 @@ def _root(path: Path, *, create: bool) -> Iterator[int]:
             if create and index == len(path.parts) - 1:
                 with suppress(FileExistsError):
                     os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
             child = os.open(component, _DIRECTORY_FLAGS, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
@@ -139,6 +140,7 @@ def _directory(parent: int, name: str, *, create: bool) -> Iterator[int]:
     if create:
         with suppress(FileExistsError):
             os.mkdir(name, mode=0o700, dir_fd=parent)
+            os.fsync(parent)
     descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent)
     try:
         _private(os.fstat(descriptor), directory=True)

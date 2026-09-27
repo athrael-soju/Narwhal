@@ -16,6 +16,15 @@ def main() -> None:
     """Run the helper while keeping forked workers attached after their leader exits."""
     result = Path(sys.argv[1])
     release = Path(sys.argv[2])
+    command = sys.argv[3:]
+    if command[:1] == ["--start-fd"]:
+        gate = int(command[1])
+        command = command[2:]
+        try:
+            if os.read(gate, 1) != b"1":
+                return
+        finally:
+            os.close(gate)
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0):
         raise OSError(ctypes.get_errno(), "could not enable isolated helper reaping")
@@ -23,7 +32,7 @@ def main() -> None:
     # stays alive through TERM so descendants retain an ownership anchor.
     signal.signal(signal.SIGTERM, lambda signum, frame: None)
     signal.signal(signal.SIGINT, lambda signum, frame: None)
-    child = subprocess.Popen(sys.argv[3:])
+    child = subprocess.Popen(command)
     code = child.wait()
     temporary = result.with_suffix(".pending")
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:

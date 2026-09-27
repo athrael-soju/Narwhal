@@ -1563,6 +1563,20 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
     args = parser.parse_args(argv)
     if args.command == "start-shared" and args.ready_seconds < 1:
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
+    if "NARWHAL_MANAGEMENT_REGISTRY" in os.environ:
+        if not __package__:
+            parser.exit(
+                1,
+                "narwhal-engine: adapter_unavailable: "
+                "Standalone managed execution is unavailable\n",
+            )
+        from narwhal import command_results as results
+        from narwhal.deployment.management_cli import guard_bound_command
+
+        results.set_operation(args.command)
+        denied = guard_bound_command("narwhal-engine")
+        if denied is not None:
+            return denied
     if structured:
         from narwhal import command_results as results
 

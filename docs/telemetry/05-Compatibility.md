@@ -29,10 +29,16 @@ Current interfaces are:
 | Diagnostic bundle    | `narwhal.diagnostic-bundle` |       1 |
 | Management registry (unreleased) | `narwhal.management-registry` | 1 |
 | Management result (unreleased) | `narwhal.management-result` | 1 |
+| Deployment plan (unreleased) | `narwhal.deployment-plan` | 1 |
+| Preparation snapshot (unreleased) | `narwhal.management-snapshot` | 1 |
+| Management operation (unreleased) | `narwhal.management-operation` | 1 |
 
 The unreleased [MCP server](../cli/MCP.md) reads management registries and
-validates the results returned by registered adapters. It exposes six inspection
-tools. Deployment plans and operation records remain planned contracts and
-do not appear in the installed manifest.
+validates the results returned by registered adapters. Its ten tools inspect
+targets, configuration, status, diagnostics, artifacts, plans and operations,
+and record cancellation requests. The management core reads and writes the
+plan, snapshot and operation formats above. Production execution adapters are
+not installed, so preparation, execution and resumption tools remain absent
+from discovery.
 
 Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

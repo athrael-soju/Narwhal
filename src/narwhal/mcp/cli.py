@@ -55,9 +55,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(name)s: %(message)s")
     try:
-        from .inspection import inspection_adapters
+        from narwhal.deployment.management_coordinator import OperationCoordinator
 
-        asyncio.run(serve(inspection_adapters(registry)))
+        from .inspection import inspection_adapters
+        from .operations import operation_adapters
+
+        coordinator = OperationCoordinator(registry, registry_path=Path(selected))
+        coordinator.reconcile_startup()
+        adapters = (*inspection_adapters(registry), *operation_adapters(registry, coordinator))
+        asyncio.run(serve(adapters))
     except KeyboardInterrupt:
         return 130
     except Exception:

@@ -140,6 +140,19 @@ def _main(argv: list[str]) -> int:
         return bundle.run(args)
     results.set_operation("dev " + args.action)
     root = args.instance.expanduser().resolve()
+    if args.action != "status":
+        from ..deployment.management_cli import guard_bound_command
+        from ..deployment.management_registry import PlanAction
+
+        managed_actions: dict[str, PlanAction] = {
+            "init": "dev_init",
+            "up": "dev_up",
+            "verify": "dev_verify",
+            "down": "dev_down",
+        }
+        denied = guard_bound_command("narwhal", action=managed_actions[args.action], instance=root)
+        if denied is not None:
+            return denied
     results.set_data({"instance": str(root)})
     for name in ("instance.json", "lifecycle.json", "fleet.json"):
         results.add_artifact(name.removesuffix(".json"), root / name)

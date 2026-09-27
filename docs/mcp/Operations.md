@@ -2,10 +2,16 @@
 
 The management executor records long operations so that a client can inspect
 their progress, reconnect after a disconnect, and recover interrupted work.
-This page defines the proposed version 1 operation contract for
-[MCP fleet operations](../MCP-Contracts.md). The operation store and shared
-coordinator are not yet available; the existing stage runner and dev lifecycle
-provide process evidence and local locks for their own commands.
+This page defines the version 1 operation contract for
+[MCP fleet operations](../MCP-Contracts.md). The unreleased operation store,
+coordinator and detached worker implement persistence, reservations and
+execution for registered adapters. MCP exposes record listing, inspection and
+cancellation requests, together with plan inspection.
+
+Production execution adapters are not installed. Preparation, execution and
+resumption are absent from MCP discovery. The lifecycle below describes how
+the core handles work supplied by an adapter; the existing dev and fleet
+commands require their own adapters before they can submit managed work.
 
 ## Submission and lookup
 
@@ -29,6 +35,12 @@ by creation time, newest first, using the operation ID to break ties. The cursor
 identifies that target and snapshot. An invalid cursor returns `invalid_input`.
 A client that loses its submission response can use this list to recover the
 operation ID.
+
+The store keeps operation records, canonical requests, reservations, tombstones
+and list snapshots in one private SQLite database under `state_dir`. Admission
+commits the request, operation and reservations in one transaction before a
+worker starts. Each inspection exports a frozen redacted record under the
+target's `artifact_root`; later operation updates do not change that export.
 
 Each summary contains
 `operation_id`, `parent_operation_id`, `action`, `plan_id`, `state`,
@@ -147,9 +159,10 @@ changing the deployment.
 | `recovery_required` | `cancelled` | After cancellation, reconciliation establishes the effects and confirms that helpers stopped. |
 
 An operation in `recovery_required` retains its reservations. The executor
-records each reconciliation attempt and stops it at its recorded deadline.
-When it regains connectivity to the worker or host, it retries inspection.
-Clients can continue to use inspection tools while recovery is unresolved.
+records each adapter reconciliation attempt and stops it at its recorded
+deadline. The current frontend checks worker identity on startup and operation
+inspection; it does not poll remote hosts when connectivity returns. Clients
+can continue to use inspection tools while recovery is unresolved.
 Retrying a plan, changing a target alias or deleting a lock file cannot clear
 the operation's reservation.
 
@@ -199,9 +212,12 @@ The plan records the overall operation budget and each stage's action and
 cleanup budgets. Every duration must be finite and positive. The overall
 deadline starts when the worker begins execution. The executor reserves the
 required resources when it accepts execution; it does not queue work behind a
-conflicting operation. Before starting each stage, the worker checks that
-enough time remains for its action and cleanup budgets. If those budgets do
-not fit, the operation fails before that stage starts.
+conflicting operation. The worker reserves time for cleanup before starting a
+stage. Claiming the operation and recording worker state consume part of its
+overall budget, so the first stage may receive less action time to preserve
+that cleanup allowance. Later stages require enough remaining time for their
+full recorded action and cleanup budgets. If those budgets do not fit, the
+operation fails before that stage starts.
 
 The action budget limits the command or adapter call. Cleanup has separate
 budgets for graceful and forced termination, following the existing
@@ -218,12 +234,25 @@ preparation requires inspection permission. Repeating a cancellation has no
 additional effect; cancelling a terminal operation returns its terminal
 snapshot.
 
+If no worker has claimed a queued operation, the coordinator records terminal
+cancellation and its evidence without launching work. If a worker claims it
+concurrently, that worker handles the persisted request. A lost cancellation
+response does not undo the request; repeating the call returns the current
+record.
+
 When the worker receives cancellation, it stops starting stages and signals
 only helpers whose identities it has verified. It uses the active stage's
-recorded cleanup budget. An explicit cancellation can also request cleanup
-for an operation in `recovery_required`, after verifying the affected
-identities. That operation remains in `recovery_required` until the executor
-establishes the effects.
+recorded cleanup budget.
+
+If the worker is lost, an explicit cancellation can clean up local temporary
+helpers that the shared command runner recorded for incomplete stages. The
+coordinator verifies the operation and stage ownership, launch token, host
+boot ID, PID and process start ticks before signalling a helper. It uses the
+recorded TERM and KILL budgets. This recovery path leaves remote resources
+and resources retained by completed stages in place. The operation becomes
+`cancelled` only when the executor establishes that helpers have stopped and
+every recorded effect is known; otherwise it retains `recovery_required` and
+its reservations.
 
 Cancellation leaves engines or services retained by completed stages in place.
 The result lists those resources and links to their evidence.
@@ -256,11 +285,15 @@ For local processes, the coordinator compares the host boot ID, PID and process
 start ticks. For remote services, it uses the adapter's resource identities.
 A reused PID or a different engine generation cannot establish ownership.
 
-During reconciliation, the coordinator inspects recorded intentions, receipts,
-helper identities and live state. It performs bounded, read-only checks on
-startup and when connectivity returns. Reading an operation never starts
-cleanup. Explicit cancellation can request cleanup of identified temporary
-helpers under the action's current authorisation.
+Startup and `operation_inspect` check local worker identity without invoking
+the adapter. If the worker is lost, these checks retain the operation in
+`recovery_required`. Reading an operation never starts cleanup.
+
+The core also provides bounded, read-only adapter reconciliation. When called
+with an adapter, it inspects recorded intentions, receipts, helper identities
+and live state before deciding whether the operation can become terminal.
+Production adapters still need to connect this procedure to their recovery
+workflow; the current frontend does not run remote reconciliation callbacks.
 
 Before repeating an interrupted installation or launch, the coordinator must
 establish whether the original action took effect. A remote action may have
@@ -288,16 +321,17 @@ requires fresh preparation, including when the intended inputs have not
 changed. The executor rechecks permissions, plan bindings, prerequisites and
 resource state using the same checks as a new execution.
 
-The executor may mark a completed stage `reused` only when its input
-fingerprints, engine identities, artifact digests and documented qualification
-rules still match. It retains failed and incomplete evidence for diagnosis;
-that evidence cannot qualify a stage.
+The current core executes every stage in the fresh plan. It writes new stage
+records and artifacts and leaves `reused_from` null. The parent's state and
+failed evidence remain unchanged.
 
-The child operation writes new stage records and artifacts for work it repeats.
-For reused work, it links the evidence to the parent's immutable stage record.
-If an engine generation or another input changes, the executor invalidates
-dependent stages according to the [deployment invalidation rules](Deployment.md).
-The parent's state and failed evidence remain unchanged.
+The schema permits a future adapter to mark completed work `reused` only when
+its input fingerprints, engine identities, artifact digests and documented
+qualification rules still match. Such an adapter must link the evidence to the
+parent's immutable stage record. Failed or incomplete evidence cannot qualify
+a reused stage. If an engine generation or another input changes, it must
+invalidate dependent stages according to the
+[deployment invalidation rules](Deployment.md).
 
 ## Resource exclusion across entry points
 
@@ -341,13 +375,14 @@ must describe that change and require the corresponding permission. A request
 to profile does not itself authorise the executor to interrupt traffic.
 
 The existing `dev` instance lock continues to protect its lifecycle document.
-The executor acquires the coordinator before that lock. CLI commands invoked
-within an operation inherit a verified operation context and use their
-parent's reservation. Supported CLI invocations
-using the
+The executor acquires the coordinator before that lock. CLI execution adapters
+must give commands invoked within an operation a verified context that joins
+the parent's reservation. Supported CLI invocations using the
 [`NARWHAL_MANAGEMENT_REGISTRY` binding](Registration.md#registry-changes-and-retention)
-enter the same coordinator and receive their own operation identity. Version 1
-requires one management authority for each resource set.
+currently reject measurement and mutation with `adapter_unavailable` because
+those adapters are absent. Once installed, they must enter the same coordinator
+and receive their own operation identity. Version 1 requires one management
+authority for each resource set.
 
 The coordinator cannot prevent commands from older installations or manual
 changes on a host. Before measurements or changes, the adapter must check

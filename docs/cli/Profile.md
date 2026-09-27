@@ -2,6 +2,12 @@
 
 `narwhal-profile --fleet PATH` measures live engines into the fleet's `profiles.path`, refits TTFT from retained samples, or merges separately measured role mixes. Every mode writes a profile store and a sidecar at the same path with its suffix replaced by `.samples.json`.
 
+In the unreleased MCP build, setting `NARWHAL_MANAGEMENT_REGISTRY` requires
+`--fleet` to match one registered target with the `fleet_profile` grants.
+All modes then exit 1 with `adapter_unavailable` because execution adapters
+are not installed. This check precedes fleet loading, measurement and output
+writes. See the [management binding](../mcp/Registration.md#registry-changes-and-retention).
+
 Live sweeps bind each fit to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when `engine_contract` is configured, or to the live process identity otherwise, and retain that evidence with the raw observations in the `.samples.json` sidecar.
 
 Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and merges require fresh output paths, and every mode rejects symlink destinations.

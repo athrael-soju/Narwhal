@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 
@@ -26,7 +26,14 @@ def write_evidence(path: Path, record: dict) -> None:
             os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w"
         ) as output:
             output.write(json.dumps(record, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
         temporary.replace(path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -48,6 +55,14 @@ class StageCancelled(KeyboardInterrupt):
         self.stage = stage
         self.context = context
         super().__init__(f"{stage} cancelled; inspect {context['evidence']}")
+
+
+class StageOutputLimit(ValueError):
+    """A managed helper exceeded its bounded output capture."""
+
+    def __init__(self, context: dict):
+        self.context = context
+        super().__init__("stage output exceeded its byte limit")
 
 
 def seconds(name: str, default: float) -> float:
@@ -261,15 +276,28 @@ def run(
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     retain_descendants: bool = False,
+    before_start: Callable[[dict], None] | None = None,
+    observe: Callable[[dict], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    cleanup_grace: float | None = None,
+    kill_grace: float | None = None,
+    redact: Callable[[bytes], bytes] | None = None,
+    max_output_bytes: int = 8 * 1024 * 1024,
 ) -> subprocess.CompletedProcess[str]:
     """Execute one stage; execution and cleanup have independent finite budgets."""
     default = seconds("NARWHAL_STAGE_TIMEOUT_SECONDS", 300)
     override = "NARWHAL_STAGE_" + re.sub(r"[^A-Z0-9]", "_", stage.upper()) + "_TIMEOUT_SECONDS"
     budget = timeout if timeout is not None else seconds(override, default)
-    grace = seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10)
-    kill = seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5)
-    if not math.isfinite(budget) or budget <= 0:
-        raise ValueError("stage timeout must be finite and positive")
+    grace = (
+        cleanup_grace
+        if cleanup_grace is not None
+        else seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10)
+    )
+    kill = kill_grace if kill_grace is not None else seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5)
+    if any(not math.isfinite(value) or value <= 0 for value in (budget, grace, kill)):
+        raise ValueError("stage and cleanup timeouts must be finite and positive")
+    if type(max_output_bytes) is not int or max_output_bytes < 1:
+        raise ValueError("stage output limit must be a positive integer")
     log = log.resolve()
     token = uuid.uuid4().hex[:12]
     evidence = log.with_name(f"{log.name}.{token}.stage.json")
@@ -285,7 +313,7 @@ def run(
         "budget_seconds": budget,
         "cleanup_grace_seconds": grace,
         "kill_grace_seconds": kill,
-        "argv": command,
+        "argv": json.loads(redact(json.dumps(command).encode())) if redact else command,
         "evidence": str(evidence),
         "stdout": str(stdout_path),
         "stderr": str(stderr_path),
@@ -297,8 +325,33 @@ def run(
     returncode: int | None = None
     release_failure: OSError | None = None
     owned: dict[int, int] = {}
+    buffers = [bytearray(), bytearray()]
+    output_truncated = False
+
+    def drain() -> None:
+        nonlocal output_truncated
+        if redact is None or child is None:
+            return
+        for stream, saved in zip((child.stdout, child.stderr), buffers, strict=True):
+            assert stream is not None
+            while True:
+                try:
+                    block = os.read(stream.fileno(), 65536)
+                except BlockingIOError:
+                    break
+                if not block:
+                    break
+                available = max_output_bytes - len(saved)
+                saved.extend(block[:available])
+                if len(block) > available:
+                    output_truncated = True
+                    break
+
     with _reaper(), cancellation():
         with contextlib.ExitStack() as stack:
+            gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
+            stack.callback(os.close, gate_read)
+            stack.callback(os.close, gate_write)
             outputs = [
                 stack.enter_context(
                     os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w")
@@ -312,23 +365,41 @@ def run(
                         str(Path(__file__).with_name("stage_worker.py")),
                         str(result_path),
                         str(release_path),
+                        *(["--start-fd", str(gate_read)] if before_start is not None else []),
                         *command,
                     ],
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
-                    stdout=outputs[0],
-                    stderr=outputs[1],
+                    stdout=subprocess.PIPE if redact else outputs[0],
+                    stderr=subprocess.PIPE if redact else outputs[1],
                     start_new_session=True,
+                    pass_fds=(gate_read,) if before_start is not None else (),
                 )
+                if redact is not None:
+                    assert child.stdout is not None and child.stderr is not None
+                    for stream in (child.stdout, child.stderr):
+                        os.set_blocking(stream.fileno(), False)
+                        stack.callback(stream.close)
                 _discover(owned, child.pid)
                 context.update(pid=child.pid, processes=owned, status="running")
                 write_evidence(evidence, context)
+                if before_start is not None:
+                    before_start(context)
+                    os.write(gate_write, b"1")
                 while child.poll() is None:
+                    drain()
+                    if output_truncated:
+                        break
                     previous_count = len(owned)
                     _discover(owned, child.pid)
                     if len(owned) != previous_count:
                         write_evidence(evidence, context)
+                        if observe is not None:
+                            observe(context)
+                    if cancelled is not None and cancelled():
+                        failure = StageCancelled
+                        break
                     if result_path.exists():
                         returncode = json.loads(result_path.read_text())["returncode"]
                         break
@@ -352,7 +423,11 @@ def run(
                         failure = StageTimeout
                         context["release_error"] = "supervisor release exceeded kill grace"
                 if child is not None and (
-                    failure or release_failure or not retain_descendants or returncode != 0
+                    failure
+                    or output_truncated
+                    or release_failure
+                    or not retain_descendants
+                    or returncode != 0
                 ):
                     saved = {}
                     if threading.current_thread() is threading.main_thread():
@@ -365,6 +440,14 @@ def run(
                     finally:
                         for sig, handler in saved.items():
                             signal.signal(sig, handler)
+                drain()
+                if redact is not None:
+                    for output, data in zip(outputs, buffers, strict=True):
+                        output.write(redact(bytes(data)).decode("utf-8"))
+                        output.flush()
+                        os.fsync(output.fileno())
+                if output_truncated:
+                    context["output_truncated"] = True
                 context.update(
                     elapsed_seconds=time.monotonic() - started,
                     returncode=returncode,
@@ -374,14 +457,18 @@ def run(
                     else "timeout"
                     if failure
                     else "failed"
-                    if release_failure
+                    if release_failure or output_truncated
                     else "completed",
                 )
                 write_evidence(evidence, context)
+                if observe is not None:
+                    observe(context)
         stdout = stdout_path.read_text(errors="replace")
         stderr = stderr_path.read_text(errors="replace")
         with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as output:
             output.write(json.dumps(context) + "\n" + stdout + stderr)
+    if output_truncated:
+        raise StageOutputLimit(context)
     if failure:
         raise failure(stage, context)
     if release_failure:

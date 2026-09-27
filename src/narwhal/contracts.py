@@ -23,6 +23,9 @@ COMMAND_RESULT = "command_result"
 DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
 MANAGEMENT_REGISTRY = "management_registry"
 MANAGEMENT_RESULT = "management_result"
+MANAGEMENT_OPERATION = "management_operation"
+DEPLOYMENT_PLAN = "deployment_plan"
+MANAGEMENT_SNAPSHOT = "management_snapshot"
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,9 @@ CONTRACTS: dict[str, Contract] = {
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
     MANAGEMENT_REGISTRY: Contract("narwhal.management-registry"),
     MANAGEMENT_RESULT: Contract("narwhal.management-result"),
+    MANAGEMENT_OPERATION: Contract("narwhal.management-operation"),
+    DEPLOYMENT_PLAN: Contract("narwhal.deployment-plan"),
+    MANAGEMENT_SNAPSHOT: Contract("narwhal.management-snapshot"),
 }
 
 

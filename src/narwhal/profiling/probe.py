@@ -1104,6 +1104,12 @@ def _main(argv: list[str]) -> int:
         "fit its live max_model_len; required with --colocated",
     )
     args = ap.parse_args(argv)
+    from ..deployment.management_cli import guard_bound_command
+
+    results.set_operation("merge" if args.merge else "refit" if args.refit_samples else "profile")
+    denied = guard_bound_command("narwhal-profile", action="fleet_profile", fleet=Path(args.fleet))
+    if denied is not None:
+        return denied
     try:
         cfg = FleetConfig.load(args.fleet)
     except (OSError, ValueError) as exc:

@@ -6,9 +6,11 @@ references and allowed actions. Create and maintain this file on the management
 workstation; MCP tools cannot edit it.
 
 The unreleased [server command](../cli/MCP.md) validates this document at
-startup. Its six inspection tools check the target's `inspect` grant before
-accessing its inputs or endpoints. Execution grants, plans and shared operation
-coordination remain planned in the [MCP contract](../MCP-Contracts.md).
+startup. Inspection tools check the target's `inspect` grant before accessing
+inputs, endpoints or retained plans and operations. Cancellation also checks
+the original action's grants, except when cancelling preparation. The operation
+core enforces these permissions; production execution adapters remain planned
+in the [MCP contract](../MCP-Contracts.md).
 
 ## Registry document
 
@@ -22,7 +24,7 @@ document and does not change the `NARWHAL_FLEET` serving contract.
 | --- | --- |
 | `schema`, `schema_version` | Literal `narwhal.management-registry`, integer `1`. |
 | `registry_id` | UUID, retained across server restarts and registry edits. |
-| `state_dir` | Absolute private local directory for inspection audit receipts and listing snapshots. The planned executor also stores its deduplication index, reservations, plans and operations here. |
+| `state_dir` | Absolute private local directory for audit receipts, listing snapshots, deduplication records, reservations, plans and operations. |
 | `targets` | Array of target entries, at most 100; unique `id` values. |
 
 The registry requires mode `0600` and ownership by the server's operating-system
@@ -30,7 +32,7 @@ user. It must be a regular file at most 1 MiB; the loader rejects a symlink at
 the final path component and duplicate JSON keys. Inspection state and artifact
 files require mode `0600`; their private directories require mode `0700` and
 the same ownership. The server validates the complete registry before exposing
-tools. The planned executor requires atomic writes and locks in `state_dir`;
+tools. The executor requires atomic writes and locks in `state_dir`;
 V1 cannot coordinate operations on filesystems that lack those guarantees.
 
 For a new deployment, register the paths to prepared local inputs and the host
@@ -221,28 +223,46 @@ must use that same store. Independent registries or workstations cannot exclude
 conflicting work. Site automation must direct operations through the designated
 registry and coordinator.
 
-The planned finite management CLI commands use `NARWHAL_MANAGEMENT_REGISTRY`
-to select the registry. The command resolves its fleet file or dev instance by
-canonical path to exactly one target. Missing or ambiguous matches fail before
-the operation starts.
+When `NARWHAL_MANAGEMENT_REGISTRY` is set, the following finite CLI commands
+require management execution. Commands with a fleet or instance path resolve
+it to exactly one registered target and check the action's grants. Missing or
+ambiguous matches fail before the command reads deployment inputs or starts
+helpers.
 
-These commands retain their existing arguments and result contracts. A direct
-command creates a plan and operation record internally, then checks the same
-capabilities and locks as an MCP call. A nested command joins its parent
-operation using local context authenticated by the executor. An environment
-variable containing an operation ID cannot establish that authority.
+| Command | Binding and current result |
+| --- | --- |
+| `narwhal dev init/up/verify/down` | Match `--instance` and check the corresponding `dev_*` action. |
+| `narwhal-profile` | Match `--fleet` and check `fleet_profile`, including refit and merge modes that write qualification artifacts. |
+| `narwhal-check` preflight | Match `--fleet` and check `fleet_preflight`, including `--no-kv`. |
+| `narwhal-engine` actions | No registered fleet selector is available; reject managed execution before preparing files or starting helpers. |
+
+The distribution has no execution adapters. After the binding and grant checks,
+these commands return `failed_gate` with code `adapter_unavailable` and exit 1.
+An empty registry variable is an input error for commands that resolve a target.
+`narwhal-engine` rejects bound execution regardless of the variable's value.
+An environment variable containing an operation ID cannot bypass these checks.
+
+Configuration, diagnostic collection and `dev status` retain their inspection
+behaviour. `narwhal-check --verify-evidence` reads retained evidence and live
+identities without running new transfer probes; it also remains available.
+Help, version, example-config and contract-manifest output remain available.
+
+Future CLI execution adapters must retain the existing arguments and result
+contracts. A direct command will create its plan and operation internally,
+then acquire the same permissions and reservations as an MCP call. A nested
+command must join its parent's reservation through local context authenticated
+by the executor.
 
 For the MCP server, explicit `--registry` takes precedence over
 `NARWHAL_MANAGEMENT_REGISTRY`; absence of both is a startup error. Existing CLI
 invocations without that variable retain their current behaviour and are
-outside the shared-coordination guarantee. The MCP startup binding is part of
-the unreleased server. The proposed finite management CLI bindings and
-shared coordination remain planned.
+outside the shared-coordination guarantee. The MCP startup binding and the
+finite-command rejection checks above are part of the unreleased server work.
 
-The server loads a registry snapshot on startup; restart it after editing the
-registry. The planned executor validates edits atomically during reload or
-restart, then supplies the same snapshot to connected MCP frontends. At each
-stage boundary, it checks permissions and the registration digest. A subprocess
+The server loads its inspection registry snapshot on startup; restart it after
+editing the registry. The operation coordinator rereads the registry before
+its public calls and checks permissions at each stage boundary. Changing the
+registry ID or state directory requires a frontend restart. A subprocess
 already running follows the action limits and cleanup rules recorded for it.
 
 To calculate the registration digest, the executor fills in target defaults,
