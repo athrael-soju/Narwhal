@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -144,11 +145,13 @@ class Session:
         self.files.put(host, self.relative + "/" + name, content)
         return self.root / name
 
-    def export(self, kind: str, value: Any) -> dict[str, Any]:
+    def export(self, kind: str, value: Any, *, complete: bool = True) -> dict[str, Any]:
         """Expose fixed structured evidence and retain its reference before advancing."""
         context = self.context
         reference = ArtifactStore(str(context.registry.registry_id), context.target).export(
-            encode_record(public_value(context.access, context.target, value)), kind
+            encode_record(public_value(context.access, context.target, value)),
+            kind,
+            complete=complete,
         )
 
         def retain(record: dict[str, Any]) -> None:
@@ -240,8 +243,55 @@ class Session:
         if row["state"] not in {"succeeded", "awaiting_retain"} or (
             row["state"] == "succeeded" and not remote_absent(row)
         ):
+            with contextlib.suppress(OperationError, ValueError, OSError):
+                self._failed_output(host, job_id, row)
             raise OperationError("command_failed", "Remote gate job did not complete successfully")
         return effect
+
+    def _failed_output(self, host: str, job_id: str, receipt: dict[str, Any]) -> None:
+        """Export bounded failed-job output without replacing the initiating failure."""
+        streams: dict[str, Any] = {}
+        for stream in ("stdout", "stderr"):
+            try:
+                result = self.transport.read(host, job_id, stream, max_bytes=65536)
+                data = base64.b64decode(result["data_base64"], validate=True)
+                if (
+                    result["job_id"] != job_id
+                    or result["stream"] != stream
+                    or result["offset"] != 0
+                    or len(data) > 65536
+                    or type(result["bytes"]) is not int
+                    or result["bytes"] < len(data)
+                    or result["next_offset"] != (len(data) if result["bytes"] > len(data) else None)
+                ):
+                    raise ValueError("Remote failure output has an invalid identity or bound")
+                streams[stream] = {
+                    "log": data.decode("utf-8", errors="replace"),
+                    "bytes": result["bytes"],
+                    "captured_bytes": len(data),
+                    "truncated": result["next_offset"] is not None
+                    or bool(receipt.get(stream + "_truncated")),
+                }
+            except (OperationError, ValueError, OSError, KeyError, TypeError) as error:
+                streams[stream] = {
+                    "omitted": True,
+                    "error": error.code
+                    if isinstance(error, OperationError)
+                    else "source_unavailable",
+                }
+        self.export(
+            "ssh_command_output",
+            {
+                "host_id": host,
+                "owner": receipt["owner"],
+                "state": receipt["state"],
+                "exit_code": receipt.get("exit_code"),
+                "streams": streams,
+            },
+            complete=all(
+                not row.get("omitted") and not row.get("truncated") for row in streams.values()
+            ),
+        )
 
     def gate(
         self,

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.config import EngineContract
+from narwhal.deployment import ssh_gates
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from tools.deployment.attestation_contract import (
     MODEL_DIMENSIONS_CAPTURE,
@@ -517,6 +518,160 @@ class AttestationContractTests(unittest.TestCase):
                 save(run / "transfer-mode.json", stale)
                 with self.assertRaisesRegex(ValueError, "Transfer mode plan_sha256"):
                     engine_document(run, log)
+
+    @contextlib.contextmanager
+    def managed_attestation(self, root, responses=None):
+        run, log = self.engine_evidence(root)
+        plan = read_json(run / "launch.json")
+        cid = (run / "container.id").read_text().strip()
+        generation = {
+            "role": plan["role"],
+            "container_id": cid,
+            "generation": {"vllm_version": "0.29.0", "process_start_time_seconds": 100.0},
+            "plan_sha256": hashlib.sha256((run / "launch.json").read_bytes()).hexdigest(),
+            "cache_sha256": hashlib.sha256((run / "cache-layout.json").read_bytes()).hexdigest(),
+            "image": plan["image"],
+            "run": str(run),
+        }
+        save(run / "management-generation.json", generation)
+        save(run / "image-check.log", {"connector": "test.NixlPullConnector"})
+        captures = {}
+        for name in (
+            "nixl-connector-version.json",
+            "cache-registration.json",
+            "handshake-policy.json",
+        ):
+            captures[name] = read_json(run / name)
+            (run / name).unlink()
+        dimensions = read_json(run / "model-dimensions.json")
+        dimensions.update(
+            image_id=plan["image"], container_id=cid, launcher_sha256=plan["launcher_sha256"]
+        )
+        startup = log.read_text()
+        bodies = {
+            "/version": (run / "version.json").read_bytes(),
+            "/metrics": (run / "metrics.txt").read_bytes(),
+        }
+        bodies.update(responses or {})
+        for name in ("version.json", "metrics.txt", "transfer-mode.json", "startup.log"):
+            (run / name).unlink()
+        requested = []
+
+        def response(request):
+            self.assertEqual(request.headers["authorization"], "Bearer test-engine-secret")
+            requested.append(request.url.path)
+            return httpx.Response(200, content=bodies[request.url.path])
+
+        client = httpx.AsyncClient
+
+        def bounded_client(**kwargs):
+            self.assertFalse(kwargs["trust_env"])
+            self.assertFalse(kwargs["follow_redirects"])
+            return client(transport=httpx.MockTransport(response), **kwargs)
+
+        contract = ssh_gates.attestation_contract
+        launcher = ssh_gates.launch_engine
+        with (
+            patch.dict(os.environ, {"NARWHAL_ENGINE_API_KEY": "test-engine-secret"}),
+            patch.object(ssh_gates.httpx, "AsyncClient", side_effect=bounded_client),
+            patch.object(
+                contract.subprocess,
+                "run",
+                return_value=SimpleNamespace(
+                    stdout=json.dumps(
+                        {"Id": cid, "Image": plan["image"], "State": {"Running": True}}
+                    )
+                ),
+            ),
+            patch.object(launcher, "docker", return_value=startup),
+            patch.object(
+                contract,
+                "capture_nixl",
+                side_effect=lambda _: save(
+                    run / "nixl-connector-version.json", captures["nixl-connector-version.json"]
+                ),
+            ),
+            patch.object(
+                contract,
+                "capture_model_dimensions",
+                side_effect=lambda _: save(run / "model-dimensions.live.json", dimensions),
+            ),
+            patch.object(
+                launcher,
+                "registration_layout",
+                side_effect=lambda *_: save(
+                    run / "cache-registration.json", captures["cache-registration.json"]
+                ),
+            ),
+            patch.object(
+                launcher,
+                "handshake_policy",
+                side_effect=lambda *_: save(
+                    run / "handshake-policy.json", captures["handshake-policy.json"]
+                ),
+            ),
+        ):
+            yield run, requested
+
+    def test_managed_attestation_captures_http_inputs_for_real_generator(self):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            self.managed_attestation(Path(folder)) as (
+                run,
+                requested,
+            ),
+        ):
+            result = ssh_gates.perform({"operation": "attest", "run": str(run)})
+            document = AttestationDocument.load(result["document"])
+            self.assertEqual(document.contract.vllm_version, "0.29.0")
+            self.assertFalse(document.contract.missing())
+            self.assertEqual(requested, ["/version", "/metrics"])
+            self.assertEqual(read_json(run / "version.json"), {"version": "0.29.0"})
+            self.assertEqual((run / "metrics.txt").read_text(), "process_start_time_seconds 100\n")
+            for name in ("version.json", "metrics.txt", "engine-attestation.json"):
+                self.assertEqual((run / name).stat().st_mode & 0o777, 0o600)
+            for source in document.sources.values():
+                path, digest = source.rsplit(" sha256:", 1)
+                self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
+            self.assertEqual(result["container_id"], "b" * 64)
+            self.assertEqual(
+                hashlib.sha256(Path(result["document"]).read_bytes()).hexdigest(), result["sha256"]
+            )
+
+    def test_managed_attestation_rejects_http_identity_changes_and_oversized_evidence(self):
+        for responses, message in (
+            ({"/version": b'{"version":"0.30.0"}'}, "checked runtime"),
+            ({"/metrics": b"process_start_time_seconds 200\n"}, "generation changed"),
+            ({"/metrics": b"vllm:num_requests_running 0\n"}, "has no process_start"),
+            ({"/metrics": b"x" * (4 * 1024 * 1024 + 1)}, "byte limit"),
+        ):
+            with (
+                self.subTest(message=message),
+                tempfile.TemporaryDirectory() as folder,
+                self.managed_attestation(Path(folder), responses) as (run, _),
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                try:
+                    ssh_gates.perform({"operation": "attest", "run": str(run)})
+                finally:
+                    for name in ("version.json", "metrics.txt", "engine-attestation.json"):
+                        self.assertFalse((run / name).exists())
+
+    def test_managed_attestation_rejects_changed_launch_generation_bindings(self):
+        for field in ("container_id", "plan_sha256", "cache_sha256", "image"):
+            with (
+                self.subTest(field=field),
+                tempfile.TemporaryDirectory() as folder,
+                self.managed_attestation(Path(folder)) as (run, requested),
+            ):
+                path = run / "management-generation.json"
+                generation = read_json(path)
+                generation[field] = "changed"
+                save(path, generation)
+                with self.assertRaisesRegex(ValueError, "Launch generation " + field):
+                    ssh_gates.perform({"operation": "attest", "run": str(run)})
+                self.assertEqual(requested, [])
+                self.assertFalse((run / "engine-attestation.json").exists())
 
     def test_sidecar_uses_derived_role_url_and_current_document(self):
         with tempfile.TemporaryDirectory() as folder:

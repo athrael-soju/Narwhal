@@ -21,7 +21,7 @@ import httpx
 
 from narwhal.config import FleetConfig
 from narwhal.contracts import COMMAND_RESULT, STATE, validate_document
-from narwhal.engines.attestation import fetch_engine_identity
+from narwhal.engines.attestation import fetch_engine_identity, parse_process_start
 from narwhal.runtime.state import validate as validate_handoff
 
 from . import attestation_contract, launch_engine
@@ -142,6 +142,37 @@ def _headers() -> dict[str, str]:
     return {"authorization": "Bearer " + key} if key else {}
 
 
+async def _attestation_http(
+    run: Path, plan: dict[str, Any], checked: dict[str, Any], container: str
+) -> None:
+    """Retain bounded HTTP evidence only for the generation captured at launch."""
+    generation = attestation_contract.read_json(run / "management-generation.json")
+    attestation_contract.require_binding(
+        generation,
+        "Launch generation",
+        role=plan["role"],
+        container_id=container,
+        plan_sha256=launch_engine.digest(run / "launch.json"),
+        cache_sha256=launch_engine.digest(run / "cache-layout.json"),
+        image=plan["image"],
+    )
+    endpoint = plan["endpoint"].rstrip("/")
+    version_body = await _get(endpoint + "/version", _headers())
+    metrics_body = await _get(endpoint + "/metrics", _headers())
+    version = json.loads(version_body)
+    if not isinstance(version, dict) or version.get("version") != checked["vllm_api_version"]:
+        raise ValueError("HTTP version differs from the checked runtime")
+    metrics = metrics_body.decode()
+    observed = {
+        "vllm_version": version["version"],
+        "process_start_time_seconds": parse_process_start(metrics),
+    }
+    if observed != generation.get("generation"):
+        raise ValueError("HTTP engine generation changed since launch")
+    launch_engine.write_private(run / "version.json", version_body.decode())
+    launch_engine.write_private(run / "metrics.txt", metrics)
+
+
 def attest(request: dict[str, Any]) -> dict[str, Any]:
     """Capture the running container's attestation inputs with existing validators."""
     run = Path(request["run"])
@@ -186,6 +217,7 @@ def attest(request: dict[str, Any]) -> dict[str, Any]:
         },
     )
     launch_engine.handshake_policy(run, plan)
+    asyncio.run(_attestation_http(run, plan, checked, container))
     destination = attestation_contract.generate(run, startup)
     return {
         "document": str(destination),

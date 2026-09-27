@@ -232,6 +232,14 @@ Disconnecting does not cancel accepted work. Use `operation_cancel` to request
 cancellation. Remote supervisors enforce recorded deadlines and attempt cleanup
 of their owned helpers. A lost SSH connection cannot prove remote cleanup.
 
+On `command_failed`, use `artifact_read` to inspect the `ssh_command_output`
+artifact when present. The adapter attempts to export the first 65,536 bytes of
+each remote stdout and stderr log, with credentials, request content and private
+paths redacted. Each stream reports truncation or an explicit omission; either
+condition marks the artifact `complete: false`. Output collection uses the
+remaining stage deadline; collection failure preserves the original command
+error.
+
 If an operation reports `recovery_required`, restore host access and inspect
 its reconciled effects. The coordinator retains reservations while effects or
 ownership remain unknown. Follow [Operations and recovery](Operations.md) for
@@ -249,3 +257,19 @@ If cleanup itself is interrupted, select that cleanup operation in a new cleanup
 plan. The coordinator verifies the previous worker's absence before transferring
 its exact reservations. An unreachable host or uncertain process identity keeps
 the operation in recovery until those observations can be established.
+
+### Resume a failed deployment
+
+If deployment preparation reports `resource_conflict` with the message
+`A recorded fleet must be cleaned up before a new deployment`, clean up the
+earlier failed deployment before resuming it:
+
+1. Complete the cleanup procedure above using the failed deployment's execution
+   ID. Wait until the cleanup operation reports `state: "succeeded"`.
+2. Prepare `fleet_deploy` again with the registered recipe and inspect the new
+   plan.
+3. Call `operation_resume` with the failed deployment's execution ID and the
+   new plan ID. The resumed operation records its parent and reruns every stage.
+
+The failed execution and its evidence remain available after cleanup and
+resumption.

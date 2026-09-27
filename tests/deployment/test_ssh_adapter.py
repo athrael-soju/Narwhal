@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import copy
+import json
+import os
 import time
 import unittest
 from types import SimpleNamespace
@@ -253,6 +256,105 @@ class SSHOwnershipTests(unittest.TestCase):
 
 
 class ArtifactOutcomeTests(unittest.TestCase):
+    def failed_command(self, response):
+        fixture = executor_fixtures.ManagementExecutorTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        operation_id = fixture.admit()
+        stores = []
+        test = self
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                job_id = str(uuid4())
+                owner = {
+                    "operation_id": context.operation_id,
+                    "stage_id": context.stage_id,
+                    "launch_token": job_id,
+                }
+                receipt = {
+                    "owner": owner,
+                    "state": "failed",
+                    "exit_code": 1,
+                    "observed_processes": {},
+                    "containers": [],
+                    "cleanup": {"error": None},
+                }
+
+                def read(host, job, stream, *, max_bytes):
+                    test.assertEqual((host, job, max_bytes), ("one", job_id, 65536))
+                    return response(job, stream)
+
+                session = ssh_adapter.Session.__new__(ssh_adapter.Session)
+                session.context = context
+                session.artifacts = []
+                session.execution = {"credential_fields": {}}
+                session.transport = SimpleNamespace(
+                    submit=Mock(return_value=receipt),
+                    status=Mock(return_value=receipt),
+                    read=read,
+                )
+                stores.append(ArtifactStore(str(context.registry.registry_id), context.target))
+                session.command(
+                    "one", "attest", ["attest"], cwd=fixture.root, env={}, job_id=job_id
+                )
+
+        with patch.dict(os.environ, {"CPU_SECRET": "private-attestation-credential"}):
+            result = run_operation(
+                fixture.registry, "cpu", operation_id, adapter=Adapter(), plan=fixture.plan
+            )
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["result"]["errors"][0]["code"], "command_failed")
+        artifact = next(row for row in result["artifacts"] if row["kind"] == "ssh_command_output")
+        self.assertIn(artifact, result["stages"][0]["artifacts"])
+        self.assertFalse(artifact["complete"])
+        return json.loads(stores[0].read(artifact["artifact_id"])["text"])
+
+    def test_failed_command_exports_redacted_output_and_marks_truncation(self):
+        def response(job, stream):
+            data = (
+                b"bounded progress"
+                if stream == "stdout"
+                else b"FileNotFoundError: /private/run/version.json private-attestation-credential "
+                b"prompt=private-request-content"
+            )
+            return {
+                "job_id": job,
+                "stream": stream,
+                "offset": 0,
+                "bytes": len(data) + (10 if stream == "stdout" else 0),
+                "next_offset": len(data) if stream == "stdout" else None,
+                "data_base64": base64.b64encode(data).decode(),
+            }
+
+        output = self.failed_command(response)
+        self.assertEqual(output["exit_code"], 1)
+        self.assertTrue(output["streams"]["stdout"]["truncated"])
+        self.assertFalse(output["streams"]["stderr"]["truncated"])
+        self.assertIn("FileNotFoundError", output["streams"]["stderr"]["log"])
+        self.assertNotIn("private-attestation-credential", json.dumps(output))
+        self.assertNotIn("/private/run", json.dumps(output))
+        self.assertNotIn("private-request-content", json.dumps(output))
+
+    def test_failed_command_retains_original_error_when_output_is_unavailable_or_oversized(self):
+        def response(job, stream):
+            if stream == "stdout":
+                raise OperationError("source_unavailable", "Remote output is unavailable")
+            return {
+                "job_id": job,
+                "stream": stream,
+                "offset": 0,
+                "bytes": 65537,
+                "next_offset": None,
+                "data_base64": base64.b64encode(b"x" * 65537).decode(),
+            }
+
+        output = self.failed_command(response)
+        for stream in ("stdout", "stderr"):
+            self.assertEqual(
+                output["streams"][stream], {"omitted": True, "error": "source_unavailable"}
+            )
+
     def test_previously_persisted_artifact_appears_once_in_completed_operation(self):
         fixture = executor_fixtures.ManagementExecutorTests()
         fixture.setUp()
