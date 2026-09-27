@@ -73,6 +73,37 @@ Place tests under `tests/` by component, assert a named failure or invariant, an
 
 Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, start each checked engine, qualify directed links against the live cache, attest and profile those processes, then run preflight and routed load through the private path.
 
+### Documentation preview
+
+From the repository root, install the constrained documentation dependencies:
+
+```bash
+make docs-setup
+```
+
+This command reuses `.venv`, or creates it with the development tools when
+missing, then installs the documentation extra. To use another existing
+environment, pass its Python executable as `VENV_PYTHON` to each documentation
+command. Installation and build failures return a nonzero exit status.
+
+Start the local preview:
+
+```bash
+make docs-serve
+```
+
+Open `http://127.0.0.1:8000/Narwhal/`. MkDocs runs in the foreground and reloads the
+preview after documentation edits. Press Ctrl+C to stop it. If port 8000 is
+occupied, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/`.
+
+Before submitting documentation changes, run the strict build:
+
+```bash
+make docs-build
+```
+
+The command cleans and rebuilds `site/`, and fails on documentation warnings.
+
 ## Behaviour changes
 
 Add focused tests for serving and recovery changes. Validate process replacement and router failover on a deployed fleet using the [release drills](docs/operate/04-Upgrade-and-Validate.md).
@@ -169,7 +200,7 @@ Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued 
 
 Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
 
-Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
+Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, run `make docs-setup` and `make docs-build`.
 
 A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
 
