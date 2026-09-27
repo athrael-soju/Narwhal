@@ -19,20 +19,57 @@ from narwhal.observability.management_targets import build_targets
 from narwhal.observability.management_types import MonitoringBinding
 
 from .management_records import OperationError
-from .ssh_worker import _command, _labels
+from .ssh_files import _parent
+from .ssh_worker import _absolute, _command, _labels, _uuid
 
 if TYPE_CHECKING:
     from .ssh_adapter import Session
 
 
-def owned_override(owner: dict[str, str]) -> tuple[str, dict[str, Any]]:
-    """Give each service and retained data volume the supervisor's exact owner labels."""
-    project = "narwhal-" + owner["launch_token"].replace("-", "")
+def owned_override(owner: dict[str, str], data_root: Path) -> tuple[str, dict[str, Any]]:
+    """Label the services and bind named volumes beneath the owned operation directory."""
+    project = "narwhal-" + _uuid(owner["launch_token"]).replace("-", "")
     labels = _labels(owner)
     return project, {
         "services": {name: {"labels": labels} for name in ("prometheus", "grafana")},
-        "volumes": {name: {"labels": labels} for name in ("prom-data", "grafana-data")},
+        "volumes": {
+            name: {
+                "labels": labels,
+                "driver": "local",
+                "driver_opts": {
+                    "type": "none",
+                    "o": "bind",
+                    # Compose interpolates values in JSON overrides as well as YAML.
+                    "device": str(data_root / name).replace("$", "$$"),
+                },
+            }
+            for name in ("prom-data", "grafana-data")
+        },
     }
+
+
+def _data_root(request: dict[str, Any]) -> Path:
+    """Create empty volume directories under the authenticated operation's private root."""
+    owner = request["owner"]
+    root = _absolute(request["operation_root"])
+    operation = _uuid(owner["operation_id"])
+    launch = _uuid(owner["launch_token"])
+    if (
+        root.name != operation
+        or root.parent.name != "operations"
+        or _absolute(request["result_path"]) != root / "jobs" / launch / "result.json"
+    ):
+        raise ValueError("Monitoring data path differs from the owned operation")
+    project = "narwhal-" + launch.replace("-", "")
+    data = root / "monitoring-data" / project
+    for name in ("prom-data", "grafana-data"):
+        relative = (data / name).relative_to(root.parent.parent).as_posix()
+        with _parent(str(root.parent.parent), relative, create=True) as (parent, leaf):
+            # Existing directories may contain retained data. Never adopt or chmod them.
+            # Docker populates these empty named volumes from the image's data directory.
+            os.mkdir(leaf, 0o700, dir_fd=parent)
+            os.fsync(parent)
+    return data
 
 
 def _get(url: str, timeout_s: float) -> tuple[int, str]:
@@ -63,7 +100,8 @@ def start_remote(request: dict[str, Any]) -> dict[str, Any]:
 
     startup = importlib.import_module("tools.observability.start")
     environment = dict(os.environ)
-    project, override = owned_override(request["owner"])
+    data_root = _data_root(request)
+    project, override = owned_override(request["owner"], data_root)
     path = Path(request["result_path"]).with_name("compose.owner.json")
     write_result(path, override)
     stack = startup.ComposeStack(env=environment)
@@ -102,20 +140,35 @@ def start_remote(request: dict[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(volumes, list)
         or len(volumes) != 2
+        or any(not isinstance(row, dict) for row in volumes)
         or {row.get("Name") for row in volumes} != set(volume_names)
         or any(
-            any((row.get("Labels") or {}).get(key) != value for key, value in expected.items())
+            row.get("Driver") != "local"
+            or row.get("Options")
+            != {
+                "type": "none",
+                "o": "bind",
+                "device": str(data_root / row["Name"].removeprefix(project + "_")),
+            }
+            or not isinstance(row.get("Labels"), dict)
+            or any(row["Labels"].get(key) != value for key, value in expected.items())
             for row in volumes
         )
     ):
-        raise ValueError("Monitoring data volume ownership does not match the operation")
+        raise ValueError("Monitoring data volume ownership or placement differs from the operation")
     return {
         "host_id": request["host_id"],
         "project": project,
         "labels": expected,
         "containers": {name: asdict(value) for name, value in containers.items()},
         "volumes": [
-            {"name": row["Name"], "driver": row["Driver"], "labels": row["Labels"]}
+            {
+                "name": row["Name"],
+                "driver": row["Driver"],
+                "labels": row["Labels"],
+                "options": row["Options"],
+                "backing_path": row["Options"]["device"],
+            }
             for row in volumes
         ],
         "prometheus_url": prometheus,
@@ -133,6 +186,7 @@ def start(session: Session) -> dict[str, Any]:
         "monitoring",
         {
             "operation": "monitoring_start",
+            "operation_root": str(session.root),
             "host_id": session.router_host,
             "fleet": router["fleet_path"],
             "router_url": router["url"],

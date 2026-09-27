@@ -449,6 +449,81 @@ class ProbeTests(unittest.TestCase):
                 worker._stop_containers(record, time.monotonic() + 2)
             self.assertEqual(observed.call_count, 1)
 
+    def test_restarting_container_cleanup_keeps_identity_checks_without_a_host_pid(self):
+        container_id = "b" * 64
+        owner = {"operation_id": str(uuid4()), "stage_id": "test", "launch_token": str(uuid4())}
+        labels = worker._labels(owner)
+        record = {"daemon_id": "fixture-daemon", "container_labels": labels}
+        row = {
+            "Id": container_id,
+            "Config": {"Labels": labels.copy()},
+            "State": {"Running": True, "Restarting": True, "Pid": 0},
+        }
+        active = True
+        removed = []
+
+        def command(argv, _deadline):
+            nonlocal active
+            if argv[1] == "info":
+                return b"fixture-daemon"
+            if argv[1] == "ps":
+                return container_id.encode() if active else b""
+            if argv[1] == "inspect":
+                return json.dumps([row]).encode()
+            self.assertEqual(argv, ["docker", "rm", "-f", container_id])
+            removed.append(argv[-1])
+            active = False
+            return b""
+
+        with (
+            patch.object(worker, "_command", side_effect=command),
+            patch.object(worker, "_identity") as identity,
+        ):
+            for invalid in ("label", "id"):
+                with self.subTest(invalid=invalid):
+                    if invalid == "label":
+                        row["Config"]["Labels"] = {}
+                    else:
+                        row["Id"] = "c" * 64
+                    with self.assertRaisesRegex(worker.WorkerError, "ownership changed"):
+                        worker._stop_containers(record, time.monotonic() + 2)
+                    self.assertEqual(removed, [])
+                    row["Config"]["Labels"] = labels.copy()
+                    row["Id"] = container_id
+            rows = worker._containers(record, time.monotonic() + 2)
+            self.assertTrue(rows[0]["running"])
+            self.assertIsNone(rows[0]["process"])
+            self.assertEqual(rows[0]["descendants"], {})
+            self.assertEqual(worker._stop_containers(record, time.monotonic() + 2), [])
+            self.assertEqual(removed, [container_id])
+            identity.assert_not_called()
+
+    def test_missing_container_pid_requires_exact_restart_backoff_state(self):
+        container_id = "b" * 64
+        labels = {"owner": "fixture"}
+        record = {"daemon_id": "fixture-daemon", "container_labels": labels}
+        for restarting, pid in ((False, 0), (None, 0), (True, -1), (True, None), (True, False)):
+            row = {
+                "Id": container_id,
+                "Config": {"Labels": labels},
+                "State": {"Running": True, "Restarting": restarting, "Pid": pid},
+            }
+            with (
+                self.subTest(restarting=restarting, pid=pid),
+                patch.object(
+                    worker,
+                    "_command",
+                    side_effect=[
+                        b"fixture-daemon",
+                        container_id.encode(),
+                        json.dumps([row]).encode(),
+                    ],
+                ) as command,
+                self.assertRaisesRegex(worker.WorkerError, "host PID is unavailable"),
+            ):
+                worker._stop_containers(record, time.monotonic() + 2)
+            self.assertEqual(command.call_count, 3)
+
     def test_checkpoint_matches_existing_manifest_and_follows_regular_hf_links(self):
         from tools.deployment.checkpoint_manifest import inspect_checkpoint
 

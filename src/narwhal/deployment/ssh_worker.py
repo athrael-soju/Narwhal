@@ -321,8 +321,12 @@ def _containers(record: dict[str, Any], deadline: float) -> list[dict[str, Any]]
             raise WorkerError("ownership_conflict", "Remote container ownership changed")
         process = None
         descendants: dict[str, int] = {}
-        if row.get("State", {}).get("Running"):
-            pid = row.get("State", {}).get("Pid")
+        state = row.get("State", {})
+        pid = state.get("Pid")
+        restarting_without_process = (
+            state.get("Restarting") is True and type(pid) is int and pid == 0
+        )
+        if state.get("Running") and not restarting_without_process:
             if type(pid) is not int or pid <= 0:
                 raise WorkerError("source_unavailable", "Container host PID is unavailable")
             process = _identity(pid)
@@ -336,7 +340,7 @@ def _containers(record: dict[str, Any], deadline: float) -> list[dict[str, Any]]
                 "daemon_id": daemon,
                 "container_id": row["Id"],
                 "labels": labels,
-                "running": bool(row.get("State", {}).get("Running")),
+                "running": bool(state.get("Running")),
                 "process": process,
                 "descendants": descendants,
             }

@@ -80,6 +80,11 @@ allow only the actions needed for this deployment:
 Write a settings document with these required fields. Replace every path and
 the commit placeholder before use. `remote_root` is the private absolute parent
 directory for operation inputs, source checkouts and evidence on each host.
+On the router host, it also holds the backing directories for the owned
+Prometheus and Grafana data volumes. Select a filesystem with space available
+to non-root container users. Ext4 reserved blocks can leave those users unable
+to write even when root can still allocate files. Docker stores image layers
+and container files under its configured data root.
 
 ```json
 {
@@ -249,7 +254,8 @@ To stop resources owned by an operation, prepare `deployment_cleanup` with
 `parameters: {"operation_id": "UUID_OF_THE_OPERATION"}`. Replace the placeholder
 with the retained execution ID, inspect the plan and execute it. Cleanup stops
 the selected owned processes and containers. It preserves private inputs,
-source checkouts, gate evidence and monitoring data volumes for inspection.
+source checkouts, gate evidence, monitoring data volumes and their backing
+directories for inspection.
 The cleanup result reports removed and residual resources and retained evidence.
 Successful cleanup does not restore an earlier deployment generation.
 
@@ -265,7 +271,9 @@ If deployment preparation reports `resource_conflict` with the message
 earlier failed deployment before resuming it:
 
 1. Complete the cleanup procedure above using the failed deployment's execution
-   ID. Wait until the cleanup operation reports `state: "succeeded"`.
+   ID and the original `remote_root`. Wait until the cleanup operation reports
+   `state: "succeeded"`. If recovery requires a different filesystem, change
+   `remote_root` after cleanup succeeds.
 2. Prepare `fleet_deploy` again with the registered recipe and inspect the new
    plan.
 3. Call `operation_resume` with the failed deployment's execution ID and the
