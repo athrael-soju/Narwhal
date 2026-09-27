@@ -27,8 +27,8 @@ variant with the verified live generation. The separate `generation` check
 sends a completion request directly to the engine.
 
 After replacing an engine, [activate fresh profiles while preserving its
-hold](#activate-replacement-profiles) before requesting readmission. Updating
-the profile files does not replace the profiles already loaded by the router.
+hold](#activate-replacement-profiles) before requesting readmission. The router
+uses its loaded profiles until you restart it with the updated store.
 
 ## 7. Restart one engine
 
@@ -117,8 +117,8 @@ returning the engine to placement:
 
 Failed validation returns HTTP 409 and keeps the engine blocked. Because
 `curl -f` discards that response body, query `GET /narwhal/lifecycle` for
-`engines.<id>.error` and `checks`. Some checks continue after a failure;
-passing checks alone do not mean the engine was readmitted.
+`engines.<id>.error` and `checks`. Some checks continue after a failure.
+Check for `state = active` and `accepts_new = true` in the readmission result.
 
 Verify the successful response and retain its checks:
 
@@ -332,8 +332,9 @@ collection reaches an engine that is already stopped:
    for identity collection, and request whole-wave readmission.
 
 If every identity was readable on the first drain, verify `wave.ready_to_stop`
-and proceed to fleet restart. Do not use the accepted identities in
-`process_starts` as substitutes for the required `old_process_start` records.
+and proceed to fleet restart. Each replacement's process start must be newer
+than the drain's `old_process_start`. The `process_starts` values record
+previously accepted identities.
 
 ## Activate replacement profiles
 
@@ -366,8 +367,9 @@ variant. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#pr
 with the recorded measurement recipe. Keep the profiles and sample evidence
 for unchanged generations when assembling the complete store.
 
-`narwhal-profile --only` writes only the selected engines; its output alone is
-not a complete store for a larger fleet. The [profile command](../cli/Profile.md#selection-refitting-and-output)
+`narwhal-profile --only` writes profiles for the selected engines. For a larger
+fleet, merge that output with the retained profiles for unchanged engines.
+The [profile command](../cli/Profile.md#selection-refitting-and-output)
 explains how to merge measured stores and retain their source sidecars.
 
 ### 1. Prepare the activation configuration
@@ -412,8 +414,9 @@ the log, profiles, and sample files.
 
 ### 3. Capture the held state
 
-Confirm that the router has no in-flight requests, then capture its handoff.
-Do not issue readmission while capturing or loading this state:
+Wait for all routed requests to finish, then capture the handoff. Keep the
+lifecycle hold through capture and loading; request readmission after
+verifying the resumed hold:
 
 ```bash
 curl -fsS "$ROUTER_URL/narwhal/state" > "$RUN_DIR/activation-idle.json"
@@ -469,8 +472,8 @@ narwhal-serve --fleet "$ACTIVATION_FLEET" --resume \
 
 Run that command through the deployment's process manager. Startup first
 checks every loaded profile against its live generation, then applies the
-saved handoff. A missing handoff cannot preserve the lifecycle hold; verify
-the saved state before starting the replacement.
+saved handoff. Before starting the replacement, verify that the saved handoff
+exists and contains the lifecycle holds to restore.
 
 ### 5. Verify the hold before readmission
 
