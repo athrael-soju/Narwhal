@@ -6,64 +6,17 @@ import argparse
 import json
 import os
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from narwhal.config.environment import resolve_endpoint
+from narwhal.observability.management_targets import (
+    TargetContract,
+    build_targets,
+    metrics_authority,  # noqa: F401 - preserve the operator helper import
+)
 
 DEFAULT_TARGETS_DIR = (
     Path(__file__).parents[2] / "runs" / "observability" / "mounts" / "prometheus" / "targets"
 )
-
-
-@dataclass(frozen=True)
-class TargetContract:
-    """Expected Prometheus target identities for one deployment."""
-
-    router: str
-    engines: tuple[tuple[str, str], ...]
-
-
-def metrics_authority(url: str) -> str:
-    """Return the host and port Prometheus scrapes from an HTTP base URL."""
-    try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"invalid metrics URL {url!r}: {exc}") from exc
-    if parsed.scheme != "http":
-        raise ValueError(f"metrics URL {url!r} requires http")
-    if parsed.hostname is None or port is None:
-        raise ValueError(f"metrics URL {url!r} requires an explicit host and port")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"metrics URL {url!r} contains credentials")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise ValueError(f"metrics URL {url!r} must identify an HTTP origin")
-    return parsed.netloc
-
-
-def build_targets(fleet: dict[str, object], router_url: str) -> TargetContract:
-    """Build router and engine target identities from deployment inputs."""
-    raw_engines = fleet.get("engines")
-    if not isinstance(raw_engines, list) or not raw_engines:
-        raise ValueError("fleet document requires a populated engines array")
-    engines: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for index, raw_engine in enumerate(raw_engines):
-        if not isinstance(raw_engine, dict):
-            raise ValueError(f"fleet engine {index} requires an object")
-        iid = raw_engine.get("iid")
-        url = raw_engine.get("url")
-        if not isinstance(iid, str) or not iid:
-            raise ValueError(f"fleet engine {index} requires iid")
-        if iid in seen:
-            raise ValueError(f"fleet engine iid {iid!r} appears more than once")
-        if not isinstance(url, str):
-            raise ValueError(f"fleet engine {iid!r} requires url")
-        seen.add(iid)
-        engines.append((iid, metrics_authority(resolve_endpoint(url, f"engines[{index}].url"))))
-    return TargetContract(metrics_authority(router_url), tuple(engines))
 
 
 def _write_json(path: Path, value: object) -> None:
