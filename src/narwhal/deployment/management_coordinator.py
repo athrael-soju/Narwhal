@@ -326,6 +326,12 @@ class OperationCoordinator:
                 parameters=found["parameters"],
                 plan=self.store.plan(target_id, operation["operation_id"]),
                 parent_operation_id=parent,
+                resources=[row["resource_id"] for row in operation["resources"]],
+                cleanup_of=(
+                    found["parameters"]["operation_id"]
+                    if found["action"] == "deployment_cleanup" and tool != "plan_prepare"
+                    else None
+                ),
             )
         return self._launch(target_id, operation, False)
 
@@ -408,6 +414,11 @@ class OperationCoordinator:
             plan=plan,
             resources=sorted(resources),
             parent_operation_id=parent,
+            cleanup_of=(
+                plan["payload"]["parameters"]["operation_id"]
+                if plan["payload"]["action"] == "deployment_cleanup"
+                else None
+            ),
         )
         return self._launch(target.id, operation, created)
 

@@ -43,6 +43,7 @@ from .management_registry import ManagementRegistry, ManagementTarget
 _DATABASE = "operations.sqlite3"
 _LOCK = "operations.lock"
 MAX_PAGE_BYTES = 220_000
+MAX_CLEANUP_PREDECESSORS = 16
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _IMMUTABLE = {
@@ -327,6 +328,92 @@ class OperationStore:
                 "DELETE FROM reservations WHERE operation_id=?", (record["operation_id"],)
             )
 
+    def _cleanup_original(
+        self,
+        connection: sqlite3.Connection,
+        target_id: str,
+        operation_id: str,
+        resources: Sequence[str],
+    ) -> None:
+        """Require a stopped execution and its exact reservations before transfer."""
+        from .management_executor import worker_alive
+
+        original = self._read(connection, target_id, operation_id)
+        if original["state"] not in TERMINAL | {"recovery_required"}:
+            raise OperationError("resource_busy", "Cleanup cannot replace an active operation")
+        self._cleanup_chain(connection, target_id, original, resources)
+        if original["state"] == "recovery_required" and worker_alive(original["worker"]):
+            raise OperationError("resource_busy", "The original operation worker is still alive")
+
+    def _cleanup_chain(
+        self,
+        connection: sqlite3.Connection,
+        target_id: str,
+        original: dict[str, Any],
+        resources: Sequence[str],
+    ) -> None:
+        """Follow immutable cleanup selections to one bounded fleet execution lineage."""
+        seen: set[str] = set()
+        current = original
+        for _ in range(MAX_CLEANUP_PREDECESSORS):
+            operation_id = current["operation_id"]
+            require(operation_id not in seen, "Cleanup predecessor chain contains a cycle")
+            seen.add(operation_id)
+            require(
+                current["tool"] != "plan_prepare"
+                and current["action"]
+                in {
+                    "fleet_deploy",
+                    "fleet_profile",
+                    "fleet_preflight",
+                    "engine_replace",
+                    "monitoring_start",
+                    "deployment_cleanup",
+                },
+                "Cleanup requires a fleet execution operation",
+            )
+            require(
+                bool(resources)
+                and sorted(resources) == sorted(row["resource_id"] for row in current["resources"]),
+                "Cleanup must reserve every predecessor's exact resources",
+            )
+            row = connection.execute(
+                "SELECT request,plan FROM operations WHERE operation_id=?", (operation_id,)
+            ).fetchone()
+            request, plan = _decode(row[0]), _decode(row[1])
+            require(
+                all(
+                    request[name] == current[name]
+                    for name in ("tool", "action", "plan_id", "plan_digest", "parent_operation_id")
+                )
+                and plan["plan_id"] == current["plan_id"]
+                and plan["plan_digest"] == current["plan_digest"]
+                and hashlib.sha256(canonical(plan["payload"])).hexdigest() == current["plan_digest"]
+                and plan["payload"]["target_id"] == target_id
+                and plan["payload"]["action"] == current["action"]
+                and plan["payload"]["parameters"] == request["parameters"],
+                "Cleanup predecessor admission identity is inconsistent",
+            )
+            if current["action"] != "deployment_cleanup":
+                return
+            parameters = request["parameters"]
+            predecessor = uuid_string(parameters["operation_id"])
+            require(
+                parameters == {"operation_id": predecessor},
+                "Cleanup predecessor selection is not canonical",
+            )
+            if len(seen) == MAX_CLEANUP_PREDECESSORS:
+                break
+            current = self._read(connection, target_id, predecessor)
+        raise OperationError("invalid_input", "Cleanup predecessor chain exceeds its limit")
+
+    @staticmethod
+    def _cleanup_replay(record: dict[str, Any], resources: Sequence[str]) -> None:
+        require(
+            sorted(resources) == sorted(row["resource_id"] for row in record["resources"]),
+            "Cleanup replay resources differ from the accepted operation",
+        )
+
     @_checked
     def admit(
         self,
@@ -340,6 +427,7 @@ class OperationStore:
         resources: Sequence[str] = (),
         parent_operation_id: str | None = None,
         preparation_budgets: dict[str, Any] | None = None,
+        cleanup_of: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Commit deduplication, plan consumption and exclusions before acceptance."""
         target = self._authorize(target_id, action)
@@ -353,6 +441,14 @@ class OperationStore:
         require(len(resources) == len(set(resources)))
         if parent_operation_id is not None:
             parent_operation_id = uuid_string(parent_operation_id)
+        if action == "deployment_cleanup" and tool != "plan_prepare":
+            cleanup_of = uuid_string(cleanup_of)
+            require(
+                parameters == {"operation_id": cleanup_of},
+                "Cleanup selection must match its canonical operation parameter",
+            )
+        else:
+            require(cleanup_of is None, "Only cleanup execution may transfer reservations")
         if tool == "plan_prepare":
             require(plan is None and parent_operation_id is None and not resources)
             preparation_budgets = preparation_budgets or target.preparation.model_dump(mode="json")
@@ -401,7 +497,10 @@ class OperationStore:
                     raise OperationError(
                         "request_id_conflict", "Request ID already identifies different work"
                     )
-                return self._read(connection, target_id, found[2]), False
+                record = self._read(connection, target_id, found[2])
+                if cleanup_of is not None:
+                    self._cleanup_replay(record, resources)
+                return record, False
             if plan is not None:
                 used = connection.execute(
                     "SELECT target_id,tool,parent_id,operation_id FROM consumed_plans WHERE "
@@ -418,6 +517,8 @@ class OperationStore:
                         raise OperationError(
                             "plan_scope_mismatch", "Consumed plan identity cannot change"
                         )
+                    if cleanup_of is not None:
+                        self._cleanup_replay(record, resources)
                     connection.execute(
                         "INSERT INTO requests VALUES (?, ?, ?, ?, ?)",
                         (target_id, request_id, digest, encoded, record["operation_id"]),
@@ -437,10 +538,13 @@ class OperationStore:
                     raise OperationError(
                         "operation_not_resumable", "Operation cannot be resumed with this action"
                     )
+            if cleanup_of is not None:
+                self._cleanup_original(connection, target_id, cleanup_of, resources)
             for resource in sorted(resources):
-                if connection.execute(
-                    "SELECT 1 FROM reservations WHERE resource_id=?", (resource,)
-                ).fetchone():
+                reserved = connection.execute(
+                    "SELECT operation_id FROM reservations WHERE resource_id=?", (resource,)
+                ).fetchone()
+                if reserved is not None and reserved[0] != cleanup_of:
                     raise OperationError(
                         "resource_busy", "A required resource is reserved by another operation"
                     )
@@ -488,6 +592,8 @@ class OperationStore:
                     "INSERT INTO consumed_plans VALUES (?, ?, ?, ?, ?)",
                     (plan["plan_id"], target_id, tool, parent_operation_id, record["operation_id"]),
                 )
+            if cleanup_of is not None:
+                connection.execute("DELETE FROM reservations WHERE operation_id=?", (cleanup_of,))
             connection.executemany(
                 "INSERT INTO reservations VALUES (?, ?, ?)",
                 [(resource, record["operation_id"], fence) for resource in sorted(resources)],
