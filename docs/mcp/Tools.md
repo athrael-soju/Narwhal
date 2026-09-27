@@ -2,7 +2,7 @@
 
 This page specifies tool arguments, results and errors for the
 [MCP contract](../MCP-Contracts.md). The unreleased [server command](../cli/MCP.md)
-exposes fourteen tools; the catalogue identifies them below. The installed
+exposes eighteen tools; the catalogue identifies them below. The installed
 `local-dev-v1` adapter supports preparation, execution and resumption for local
 dev actions. Registration binds each target ID to its inputs and access grants.
 
@@ -75,10 +75,10 @@ The result shapes below describe the management envelope's `data` field.
 | `operation_inspect` | Read one operation's state. | Operation store | Implemented |
 | `operation_cancel` | Record cancellation for an operation. | Shared executor | Implemented |
 | `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Local dev actions implemented |
-| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Planned |
-| `metrics_query` | Run a registered Prometheus query. | Observability adapter | Planned |
-| `host_inventory` | Collect inventory from a registered host. | Site adapter | Planned |
-| `host_logs` | Collect a selected log source. | Site adapter | Planned |
+| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Local provider implemented |
+| `metrics_query` | Run a registered Prometheus query. | Observability adapter | Implemented |
+| `host_inventory` | Collect inventory from a registered host. | Site adapter | Local provider implemented |
+| `host_logs` | Collect a selected log source. | Site adapter | Local provider implemented |
 | `artifact_read` | Read a retained redacted export. | Artifact store | Implemented |
 
 ### Targets and configuration
@@ -271,8 +271,10 @@ evidence. An accepted request returns `{operation_id: UUID}` for that new attemp
 ### Monitoring and metrics
 
 `monitoring_status` takes only the common arguments and completes synchronously.
-The site adapter inspects Prometheus targets, verifies Grafana, and reads router
-readiness. The result is:
+The site adapter supplies expected scrape identities. The observability package
+inspects Prometheus targets, verifies Grafana, and reads router readiness. The
+[monitoring guide](Observability.md) lists the acceptance checks and provider
+availability. The result is:
 
 ```text
 {sources: Observation[], readiness: pass|fail|unknown}
@@ -431,7 +433,9 @@ truncated series or samples, and stale or missing required observations produce
 `complete: false`.
 
 The executor bounds the Prometheus timeout by `timeout_s` and limits response
-bytes while streaming. Registered query expressions cannot contain runtime
+bytes while streaming, with a maximum HTTP body of 8,388,608 bytes. The client
+disables redirects and environment proxies and rejects compressed responses.
+Registered query expressions cannot contain runtime
 substitutions supplied by the agent.
 
 `host_inventory` retains at most 1,048,576 bytes and reports failures for each

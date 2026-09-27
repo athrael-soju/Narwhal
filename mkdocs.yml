@@ -139,6 +139,7 @@ nav:
           - Contract overview: MCP-Contracts.md
           - Registration and permissions: mcp/Registration.md
           - Manage a local dev instance: mcp/Local-Dev.md
+          - Inspect monitoring and host evidence: mcp/Observability.md
           - Tools and results: mcp/Tools.md
           - Plans and site adapters: mcp/Deployment.md
           - Operations and recovery: mcp/Operations.md

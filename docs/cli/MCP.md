@@ -2,14 +2,16 @@
 
 `narwhal-mcp` starts a local Model Context Protocol (MCP) server over stdio.
 This command is **unreleased work on the MCP milestone branch**. It exposes
-fourteen tools for target and configuration inspection, local dev status,
-diagnostics, artifacts, plans and persistent operations. The installed
+eighteen tools for target and configuration inspection, local dev status,
+diagnostics, monitoring, metrics, host evidence, artifacts, plans and persistent
+operations. The installed
 `local-dev-v1` adapter executes the local dev lifecycle through `plan_prepare`,
 `plan_execute` and `operation_resume`.
 
 Follow [Manage a local dev instance through MCP](../mcp/Local-Dev.md) to register
-and operate a CUDA dev instance. The SSH fleet and observability adapters
-remain planned in the [MCP contract](../MCP-Contracts.md).
+and operate a CUDA dev instance. [Inspect monitoring through MCP](../mcp/Observability.md)
+covers monitoring, registered queries and local host evidence. The SSH fleet
+provider remains planned in the [MCP contract](../MCP-Contracts.md).
 
 The client supplies the model and conversation, then launches the server under
 your local account. The server exchanges messages through stdin and stdout.
@@ -169,7 +171,7 @@ asyncio.run(main())
 PY
 ```
 
-A successful check prints the negotiated protocol version, the fourteen available
+A successful check prints the negotiated protocol version, the eighteen available
 tools, `targets: ['example-fleet']` and `config_validate: success`. The client then
 closes the session. This check verifies registry loading, target discovery and
 a successful call to the installed offline configuration validator. The example

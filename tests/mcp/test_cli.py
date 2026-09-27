@@ -28,6 +28,9 @@ class StartupTests(unittest.TestCase):
                 ) as coordinator,
                 patch("narwhal.mcp.inspection.inspection_adapters", return_value=()) as adapters,
                 patch("narwhal.mcp.operations.operation_adapters", return_value=()) as operations,
+                patch(
+                    "narwhal.mcp.observability.observability_adapters", return_value=()
+                ) as observe,
                 patch("narwhal.mcp.server.serve", new_callable=AsyncMock) as serve,
             ):
                 self.assertEqual(main(argv), 0)
@@ -36,6 +39,7 @@ class StartupTests(unittest.TestCase):
                 coordinator.assert_called_once_with(load.return_value, registry_path=Path(selected))
                 coordinator.return_value.reconcile_startup.assert_called_once_with()
                 operations.assert_called_once_with(load.return_value, coordinator.return_value)
+                observe.assert_called_once_with(load.return_value)
                 serve.assert_awaited_once_with(())
 
     def test_missing_selection_and_invalid_registry_never_open_transport(self):
