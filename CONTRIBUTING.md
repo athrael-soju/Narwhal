@@ -13,7 +13,7 @@ git switch -c describe-your-change upstream/main
 ```
 
 Run `make help` from the repository root to list contributor commands and their
-overrides. Help works before environment setup and does not install dependencies.
+overrides.
 
 Install the development tools and local checks.
 
@@ -30,20 +30,23 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
 ```
 
-`make setup` creates the development environment when it is missing. After
-pulling changes to `pyproject.toml` or `constraints-dev.txt`, refresh the installed
+After pulling changes to `pyproject.toml` or `constraints-dev.txt`, refresh the
 development dependencies from the repository root:
 
 ```bash
 make sync
 ```
 
-`make sync` reuses `.venv`, or creates it when missing. It installs the editable
-development extra against `constraints-dev.txt` without removing the environment
-or local working files. To use another existing environment, pass its Python
-executable as `VENV_PYTHON`, for example `make sync VENV_PYTHON=/path/to/venv/bin/python`
-after replacing the path. With this override, `make sync` does not create `.venv`.
-An installation failure stops the command with a nonzero exit status.
+`make sync` installs the editable package and development dependencies using
+`constraints-dev.txt`. It creates `.venv` if needed.
+
+To use an existing virtual environment for `make sync`, tests, linting,
+formatting or documentation, pass its Python executable as `VENV_PYTHON`.
+Replace `/path/to/venv/bin/python` with that executable in this example:
+
+```bash
+make sync VENV_PYTHON=/path/to/venv/bin/python
+```
 
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
 
@@ -55,9 +58,8 @@ run:
 make fix
 ```
 
-This command edits files. Review the diff before committing. If lint errors
-remain, the command stops before formatting; address those errors and rerun it.
-`make fix` honours `VENV_PYTHON`, as do the lint and formatting checks.
+Review the diff before committing. If lint errors remain, the command stops
+before formatting; address those errors and rerun it.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 
@@ -76,9 +78,8 @@ make test TEST_ARGS='-k failover -v'
 ```
 
 This command runs tests whose fully qualified names contain `failover`, with
-verbose output. Test failures produce a nonzero exit status. `make unit` and
-`make check` always run the full unit suite and ignore `TEST_ARGS`, including
-values supplied through the environment. All three targets honour `VENV_PYTHON`.
+verbose output. `make unit` and `make check` use the full unit suite regardless
+of `TEST_ARGS`, including values supplied through the environment.
 
 ### Coverage and test scope
 
@@ -90,16 +91,11 @@ Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect 
 
 ### Documentation preview
 
-From the repository root, install the constrained documentation dependencies:
+From the repository root, install the documentation tools:
 
 ```bash
 make docs-setup
 ```
-
-This command reuses `.venv`, or creates it with the development tools when
-missing, then installs the documentation extra. To use another existing
-environment, pass its Python executable as `VENV_PYTHON` to each documentation
-command. Installation and build failures return a nonzero exit status.
 
 Start the local preview:
 
@@ -108,8 +104,10 @@ make docs-serve
 ```
 
 Open `http://127.0.0.1:8000/Narwhal/`. MkDocs runs in the foreground and reloads the
-preview after documentation edits. Press Ctrl+C to stop it. If port 8000 is
-occupied, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/`.
+preview after documentation edits. Press Ctrl+C to stop it.
+
+If port 8000 is occupied, run `make docs-serve DOCS_PORT=8001` and open
+`http://127.0.0.1:8001/Narwhal/`.
 
 Before submitting documentation changes, run the strict build:
 
@@ -117,7 +115,7 @@ Before submitting documentation changes, run the strict build:
 make docs-build
 ```
 
-The command cleans and rebuilds `site/`, and fails on documentation warnings.
+MkDocs clears and rebuilds `site/`. Documentation warnings fail the build.
 
 ## Behaviour changes
 
@@ -181,12 +179,7 @@ Site automation owns host credentials, source distribution, network configuratio
 ## Issues
 
 Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose)
-to open a bug report, feature request or documentation correction. Bug reports
-require reproduction steps, expected and actual behaviour, and versions.
-Topology is optional; include it when an engine or fleet failure depends on the
-deployment layout. Documentation corrections require the affected page URL or
-repository path, the incorrect or missing guidance, and a proposed correction
-or description of the guidance needed.
+to report a failure, request a feature or suggest a documentation correction.
 
 Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug, feature and documentation forms select `bug`, `enhancement` and `documentation`, respectively; blank issues receive `triage`, which maintainers replace with the applicable label.
 
