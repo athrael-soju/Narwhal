@@ -6,6 +6,7 @@ VENV_PYTHON ?= .venv/bin/python
 # A VENV_PYTHON override disables automatic `.venv` creation.
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
+TEST_ARGS ?=
 
 .PHONY: setup sync test unit lint format types links publication versions check docs-build observe
 .PHONY: coverage
@@ -19,7 +20,8 @@ setup: .venv/bin/python
 sync: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m pip install -e '.[dev]' -c constraints-dev.txt
 
-test: unit
+test: $(BOOTSTRAP)
+	$(VENV_PYTHON) -m unittest discover -s tests -t . $(TEST_ARGS)
 
 coverage: $(BOOTSTRAP)
 	$(VENV_PYTHON) tools/maintenance/run_coverage.py $(COVERAGE_ARGS)
