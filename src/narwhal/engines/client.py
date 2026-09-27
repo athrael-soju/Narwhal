@@ -190,6 +190,10 @@ class EngineClient:
         self._health_timeout = health_timeout_s
         self._connect_timeout = connect_timeout_s
         self._pool_timeout = pool_timeout_s
+        # HTTPX's networking transport reports request I/O through its public
+        # trace extension after acquiring a pool connection. Injected transports
+        # need not implement that extension or have a connection pool.
+        self._trace_pool_wait = transport is None or isinstance(transport, httpx.AsyncHTTPTransport)
         # Attach the engine credential to each leg and probe. A caller-supplied
         # authorization header takes precedence.
         self._engine_api_key = engine_api_key
@@ -295,6 +299,11 @@ class EngineClient:
     ) -> PrefillResult:
         """Run prefill and bind the handoff to its producer and request ID."""
         leg = self._prefill_leg(body)
+        io_started = False
+
+        async def trace(name: str, info: dict[str, Any]) -> None:
+            nonlocal io_started
+            io_started = True
 
         try:
             async with asyncio.timeout(self._prefill_timeout):
@@ -303,8 +312,14 @@ class EngineClient:
                     json=leg,
                     headers=self._auth(headers),
                     timeout=self._phase_timeout(self._prefill_timeout),
+                    extensions={"trace": trace},
                 )
         except TimeoutError as exc:
+            if self._trace_pool_wait and not io_started:
+                raise httpx.PoolTimeout(
+                    f"prefill waited for a connection until its {self._prefill_timeout:g}s "
+                    "elapsed deadline"
+                ) from exc
             raise httpx.ReadTimeout(
                 f"prefill exceeded its {self._prefill_timeout:g}s elapsed deadline"
             ) from exc

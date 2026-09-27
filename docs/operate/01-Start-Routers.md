@@ -20,9 +20,10 @@ A router pair must run one coherent deployment set under one release identifier:
 - the Narwhal release;
 - the fleet configuration;
 - the profile store;
+- the first-token calibration artifact, when `engine.first_token_calibration_path` is set;
 - the corresponding [deployment evidence set](../measure/03-Load-Trial.md#7-run-the-synthetic-deployment-trial).
 
-Install that set on both router hosts.
+Install that set on both router hosts. The configured calibration path must be readable from each router's working directory. A missing artifact or an engine-generation mismatch stops startup; after replacing an engine, [recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and distribute the new artifact and fleet configuration before restarting the routers.
 
 Before replacing or upgrading either router, inspect the installed build's handoff contracts:
 
@@ -66,7 +67,7 @@ The load balancer routes against `/ready`. HTTP status on that endpoint represen
 
 Run the final preflight against the deployment set before either router begins serving production traffic.
 
-Start both routers from the same release, fleet configuration, and profile store.
+Start both routers from the same [deployment set](#2-keep-one-deployment-set).
 
 Start the first router:
 

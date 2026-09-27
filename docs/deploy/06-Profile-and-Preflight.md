@@ -26,22 +26,24 @@ Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured engi
 
 ## Calibrate the first-token deadline
 
-From the router host, keep the engines idle. For a service admitting inputs up to 16,384 tokens, run:
+From the router host, keep the engines idle. With the example engine launch limit of 16,384 total tokens, inputs can use at most 16,383 tokens while leaving room for one output token. For a service admitting that input range, run:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16384 \
+  --calibrate-first-token --input-tokens 256,8192,16383 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-out runs/deployment/first-token-calibration.json
 ```
 
-Choose input lengths that span the served range and include its longest admitted input. Set the observation bound above the current `engine.first_token_timeout_s` and within `serving.request_timeout_s`. The command gives each prompt a unique prefix, sizes it with the live tokenizer without exceeding the requested input length, then creates a fresh handoff for every sample on every role-permitted directed pair. It records actual input tokens, prefill time, elapsed time from starting decode to the first generated token, failed sizing or transfer attempts, and observation expiries. The output path must be new and should remain under the ignored `runs/` tree.
+Choose input lengths that span the served range and include its longest admitted input. Every target must leave at least one output token within both engines' live context limits. Calibration requests up to four output tokens, reducing that count to fit the smaller producer/consumer context limit. Set the observation bound above the current `engine.first_token_timeout_s` and within `serving.request_timeout_s`.
+
+The command gives each prompt a unique prefix, sizes it with the live tokenizer without exceeding the requested input length, then creates a fresh handoff for every sample on every role-permitted directed pair. It records actual input tokens, prefill time, elapsed time from starting decode to the first generated token, failed sizing or transfer attempts, and observation expiries. The output path must be new and should remain under the ignored `runs/` tree.
 
 A complete artifact has at least 100 successful samples and no failed attempts per pair and input length, with unchanged engine generations. For each group, the command computes `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`; its printed candidate is the largest group result. Diagnose failed transfers and observation expiries before using the candidate. A larger observation bound changes only the diagnostic run.
 
 Each attempt, including prompt sizing, prefill, and decode completion, remains bounded by `serving.request_timeout_s`. An attempt that expires after producing its first token is retained as `request_expired` and excluded from the candidate calculation.
 
-Set `engine.first_token_timeout_s` strictly above the candidate and set `engine.first_token_calibration_path` to the artifact path. Check that the selected deadline, measured prefill, and router overhead fit the service's client TTFT requirement. Model, engine generation, transport, and served-context changes require new samples. Retain the fleet document, raw artifact, command, and process identities together. The [GPU qualification report](../measure/07-GPU-Qualification.md) records one deployment's separate measurements.
+Set `engine.first_token_timeout_s` strictly above the candidate and set `engine.first_token_calibration_path` to the artifact path. Check that the selected deadline, measured prefill, and router overhead fit the service's client TTFT requirement. Model, engine generation, transport, and served-context changes require new samples. Write each replacement to a fresh path, then update the fleet configuration and distribute both files to every router host before preflight and startup. Retain the fleet document, raw artifact, command, and process identities together. The [GPU qualification report](../measure/07-GPU-Qualification.md) records one deployment's separate measurements.
 
 ## Run preflight
 

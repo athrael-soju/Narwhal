@@ -14,7 +14,7 @@ With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
 | `--evidence-out PATH` | gate output only | Write process-bound full-mesh KV evidence to a fresh JSON path. Requires a fleet `engine_contract`; exclusive with `--ring`, `--no-kv` and `--verify-evidence`. |
 | `--verify-evidence PATH` | run preflight | Verify saved directed KV evidence against current fleet/profile hashes and live process generations. Requires a fleet `engine_contract`; exclusive with `--evidence-out`. `--ring`, `--no-kv` and `--repeats` apply to new probes. |
 | `--calibrate-first-token` | false | Measure fresh directed handoffs across specified input lengths with a diagnostic first-token bound. Exclusive with directed KV evidence modes, `--ring`, `--no-kv`, and nondefault `--repeats`. |
-| `--input-tokens LIST` | required for calibration | Comma-separated positive target input lengths. Include the longest input admitted by the service. |
+| `--input-tokens LIST` | required for calibration | Comma-separated positive target input lengths. Include the longest input admitted by the service. Each target must leave at least one output token within both engines' live context limits. |
 | `--samples N` | `100` | Fresh handoffs per pair and input length. At least 100 completed attempts per group are required for qualifying evidence. |
 | `--observation-timeout-s SECONDS` | required for calibration | Diagnostic bound above `engine.first_token_timeout_s` and no greater than `serving.request_timeout_s`. |
 | `--calibration-out PATH` | required for calibration | Write raw samples and group summaries to a fresh JSON path under `runs/`. |
@@ -40,6 +40,8 @@ including its active-request and KV-token costs. Capacity output states the
 request count used for the TPOT calculation.
 
 Use [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before qualifying a fleet. Calibration writes completed timings, observation expiries, transfer failures, process generations, p99, observed maxima, and a candidate deadline. It retains an incomplete artifact when any attempt fails, fewer than 100 samples complete in a group, a generation changes, or the candidate does not fit the request deadline. Calibration uses `--observation-timeout-s` for first output and `serving.request_timeout_s` for the complete attempt.
+
+Calibration requests up to four output tokens per handoff, reducing the count to fit the smaller live context limit of the producer and consumer. A target of `max_model_len - 1` requests one output token. Every successful sample must produce a generated token and finish a valid stream. Saved evidence must contain distinct attempt numbers covering the configured sample count in every group, with no recorded generation changes or generation-check errors.
 
 In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
 

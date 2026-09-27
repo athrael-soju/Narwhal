@@ -8,8 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from narwhal.config import FleetConfig
-from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
+from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
 from tests.fixtures import ROOT
@@ -33,6 +35,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             "schema": calibration.SCHEMA,
             "schema_version": 1,
             "status": "complete",
+            "changed_generations": [],
+            "generation_errors": [],
             "model": self.cfg.model,
             "contract_fingerprint": self.cfg.engine_contract.fingerprint(),
             "engine_urls": {spec.iid: spec.url for spec in self.cfg.engines},
@@ -43,6 +47,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                     "producer": src,
                     "consumer": dst,
                     "target_input_tokens": 8,
+                    "actual_input_tokens_min": 8,
+                    "actual_input_tokens_max": 8,
                     "completed": 100,
                     "failed": 0,
                     "p99_seconds": 3.75,
@@ -56,11 +62,15 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                     "producer": src,
                     "consumer": dst,
                     "target_input_tokens": 8,
+                    "actual_input_tokens": 8,
+                    "requested_output_tokens": 4,
+                    "attempt": attempt,
                     "status": "completed",
+                    "prefill_seconds": 0.25,
                     "first_token_seconds": 3.75,
                 }
                 for src, dst in pairs
-                for _ in range(100)
+                for attempt in range(1, 101)
             ],
             "candidate_deadline_s": 5.0,
             "generations": {spec.iid: "old" for spec in self.cfg.engines},
@@ -79,6 +89,29 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "incorrect maximum_seconds", " ".join(calibration.evidence_problems(self.cfg, document))
         )
+
+    def test_validation_rejects_duplicated_or_invalid_attempt_indices(self):
+        self.cfg.first_token_timeout_s = 5.1
+        for index in (1, 0, 101, None, True):
+            with self.subTest(index=index):
+                document = self._complete_document()
+                document["attempts"][1]["attempt"] = index
+                self.assertIn(
+                    "lacks distinct attempt indices",
+                    " ".join(calibration.evidence_problems(self.cfg, document)),
+                )
+
+    def test_validation_rejects_missing_or_failed_generation_checks(self):
+        self.cfg.first_token_timeout_s = 5.1
+        for field in ("changed_generations", "generation_errors"):
+            for value in (None, ["e0"], "", False):
+                with self.subTest(field=field, value=value):
+                    document = self._complete_document()
+                    document[field] = value
+                    self.assertIn(
+                        f"{field} must be an empty list",
+                        " ".join(calibration.evidence_problems(self.cfg, document)),
+                    )
 
     async def test_saved_evidence_rejects_a_changed_engine_generation(self):
         self.cfg.first_token_timeout_s = 5.1
@@ -181,6 +214,84 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row["status"] == "failed_sizing" for row in document["attempts"]))
         self.assertTrue(all("HTTP 503" in row["error"] for row in document["attempts"]))
         decode.assert_not_called()
+
+    async def test_calibration_reserves_available_output_at_context_boundary(self):
+        """The real connector and client complete a one-token crossed handoff."""
+        self.cfg.engines[1].pin = True
+        requests = []
+
+        def handle(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            self.assertLessEqual(int(body["prompt"]) + body["max_tokens"], 1024)
+            if not body["stream"]:
+                self.assertEqual(body["max_tokens"], 1)
+                return httpx.Response(
+                    200,
+                    json={
+                        "kv_transfer_params": {
+                            "remote_engine_id": str(request.url.host),
+                            "remote_block_ids": [0],
+                        }
+                    },
+                )
+            self.assertIn("remote_engine_id", body["kv_transfer_params"])
+            return httpx.Response(
+                200, text='data: {"choices":[{"text":"x","token_ids":[1]}]}\n\ndata: [DONE]\n\n'
+            )
+
+        async def make_prompt(client, url, model, target, dialect, **kwargs):
+            return str(target), target
+
+        output = Path(self.folder.name) / "boundary.json"
+        with (
+            patch.object(
+                calibration,
+                "EngineClient",
+                side_effect=lambda **kwargs: EngineClient(
+                    **kwargs, transport=httpx.MockTransport(handle)
+                ),
+            ),
+            patch.object(
+                calibration,
+                "read_generation",
+                new=AsyncMock(return_value=SimpleNamespace(digest="g")),
+            ),
+            patch.object(
+                calibration,
+                "engine_context_limit",
+                new=AsyncMock(
+                    side_effect=lambda client, url, *args: (
+                        1028 if url == self.cfg.engines[0].url else 1024
+                    )
+                ),
+            ),
+            patch.object(calibration, "make_prompt", new=make_prompt),
+        ):
+            code = await calibration.calibrate(
+                self.cfg,
+                input_tokens=(128, 1021, 1022, 1023),
+                samples_per_group=1,
+                observation_timeout_s=1.0,
+                out=output,
+            )
+            with self.assertRaisesRegex(ValueError, "e3: requested 1024 input tokens"):
+                await calibration.calibrate(
+                    self.cfg,
+                    input_tokens=(1024,),
+                    samples_per_group=1,
+                    observation_timeout_s=1.0,
+                    out=Path(self.folder.name) / "oversized.json",
+                )
+        self.assertEqual(code, 1)  # Boundary behavior does not establish 100-sample qualification.
+        document = json.loads(output.read_text())
+        self.assertTrue(all(row["status"] == "completed" for row in document["attempts"]))
+        expected = {128: 4, 1021: 3, 1022: 2, 1023: 1}
+        for row in document["attempts"]:
+            self.assertEqual(row["requested_output_tokens"], expected[row["target_input_tokens"]])
+        for body in requests:
+            if body["stream"]:
+                self.assertEqual(body["max_tokens"], expected[int(body["prompt"])])
 
 
 class DeadlineValidationTests(unittest.TestCase):

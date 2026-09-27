@@ -54,6 +54,11 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
         return ["first-token calibration has an unknown schema or version"]
     if document.get("status") != "complete":
         problems.append("first-token calibration has failed, expired, or insufficient probes")
+    problems.extend(
+        f"first-token calibration {field} must be an empty list"
+        for field in ("changed_generations", "generation_errors")
+        if document.get(field) != []
+    )
     if document.get("model") != cfg.model:
         problems.append("first-token calibration model differs from the fleet")
     contract = cfg.engine_contract.fingerprint() if cfg.engine_contract else None
@@ -95,10 +100,16 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
     if set(attempted) - {None} != expected_groups:
         problems.append("first-token calibration raw attempts do not cover the expected groups")
     timings: dict[tuple[str, str, int], list[float]] = {}
+    attempt_indices: dict[tuple[str, str, int], set[int]] = {}
     for attempt in attempts:
         key = _group_key(attempt)
         if key is None or attempt.get("status") != "completed":
             continue
+        index = attempt.get("attempt")
+        if type(index) is not int or not 1 <= index <= repeats:
+            problems.append(f"first-token calibration group {key} has an invalid attempt index")
+        else:
+            attempt_indices.setdefault(key, set()).add(index)
         elapsed = attempt.get("first_token_seconds")
         if (
             not isinstance(elapsed, (int, float))
@@ -127,6 +138,10 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
             or attempted[key] != repeats
         ):
             problems.append(f"first-token calibration group {key} has incomplete attempts")
+        if len(attempt_indices.get(key, set())) != repeats:
+            problems.append(
+                f"first-token calibration group {key} lacks distinct attempt indices 1..{repeats}"
+            )
         if timings.get(key):
             p99, maximum, calculated = candidate_deadline(timings[key])
             for field, expected_value in (
@@ -266,25 +281,27 @@ async def calibrate(
             timeout=observation_timeout_s, headers=cfg.engine_headers()
         ) as sizing:
             context_limits: dict[str, int] = {}
-            for source in sorted({src for src, _ in pairs}):
-                spec = by_id[source]
+            for iid in sorted({iid for pair in pairs for iid in pair}):
+                spec = by_id[iid]
                 async with asyncio.timeout(observation_timeout_s):
                     context_limit = await engine_context_limit(
                         sizing, spec.url, cfg.model, dialect, observation_timeout_s
                     )
                 for target in input_tokens:
-                    if target + 4 > context_limit:
+                    if target + 1 > context_limit:
                         raise ValueError(
-                            f"{source}: requested {target} input tokens plus four output tokens "
+                            f"{iid}: requested {target} input tokens plus one output token "
                             f"exceed live context limit {context_limit}"
                         )
-                context_limits[source] = context_limit
-            for source, context_limit in context_limits.items():
+                context_limits[iid] = context_limit
+            for source in sorted({src for src, _ in pairs}):
                 spec = by_id[source]
                 for target in input_tokens:
                     for src, dst in pairs:
                         if src != source:
                             continue
+                        context_limit = min(context_limits[src], context_limits[dst])
+                        output_tokens = min(4, context_limit - target)
                         timings: list[float] = []
                         actual_lengths: list[int] = []
                         failures = 0
@@ -293,6 +310,7 @@ async def calibrate(
                                 "producer": src,
                                 "consumer": dst,
                                 "target_input_tokens": target,
+                                "requested_output_tokens": output_tokens,
                                 "attempt": attempt + 1,
                             }
                             phase = "sizing"
@@ -311,15 +329,16 @@ async def calibrate(
                                             max_input_tokens=target,
                                         )
                                     row["actual_input_tokens"] = actual
-                                    if actual + 4 > context_limit:
+                                    if actual + output_tokens > context_limit:
                                         raise ValueError(
-                                            f"sized input {actual} plus four output tokens "
+                                            f"sized input {actual} plus "
+                                            f"{output_tokens} output tokens "
                                             f"exceed live context limit {context_limit}"
                                         )
                                     body = {
                                         "model": cfg.model,
                                         "prompt": prompt,
-                                        "max_tokens": 4,
+                                        "max_tokens": output_tokens,
                                         "temperature": 0.0,
                                     }
                                     phase = "prefill"
