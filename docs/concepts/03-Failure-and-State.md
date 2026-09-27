@@ -60,7 +60,8 @@ Narwhal pauses new requests to an engine by applying an inference-verification h
 
 An inconclusive inference-probe leg leaves the inference-verification hold active. The monitor schedules another probe while admission sends new work to eligible peers.
 
-A successful inference probe clears recorded inference failures.
+A successful inference probe clears recorded inference failures only after
+the loaded profiles match the engine's live generation.
 
 A failed prefill or decode probe leg ejects the engine.
 
@@ -91,7 +92,8 @@ When `recovery.failure_quarantine_s` is configured, a failed engine remains quar
 
 Candidate selection automatically expires the quarantine when its deadline passes.
 
-A successful inference probe also clears the separate inference-verification hold.
+A successful inference probe also clears the separate inference-verification
+hold after the profile-generation check passes.
 
 ## Readmission and drains
 
@@ -99,12 +101,19 @@ Before returning an engine to placement, Narwhal verifies:
 
 - health;
 - attestation;
+- loaded profile generations;
 - model identity;
 - generation identity;
 - role-permitted KV transfer;
 - final health.
 
 Planned maintenance adds a newer-process requirement.
+
+Profile checks cover every loaded variant for the engine. Contracted fleets
+bind measurements to verified attestation; fleets without a contract use the
+live process identity. Health and inference recovery, explicit readmission,
+and standby takeover keep engines excluded when their profile bindings fail.
+Replacing the profile file alone does not reload a running router's store.
 
 Operator drains survive:
 
@@ -136,10 +145,16 @@ On every monitor pass, the active router writes a versioned handoff containing:
 
 ### Resume validation
 
-`narwhal-serve --resume` applies a saved handoff when both of these match the configured fleet:
+`narwhal-serve --resume` applies a saved handoff when these match the configured fleet:
 
 - handoff schema;
-- engine set.
+- engine set;
+- engine restart policy.
+
+A contracted fleet also requires accepted process identities for every
+eligible engine. [Profile activation with resume](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+preserves outstanding lifecycle holds and drain identities while loading
+fresh measurements.
 
 ### Atomic handoff writes
 

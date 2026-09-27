@@ -144,14 +144,25 @@ Narwhal runs these checks before releasing the candidate's lifecycle hold:
 
 1. health
 2. process-bound attestation
-3. configured model
-4. direct generation
-5. role-compatible KV transfer
-6. final health
+3. loaded profile generations against the verified live generation
+4. configured model
+5. direct generation
+6. role-compatible KV transfer
+7. final health
+
+`profile generation` must pass for every loaded profile variant of each
+participant. A missing profile, missing generation evidence, or a mismatched
+digest keeps the candidate excluded and names the engine that requires
+reprofiling. `generation` reports the separate direct completion probe.
 
 For a planned restart, Narwhal requires a process start newer than the drain record before releasing the hold. After a transient breaker ejection, it can validate and readmit the running process.
 
 HTTP `409` leaves candidates that fail validation blocked.
+
+Updating profile files does not change the running router's loaded store.
+Follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+to load fresh measurements through router resume while preserving the
+lifecycle hold, then repeat readmission.
 
 ### Whole-wave restart policy
 

@@ -21,18 +21,16 @@ resource limits, and log locations. Run those commands through the configured
 process manager when the procedure reaches process replacement. Narwhal
 records permission to stop a process; it does not stop or launch that process.
 
-Keep external admission closed during replacement and drill validation.
-Current lifecycle readmission omits saved-profile generation binding
-([#160](https://github.com/athrael-soju/Narwhal/issues/160)). Its `generation`
-check is a direct completion probe. Startup and preflight reject profiles
-bound to a previous engine process generation.
+Keep external admission closed during replacement and profile activation.
+Readmission rejects missing profiles and profiles bound to a previous engine
+generation. The `profile generation` check compares every loaded profile
+variant with the verified live generation; `generation` is a separate direct
+completion probe.
 
-After the lifecycle checks, measure fresh profiles for the replacement
-processes, run all preflight gates, and restart the serving router to load the
-final profile store before reopening external admission. Updating the profile
-files does not reload the running router's in-memory `ProfileStore`. Follow
-[Restore service after the drill](04-Upgrade-and-Validate.md#restore-service-after-the-drill)
-for the activation sequence.
+After replacing an engine, [activate fresh profiles while preserving its
+hold](#activate-replacement-profiles) before requesting readmission. Updating
+the profile files does not reload the running router's in-memory
+`ProfileStore`.
 
 ## 7. Restart one engine
 
@@ -90,6 +88,10 @@ Retain the process manager's stop/start output and the new engine and sidecar
 identities. A successful `/health` response can have an empty body; use its
 HTTP status to check health.
 
+[Activate replacement profiles](#activate-replacement-profiles), then continue
+with readmission. Keep the candidate excluded while measuring and loading its
+new profile.
+
 ### 7.3 Request readmission
 
 ```bash
@@ -103,8 +105,9 @@ Narwhal validates the candidate and its role-permitted peers before returning
 the candidate to placement:
 
 1. For each participant, check health, process identity, process-bound
-   attestation, and the configured model. A peer must retain its accepted
-   process identity.
+   attestation, loaded profile generations, and the configured model. Every
+   loaded profile variant must match the verified generation. A peer must
+   retain its accepted process identity.
 2. For each candidate, require a process start newer than its recorded drain
    identity and run direct generation.
 3. If those checks pass, exercise the role-permitted KV transfers. Recheck
@@ -128,7 +131,7 @@ import sys
 engine = json.load(open(sys.argv[1]))["engines"]["e0"]
 assert engine["state"] == "active" and engine["accepts_new"], engine
 assert engine["new_process_start"] > engine["old_process_start"], engine
-assert {"health", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), engine
+assert {"health", "profile generation", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), engine
 assert any(check.startswith("attestation ") for check in engine["checks"]), engine
 print("e0 readmitted:", engine["checks"])
 PY
@@ -144,7 +147,10 @@ and verify its engine placement and terminal outcome in the
 
 Recovery from an unplanned breaker ejection runs the same validation sequence, using the current process identity.
 
-A passing engine returns automatically.
+A passing engine returns automatically when its loaded profiles still match
+its running generation. If the process changed, measure and
+[activate replacement profiles](#activate-replacement-profiles) before
+requesting explicit readmission.
 
 A failed gate places the engine under operator control until repair and explicit readmission.
 
@@ -221,7 +227,10 @@ the recorded process manager commands. Retain the old and new identities and
 repeat the endpoint checks in [Replace the process](#72-replace-the-process)
 for every member.
 
-Then request wave readmission:
+With every sidecar serving valid attestation, [activate replacement
+profiles](#activate-replacement-profiles) for the complete wave. Verify the
+resumed router preserves the hold and original drain identities, then request
+wave readmission:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
@@ -249,7 +258,7 @@ assert not state["wave"]["active"] and state["router"]["ready"], state
 for iid, engine in state["engines"].items():
     assert engine["state"] == "active" and engine["accepts_new"], (iid, engine)
     assert engine["new_process_start"] > engine["old_process_start"], (iid, engine)
-    assert {"health", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), (iid, engine)
+    assert {"health", "profile generation", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), (iid, engine)
     assert any(check.startswith("attestation ") for check in engine["checks"]), (iid, engine)
     print(iid, engine["checks"])
 PY
@@ -319,6 +328,170 @@ collection reaches an engine that is already stopped:
 If every identity was readable on the first drain, proceed from its successful
 drain observation to fleet restart. Do not use the accepted identities in
 `process_starts` as substitutes for the required `old_process_start` records.
+
+## Activate replacement profiles
+
+Use this procedure after the replacement processes and their attestation
+sidecars are healthy, while their lifecycle holds remain active. Close
+external admission and let all routed requests finish before profiling,
+preflight, or router replacement. Stop a warm standby through its process
+manager before replacing the active router; return it with the same final
+profile store after readmission.
+
+Run the commands below on the router host in its deployment environment.
+Use the same working directory and endpoint variables as its existing launch.
+Set `FLEET` to its current fleet document and `FRESH_PROFILES` to a fresh,
+complete profile store prepared for the current processes:
+
+```bash
+FLEET='config/fleet.production.json'
+FRESH_PROFILES='runs/replacement/profiles.json'
+ACTIVATION_FLEET="$RUN_DIR/fleet-activation.json"
+```
+
+Replace those two example paths before running the steps. The store must
+cover exactly the original fleet, including every required shared-GPU role
+variant. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines)
+with the recorded measurement recipe. Retain the profiles and sample evidence
+for unchanged generations when assembling the complete store.
+`narwhal-profile --only` writes only the selected engines; its output alone is
+not a complete store for a larger fleet. The [profile command](../cli/Profile.md#selection-refitting-and-output)
+documents measured-store merging and source-sidecar retention.
+
+### 1. Prepare the activation configuration
+
+Copy the current fleet document, selecting the complete fresh store and a new
+handoff path in this run directory:
+
+```bash
+python3 - "$FLEET" "$FRESH_PROFILES" "$RUN_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source, profiles, run = map(Path, sys.argv[1:])
+fleet = json.loads(source.read_text())
+assert profiles.is_file(), profiles
+fleet.setdefault("profiles", {})["path"] = str(profiles.resolve())
+fleet.setdefault("recovery", {})["state_path"] = str((run / "resume-state.json").resolve())
+with (run / "fleet-activation.json").open("x") as output:
+    json.dump(fleet, output, indent=2)
+    output.write("\n")
+PY
+```
+
+Keep the engine IDs, model, endpoints, contract, role pins, and restart policy
+unchanged. Resume requires a compatible handoff schema and the same engine
+IDs and restart policy. The handoff does not bind `profiles.path`, so it can
+restore the holds with a newly measured store.
+
+### 2. Run full preflight
+
+Keep the fleet idle and run every gate, including all role-permitted directed
+KV paths:
+
+```bash
+narwhal-check --fleet "$ACTIVATION_FLEET" > "$RUN_DIR/activation-preflight.log" 2>&1
+```
+
+Proceed only when the command exits successfully with every required gate
+passing. Preserve the log and all source profile/sample files.
+
+### 3. Capture the held state
+
+Confirm that the router has no in-flight requests, then capture its handoff.
+Do not issue readmission while capturing or loading this state:
+
+```bash
+curl -fsS "$ROUTER_URL/narwhal/state" > "$RUN_DIR/activation-idle.json"
+python3 - "$RUN_DIR/activation-idle.json" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1]))
+assert state["admission"]["inflight"] == 0, state["admission"]
+PY
+curl -fsS "$ROUTER_URL/narwhal/handoff" > "$RUN_DIR/activation-handoff.json"
+python3 - "$ACTIVATION_FLEET" "$RUN_DIR/activation-handoff.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fleet = json.load(open(sys.argv[1]))
+saved = Path(sys.argv[2])
+handoff = json.loads(saved.read_text())
+assert handoff["schema"] == "narwhal.handoff" and handoff["schema_version"] == 1
+assert set(handoff["engines"]) == {engine["iid"] for engine in fleet["engines"]}
+assert handoff["model"] == fleet["model"]
+lifecycle = handoff["lifecycle"]
+policy = fleet.get("recovery", {}).get("engine_restart_policy", "individual")
+assert lifecycle["engine_restart_policy"] == policy
+held = [row for row in lifecycle["records"] if row["state"] != "active"]
+assert held, "no lifecycle hold to resume"
+for row in held:
+    assert row["state"] != "validating", row
+    if row["restart_required"]:
+        assert row["old_process_start"] is not None, row
+with Path(fleet["recovery"]["state_path"]).open("xb") as output:
+    output.write(saved.read_bytes())
+print("saved holds:", [row["iid"] for row in held])
+PY
+```
+
+Keep `activation-handoff.json` as the pre-restart evidence. The replacement
+router reads and subsequently updates the separate `resume-state.json`.
+
+### 4. Restart the router with resume enabled
+
+Stop the old router through its process manager and wait for that process to
+exit. Start its replacement with `--fleet "$ACTIVATION_FLEET" --resume`,
+preserving its bind address, port, lease settings, and other serving options.
+For a standalone router using the default loopback bind and port, the launch
+command is:
+
+```bash
+narwhal-serve --fleet "$ACTIVATION_FLEET" --resume \
+  --host 127.0.0.1 --port 8000 --journal "$RUN_DIR/router-activation.jsonl"
+```
+
+Run that command through the deployment's process manager. Startup first
+checks every loaded profile against its live generation, then applies the
+saved handoff. A missing handoff cannot preserve the lifecycle hold; verify
+the saved state before starting the replacement.
+
+### 5. Verify the hold before readmission
+
+From another terminal with the same `ROUTER_URL` and `RUN_DIR`, compare the
+resumed lifecycle state with the captured handoff:
+
+```bash
+curl -fsS "$ROUTER_URL/narwhal/lifecycle" > "$RUN_DIR/activation-resumed.json"
+python3 - "$RUN_DIR/activation-handoff.json" "$RUN_DIR/activation-resumed.json" <<'PY'
+import json
+import sys
+
+saved = json.load(open(sys.argv[1]))["lifecycle"]
+live = json.load(open(sys.argv[2]))
+assert live["engine_restart_policy"] == saved["engine_restart_policy"]
+assert live["wave"]["id"] == saved["wave_id"]
+for before in saved["records"]:
+    if before["state"] == "active":
+        continue
+    after = live["engines"][before["iid"]]
+    assert after["state"] != "active" and not after["accepts_new"], after
+    assert after["old_process_start"] == before["old_process_start"], after
+    assert after["restart_required"] == before["restart_required"], after
+if saved["wave_id"]:
+    assert live["wave"]["active"] and not live["router"]["ready"], live
+print("lifecycle holds and drain identities preserved")
+PY
+```
+
+Then request [individual readmission](#73-request-readmission) or
+[whole-wave readmission](#82-restart-the-fleet), verify its checks and a routed
+request, and reopen external admission. An individual hold can coexist with
+HTTP 200 readiness while other engines remain eligible; inspect the held
+engine's `accepts_new` value.
 
 ## 9. Detect process replacement
 
