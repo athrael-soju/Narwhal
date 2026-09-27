@@ -1,0 +1,25 @@
+name: Documentation correction
+description: Report incorrect or missing operator or contributor guidance
+labels: ["documentation"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page URL or repository path
+      description: Link the affected documentation page or name the file and section.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Incorrect or missing guidance
+      description: Describe the problem and the task you were trying to complete. Remove credentials, live addresses, private paths, and hardware/model identifiers from examples.
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Proposed correction or expected guidance
+      description: Suggest replacement text or describe what the page needs to explain.
+    validations:
+      required: true

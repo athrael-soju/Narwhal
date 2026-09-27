@@ -12,6 +12,9 @@ git fetch upstream
 git switch -c describe-your-change upstream/main
 ```
 
+Run `make help` from the repository root to list contributor commands and their
+overrides. Help works before environment setup and does not install dependencies.
+
 Install the development tools and local checks.
 
 ```bash
@@ -27,7 +30,34 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
 ```
 
+`make setup` creates the development environment when it is missing. After
+pulling changes to `pyproject.toml` or `constraints-dev.txt`, refresh the installed
+development dependencies from the repository root:
+
+```bash
+make sync
+```
+
+`make sync` reuses `.venv`, or creates it when missing. It installs the editable
+development extra against `constraints-dev.txt` without removing the environment
+or local working files. To use another existing environment, pass its Python
+executable as `VENV_PYTHON`, for example `make sync VENV_PYTHON=/path/to/venv/bin/python`
+after replacing the path. With this override, `make sync` does not create `.venv`.
+An installation failure stops the command with a nonzero exit status.
+
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
+
+`make lint` and `make format` report lint and formatting errors without editing
+files. To apply safe Ruff lint fixes and then format `src/`, `tools/` and `tests/`,
+run:
+
+```bash
+make fix
+```
+
+This command edits files. Review the diff before committing. If lint errors
+remain, the command stops before formatting; address those errors and rerun it.
+`make fix` honours `VENV_PYTHON`, as do the lint and formatting checks.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 
@@ -37,7 +67,18 @@ Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <br
 
 The suite runs `make check` on GitHub-hosted runners. It runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 also builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
 
-The CI jobs use synthetic test inputs and a standard read-only GitHub token. For a narrower pass, `make test` runs the unit suite.
+The CI jobs use synthetic test inputs and a standard read-only GitHub token.
+`make test` runs the unit suite. Pass unittest discovery options through
+`TEST_ARGS` to select tests or change verbosity:
+
+```bash
+make test TEST_ARGS='-k failover -v'
+```
+
+This command runs tests whose fully qualified names contain `failover`, with
+verbose output. Test failures produce a nonzero exit status. `make unit` and
+`make check` always run the full unit suite and ignore `TEST_ARGS`, including
+values supplied through the environment. All three targets honour `VENV_PYTHON`.
 
 ### Coverage and test scope
 
@@ -46,6 +87,37 @@ The CI jobs use synthetic test inputs and a standard read-only GitHub token. For
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
 Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, start each checked engine, qualify directed links against the live cache, attest and profile those processes, then run preflight and routed load through the private path.
+
+### Documentation preview
+
+From the repository root, install the constrained documentation dependencies:
+
+```bash
+make docs-setup
+```
+
+This command reuses `.venv`, or creates it with the development tools when
+missing, then installs the documentation extra. To use another existing
+environment, pass its Python executable as `VENV_PYTHON` to each documentation
+command. Installation and build failures return a nonzero exit status.
+
+Start the local preview:
+
+```bash
+make docs-serve
+```
+
+Open `http://127.0.0.1:8000/Narwhal/`. MkDocs runs in the foreground and reloads the
+preview after documentation edits. Press Ctrl+C to stop it. If port 8000 is
+occupied, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/`.
+
+Before submitting documentation changes, run the strict build:
+
+```bash
+make docs-build
+```
+
+The command cleans and rebuilds `site/`, and fails on documentation warnings.
 
 ## Behaviour changes
 
@@ -108,7 +180,15 @@ Site automation owns host credentials, source distribution, network configuratio
 
 ## Issues
 
-Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug report template selects `bug`; blank issues receive `triage`, which maintainers replace with the applicable label.
+Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose)
+to open a bug report, feature request or documentation correction. Bug reports
+require reproduction steps, expected and actual behaviour, and versions.
+Topology is optional; include it when an engine or fleet failure depends on the
+deployment layout. Documentation corrections require the affected page URL or
+repository path, the incorrect or missing guidance, and a proposed correction
+or description of the guidance needed.
+
+Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug, feature and documentation forms select `bug`, `enhancement` and `documentation`, respectively; blank issues receive `triage`, which maintainers replace with the applicable label.
 
 Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
@@ -143,7 +223,7 @@ Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued 
 
 Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
 
-Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
+Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, run `make docs-setup` and `make docs-build`.
 
 A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
 
