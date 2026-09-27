@@ -1287,9 +1287,67 @@ def _alarm(*_arguments: Any) -> None:
     raise WorkerError("stage_timeout", "Remote request deadline expired")
 
 
+@contextlib.contextmanager
+def _probe_channel(descriptor: int) -> Iterator[None]:
+    """Interrupt a stateless probe when its held-open SSH input channel closes."""
+    mode = os.fstat(descriptor).st_mode
+    if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+        raise WorkerError("invalid_input", "Remote probe requires a live input channel")
+    finished = threading.Event()
+    sending = threading.Lock()
+    main_thread = threading.get_ident()
+    cancellation_signal = signal.SIGUSR1
+    previous_handler = signal.getsignal(cancellation_signal)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {cancellation_signal})
+
+    def interrupted(*_arguments: Any) -> None:
+        if not finished.is_set():
+            raise WorkerError("stage_cancelled", "Remote probe caller disconnected")
+
+    def observe() -> None:
+        try:
+            with selectors.DefaultSelector() as selected:
+                selected.register(descriptor, selectors.EVENT_READ)
+                while not finished.is_set():
+                    if not selected.select(0.05):
+                        continue
+                    # No more request bytes are valid after the bounded JSON line.
+                    # EOF or extra input ends the stateless request's lifetime.
+                    os.read(descriptor, 1)
+                    break
+        except (OSError, ValueError):
+            pass
+        with sending:
+            if not finished.is_set():
+                signal.pthread_kill(main_thread, cancellation_signal)
+
+    signal.signal(cancellation_signal, interrupted)
+    watcher = threading.Thread(target=observe, daemon=True, name="ssh-probe-channel")
+    try:
+        watcher.start()
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {cancellation_signal})
+        yield
+    finally:
+        finished.set()
+        signal.pthread_sigmask(signal.SIG_BLOCK, {cancellation_signal})
+        with sending:
+            pass
+        if watcher.ident is not None:
+            watcher.join(timeout=1)
+        while signal.sigtimedwait({cancellation_signal}, 0) is not None:
+            pass
+        signal.signal(cancellation_signal, previous_handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        if watcher.is_alive():
+            raise WorkerError("stage_timeout", "Remote probe channel observer did not stop")
+
+
 def main() -> int:
     try:
-        raw = sys.stdin.buffer.read(MAX_REQUEST + 1)
+        raw = sys.stdin.buffer.readline(MAX_REQUEST + 2)
+        framed = raw.endswith(b"\n")
+        if framed:
+            raw = raw[:-1]
         if len(raw) > MAX_REQUEST:
             raise WorkerError("invalid_input", "Remote request exceeds its bound")
         request = _decode(raw)
@@ -1304,7 +1362,10 @@ def main() -> int:
                 raise WorkerError("prerequisite_failed", "Remote file helper is unavailable")
             result = handler(request)
         elif command == "probe":
-            result = probe(request["kind"], request["parameters"], deadline)
+            if not framed:
+                raise WorkerError("invalid_input", "Remote probe requires a live input channel")
+            with _probe_channel(sys.stdin.fileno()):
+                result = probe(request["kind"], request["parameters"], deadline)
         else:
             root = _absolute(request["root"])
             if command == "submit":

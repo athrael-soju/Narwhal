@@ -75,6 +75,9 @@ def _exchange(
     request = json.dumps(document["request"], separators=(",", ":"), allow_nan=False).encode()
     if len(request) > ssh_worker.MAX_REQUEST:
         raise OperationError("invalid_input", "SSH request exceeds its byte limit")
+    probe = document["request"].get("command") == "probe"
+    if probe:
+        request += b"\n"
     with tempfile.TemporaryFile() as password:
         if document.get("password") is not None:
             sshpass = shutil.which("sshpass", path=os.defpath)
@@ -147,7 +150,8 @@ def _exchange(
                                 continue
                             if sent == len(request):
                                 selected.unregister(ready_stream)
-                                process.stdin.close()
+                                if not probe:
+                                    process.stdin.close()
                             continue
                         data = os.read(key.fd, 65536)
                         if not data:
@@ -170,6 +174,7 @@ def _exchange(
             except subprocess.TimeoutExpired:
                 raise OperationError("stage_timeout", "SSH exchange deadline expired") from None
             finally:
+                process.stdin.close()
                 _stop(process, deadline)
                 for stream in (process.stdin, process.stdout, process.stderr):
                     stream.close()

@@ -4,7 +4,9 @@ import base64
 import contextlib
 import json
 import os
+import selectors
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -85,6 +87,22 @@ class RemoteJobTests(unittest.TestCase):
         with self.assertRaisesRegex(worker.WorkerError, "different inputs"):
             worker.submit(self.root, {**job, "env": {**job["env"], "OTHER": "changed"}})
 
+    def test_durable_submit_keeps_running_after_input_channel_closes(self):
+        job = self.job("import time; time.sleep(30)")
+        process = subprocess.run(
+            [sys.executable, "-m", "narwhal.deployment.ssh_worker"],
+            input=json.dumps({"command": "submit", "root": str(self.root), "job": job}).encode(),
+            capture_output=True,
+            timeout=5,
+            check=True,
+        )
+        self.assertTrue(json.loads(process.stdout)["ok"])
+        self.assertEqual(process.stderr, b"")
+        record = self.wait(job["job_id"], {"running"})
+        self.assertTrue(worker._alive(record["child"]))
+        worker.cancel(self.root, job["job_id"])
+        self.assertEqual(self.wait(job["job_id"])["state"], "cancelled")
+
     def test_timeout_stops_and_reaps_forked_children(self):
         code = (
             "import os,time; from pathlib import Path; child=os.fork(); "
@@ -163,6 +181,164 @@ class RemoteJobTests(unittest.TestCase):
         self.wait(job["job_id"])
         with self.assertRaises(worker.WorkerError):
             worker.read(self.root, job["job_id"], "../request.json")
+
+
+class ProbeChannelTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.marker = self.root / "ready"
+
+    def start(self, setup, *, parameters=None):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from narwhal.deployment import ssh_worker as worker\n"
+                "import contextlib,json,os,signal,sys,threading\nfrom pathlib import Path\n"
+                + setup
+                + "\nraise SystemExit(worker.main())\n",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+
+        def cleanup():
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+        self.addCleanup(cleanup)
+        process.stdin.write(
+            json.dumps(
+                {
+                    "command": "probe",
+                    "kind": "checkpoint",
+                    "parameters": parameters or {},
+                    "timeout_ms": 30_000,
+                }
+            ).encode()
+            + b"\n"
+        )
+        process.stdin.flush()
+        return process
+
+    def await_marker(self):
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            if self.marker.exists():
+                return
+            time.sleep(0.01)
+        self.fail("Probe did not enter its observed work")
+
+    def close_channel(self, process):
+        process.stdin.close()
+        process.stdin = None
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(stderr, b"")
+        reply = json.loads(stdout)
+        self.assertFalse(reply["ok"])
+        self.assertEqual(reply["error"]["code"], "stage_cancelled")
+
+    def test_probe_finishes_with_input_held_open_and_restores_signal_handler(self):
+        setup = """
+before=signal.getsignal(signal.SIGUSR1)
+def observe(kind,parameters,deadline):
+ return {'held_open':True}
+worker.probe=observe
+original=worker.main
+def checked():
+ result=original()
+ assert signal.getsignal(signal.SIGUSR1)==before
+ assert len(threading.enumerate())==1
+ return result
+worker.main=checked
+"""
+        process = self.start(setup)
+        with selectors.DefaultSelector() as selected:
+            selected.register(process.stdout, selectors.EVENT_READ)
+            self.assertTrue(selected.select(timeout=5))
+        self.assertEqual(
+            json.loads(process.stdout.readline()), {"ok": True, "data": {"held_open": True}}
+        )
+        process.wait(timeout=5)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stderr.read(), b"")
+
+    def test_channel_eof_stops_checkpoint_threads_and_closes_their_files(self):
+        model = self.root / "model"
+        model.mkdir()
+        for name in ("config.json", "a.safetensors", "b.safetensors", "c.safetensors"):
+            (model / name).write_bytes(b"{}")
+        setup = (
+            f"marker=Path({str(self.marker)!r})\n"
+            + """
+release=threading.Event()
+entered=threading.Barrier(4, action=lambda: marker.write_text('ready'), timeout=5)
+streams=[]
+original_open=os.fdopen
+original_signal=signal.pthread_kill
+def interrupt(thread,number):
+ try: original_signal(thread,number)
+ finally: release.set()
+signal.pthread_kill=interrupt
+@contextlib.contextmanager
+def opened(fd,mode):
+ with original_open(fd,mode) as stream:
+  streams.append(stream)
+  class Reader:
+   first=True
+   def fileno(self): return stream.fileno()
+   def read(self,size):
+    if self.first:
+     self.first=False
+     entered.wait()
+     assert release.wait(5)
+    return stream.read(size)
+  yield Reader()
+os.fdopen=opened
+original_main=worker.main
+def checked():
+ result=original_main()
+ assert len(streams)==4 and all(stream.closed for stream in streams)
+ assert len(threading.enumerate())==1
+ return result
+worker.main=checked
+"""
+        )
+        process = self.start(setup, parameters={"model_dir": str(model)})
+        self.await_marker()
+        self.close_channel(process)
+
+    def test_channel_eof_reaps_a_probe_subprocess_group(self):
+        helper = (
+            "import os,time; from pathlib import Path; "
+            f"Path({str(self.marker)!r}).write_text(str(os.getpid())); time.sleep(30)"
+        )
+        setup = f"""
+def observe(kind,parameters,deadline):
+ return {{'body':worker._command([sys.executable,'-c',{helper!r}],deadline).decode()}}
+worker.probe=observe
+"""
+        process = self.start(setup)
+        self.await_marker()
+        pid = int(self.marker.read_text())
+        identity = worker._identity(pid)
+
+        def cleanup_helper():
+            if worker._alive(identity):
+                os.killpg(pid, signal.SIGKILL)
+
+        self.addCleanup(cleanup_helper)
+        self.close_channel(process)
+        self.assertIsNone(worker._proc(pid))
 
 
 class ProbeTests(unittest.TestCase):

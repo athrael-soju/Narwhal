@@ -246,6 +246,11 @@ When the worker receives cancellation, it stops starting stages and signals
 only helpers whose identities it has verified. It uses the active stage's
 recorded cleanup budget.
 
+SSH inspection probes remain attached to their SSH input channel and cancel
+when that channel closes. If a network failure hides the closure, the remote
+probe continues to enforce its recorded deadline. Detached deployment jobs
+use their persisted ownership receipts and cancellation requests.
+
 If the worker is lost, an explicit cancellation can clean up local temporary
 helpers that the shared command runner recorded for incomplete stages. The
 coordinator verifies the operation and stage ownership, launch token, host

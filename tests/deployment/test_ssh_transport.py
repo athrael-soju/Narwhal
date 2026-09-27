@@ -45,8 +45,9 @@ class TransportTests(unittest.TestCase):
 
     def test_fixed_argv_pins_trust_and_does_not_inherit_process_controls(self):
         code = (
-            "import json,os,sys; request=json.load(sys.stdin); "
+            "import json,os,select,sys; request=json.loads(sys.stdin.readline()); "
             "print(json.dumps({'argv':sys.argv[1:], 'request':request, "
+            "'held_open':not select.select([0],[],[],0)[0], "
             "'injected':os.environ.get('LD_PRELOAD')}))"
         )
         with patch.dict(os.environ, {"LD_PRELOAD": "private-placeholder"}):
@@ -55,6 +56,7 @@ class TransportTests(unittest.TestCase):
         self.assertIn(f"UserKnownHostsFile=/proc/{os.getpid()}/fd/{self.fd}", value["argv"])
         self.assertEqual(value["argv"][-2], "fixture.invalid")
         self.assertEqual(value["request"]["kind"], "inventory")
+        self.assertTrue(value["held_open"])
         self.assertIsNone(value["injected"])
 
     def test_ssh_failure_never_asserts_remote_absence_or_exposes_stderr(self):
