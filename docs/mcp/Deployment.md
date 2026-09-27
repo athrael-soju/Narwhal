@@ -349,10 +349,12 @@ Ubuntu/WSL2 CUDA runtime and registered recipe. `ssh-v1` operates existing,
 registered Linux hosts over verified SSH, following Gates A–G. Cloud account
 provisioning and allocation of new virtual machines require a separate adapter.
 
-Every adapter publishes an immutable manifest containing `id`, `version`,
-supported actions, operation identifiers, required platform capabilities,
-resource kinds, asset hashes and available recovery methods. It also names and
-ships versioned JSON Schemas for its settings and recipe input formats.
+The Python `AdapterManifest` contains `id`, `version`, `assets_sha256`, `source`
+and `actions`. The `actions` mapping names the fixed operation identifiers that
+each action requires. The executor binds those fields into the saved plan.
+Adapters ship schemas for their settings and recipe formats separately; the
+manifest does not contain those schemas, platform prerequisites or recovery
+methods.
 
 Before mutation, the executor checks that the adapter supports the selected
 action and its prerequisites are present. A missing prerequisite or unsupported
@@ -371,23 +373,37 @@ For `ssh-v1`, the recipe supplies the nonsecret
 [deployment environment inputs](../configuration/04-Deployment-Inputs.md) and
 references the existing host, launch and fleet documents. Its settings schema
 declares source location, SSH trust, supervision method, fixed measurement/load
-recipes and stage budgets. The manifest must enumerate those accepted fields,
+recipes and stage budgets. The settings schema must enumerate those accepted fields,
 their defaults and validators; unsupported settings fail before preparation.
 Environment files containing secrets remain outside the immutable input store.
 During preparation, the adapter captures their nonsecret values and credential
 references separately.
 
-The executor passes an internal context to every adapter call. It contains
-target and operation IDs, the plan digest where one exists, stage ID, fencing
-token, absolute deadline and a private output directory. The worker resolves
-credential values in its own environment.
+The executor passes a `StageContext` to every adapter call. The context exposes
+the target and operation IDs, current stage ID, fencing token, deadlines,
+private output directory and owned helper runner. Calls that require a saved
+plan receive it as a separate argument. The worker resolves credential values
+in its own environment.
 
-Each adapter response contains typed `data`, artifact references, observed
-resource identities and a structured error or null. The executor retains every
-invoked CLI result unchanged under the
-[command result contract](../Command-Results.md).
+`ManagementAdapter` defines these Python methods:
 
-| Interface | Inputs beyond context | Required output |
+| Method | Inputs beyond context | Return value |
+| --- | --- | --- |
+| `prepare` | Registered target, action and parameters. | `PreparedPlan` with identity, observations, input bytes, resolved parameters and stages. |
+| `check` | Registered target and saved plan. | `None` when the current inputs and prerequisites match; an error otherwise. |
+| `execute_stage` | Fixed stage and saved plan. | `StageOutcome` with status, data, command result, artifacts, effect receipts and errors. |
+| `reconcile` | Retained operation. | `ReconcileOutcome` with helper and completion findings, effect receipts, artifacts and errors. |
+
+The executor retains invoked CLI results under the
+[command result contract](../Command-Results.md), with credential redaction at
+the export boundary. Reconciliation inspects effects without starting or
+stopping resources.
+
+The planned SSH adapter needs the following site operations inside those
+methods. These names describe the work and evidence each operation must supply;
+they are not additional methods on `ManagementAdapter`.
+
+| Site operation | Inputs beyond context | Required output |
 | --- | --- | --- |
 | `snapshot` | Registered target and recipe references | Immutable host, artifact, runtime and access observations with a snapshot ID/digest. |
 | `check` | Snapshot or plan binding and selected capability | Named prerequisite verdicts, tool versions, supported/unsupported action details. |
@@ -398,16 +414,22 @@ invoked CLI result unchanged under the
 | `collect` | Registered evidence kind, subjects and byte/time limits | Bounded artifact manifest and explicit omissions/truncation. |
 | `stop` | Enumerated owned identities and cleanup budgets | Removed, absent, surviving or unknown resources and cleanup evidence. |
 
-These Python adapter interfaces use operation identifiers declared by the
-adapter manifest for installation, attestation, router supervision, monitoring
-and tunnels. They add no public shell commands. The `measure` interface follows
-its fixed recipe without automatic tuning.
+The adapter maps its declared stage operation identifiers to fixed installation,
+attestation, router, monitoring and tunnel procedures. MCP callers cannot supply
+shell commands. Measurement follows its registered recipe without automatic
+tuning.
 
 When an adapter creates a resource, it records ownership before later stages
 depend on that resource. Linux identities include host boot ID, PID and start
 ticks. Container ownership includes daemon host, container ID and Narwhal
 launch/operation labels. A failed observation returns `unknown`; it does not
 prove absence or authorise stopping an unrelated process.
+
+The executor checks a management-host helper against local process identity.
+For a helper on another host, the adapter must report `effect: "absent"` before
+the executor treats it as stopped. A remote PID or boot ID cannot establish
+absence through the management host's process table. Until the adapter supplies
+that observation, the helper keeps the operation in `recovery_required`.
 
 Each resource receipt contains these fields:
 

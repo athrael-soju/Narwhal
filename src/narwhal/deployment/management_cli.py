@@ -30,7 +30,7 @@ def operation_error_status(code: str) -> str:
         return "invalid_input"
     if code == "stage_cancelled":
         return "interrupted"
-    if code in {"stage_timeout", "operation_timeout"}:
+    if code in {"stage_timeout", "operation_timeout", "audit_failed"}:
         return "error"
     return "failed_gate"
 
@@ -51,25 +51,51 @@ def guard_bound_command(
     if "NARWHAL_MANAGEMENT_REGISTRY" not in os.environ:
         return None
     from .management_access import AccessError
+    from .management_audit import execution_event, operation_event
     from .management_context import authorize_command
     from .management_coordinator import OperationCoordinator
     from .management_records import OperationError
 
+    registry = None
+    target_id = None
     try:
-        if authorize_command(
-            command, action=action, fleet=fleet, instance=instance, arguments=arguments
-        ):
-            return None
-        if action is None:
-            raise OperationError(
-                "adapter_unavailable", "This command has no installed management adapter"
-            )
         selected = os.environ["NARWHAL_MANAGEMENT_REGISTRY"]
         if not selected:
             raise OperationError("invalid_input", "Management registry selection is empty")
         registry_path = Path(selected)
         try:
             registry = load_registry(registry_path)
+        except (OSError, ValueError, RuntimeError):
+            raise OperationError(
+                "invalid_input", "Management registry or command target path is invalid"
+            ) from None
+        execution_event(
+            registry,
+            "cli_started",
+            source="cli",
+            tool=command,
+            target_id=None,
+            action=action,
+            outcome="started",
+        )
+        if authorize_command(
+            command, action=action, fleet=fleet, instance=instance, arguments=arguments
+        ):
+            execution_event(
+                registry,
+                "cli_finished",
+                source="cli",
+                tool=command,
+                target_id=None,
+                action=action,
+                outcome="joined",
+            )
+            return None
+        if action is None:
+            raise OperationError(
+                "adapter_unavailable", "This command has no installed management adapter"
+            )
+        try:
             requested = instance if instance is not None else fleet
             if requested is None:
                 raise ValueError("missing target input")
@@ -89,7 +115,8 @@ def guard_bound_command(
         if len(matches) != 1:
             raise OperationError("invalid_input", "Command target matches multiple registrations")
         target = matches[0]
-        coordinator = OperationCoordinator(registry, registry_path=registry_path)
+        target_id = target.id
+        coordinator = OperationCoordinator(registry, registry_path=registry_path, entry_point="cli")
         coordinator.authorize_action(target.id, action)
         coordinator.adapter(target)
         if command == "narwhal" and action.startswith("dev_"):
@@ -97,19 +124,45 @@ def guard_bound_command(
             prepared = coordinator.submit_prepare(target.id, action, parameters, str(uuid4()))
             completed = _wait(coordinator, target.id, prepared["operation_id"])
             if completed["state"] != "succeeded":
+                operation_event(
+                    registry,
+                    "cli_finished",
+                    completed,
+                    source="cli",
+                    outcome=completed["result"]["status"],
+                    required=False,
+                )
                 return _return_operation(completed, registry=coordinator.registry)
             operation = coordinator.submit_execute(
                 target.id, completed["result"]["data"]["plan_id"], str(uuid4())
             )
-            return _return_operation(
-                _wait(coordinator, target.id, operation["operation_id"]),
-                registry=coordinator.registry,
+            completed = _wait(coordinator, target.id, operation["operation_id"])
+            operation_event(
+                registry,
+                "cli_finished",
+                completed,
+                source="cli",
+                outcome=completed["result"]["status"],
+                required=False,
             )
+            return _return_operation(completed, registry=coordinator.registry)
         raise OperationError(
             "adapter_unavailable", "This command has no installed management CLI adapter"
         )
     except (OperationError, AccessError) as error:
         status = operation_error_status(error.code)
+        if registry is not None:
+            execution_event(
+                registry,
+                "cli_finished",
+                source="cli",
+                tool=command,
+                target_id=target_id,
+                action=action,
+                outcome=status,
+                codes=[error.code],
+                required=False,
+            )
         command_results.set_status(status)
         command_results.record_error(error.code, error.message)
         print(f"{command}: {error.code}: {error.message}", file=sys.stderr)

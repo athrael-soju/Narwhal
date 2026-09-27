@@ -12,6 +12,7 @@ from pydantic import Field
 
 from narwhal.contracts import ContractVersionError
 from narwhal.deployment.management_access import AccessError, InspectionAccess
+from narwhal.deployment.management_audit import execution_event
 from narwhal.deployment.management_coordinator import OperationCoordinator, View
 from narwhal.deployment.management_records import OperationError
 from narwhal.deployment.management_registry import ManagementRegistry, PlanAction
@@ -173,6 +174,18 @@ class OperationTools:
         except asyncio.CancelledError:
             with contextlib.suppress(AccessError, OSError):
                 self.access.audit(name, audit_target, "interrupted", ["stage_cancelled"])
+            execution_event(
+                self.access.registry,
+                "tool_finished",
+                source="mcp",
+                tool=name,
+                target_id=audit_target,
+                action=getattr(inputs, "action", None),
+                operation=inputs.model_dump(),
+                outcome="interrupted",
+                codes=["stage_cancelled"],
+                required=False,
+            )
             raise
         except OSError:
             payload = result(
@@ -200,6 +213,23 @@ class OperationTools:
                     }
                 ],
             )
+        codes = [row["code"] for row in payload["errors"]]
+        execution_event(
+            self.access.registry,
+            "tool_finished",
+            source="mcp",
+            tool=name,
+            target_id=audit_target,
+            action=getattr(inputs, "action", None),
+            operation={**inputs.model_dump(), **(payload.get("data") or {})},
+            outcome=payload["outcome"],
+            codes=codes,
+            artifacts=payload["artifacts"],
+            decision="deny"
+            if "permission_denied" in codes or "target_not_found" in codes
+            else None,
+            required=False,
+        )
         try:
             self.access.audit(
                 name, audit_target, payload["outcome"], [row["code"] for row in payload["errors"]]

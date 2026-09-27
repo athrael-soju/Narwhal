@@ -61,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         from .observability import observability_adapters
         from .operations import operation_adapters
 
-        coordinator = OperationCoordinator(registry, registry_path=Path(selected))
+        coordinator = OperationCoordinator(
+            registry, registry_path=Path(selected), entry_point="mcp"
+        )
         coordinator.reconcile_startup()
         adapters = (
             *inspection_adapters(registry),
