@@ -2,8 +2,11 @@
 
 import asyncio
 import contextlib
+import json
 import unittest
 from unittest.mock import patch
+
+import httpx
 
 from narwhal.engines.client import (
     FIRST_OUTPUT_DETAIL,
@@ -11,7 +14,9 @@ from narwhal.engines.client import (
     EngineClient,
     EngineError,
     ProbeLeg,
+    leg_failure_class,
 )
+from narwhal.types import LEG_TIMEOUT
 
 TOKEN = b'data: {"choices":[{"text":"x","token_ids":[1]}]}\n\n'
 DONE = b"data: [DONE]\n\n"
@@ -132,3 +137,114 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.client, "_probe_prefill", return_value=ProbeLeg()):
             result = await self.client.probe_inference(self.url, deadline_s=0.4)
         self.assertIsNone(result.decode.failed)
+
+
+class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    """Distinguish local pool waits from engine waits on live HTTP connections."""
+
+    async def asyncSetUp(self):
+        self.release = asyncio.Event()
+        self.requests = []
+        self.handlers = set()
+
+        async def serve(reader, writer):
+            task = asyncio.current_task()
+            self.handlers.add(task)
+            try:
+                while True:
+                    headers = await reader.readuntil(b"\r\n\r\n")
+                    size = next(
+                        int(line.split(b":", 1)[1])
+                        for line in headers.split(b"\r\n")
+                        if line.lower().startswith(b"content-length:")
+                    )
+                    await reader.readexactly(size)
+                    path = headers.split(b" ")[1].decode()
+                    self.requests.append(path)
+                    if path == "/slow":
+                        await self.release.wait()
+                    body = (
+                        b"x"
+                        if path == "/occupied"
+                        else json.dumps(
+                            {
+                                "kv_transfer_params": {
+                                    "remote_engine_id": "e0",
+                                    "remote_block_ids": [0],
+                                }
+                            }
+                        ).encode()
+                    )
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: "
+                        + str(len(body)).encode()
+                        + b"\r\n\r\n"
+                    )
+                    await writer.drain()
+                    if path == "/occupied":
+                        await self.release.wait()
+                    writer.write(body)
+                    await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                pass
+            finally:
+                writer.close()
+                with contextlib.suppress(ConnectionError):
+                    await writer.wait_closed()
+                self.handlers.discard(task)
+
+        self.server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        self.url = f"http://127.0.0.1:{self.server.sockets[0].getsockname()[1]}"
+
+    async def asyncTearDown(self):
+        self.release.set()
+        self.server.close()
+        await self.server.wait_closed()
+        pending = list(self.handlers)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    async def test_elapsed_deadline_during_pool_wait_is_not_breaker_evidence(self):
+        for explicit_transport in (False, True):
+            with self.subTest(explicit_transport=explicit_transport):
+                self.release.clear()
+                self.requests.clear()
+                transport = (
+                    httpx.AsyncHTTPTransport(limits=httpx.Limits(max_connections=1))
+                    if explicit_transport
+                    else None
+                )
+                client = EngineClient(
+                    max_connections=1,
+                    prefill_timeout_s=0.04,
+                    pool_timeout_s=1,
+                    transport=transport,
+                )
+                try:
+                    async with client._data.stream("POST", self.url + "/occupied", json={}) as held:
+                        with self.assertRaises(httpx.PoolTimeout) as caught:
+                            await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
+                        self.assertIsNone(leg_failure_class(caught.exception))
+                        self.assertEqual(self.requests, ["/occupied"])
+                        self.release.set()
+                        await held.aread()
+                    result = await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
+                    self.assertEqual(result.parameters()["remote_engine_id"], "e0")
+                finally:
+                    await client.aclose()
+
+    async def test_elapsed_deadline_after_dispatch_remains_engine_timeout(self):
+        for reused_connection in (False, True):
+            with self.subTest(reused_connection=reused_connection):
+                self.requests.clear()
+                client = EngineClient(prefill_timeout_s=0.04, pool_timeout_s=1)
+                try:
+                    if reused_connection:
+                        await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
+                    with self.assertRaises(httpx.ReadTimeout) as caught:
+                        await client.prefill(self.url, "/slow", {"prompt": "x"}, {})
+                    self.assertEqual(leg_failure_class(caught.exception), LEG_TIMEOUT)
+                    self.assertEqual(self.requests[-1], "/slow")
+                finally:
+                    await client.aclose()

@@ -27,16 +27,56 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         bind_identity_profiles(self.router)
         self.addAsyncCleanup(self.router.engines.aclose)
 
-    async def test_input_length_rotates_after_failure_and_reuses_a_successful_tokenizer(self):
-        """Failed tokenization rotates the preferred engine and returns the local estimate."""
+    async def test_token_id_prompt_uses_its_exact_length_without_tokenization(self):
+        """vLLM's string-only tokenizer is unnecessary for a token-ID completion."""
         self.cfg.tokenize = True
         with patch.object(
-            self.router.engines, "token_count", new=AsyncMock(side_effect=[None, 9, 10])
+            self.router.engines,
+            "token_count",
+            new=AsyncMock(
+                side_effect=EngineError("tokenize", "http://engine", 400, "string required")
+            ),
         ) as count:
-            self.assertEqual(
-                await self.router.input_length({"prompt": "hello"}),
-                self.router.estimate_length({"prompt": "hello"}),
-            )
+            self.assertEqual(await self.router.input_length({"prompt": list(range(512))}), 512)
+            self.assertEqual(await self.router.input_length({"prompt": [0]}), 1)
+            count.assert_not_awaited()
+
+    async def test_text_chat_and_non_token_arrays_keep_strict_tokenization(self):
+        """Only a valid flat token-ID prompt bypasses the exact-count route."""
+        self.cfg.tokenize = True
+        bodies = [
+            {"prompt": "hello"},
+            {"messages": [{"role": "user", "content": "hello"}]},
+            {"prompt": [1], "messages": [{"role": "user", "content": "hello"}]},
+            *({"prompt": prompt} for prompt in ([], [True], [-1], [1.5], ["hello"], [[1]])),
+        ]
+        for body in bodies:
+            with (
+                self.subTest(body=body),
+                patch.object(
+                    self.router.engines,
+                    "token_count",
+                    new=AsyncMock(
+                        side_effect=EngineError("tokenize", "http://engine", 504, "late")
+                    ),
+                ) as count,
+                self.assertRaisesRegex(EngineError, "late"),
+            ):
+                await self.router.input_length(body)
+            self.assertTrue(count.await_args.kwargs["strict"])
+
+    async def test_input_length_rotates_after_failure_and_reuses_a_successful_tokenizer(self):
+        """Failed exact counting fails this request and rotates the preferred engine."""
+        self.cfg.tokenize = True
+        with patch.object(
+            self.router.engines,
+            "token_count",
+            new=AsyncMock(
+                side_effect=[EngineError("tokenize", "http://engine", 504, "late"), 9, 10]
+            ),
+        ) as count:
+            with self.assertRaisesRegex(EngineError, "late"):
+                await self.router.input_length({"prompt": "hello"})
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 9)
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 10)
         self.assertNotEqual(count.call_args_list[0].args[0], count.call_args_list[1].args[0])

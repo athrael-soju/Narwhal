@@ -24,11 +24,13 @@ from ..cli_support import add_version_argument
 from ..config import FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
-from ..engines.client import EngineClient, EngineError
+from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
 from ..engines.connector import PrefillResult
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
+from ..engines.stream import sse_token_bearing, sse_token_count
 from ..engines.validation import can_consume, can_produce, validation_pairs
+from ..profiling.calibration import calibrate, verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
 from ..profiling.probe import engine_context_limit, make_prompt
@@ -44,6 +46,7 @@ class Report:
 
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     pairs: list[dict[str, object]] = field(default_factory=list)
 
     def ok(self, msg: str) -> None:
@@ -59,6 +62,11 @@ class Report:
         """Print and record a skipped gate result."""
         print(f"  SKIP  {msg}")
         self.skipped.append(msg)
+
+    def warn(self, msg: str) -> None:
+        """Report a configuration risk without changing gate outcomes."""
+        print(f"  WARN  {msg}")
+        self.warnings.append(msg)
 
 
 async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set[str]:
@@ -334,6 +342,9 @@ async def gate_tokenize(
 ) -> None:
     """Check exact token counting with the router's configured timeout."""
     print("tokenize")
+    if not cfg.tokenize:
+        rep.skip("tokenize: engine.tokenize is disabled; prefill cost uses the character estimate")
+        return
     route = client.dialect.tokenize_path
     body = {"model": cfg.model, "prompt": PROBE_PROMPT}
     for spec in cfg.engines:
@@ -346,12 +357,16 @@ async def gate_tokenize(
                 "prefill cost uses the character estimate"
             )
             continue
-        n = await client.token_count(spec.url, body, cfg.tokenize_timeout_s)
+        try:
+            n = await client.token_count(spec.url, body, cfg.tokenize_timeout_s, strict=True)
+        except EngineError as exc:
+            rep.fail(f"{spec.iid} {route} exact count failed: {exc}")
+            continue
         if n:
             rep.ok(f"{spec.iid} {route} -> {n} tokens")
         else:
             # Character-ratio error is squared by the quadratic prefill model.
-            rep.skip(f"{spec.iid} no {route}; prefill cost falls back to a character estimate")
+            rep.fail(f"{spec.iid} {route} returned no count")
 
 
 async def gate_produce(
@@ -462,33 +477,41 @@ async def gate_consume(
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
     body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 4, "temperature": 0.0}
+    dialect = lookup_dialect(cfg.dialect)
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
         record: dict[str, object] = {"producer": src, "consumer": dst}
+        decode_started: float | None = None
+        first_token_seconds: float | None = None
+        deadline: asyncio.Timeout | None = None
         try:
             if evidence is not None:
                 before_src = await _pair_snapshot(cfg, src)
                 before_dst = await _pair_snapshot(cfg, dst)
                 record["producer_before"] = before_src
                 record["consumer_before"] = before_dst
-            started = time.monotonic()
-            params = await client.prefill(by_id[src].url, "/v1/completions", body, {})
-            prefill_seconds = time.monotonic() - started
-            started = time.monotonic()
-            tokens = 0
-            async for line in client.decode(
-                by_id[dst].url,
-                "/v1/completions",
-                body,
-                {},
-                params,
-                first_token_timeout_s=cfg.first_token_timeout_s,
-            ):
-                from ..engines.stream import sse_token_count
-
-                tokens += sse_token_count(line)
-            decode_seconds = time.monotonic() - started
+            deadline = asyncio.timeout(cfg.request_timeout_s)
+            async with deadline:
+                started = time.monotonic()
+                params = await client.prefill(by_id[src].url, "/v1/completions", body, {})
+                prefill_seconds = time.monotonic() - started
+                started = decode_started = time.monotonic()
+                tokens = 0
+                async for line in client.decode(
+                    by_id[dst].url,
+                    "/v1/completions",
+                    body,
+                    {},
+                    params,
+                    first_token_timeout_s=cfg.first_token_timeout_s,
+                ):
+                    count = sse_token_count(line)
+                    tokens += count
+                    if first_token_seconds is None and (count or sse_token_bearing(line, dialect)):
+                        first_token_seconds = time.monotonic() - started
+                decode_seconds = time.monotonic() - started
+            record["first_token_seconds"] = first_token_seconds
             if evidence is not None:
                 after_src = await _pair_snapshot(cfg, src)
                 after_dst = await _pair_snapshot(cfg, dst)
@@ -518,13 +541,48 @@ async def gate_consume(
                     descriptor_sha256=sha256(params.descriptor_json.encode()).hexdigest(),
                     prefill_seconds=prefill_seconds,
                     decode_seconds=decode_seconds,
+                    first_token_seconds=first_token_seconds,
                     nixl_transfer_count_delta=count_delta,
                     nixl_transfer_seconds=transfer_seconds,
                     output_tokens=tokens,
                 )
         except EngineError as exc:
-            rep.fail(f"{src} -> {dst}: {exc}")
-            record.update(status="failed", error=str(exc))
+            deadline_exceeded = exc.status == 504 and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
+            if deadline_exceeded:
+                rep.fail(
+                    f"{src} -> {dst}: first-token deadline {cfg.first_token_timeout_s:g}s "
+                    "expired; transfer remains unconfirmed. Run first-token calibration."
+                )
+            else:
+                rep.fail(f"{src} -> {dst}: {exc}")
+            record.update(
+                status="failed",
+                failure_kind="deadline_exceeded" if deadline_exceeded else "transfer_failed",
+                error=str(exc),
+                decode_seconds=(
+                    time.monotonic() - decode_started if decode_started is not None else None
+                ),
+            )
+            if evidence is not None:
+                evidence.append(record)
+            continue
+        except TimeoutError as exc:
+            expired = deadline is not None and deadline.expired()
+            detail = (
+                f"request deadline {cfg.request_timeout_s:g}s expired; transfer remains unconfirmed"
+                if expired
+                else f"TimeoutError: {exc}"
+            )
+            rep.fail(f"{src} -> {dst}: {detail}")
+            record.update(
+                status="failed",
+                failure_kind="request_deadline_exceeded" if expired else "transfer_failed",
+                error=detail,
+                first_token_seconds=first_token_seconds,
+                decode_seconds=(
+                    time.monotonic() - decode_started if decode_started is not None else None
+                ),
+            )
             if evidence is not None:
                 evidence.append(record)
             continue
@@ -539,7 +597,12 @@ async def gate_consume(
             record.update(status="failed", error="consumer produced no tokens")
         elif (src, dst) not in seen:
             seen.add((src, dst))
-            rep.ok(f"{src} -> {dst} moved KV and produced {tokens} tokens")
+            timing = (
+                f", first token {first_token_seconds:.3f}s"
+                if first_token_seconds is not None
+                else ""
+            )
+            rep.ok(f"{src} -> {dst} moved KV and produced {tokens} tokens{timing}")
         if evidence is not None:
             evidence.append(record)
 
@@ -805,6 +868,15 @@ async def run(
     )
     try:
         live = await gate_reach(cfg, client, rep)
+        if cfg.first_token_calibration_path is None:
+            rep.warn(
+                "first-token deadline has no calibration evidence; run "
+                "narwhal-check --calibrate-first-token and set "
+                "engine.first_token_calibration_path"
+            )
+        else:
+            for calibration_problem in await verify_calibration(cfg):
+                rep.fail(calibration_problem)
         incompatible = await gate_contract(cfg, live, rep)
         store = gate_profile(cfg, rep)
         stale = await gate_profile_generation(cfg, store, live, rep)
@@ -906,7 +978,9 @@ async def run(
             output.write("\n")
         print(f"directed KV evidence: {evidence_out}")
 
-    results.set_data({"failed": rep.failed, "skipped": rep.skipped, "pairs": rep.pairs})
+    results.set_data(
+        {"failed": rep.failed, "skipped": rep.skipped, "warnings": rep.warnings, "pairs": rep.pairs}
+    )
     for problem in rep.failed:
         results.record_error("gate_failed", problem, stage="preflight")
     if rep.failed or (rep.skipped and evidence_out is not None):
@@ -951,6 +1025,31 @@ def _main(argv: list[str]) -> int:
         "--ring",
         action="store_true",
         help="test rotating producer-consumer pairs (default: full eligible directed mesh)",
+    )
+    ap.add_argument(
+        "--calibrate-first-token",
+        action="store_true",
+        help="measure directed first-token latency using a separate observation bound",
+    )
+    ap.add_argument(
+        "--input-tokens",
+        help="comma-separated input lengths, including the longest admitted input",
+    )
+    ap.add_argument(
+        "--samples",
+        type=int,
+        default=100,
+        help="fresh handoffs per pair and input length (100 required for qualifying evidence)",
+    )
+    ap.add_argument(
+        "--observation-timeout-s",
+        type=float,
+        help="diagnostic first-token bound above the configured serving limit",
+    )
+    ap.add_argument(
+        "--calibration-out",
+        type=Path,
+        help="fresh JSON path under runs/ for first-token calibration samples",
     )
     ap.add_argument(
         "--repeats",
@@ -1009,6 +1108,22 @@ def _main(argv: list[str]) -> int:
     if args.fleet is None:
         ap.error("give --fleet")
         return 2
+    if args.calibrate_first_token:
+        if args.input_tokens is None or args.observation_timeout_s is None:
+            ap.error("calibration requires --input-tokens and --observation-timeout-s")
+        if args.calibration_out is None:
+            ap.error("calibration requires --calibration-out")
+        if args.evidence_out is not None or args.verify_evidence is not None:
+            ap.error("calibration is exclusive with directed KV evidence modes")
+        if args.ring or args.no_kv or args.repeats != 1:
+            ap.error("calibration always probes the full directed mesh with --samples")
+    elif (
+        args.input_tokens is not None
+        or args.calibration_out is not None
+        or args.observation_timeout_s is not None
+        or args.samples != 100
+    ):
+        ap.error("calibration options require --calibrate-first-token")
     if args.evidence_out is not None and (args.ring or args.no_kv):
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
@@ -1026,6 +1141,24 @@ def _main(argv: list[str]) -> int:
     if results.json_mode():
         results.protect_environment(cfg.engine_api_key_env)
     try:
+        if args.calibrate_first_token:
+            calibration_out = args.calibration_out
+            input_tokens = args.input_tokens
+            observation_timeout_s = args.observation_timeout_s
+            if calibration_out is None or input_tokens is None or observation_timeout_s is None:
+                raise ValueError("calibration options are incomplete")
+            results.set_operation("calibrate-first-token")
+            results.add_artifact("first_token_calibration", calibration_out)
+            lengths = tuple(int(part) for part in input_tokens.split(","))
+            return asyncio.run(
+                calibrate(
+                    cfg,
+                    input_tokens=lengths,
+                    samples_per_group=args.samples,
+                    observation_timeout_s=observation_timeout_s,
+                    out=calibration_out,
+                )
+            )
         if args.verify_evidence is not None:
             results.set_operation("verify-evidence")
             results.add_artifact("directed_kv_evidence", args.verify_evidence)

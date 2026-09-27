@@ -19,6 +19,8 @@
 | `recovery.health.recovery_windows`    | `3`     | Consecutive healthy windows required to clear probation. At least 1.                                                                                            |
 | `recovery.health.probation_penalty_s` | `1.5`   | Placement penalty during probation. Nonnegative.                                                                                                                |
 
+The probation penalty enters prefill placement cost in seconds. Compare it with the fleet's TTFT target and measured healthy placement cost before changing it.
+
 Connection failures count immediately toward `recovery.eject_after`.
 
 Transport timeouts trigger a health probe first.
@@ -77,7 +79,7 @@ Under `whole_wave`, an ejection or identity failure holds the fleet until an ope
 | ---------------------------- | ------------------- | ------------------------------------------------------------------------ |
 | `recovery.state_path`        | `"runs/state.json"` | Atomic handoff file for roles, ejections, lifecycle state, and counters. |
 | `recovery.resume`            | `false`             | Applies a compatible handoff file at startup.                            |
-| `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative.                     |
+| `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative whole seconds.       |
 
 At first startup, the router uses the split declared in the fleet configuration. On restart with resume enabled, it loads a compatible handoff from `recovery.state_path`.
 

@@ -53,10 +53,10 @@ def parse_kv_capacity(metrics: str) -> int | None:
     return min(values) if values else None
 
 
-async def kv_capacity(client: httpx.AsyncClient, url: str) -> int | None:
+async def kv_capacity(client: httpx.AsyncClient, url: str, timeout_s: float = 30.0) -> int | None:
     """Read physical KV capacity when the engine exports it."""
     try:
-        response = await client.get(f"{url}/metrics", timeout=30.0)
+        response = await client.get(f"{url}/metrics", timeout=timeout_s)
         response.raise_for_status()
     except httpx.HTTPError:
         return None
@@ -64,7 +64,12 @@ async def kv_capacity(client: httpx.AsyncClient, url: str) -> int | None:
 
 
 async def _tokenize_response(
-    client: httpx.AsyncClient, url: str, model: str, prompt: str, dialect: EngineDialect
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    prompt: str,
+    dialect: EngineDialect,
+    timeout_s: float = 30.0,
 ) -> dict:
     """Read the engine's tokenization response for `prompt`.
 
@@ -77,7 +82,7 @@ async def _tokenize_response(
         r = await client.post(
             f"{url}{path}",
             json=dialect.tokenize_request(model, {"prompt": prompt}),
-            timeout=30.0,
+            timeout=timeout_s,
         )
     except httpx.HTTPError as exc:
         raise RuntimeError(f"tokenize probe failed on {url}: {exc}") from exc
@@ -93,10 +98,15 @@ async def _tokenize_response(
 
 
 async def _tokenize(
-    client: httpx.AsyncClient, url: str, model: str, prompt: str, dialect: EngineDialect
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    prompt: str,
+    dialect: EngineDialect,
+    timeout_s: float = 30.0,
 ) -> int:
     """Return the engine's exact token count for `prompt`."""
-    body = await _tokenize_response(client, url, model, prompt, dialect)
+    body = await _tokenize_response(client, url, model, prompt, dialect, timeout_s)
     count = dialect.tokenize_response(body)
     if count is None:
         raise RuntimeError(f"tokenize probe returned no count on {url}")
@@ -106,10 +116,14 @@ async def _tokenize(
 
 
 async def engine_context_limit(
-    client: httpx.AsyncClient, url: str, model: str, dialect: EngineDialect
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    dialect: EngineDialect,
+    timeout_s: float = 30.0,
 ) -> int:
     """Read the live serving limit from the same tokenizer used for prompt sizing."""
-    body = await _tokenize_response(client, url, model, "benchmark ", dialect)
+    body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)
     limit = body.get("max_model_len")
     if type(limit) is not int or limit < 1:
         raise RuntimeError(f"tokenize probe returned no valid max_model_len on {url}")
@@ -123,22 +137,48 @@ async def make_prompt(
     target: int,
     dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
+    timeout_s: float = 30.0,
+    prefix: str = "",
+    max_input_tokens: int | None = None,
 ) -> tuple[str, int]:
     """Build a prompt near `target` tokens and return its fitted-axis count.
 
     Dialects without an exact-count route use the configured character ratio.
+    An optional input bound requires exact counts and preserves the supplied
+    prefix while shortening the remainder. Sizing fails if it cannot fit.
     """
     word = "benchmark "
     dialect = dialect or VllmDialect()
+    if max_input_tokens is not None and max_input_tokens < 1:
+        raise ValueError("max_input_tokens must be positive")
     if dialect.tokenize_path is None:
-        text = (word * max(1, target))[: max(1, int(target * chars_per_token))]
+        if max_input_tokens is not None:
+            raise RuntimeError("bounded prompt sizing requires an exact-count tokenizer route")
+        text = (prefix + word * max(1, target))[: max(1, int(target * chars_per_token))]
         return text, max(1, round(len(text) / chars_per_token))
-    text = word * max(1, target)
-    got = await _tokenize(client, url, model, text, dialect)
+    text = prefix + word * max(1, target)
+    minimum_chars = max(1, len(prefix)) if max_input_tokens is not None else 1
+    got = await _tokenize(client, url, model, text, dialect, timeout_s)
     if got != target:
-        scaled = max(1, int(len(text) * target / got))
+        scaled = max(minimum_chars, int(len(text) * target / got))
         text = text[:scaled]
-        got = await _tokenize(client, url, model, text, dialect)
+        got = await _tokenize(client, url, model, text, dialect, timeout_s)
+    if max_input_tokens is not None:
+        for _ in range(16):
+            if got <= max_input_tokens:
+                break
+            if len(text) <= minimum_chars:
+                raise RuntimeError(
+                    f"prompt prefix requires {got} tokens, exceeding input bound {max_input_tokens}"
+                )
+            scaled = max(minimum_chars, int(len(text) * max_input_tokens / got))
+            text = text[: min(len(text) - 1, scaled)]
+            got = await _tokenize(client, url, model, text, dialect, timeout_s)
+        if got > max_input_tokens:
+            raise RuntimeError(
+                f"prompt still has {got} tokens after 16 sizing attempts "
+                f"for input bound {max_input_tokens}"
+            )
     return text, got
 
 
@@ -151,12 +191,21 @@ async def probe_prefill(
     dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
     max_model_len: int | None = None,
+    observation_timeout_s: float | None = None,
 ) -> list[tuple[float, float]]:
     """Measure one-token request latency across the input-length sweep."""
     dialect = dialect or VllmDialect()
     samples: list[tuple[float, float]] = []
     for target in lens:
-        prompt, n = await make_prompt(client, url, model, target, dialect, chars_per_token)
+        prompt, n = await make_prompt(
+            client,
+            url,
+            model,
+            target,
+            dialect,
+            chars_per_token,
+            timeout_s=observation_timeout_s or 30.0,
+        )
         if max_model_len is not None and n + 1 > max_model_len:
             raise ValueError(
                 f"prefill input {n} plus one output token exceeds {url} max_model_len "
@@ -173,7 +222,9 @@ async def probe_prefill(
                 **dialect.decode_probe_extras(1),
             }
             start = time.monotonic()
-            r = await client.post(f"{url}/v1/completions", json=body, timeout=300.0)
+            r = await client.post(
+                f"{url}/v1/completions", json=body, timeout=observation_timeout_s or 300.0
+            )
             elapsed = time.monotonic() - start
             if r.status_code != 200:
                 raise RuntimeError(
@@ -320,12 +371,21 @@ async def probe_decode(
     evidence: list[dict[str, object]] | None = None,
     max_model_len: int | None = None,
     repeats: int = 1,
+    observation_timeout_s: float | None = None,
 ) -> list[tuple[float, float, float]]:
     """Measure decode gaps across input-length and concurrency combinations."""
     dialect = dialect or VllmDialect()
     samples: list[tuple[float, float, float]] = []
     for target in input_lens:
-        prompt, input_len = await make_prompt(client, url, model, target, dialect, chars_per_token)
+        prompt, input_len = await make_prompt(
+            client,
+            url,
+            model,
+            target,
+            dialect,
+            chars_per_token,
+            timeout_s=observation_timeout_s or 30.0,
+        )
         if max_model_len is not None and input_len + tokens > max_model_len:
             raise ValueError(
                 f"decode input {input_len} plus {tokens} output tokens exceeds {url} "
@@ -397,6 +457,7 @@ async def profile_instance(
     *,
     evidence: dict[str, object] | None = None,
     max_model_len: int | None = None,
+    observation_timeout_s: float | None = None,
 ) -> Profile:
     """Run both sweeps and fit one engine profile."""
     s = sweep or Sweep()
@@ -411,6 +472,7 @@ async def profile_instance(
         dialect,
         chars_per_token,
         max_model_len,
+        observation_timeout_s,
     )
     if evidence is not None:
         evidence["prefill"] = prefill
@@ -434,12 +496,13 @@ async def profile_instance(
         evidence=decode_intervals,
         max_model_len=max_model_len,
         repeats=s.decode_repeats,
+        observation_timeout_s=observation_timeout_s,
     )
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
-    capacity = await kv_capacity(client, url)
+    capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)
     return Profile(
         iid=iid,
         ttft_a=a,
@@ -496,6 +559,7 @@ class NeighbourLoad:
         dialect: EngineDialect,
         chars_per_token: float,
         workload: ColocatedWorkload,
+        observation_timeout_s: float | None = None,
     ) -> None:
         self.client = client
         self.peers = peers
@@ -503,6 +567,7 @@ class NeighbourLoad:
         self.dialect = dialect
         self.chars_per_token = chars_per_token
         self.workload = workload
+        self.observation_timeout_s = observation_timeout_s
         self.tasks: list[asyncio.Task[None]] = []
         self.counts = {iid: 0 for iid, _, _ in peers}
         self.errors: dict[str, str] = {}
@@ -521,9 +586,21 @@ class NeighbourLoad:
             )
             output = 1 if role is Role.PREFILL else self.workload.decode_output_tokens
             prompt, count = await make_prompt(
-                self.client, url, self.model, target, self.dialect, self.chars_per_token
+                self.client,
+                url,
+                self.model,
+                target,
+                self.dialect,
+                self.chars_per_token,
+                timeout_s=self.observation_timeout_s or 30.0,
             )
-            limit = await engine_context_limit(self.client, url, self.model, self.dialect)
+            limit = await engine_context_limit(
+                self.client,
+                url,
+                self.model,
+                self.dialect,
+                timeout_s=self.observation_timeout_s or 30.0,
+            )
             if count + output > limit:
                 raise ValueError(f"neighbour {iid}: {count}+{output} exceeds max_model_len {limit}")
             jobs.append((iid, url, role, rate, prompt, output, index / len(self.peers) / rate))
@@ -784,8 +861,13 @@ async def run(
     overwrite: bool = False,
     limits_path: Path | None = None,
     colocated_workload: ColocatedWorkload | None = None,
+    observation_timeout_s: float | None = None,
 ) -> int:
     """Profile selected healthy engines and write the store."""
+    if observation_timeout_s is not None and (
+        not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
+    ):
+        raise ValueError("profile observation timeout must be finite and positive")
     store = ProfileStore(cfg.profiles_path, load=False)
     evidence_path = store.path.with_suffix(".samples.json")
     if store.path == evidence_path or (
@@ -818,16 +900,22 @@ async def run(
         **stamp(),
         "model": cfg.model,
         "sweep": asdict(sweep or Sweep()),
+        "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
     connections = max((sweep or Sweep()).decode_concurrency) + len(cfg.engines)
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(300.0, connect=10.0),
+        timeout=httpx.Timeout(
+            observation_timeout_s or 300.0,
+            connect=min(10.0, observation_timeout_s or 300.0),
+        ),
         limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
         headers=cfg.engine_headers(),
     ) as client:
         for spec in targets:
-            r = await client.get(f"{spec.url}{dialect.health_path}", timeout=10.0)
+            r = await client.get(
+                f"{spec.url}{dialect.health_path}", timeout=observation_timeout_s or 10.0
+            )
             if r.status_code != 200:
                 results.record_error(
                     "engine_unhealthy", "Health gate failed", stage="health", engine=spec.iid
@@ -839,7 +927,9 @@ async def run(
                     f"{spec.iid}: the {dialect.name} dialect needs a tokenization route "
                     "that reports max_model_len before profiling"
                 )
-            max_model_len = await engine_context_limit(client, spec.url, cfg.model, dialect)
+            max_model_len = await engine_context_limit(
+                client, spec.url, cfg.model, dialect, observation_timeout_s or 30.0
+            )
             max_num_seqs = limits.get(spec.iid)
             engine_sweep = bounded_sweep(sweep or Sweep(), max_model_len, max_num_seqs)
             print(
@@ -869,7 +959,13 @@ async def run(
                 if not peers:
                     raise ValueError(f"{spec.iid}: no neighbours in shared_device group {group}")
                 neighbour_load = NeighbourLoad(
-                    client, peers, cfg.model, dialect, cfg.chars_per_token, colocated_workload
+                    client,
+                    peers,
+                    cfg.model,
+                    dialect,
+                    cfg.chars_per_token,
+                    colocated_workload,
+                    observation_timeout_s,
                 )
             try:
                 if neighbour_load is not None:
@@ -877,7 +973,7 @@ async def run(
                 generation = await read_generation(
                     spec,
                     cfg.engine_contract,
-                    timeout_s=cfg.health_timeout_s,
+                    timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
                 )
                 engine_evidence["generation_evidence"] = generation.document
@@ -891,6 +987,7 @@ async def run(
                     cfg.chars_per_token,
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
+                    observation_timeout_s=observation_timeout_s,
                 )
                 if neighbour_load is not None:
                     measured = await neighbour_load.stop()
@@ -919,7 +1016,7 @@ async def run(
                 current = await read_generation(
                     spec,
                     cfg.engine_contract,
-                    timeout_s=cfg.health_timeout_s,
+                    timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
                 )
                 if generation.digest != current.digest:
@@ -1029,6 +1126,12 @@ def _main(argv: list[str]) -> int:
         "(default: use the requested concurrency points)",
     )
     ap.add_argument(
+        "--observation-timeout-s",
+        type=float,
+        help="positive diagnostic HTTP timeout for live health, tokenization, prefill, "
+        "decode, metrics and generation probes (default: each probe's built-in limit)",
+    )
+    ap.add_argument(
         "--overwrite",
         action="store_true",
         help="replace live-sweep profiles and sample sidecar; --only retains selected engines "
@@ -1104,6 +1207,12 @@ def _main(argv: list[str]) -> int:
         "fit its live max_model_len; required with --colocated",
     )
     args = ap.parse_args(argv)
+    if args.observation_timeout_s is not None and (
+        not math.isfinite(args.observation_timeout_s) or args.observation_timeout_s <= 0
+    ):
+        ap.error("--observation-timeout-s must be finite and positive")
+    if args.observation_timeout_s is not None and (args.merge or args.refit_samples):
+        ap.error("--observation-timeout-s applies only to live profiling")
     try:
         cfg = FleetConfig.load(args.fleet)
     except (OSError, ValueError) as exc:
@@ -1202,6 +1311,7 @@ def _main(argv: list[str]) -> int:
                 overwrite=args.overwrite,
                 limits_path=args.limits,
                 colocated_workload=colocated_workload,
+                observation_timeout_s=args.observation_timeout_s,
             )
         )
     except (OSError, ValueError) as exc:

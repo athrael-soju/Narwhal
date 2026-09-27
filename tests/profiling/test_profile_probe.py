@@ -44,6 +44,31 @@ def token(index, *, finish=None):
 class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     """HTTP fixtures exercise measurement validation with controlled token arrivals."""
 
+    async def test_colocated_sizing_uses_observation_timeout(self):
+        """The override reaches both prompt fitting and neighbour limit discovery."""
+        timeouts = []
+
+        async def answer(request):
+            self.assertEqual(request.url.path, "/tokenize")
+            timeouts.append(request.extensions["timeout"])
+            return httpx.Response(200, json={"count": 32, "max_model_len": 32})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            load = probe.NeighbourLoad(
+                client,
+                [("p", "http://prefill", Role.PREFILL)],
+                "stub",
+                probe.VllmDialect(),
+                3.8,
+                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                observation_timeout_s=75.0,
+            )
+            with self.assertRaisesRegex(ValueError, "exceeds max_model_len"):
+                await load.start()
+        self.assertEqual(len(timeouts), 2)
+        for timeout in timeouts:
+            self.assertEqual(set(timeout.values()), {75.0})
+
     async def test_colocated_load_records_completed_peer_traffic(self):
         """A mix label is backed by requests to both neighbouring engine roles."""
         calls = []
@@ -191,6 +216,51 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 9)
         self.assertEqual(len(text), 50)
 
+    async def test_bounded_prompt_fits_context_with_fixed_prefix_token_cost(self):
+        """A random prefix's token cost defeats a single character-ratio resize."""
+        prefix = "0123456789abcdef0123456789abcdef "
+        observed_counts = []
+
+        def tokenize(request):
+            prompt = json.loads(request.content)["prompt"]
+            self.assertTrue(prompt.startswith(prefix))
+            count = 20 + (len(prompt) - len(prefix) + 9) // 10
+            observed_counts.append(count)
+            return httpx.Response(200, json={"count": count})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
+            for target in (128, 512, 1020):
+                with self.subTest(target=target):
+                    observed_counts.clear()
+                    text, count = await probe.make_prompt(
+                        client,
+                        "http://e",
+                        "stub",
+                        target,
+                        prefix=prefix,
+                        max_input_tokens=target,
+                    )
+                    self.assertGreater(observed_counts[1], target)
+                    self.assertEqual(count, target)
+                    self.assertEqual(count, observed_counts[-1])
+                    self.assertTrue(text.startswith(prefix))
+                    self.assertLessEqual(count + 4, 1024)
+
+    async def test_bounded_prompt_rejects_prefix_that_cannot_fit(self):
+        calls = 0
+
+        def tokenize(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"count": 20})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
+            with self.assertRaisesRegex(RuntimeError, "prefix requires 20 tokens"):
+                await probe.make_prompt(
+                    client, "http://e", "stub", 8, prefix="unique ", max_input_tokens=8
+                )
+        self.assertLessEqual(calls, 16)
+
     async def test_tokenize_failures_abort_measurement(self):
         """Unavailable or invalid exact counts prevent fitting against an estimated axis."""
         for response in (
@@ -256,7 +326,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        async def prompt(client, url, model, target, dialect, chars_per_token):
+        async def prompt(client, url, model, target, dialect, chars_per_token, **kwargs):
             return "x" * target, target
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:

@@ -42,7 +42,10 @@ Restore these as one unit:
 - code;
 - configuration;
 - profiles;
+- the configured first-token calibration artifact, readable by the restored build and matching the live engine generations;
 - handoff state with a schema version supported by the restored build.
+
+If engine generations changed, regenerate their profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before preflight and router startup.
 
 ## 11. Validate every release
 

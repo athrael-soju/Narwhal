@@ -188,6 +188,12 @@ class EngineClient:
         )
         self._prefill_timeout = prefill_timeout_s
         self._health_timeout = health_timeout_s
+        self._connect_timeout = connect_timeout_s
+        self._pool_timeout = pool_timeout_s
+        # HTTPX's networking transport reports request I/O through its public
+        # trace extension after acquiring a pool connection. Injected transports
+        # need not implement that extension or have a connection pool.
+        self._trace_pool_wait = transport is None or isinstance(transport, httpx.AsyncHTTPTransport)
         # Attach the engine credential to each leg and probe. A caller-supplied
         # authorization header takes precedence.
         self._engine_api_key = engine_api_key
@@ -205,6 +211,14 @@ class EngineClient:
         await self._data.aclose()
         await self._control.aclose()
 
+    def _phase_timeout(self, budget_s: float) -> httpx.Timeout:
+        """Keep connection and pool limits when a leg sets its own budget."""
+        return httpx.Timeout(
+            budget_s,
+            connect=min(self._connect_timeout, budget_s),
+            pool=min(self._pool_timeout, budget_s),
+        )
+
     async def healthy(self, url: str) -> bool | None:
         """Probe the engine through the control pool.
 
@@ -216,7 +230,7 @@ class EngineClient:
         try:
             r = await self._control.get(
                 f"{url}{self.dialect.health_path}",
-                timeout=self._health_timeout,
+                timeout=self._phase_timeout(self._health_timeout),
                 headers=self._auth(None),
             )
         except httpx.PoolTimeout:
@@ -225,29 +239,48 @@ class EngineClient:
             return False
         return r.status_code == 200
 
-    async def token_count(self, url: str, body: dict[str, Any], timeout_s: float) -> int | None:
+    async def token_count(
+        self, url: str, body: dict[str, Any], timeout_s: float, *, strict: bool = False
+    ) -> int | None:
         """Ask the engine for the exact input length within `timeout_s`.
 
-        Returns None when the dialect lacks a tokenizer route or the request fails.
+        Without `strict`, unavailable counts return None for callers that own a
+        documented fallback. Strict callers receive the actual failure.
         """
         if self.dialect.tokenize_path is None:
             return None
         try:
-            r = await self._data.post(
-                f"{url}{self.dialect.tokenize_path}",
-                headers=self._auth(None),
-                json=self.dialect.tokenize_request(body.get("model"), body),
-                timeout=timeout_s,
-            )
-        except httpx.HTTPError:
+            async with asyncio.timeout(timeout_s):
+                r = await self._data.post(
+                    f"{url}{self.dialect.tokenize_path}",
+                    headers=self._auth(None),
+                    json=self.dialect.tokenize_request(body.get("model"), body),
+                    timeout=self._phase_timeout(timeout_s),
+                )
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            if strict:
+                raise EngineError(
+                    "tokenize", url, 504, f"exact count exceeded {timeout_s:g}s"
+                ) from exc
+            return None
+        except httpx.HTTPError as exc:
+            if strict:
+                raise EngineError("tokenize", url, 502, str(exc)) from exc
             return None
         if r.status_code != 200:
+            if strict:
+                raise EngineError("tokenize", url, r.status_code, r.text[:200])
             return None
         try:
             payload = r.json()
         except ValueError:
+            if strict:
+                raise EngineError("tokenize", url, 502, "invalid JSON response") from None
             return None
-        return self.dialect.tokenize_response(payload)
+        count = self.dialect.tokenize_response(payload)
+        if count is None and strict:
+            raise EngineError("tokenize", url, 502, "response has no valid token count")
+        return count
 
     def _prefill_leg(self, body: dict[str, Any]) -> dict[str, Any]:
         """Build the forced one-token prefill leg out of a request body."""
@@ -266,13 +299,30 @@ class EngineClient:
     ) -> PrefillResult:
         """Run prefill and bind the handoff to its producer and request ID."""
         leg = self._prefill_leg(body)
+        io_started = False
 
-        r = await self._data.post(
-            f"{url}{endpoint}",
-            json=leg,
-            headers=self._auth(headers),
-            timeout=self._prefill_timeout,
-        )
+        async def trace(name: str, info: dict[str, Any]) -> None:
+            nonlocal io_started
+            io_started = True
+
+        try:
+            async with asyncio.timeout(self._prefill_timeout):
+                r = await self._data.post(
+                    f"{url}{endpoint}",
+                    json=leg,
+                    headers=self._auth(headers),
+                    timeout=self._phase_timeout(self._prefill_timeout),
+                    extensions={"trace": trace},
+                )
+        except TimeoutError as exc:
+            if self._trace_pool_wait and not io_started:
+                raise httpx.PoolTimeout(
+                    f"prefill waited for a connection until its {self._prefill_timeout:g}s "
+                    "elapsed deadline"
+                ) from exc
+            raise httpx.ReadTimeout(
+                f"prefill exceeded its {self._prefill_timeout:g}s elapsed deadline"
+            ) from exc
         if r.status_code != 200:
             raise EngineError("prefill", url, r.status_code, r.text)
 
@@ -438,7 +488,7 @@ class EngineClient:
             r = await self._control.post(
                 f"{url}{_PROBE_ENDPOINT}",
                 json=body,
-                timeout=self._prefill_timeout,
+                timeout=self._phase_timeout(self._prefill_timeout),
                 headers=self._auth(None),
             )
         except httpx.PoolTimeout:

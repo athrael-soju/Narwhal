@@ -18,6 +18,7 @@ Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and 
 | `--merge PATH`         | omitted     | Repeat at least twice to combine measured profile stores and their matching sidecars. Requires `--out`; exclusive with `--refit-samples`, `--only` and `--overwrite`. |
 | `--out PATH`           | omitted     | Fresh profile destination required for `--refit-samples` and `--merge`, with a matching `.samples.json` sidecar. Live sweeps use `profiles.path`. |
 | `--limits PATH`        | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
+| `--observation-timeout-s SECONDS` | probe-specific limits | Positive diagnostic HTTP timeout for live health, tokenisation, prefill, decode, metrics, and process-generation probes. Applies only to live sweeps. |
 | `--overwrite`          | false       | Replace live profile and sample files when the first engine completes; with `--only`, the new store contains the selected profiles. Refits always require fresh outputs. |
 
 Refits retain the raw samples and process-generation evidence in the new sidecar. Merges require matching measurement evidence for every input profile and coverage of every configured engine; each engine, GPU group, role split and target-role variant must occur once. The merged sidecar records the source profile and sample paths with their SHA-256 hashes, so retain those source files.
@@ -31,6 +32,8 @@ narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --o
 ## Prefill and decode sweeps
 
 These options apply to live measurement. The command validates supplied sweep values before selecting a mode; refits use the retained samples and merges use the source stores.
+
+If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-timeout-s` for a diagnostic sweep. The profiler records the value in the sample sidecar. Serving requests use the deadlines in the fleet configuration.
 
 | Option                      | Default                                   | Contract                                                                                                                                                                                                     |
 | --------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
