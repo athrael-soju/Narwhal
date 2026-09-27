@@ -82,7 +82,7 @@ Internal Python APIs may change between releases.
 
 Narwhal maps timeout-shaped engine faults to HTTP `504` and other engine faults to HTTP `502`.
 
-When `engine.tokenize` is enabled and the configured dialect has an exact-count endpoint, a tokenisation timeout returns HTTP `504` before placement. Other tokenisation failures return an engine error. Character-ratio sizing applies when token counting is disabled or the dialect has no exact-count endpoint.
+Narwhal counts a nonempty `prompt` array of nonnegative integer token IDs locally. For text and chat input, when `engine.tokenize` is enabled and the configured dialect has an exact-count endpoint, a tokenisation timeout returns HTTP `504` before placement. Other tokenisation failures return an engine error. Character-ratio sizing applies when token counting is disabled or the dialect has no exact-count endpoint.
 
 Prefill finishes before client streaming begins, so prefill failures can be returned as ordinary HTTP errors.
 
