@@ -340,8 +340,12 @@ def inherited_context(instance: Path | None = None) -> dict[str, Any] | None:
         from .management_coordinator import OperationCoordinator
         from .management_plans import PlanStore
 
-        coordinator = OperationCoordinator(registry, registry_path)
-        target = coordinator.authorize_action(payload["target_id"], payload["action"])
+        coordinator = OperationCoordinator(registry, registry_path, entry_point="cli")
+        target = coordinator.authorize_action(
+            payload["target_id"],
+            payload["action"],
+            operation={**payload, "current_stage": payload["stage_id"]},
+        )
         record = coordinator.store.read(target.id, payload["operation_id"])
         worker = record["worker"]
         if (

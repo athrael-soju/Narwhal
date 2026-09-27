@@ -518,6 +518,7 @@ record and terminal result.
 | `unsupported_contract` | invalid_input | Supply a supported document version. |
 | `invalid_cursor` | invalid_input | Restart listing. |
 | `permission_denied` | invalid_input | Have the operator update the local grant. |
+| `audit_failed` | error | Restore private audit storage, then inspect the retained operation before retrying its request. See [audit receipts](Registration.md#audit-receipts) for failures after admission or completion. |
 | `request_id_conflict`, `plan_scope_mismatch` | invalid_input | Correct the mismatched request. |
 | `operation_record_removed` | error | Inspect the retained tombstone or archive. |
 | `stale_plan`, `adapter_prerequisite_missing` | failed_gate | Correct the inputs or prerequisites, then prepare a new plan. |

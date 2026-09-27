@@ -135,15 +135,57 @@ declared credential variables and environment references used by its fleet.
 The diagnostic subprocess also receives known credential values under internal
 redaction variable names so it removes them before writing captured evidence.
 The adapter rejects environment overrides that can alter command execution,
-including `HOME`, `PATH`, `PYTHON*`, `LD_*` and `DYLD_*`. Audit receipts record
-the tool, target ID, time, outcome and error codes without argument or credential
-values.
+including `HOME`, `PATH`, `PYTHON*`, `LD_*` and `DYLD_*`.
 
 For a fleet, the adapter settings and discovery snapshot supply host aliases
 and SSH trust bindings. Tools cannot supply an SSH destination, port forward,
 executable, environment override or arbitrary URL. The operator must choose
 query expressions that constrain results to the registered fleet. MCP arguments
 select a query ID and cannot insert expressions or label values.
+
+### Audit receipts
+
+The server appends tool inspection receipts to
+`state_dir/inspection-<registry_id>.jsonl`. Each receipt contains the tool,
+registered target ID, UTC observation time, outcome and error codes.
+
+The coordinator, worker and bound CLI also append execution receipts to
+`state_dir/execution-<registry_id>.jsonl`. Both writers require a regular file
+owned by the management user with mode `0600`, open it without following a
+symlink, and synchronize each append. Execution receipts cover capability
+decisions, accepted operations, cancellation requests, stage starts and outcomes,
+terminal results, recovery requirements, and CLI or MCP completion.
+
+| Execution field | Meaning |
+| --- | --- |
+| `observed_at`, `event`, `source` | UTC RFC 3339 time, event name, and origin: `core`, `mcp`, `cli` or `worker`. |
+| `tool`, `target_id`, `action` | Known command or tool, registered target alias and supported action. A field is null until it is known. Unregistered target selectors are always null. |
+| `request_id`, `operation_id`, `plan_id`, `stage_id` | Correlation IDs when available. Successful preparation includes the new plan ID. |
+| `outcome`, `error_codes` | Decision, progress or result and at most 64 stable error codes. |
+| `permission` | Present for permission decisions: `decision`, required and granted capabilities, and whether the action appears in the registration's allowlist. Cancelling preparation requires only `inspect`. |
+| `artifact_ids`, `artifact_count`, `artifact_ids_truncated` | Up to 256 distinct evidence IDs, their total count and whether the ID list was truncated. The operation record retains the full artifact references. |
+
+Execution receipts omit command arguments, input bodies, filesystem paths,
+resource identities and raw exception messages. The export redactor removes
+known credentials and request content from the selected fields. A nested CLI
+receipt with `outcome: "joined"` records authentication to its parent operation;
+the worker records the eventual command outcome. Retries may append more than
+one receipt for the same operation.
+
+Permission and stage-start receipts must succeed before protected work begins.
+An unavailable or unsafe execution audit file produces `audit_failed`. If an
+acceptance receipt fails after the SQLite admission transaction commits, the
+operation remains queued and keeps its request and operation IDs. The frontend
+returns the accepted operation. Repeating that request or restarting the
+coordinator attempts the receipt again before launching its worker.
+
+A failed stage-completion receipt stops subsequent stages and preserves the
+committed stage evidence. Terminal and recovery receipts follow the operation
+commit; a failed append leaves that record intact and emits a fixed diagnostic
+to stderr. Completion receipt failures do not prevent owned helper cleanup.
+The operation record remains the source for retained outcomes when a receipt
+is missing. A bound CLI cannot write a receipt when it cannot load a trusted
+registry and establish its audit directory.
 
 ### Example dev registration
 

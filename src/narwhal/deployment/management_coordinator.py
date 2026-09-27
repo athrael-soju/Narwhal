@@ -15,8 +15,9 @@ from uuid import uuid4
 from narwhal import contracts
 from narwhal.diagnostics.management_artifacts import ArtifactStore
 
-from .management_access import InspectionAccess, parse_object, read_input
+from .management_access import AccessError, InspectionAccess, parse_object, read_input
 from .management_adapters import ManagementAdapter, installed_adapters
+from .management_audit import AuditSource, execution_event, operation_event
 from .management_exports import public_value, reject_credentials
 from .management_plans import PlanStore, canonical, digest, identifier
 from .management_records import ACTION_CAPABILITIES, OperationError, encode_record, summary, utc_now
@@ -84,12 +85,15 @@ class OperationCoordinator:
         registry_path: Path | None = None,
         adapters: Mapping[str, ManagementAdapter] | None = None,
         launcher: Callable[[str, str], None] | None = None,
+        *,
+        entry_point: AuditSource = "core",
     ) -> None:
         self.registry = registry
         self.registry_path = registry_path
         self.adapters = dict(installed_adapters() if adapters is None else adapters)
         self.store = OperationStore(registry)
         self.launcher = launcher
+        self.entry_point = entry_point
 
     def _access(self) -> InspectionAccess:
         registry = (
@@ -106,20 +110,69 @@ class OperationCoordinator:
 
     def _target(self, target_id: str) -> ManagementTarget:
         access = self._access()
-        target = access.target(target_id)
+        try:
+            target = access.target(target_id)
+        except AccessError as error:
+            execution_event(
+                access.registry,
+                "permission_decision",
+                source=self.entry_point,
+                target_id=target_id,
+                outcome="denied",
+                decision="deny",
+                inspect_only=True,
+                codes=[error.code],
+            )
+            raise
         store = OperationStore(access.registry)
         store.check_registry(access.registry)
         self.store = store
         return target
 
-    def authorize_action(self, target_id: str, action: str) -> ManagementTarget:
+    def authorize_action(
+        self,
+        target_id: str,
+        action: str,
+        *,
+        operation: dict[str, Any] | None = None,
+        source: AuditSource | None = None,
+    ) -> ManagementTarget:
         """Require separate inspection, measurement, mutation and action grants."""
-        target = self._target(target_id)
-        required = ACTION_CAPABILITIES.get(action)
-        if required is None:
-            raise OperationError("invalid_input", "Action is unsupported")
-        if action not in target.actions or not required <= set(target.capabilities):
-            raise OperationError("permission_denied", "Target does not permit this action")
+        access = self._access()
+        try:
+            target = access.target(target_id)
+            required = ACTION_CAPABILITIES.get(action)
+            if required is None:
+                raise OperationError("invalid_input", "Action is unsupported")
+            if action not in target.actions or not required <= set(target.capabilities):
+                raise OperationError("permission_denied", "Target does not permit this action")
+        except (OperationError, AccessError) as error:
+            execution_event(
+                access.registry,
+                "permission_decision",
+                source=source or self.entry_point,
+                target_id=target_id,
+                action=action,
+                operation=operation,
+                outcome="denied",
+                decision="deny",
+                codes=[error.code],
+            )
+            raise
+        execution_event(
+            access.registry,
+            "permission_decision",
+            source=source or self.entry_point,
+            target_id=target_id,
+            action=action,
+            operation=operation,
+            outcome="allowed",
+            decision="allow",
+        )
+        # Audit the decision before opening the durable store or admitting work.
+        store = OperationStore(access.registry)
+        store.check_registry(access.registry)
+        self.store = store
         return target
 
     def adapter(self, target: ManagementTarget) -> ManagementAdapter:
@@ -210,6 +263,13 @@ class OperationCoordinator:
     def _launch(self, target_id: str, operation: dict[str, Any], created: bool) -> dict[str, Any]:
         if created or operation["state"] == "queued":
             try:
+                operation_event(
+                    self.registry,
+                    "operation_accepted",
+                    self.store.read(target_id, operation["operation_id"]),
+                    source=self.entry_point,
+                    outcome="accepted",
+                )
                 if self.launcher is not None:
                     self.launcher(target_id, operation["operation_id"])
                 elif self.registry_path is not None:
@@ -273,7 +333,9 @@ class OperationCoordinator:
         self, target_id: str, action: str, parameters: dict[str, Any], request_id: str
     ) -> dict[str, Any]:
         """Record an authorised preparation before starting its detached worker."""
-        target = self.authorize_action(target_id, action)
+        target = self.authorize_action(
+            target_id, action, operation={"tool": "plan_prepare", "request_id": request_id}
+        )
         resolved = action_parameters(action, parameters)
         replay = self._replay(
             target_id, request_id, tool="plan_prepare", action=action, parameters=resolved
@@ -307,7 +369,11 @@ class OperationCoordinator:
         if replay is not None:
             return replay
         plan = PlanStore(self.registry, target_id).read(plan_id)
-        target = self.authorize_action(target_id, plan["payload"]["action"])
+        target = self.authorize_action(
+            target_id,
+            plan["payload"]["action"],
+            operation={"tool": "plan_execute", "plan_id": plan_id, "request_id": request_id},
+        )
         self._check_local_binding(target, plan)
         return self._execute(target, plan, request_id)
 
@@ -357,7 +423,16 @@ class OperationCoordinator:
         if replay is not None:
             return replay
         parent = self.store.read(target_id, operation_id)
-        target = self.authorize_action(target_id, parent["action"])
+        target = self.authorize_action(
+            target_id,
+            parent["action"],
+            operation={
+                "tool": "operation_resume",
+                "operation_id": operation_id,
+                "plan_id": plan_id,
+                "request_id": request_id,
+            },
+        )
         if parent["state"] == "recovery_required":
             raise OperationError(
                 "recovery_required", "Original operation effects remain unresolved"
@@ -429,7 +504,21 @@ class OperationCoordinator:
         target = self._target(target_id)
         operation = self.store.read(target_id, operation_id)
         if operation["tool"] != "plan_prepare":
-            target = self.authorize_action(target_id, operation["action"])
+            target = self.authorize_action(
+                target_id, operation["action"], operation={**operation, "tool": "operation_cancel"}
+            )
+        execution_event(
+            self._access().registry,
+            "cancellation_requested",
+            source=self.entry_point,
+            tool="operation_cancel",
+            target_id=target_id,
+            action=operation["action"],
+            operation=operation,
+            outcome="requested",
+            decision="allow",
+            inspect_only=operation["tool"] == "plan_prepare",
+        )
         operation = self.store.request_cancel(target_id, operation_id)
         if operation["state"] == "queued":
             from .management_executor import cancel_queued_operation
@@ -519,14 +608,20 @@ class OperationCoordinator:
 
     def prepare_plan(self, context: StageContext, operation: dict[str, Any]) -> dict[str, Any]:
         """Persist discovered inputs before publishing a plan from the detached worker."""
-        target = self.authorize_action(operation["target_id"], operation["action"])
+        target = self.authorize_action(
+            operation["target_id"], operation["action"], operation=operation, source="worker"
+        )
         adapter = self.adapter(target)
         parameters = self.store.request(target.id, operation["operation_id"])["parameters"]
         registration_digest = self._registration_digest(target)
         prepared = adapter.prepare(context, target, operation["action"], parameters)
         context.assert_current()
         if (
-            self._registration_digest(self.authorize_action(target.id, operation["action"]))
+            self._registration_digest(
+                self.authorize_action(
+                    target.id, operation["action"], operation=context.read(), source="worker"
+                )
+            )
             != registration_digest
         ):
             raise OperationError("stale_plan", "Registration changed during preparation")
@@ -590,13 +685,15 @@ class OperationCoordinator:
         """Run the admitted action with current permissions at each stage."""
         from .management_executor import run_operation
 
-        operation = self.store.read(target_id, operation_id)
         target = self._target(target_id)
+        operation = self.store.read(target_id, operation_id)
         adapter = self.adapters.get(target.adapter.id)
         plan = self.store.plan(target_id, operation_id)
 
         def check(context: StageContext) -> None:
-            current = self.authorize_action(target_id, operation["action"])
+            current = self.authorize_action(
+                target_id, operation["action"], operation=context.read(), source="worker"
+            )
             selected = self.adapter(current)
             if plan is not None:
                 PlanStore(self.registry, target_id).read(plan["plan_id"])
@@ -619,4 +716,6 @@ class OperationCoordinator:
 def run_worker(registry_path: Path, target_id: str, operation_id: str) -> dict[str, Any]:
     """Load the authority used by the fixed detached worker entry point."""
     registry = load_registry(registry_path)
-    return OperationCoordinator(registry, registry_path).run_worker(target_id, operation_id)
+    return OperationCoordinator(registry, registry_path, entry_point="worker").run_worker(
+        target_id, operation_id
+    )

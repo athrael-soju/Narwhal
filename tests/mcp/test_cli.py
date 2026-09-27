@@ -33,7 +33,9 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(main(argv), 0)
                 load.assert_called_once_with(Path(selected))
                 adapters.assert_called_once_with(load.return_value)
-                coordinator.assert_called_once_with(load.return_value, registry_path=Path(selected))
+                coordinator.assert_called_once_with(
+                    load.return_value, registry_path=Path(selected), entry_point="mcp"
+                )
                 coordinator.return_value.reconcile_startup.assert_called_once_with()
                 operations.assert_called_once_with(load.return_value, coordinator.return_value)
                 serve.assert_awaited_once_with(())
