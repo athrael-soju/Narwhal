@@ -423,12 +423,16 @@ class NarwhalRouter:
 
     async def _verify_health(self, iid: str, url: str) -> None:
         """Resolve a health-evidence suspect with an engine health probe."""
+        from ..runtime.lifecycle import allow_profile_recovery
+
         verdict = await self.engines.healthy(url)
         if verdict is None:
             # Preserve the suspect's state after control-pool exhaustion.
             log.info("suspect %s probe waited out the control pool; verdict deferred", iid)
             return
         if verdict:
+            if not await allow_profile_recovery(self, iid):
+                return
             self.scheduler.record_answer(iid, "health")
             log.info("suspect %s passed health verification; health failure classes cleared", iid)
             return
@@ -437,6 +441,8 @@ class NarwhalRouter:
 
     async def _verify_inference(self, iid: str, url: str) -> None:
         """Verify a suspect engine with a prefill/decode probe."""
+        from ..runtime.lifecycle import allow_profile_recovery
+
         sources = self._inference_sources.get(iid, {""}).copy()
         for source in sorted(sources):
             producer = self.monitor.instances.get(source) if source else None
@@ -451,6 +457,10 @@ class NarwhalRouter:
                 return
         if sources != self._inference_sources.get(iid, {""}):
             return  # A newly failed path still needs verification.
+        if not await allow_profile_recovery(self, iid):
+            return
+        if sources != self._inference_sources.get(iid, {""}):
+            return  # Another path failed while profile evidence was being checked.
         self._inference_sources.pop(iid, None)
         self.scheduler.record_answer(iid, "verification")
         log.info("suspect %s passed inference verification; failures cleared", iid)

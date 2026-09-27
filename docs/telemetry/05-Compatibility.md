@@ -33,6 +33,8 @@ Current interfaces are:
 | Preparation snapshot (unreleased) | `narwhal.management-snapshot` | 1 |
 | Management operation (unreleased) | `narwhal.management-operation` | 1 |
 | Local dev adapter settings (unreleased) | `narwhal.local-dev-settings` | 1 |
+| SSH fleet adapter settings (unreleased) | `narwhal.ssh-settings` | 1 |
+| SSH fleet recipe (unreleased) | `narwhal.ssh-recipe` | 1 |
 
 The unreleased [MCP server](../cli/MCP.md) reads management registries and
 validates the results returned by registered adapters. Its fourteen tools inspect

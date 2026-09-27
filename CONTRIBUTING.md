@@ -92,7 +92,8 @@ deployment plans, persisted operations and the adapter interface to
 `deployment/`. The unreleased server exposes eighteen tools, including the
 local dev lifecycle through `dev/management_adapter.py`. Protocol handling
 belongs to `mcp/`. Monitoring checks, metric queries and local host evidence
-belong to `observability/`. The SSH fleet provider remains planned.
+belong to `observability/`. The installed SSH fleet provider delegates host
+inspection to the registered deployment adapter.
 
 When adding a tool, keep its operation with the existing package owner and
 put only its MCP schema, dispatch and result mapping in `mcp/`. Site automation

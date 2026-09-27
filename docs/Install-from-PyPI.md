@@ -23,10 +23,12 @@ The repository checkout carries deployment helpers and development checks. Run `
 The MCP milestone branch adds `narwhal-mcp` and the optional `mcp` extra.
 The base wheel installs the entry point; running the server requires the extra.
 `narwhal-mcp --help` and `--version` work without it. The server accepts local
-stdio sessions and exposes fourteen tools for target and configuration inspection,
-router and dev status, diagnostics, artifacts, plans and persistent operations.
+stdio sessions and exposes eighteen tools for target and configuration inspection,
+router and dev status, diagnostics, monitoring, metrics, host evidence,
+artifacts, plans and persistent operations.
 The installed local dev adapter supports preparation, execution and resumption
-for `dev init/up/verify/down`. The SSH fleet adapter remains planned.
+for `dev init/up/verify/down`. The installed `ssh-v1` adapter adds
+[fleet deployment through MCP](mcp/Fleet.md); live qualification remains pending.
 
 Use the [MCP installation and client procedure](cli/MCP.md) with a checkout or
 wheel containing that unreleased work.

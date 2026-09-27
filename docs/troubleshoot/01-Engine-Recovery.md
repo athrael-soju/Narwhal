@@ -1,5 +1,8 @@
 # Engine and whole-wave recovery
 
+These lifecycle procedures require a complete
+[`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract).
+
 ## Engine failure
 
 ### One engine failed unexpectedly
@@ -14,11 +17,12 @@ For `individual` recovery:
 2. Restart its sidecar through the configured process manager so the sidecar binds the new process identity.
 3. Inspect the sidecar log.
 4. Repair any named endpoint or contract failure.
-5. Follow `/narwhal/lifecycle` while the router runs the health, attestation, model, generation, role-permitted KV, and final-health gates.
-6. Confirm `accepts_new: true`.
-7. Confirm that the engine ejection has cleared.
+5. If the engine process changed, [activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activate-replacement-profiles), then request readmission.
+6. Follow `/narwhal/lifecycle` while the router runs the health, attestation, profile-generation, model, generation, role-permitted KV, and final-health gates.
+7. Confirm `accepts_new: true` and that the engine ejection has cleared.
 
-If validation enters `blocked`, repair the engine and call:
+If validation enters `blocked`, repair the failure named in
+`engines.<id>.error`, then send a `POST` request to:
 
 ```text
 /narwhal/lifecycle/readmit
@@ -30,7 +34,12 @@ For `whole_wave`, use the complete-wave procedure below for drain and readmissio
 
 ### Planned restart of one engine
 
-Drain the engine through the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine) until `/narwhal/lifecycle` reports `ready_to_stop: true`, then stop it through the external supervisor. Start the replacement with a newer process identity and submit readmission; Narwhal reruns the recovery gates before placing new work on that engine.
+Follow the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine).
+Wait until `/narwhal/lifecycle` reports `ready_to_stop: true`, then stop the
+engine through its supervisor. Start the replacement with a newer process
+identity and activate its fresh profiles while preserving the hold. Request
+readmission; Narwhal reruns the recovery checks before placing new work on
+that engine.
 
 ## Whole-wave recovery
 
@@ -39,7 +48,10 @@ Use whole-wave recovery for:
 - `recovery.engine_restart_policy: whole_wave`;
 - stale-peer assertions;
 - transfer stalls that kill a peer;
-- engine-generation mismatches.
+- process replacements that invalidate shared peer state.
+
+Under the `individual` policy, a stale profile holds the affected engine.
+Activate its fresh profiles and request individual readmission.
 
 Start a lifecycle whole-wave drain so the router stops new traffic.
 
@@ -54,7 +66,10 @@ Stop every engine process tree through the external supervisor.
 
 Before restarting the wave, verify that accelerator memory allocations belong to the intended worker processes.
 
-Launch every engine from the same immutable image and launch contract. Start a fresh attestation sidecar for every engine process, then submit whole-wave readmission.
+Launch every engine from the same immutable image and launch contract. Start
+a fresh attestation sidecar for every engine process. While the wave remains
+held, [activate the replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles),
+then request whole-wave readmission.
 
 Restore ingress after the KV ring and final-health gates pass and `/ready` returns HTTP 200.
 

@@ -70,6 +70,7 @@ class ManagementAdapter(Protocol):
 
 def installed_adapters() -> dict[str, ManagementAdapter]:
     """Enable adapters only after their action and recovery implementations ship."""
+    from narwhal.deployment.ssh_adapter import SSHAdapter
     from narwhal.dev.management_adapter import LocalDevAdapter
 
-    return {"local-dev-v1": LocalDevAdapter()}
+    return {"local-dev-v1": LocalDevAdapter(), "ssh-v1": SSHAdapter()}

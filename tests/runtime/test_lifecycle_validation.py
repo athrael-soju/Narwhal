@@ -13,6 +13,7 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 from narwhal.engines.validation import validation_pairs
 from narwhal.runtime import lifecycle
 from narwhal.runtime.lifecycle import DrainRecord, LifecycleError, ValidationOutcome
+from narwhal.runtime.monitoring import readmit
 from narwhal.serving.app import create_app
 from narwhal.types import Role
 from tests.fixtures import fleet
@@ -39,10 +40,23 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.document = AttestationDocument(
             self.cfg.engine_contract, dict.fromkeys(self.cfg.engine_contract.fields(), "fixture")
         )
+        self.bind_profiles()
         self.transport = httpx.MockTransport(self.http)
         self.router.lifecycle_transport = self.transport
         self.manager.records["e0"] = DrainRecord("e0", "validating", 1, 2, old_process_start=100)
         self.router.scheduler.drain("e0")
+
+    def bind_profiles(self):
+        """Measure the fixture's current process-bound attestation for each engine."""
+        for iid, start in self.starts.items():
+            payload = make_attestation(
+                self.document, EngineIdentity(self.cfg.engine_contract.vllm_version, start)
+            )
+            self.router.profiles.put(
+                replace(
+                    self.router.profiles.get(iid), generation_digest=payload["attestation_digest"]
+                )
+            )
 
     async def identity(self, url, **kwargs):
         """Read an engine's current process identity from the test's explicit state."""
@@ -234,9 +248,144 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.engines.prefill.await_count, 2)
         self.assertIn("e0", self.router.scheduler.draining)
         self.assertIn("final health", outcome.checks["e0"])
+        self.assertIn("profile generation", outcome.checks["e0"])
         self.manager.readmitted(["e0"], outcome)
         self.assertEqual(self.manager.records["e0"].state, "active")
         self.assertNotIn("e0", self.router.scheduler.draining)
+
+    async def test_stale_missing_and_unbound_loaded_profiles_reject_readmission(self):
+        """A successful engine probe cannot replace a missing or stale measurement binding."""
+        original = self.router.profiles.get("e0")
+        for value, detail in (
+            (None, "has no loaded profile"),
+            (replace(original, generation_digest=None), "has no generation evidence"),
+            (replace(original, generation_digest="sha256:" + "0" * 64), "differs from the live"),
+        ):
+            with self.subTest(detail=detail):
+                if value is None:
+                    self.router.profiles._by_id.pop("e0")
+                else:
+                    self.router.profiles.put(value)
+                outcome = await self.validate()
+                self.assertIn("e0", outcome.failures)
+                self.assertIn(detail, " ".join(outcome.failures["e0"]))
+                self.assertIn("e0", self.router.scheduler.draining)
+                self.router.engines.prefill.assert_not_awaited()
+        self.router.profiles.put(original)
+        self.assertTrue((await self.validate()).passed)
+
+    async def test_inactive_profile_variant_must_match_the_verified_generation(self):
+        """Checking the selected row alone would admit a stale colocated variant."""
+        original = self.router.profiles.get("e0")
+        variant = replace(
+            original,
+            generation_digest="sha256:" + "0" * 64,
+            colocated_group="gpu-0",
+            colocated_prefill_engines=1,
+            colocated_decode_engines=1,
+            colocated_target_role="prefill",
+            colocated_prefill_rps=1.0,
+            colocated_decode_rps=1.0,
+        )
+        self.router.profiles.put(variant)
+        outcome = await self.validate()
+        self.assertIn("profile generation differs", " ".join(outcome.failures["e0"]))
+        self.router.engines.prefill.assert_not_awaited()
+        self.router.profiles.put(replace(variant, generation_digest=original.generation_digest))
+        self.assertTrue((await self.validate()).passed)
+
+    async def test_one_stale_wave_member_prevents_every_member_from_returning(self):
+        """Whole-wave readmission remains atomic when only one loaded profile is stale."""
+        self.cfg.engine_restart_policy = "whole_wave"
+        self.starts["e3"] = 102
+        self.bind_profiles()
+        self.manager.wave_id = "profile-wave"
+        self.router.lifecycle_blocked = "whole-wave drain profile-wave"
+        for iid in self.starts:
+            self.router.scheduler.drain(iid)
+            self.manager.records[iid] = DrainRecord(
+                iid, "validating", 1, 2, wave_id="profile-wave", old_process_start=100
+            )
+        self.router.profiles.put(replace(self.router.profiles.get("e3"), generation_digest=None))
+        outcome = await self.validate(wave=True, engines=["e0", "e3"])
+        self.assertEqual(set(outcome.failures), {"e3"})
+        self.manager.validation_failed(outcome)
+        self.assertEqual({row.state for row in self.manager.records.values()}, {"blocked"})
+        self.assertEqual(self.router.scheduler.draining, {"e0", "e3"})
+        self.assertFalse(self.manager.view()["router"]["ready"])
+        self.assertIn("another engine", self.manager.records["e0"].error)
+        self.bind_profiles()
+        self.manager.mark_validating(["e0", "e3"])
+        outcome = await self.validate(wave=True, engines=["e0", "e3"])
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.manager.readmitted(["e0", "e3"], outcome)
+        self.assertEqual(self.router.scheduler.draining, set())
+        self.assertFalse(self.manager.wave_id)
+
+    async def test_final_attestation_change_invalidates_profile_binding(self):
+        """A valid new attestation digest after fabric must still match loaded measurements."""
+        original_health = self.router.engines.healthy
+
+        async def healthy(url):
+            if original_health.await_count == 3:
+                self.document = AttestationDocument(
+                    self.cfg.engine_contract,
+                    dict.fromkeys(self.cfg.engine_contract.fields(), "changed source evidence"),
+                )
+            return True
+
+        original_health.side_effect = healthy
+        outcome = await self.validate()
+        self.assertFalse(outcome.passed)
+        self.assertIn("profile generation differs", " ".join(outcome.failures["e0"]))
+        self.assertEqual(self.router.engines.prefill.await_count, 2)
+        self.assertIn("e0", self.router.scheduler.draining)
+
+    async def test_unchanged_generation_automatic_validation_retains_measured_profile(self):
+        """Recovery without process replacement accepts the profile already loaded."""
+        self.manager.records["e0"].restart_required = False
+        self.starts["e0"] = 100
+        self.bind_profiles()
+        outcome = await self.validate()
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.assertIn("profile generation", outcome.checks["e0"])
+
+    async def test_contracted_automatic_readmission_blocks_stale_loaded_measurements(self):
+        """The monitoring entry point retains a held record when profile binding fails."""
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.router.scheduler.eject("e0")
+        self.router.profiles.put(
+            replace(self.router.profiles.get("e0"), generation_digest="sha256:" + "0" * 64)
+        )
+        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
+            self.assertEqual(await readmit(self.router, 0), [])
+        self.assertIn("e0", self.router.scheduler.ejected)
+        self.assertIn("e0", self.router.scheduler.draining)
+        self.assertEqual(self.manager.records["e0"].state, "blocked")
+        self.assertIn("profile generation differs", self.manager.records["e0"].error)
+
+    async def test_contracted_automatic_readmission_accepts_unchanged_measured_generation(self):
+        self.starts["e0"] = 100
+        self.bind_profiles()
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.router.scheduler.eject("e0")
+        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
+            self.assertEqual(await readmit(self.router, 0), ["e0"])
+        self.assertEqual(self.manager.records["e0"].state, "active")
+        self.assertIn("profile generation", self.manager.records["e0"].checks)
+
+    async def test_identity_sweep_rejects_stale_profiles_even_when_accepted_identity_matches(self):
+        """An accepted handoff identity cannot authorize a standby's old in-memory profile."""
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.manager.process_starts["e0"] = 101
+        self.router.profiles.put(replace(self.router.profiles.get("e0"), generation_digest=None))
+        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
+            self.assertEqual(await lifecycle.check_process_identities(self.router), ["e0"])
+        self.assertIn("e0", self.router.scheduler.ejected)
+        self.assertIn("has no generation evidence", self.manager.events[-1]["reason"])
 
     async def test_readmission_rejects_gate_failures_before_fabric_dispatch(self):
         """Failed identity, model or generation evidence stops fabric probes."""
@@ -376,6 +525,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.starts["e0"] = 100
+        self.bind_profiles()
         with patch.object(lifecycle, "fetch_engine_identity", self.identities):
             self.assertEqual(await lifecycle.check_process_identities(self.router), [])
             self.starts["e0"] = 101

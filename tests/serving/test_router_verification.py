@@ -11,7 +11,7 @@ import httpx
 from narwhal.engines.client import EngineError, InferenceProbe, ProbeLeg
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
-from tests.fixtures import fleet
+from tests.fixtures import bind_identity_profiles, fleet
 
 
 class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
@@ -24,6 +24,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.engine_contract = None
         self.cfg.eject_after = 1
         self.router = create_app(self.cfg).state.router
+        bind_identity_profiles(self.router)
         self.addAsyncCleanup(self.router.engines.aclose)
 
     async def test_input_length_rotates_after_failure_and_reuses_a_successful_tokenizer(self):

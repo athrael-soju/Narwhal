@@ -81,7 +81,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         return [
             row
             for line in (self.root / "journal.jsonl").read_text().splitlines()
-            if "meta" not in (row := json.loads(line))
+            if "terminal" in (row := json.loads(line)) and "rid" in row
         ]
 
     def assert_released(self):
@@ -215,7 +215,13 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                 self.decode_frames = [{"choices": [choice]}]
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 502)
-                row = self.terminal_rows()[-1]
+                rows = [
+                    row
+                    for row in self.terminal_rows()
+                    if row["rid"] == response.headers["x-request-id"]
+                ]
+                self.assertEqual(len(rows), 1)
+                row = rows[0]
                 self.assertEqual(row["terminal"], "failed")
                 self.assertIn("token_ids", row["error"])
                 self.assert_released()

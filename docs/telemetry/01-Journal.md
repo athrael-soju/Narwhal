@@ -52,7 +52,7 @@ Narwhal retains at most `serving.max_attempts` failure entries and caps messages
 
 ### Attainment accounting
 
-For deployment acceptance, score the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) against its TTFT and TPOT limits. Only completed client responses within the applicable limits pass. All other scored offers are misses. The client includes unsent offers in the denominator and excludes the unscored warmup; an unfiltered journal cannot reconstruct that population.
+For deployment acceptance, score the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) against its TTFT and TPOT limits. Only completed client responses within the applicable limits pass. All other scored offers are misses. Build this population from the client's offer records, including unsent offers and excluding the unscored warmup.
 
 Join sent, scored offers to terminal journal rows by `client_rid` to diagnose misses. Journal outcomes that represent misses include:
 
@@ -65,9 +65,9 @@ Join sent, scored offers to terminal journal rows by `client_rid` to diagnose mi
 - terminal requests whose `output_len` is null;
 - terminal requests whose `ttft_s` is null.
 
-Completed responses above an applicable client latency limit also miss. Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request. A non-null `output_len` or `ttft_s` does not turn that cancellation into a pass.
+Completed responses above an applicable client latency limit also miss. Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request. Cancelled requests count as misses even when `output_len` or `ttft_s` has a measured value.
 
-The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) excludes cancelled, rejected, and invalid requests. It has a different population from deployment acceptance and cannot replace the client's all-offer score.
+The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) excludes cancelled, rejected, and invalid requests. Use the client's all-offer score for deployment acceptance.
 
 ### Separate transfer and decode queueing
 
@@ -83,6 +83,14 @@ Narwhal appends router operation events to the request journal for:
 - blocked decode-floor changes;
 - engine lifecycle operations;
 - monitoring health.
+
+If profile-generation verification fails during a health or inference
+recovery probe, Narwhal excludes the engine from placement and writes an
+`engine_lifecycle` event with `action: profile_recovery_blocked`. The event
+records the engine `iid`, the failed check in `error`, and `at` as Unix
+wall-clock seconds. Inspect the engine's
+[profile generation evidence](02-Profiles.md#validate-the-engine-cost-model)
+before retrying recovery.
 
 Monitoring writes these event types:
 

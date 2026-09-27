@@ -4,14 +4,15 @@
 This command is **unreleased work on the MCP milestone branch**. It exposes
 eighteen tools for target and configuration inspection, local dev status,
 diagnostics, monitoring, metrics, host evidence, artifacts, plans and persistent
-operations. The installed
-`local-dev-v1` adapter executes the local dev lifecycle through `plan_prepare`,
-`plan_execute` and `operation_resume`.
+operations. The installed `local-dev-v1` and `ssh-v1` adapters execute their
+registered actions through `plan_prepare`, `plan_execute` and `operation_resume`.
 
 Follow [Manage a local dev instance through MCP](../mcp/Local-Dev.md) to register
 and operate a CUDA dev instance. [Inspect monitoring through MCP](../mcp/Observability.md)
-covers monitoring, registered queries and local host evidence. The SSH fleet
-provider remains planned in the [MCP contract](../MCP-Contracts.md).
+covers monitoring, registered queries and host evidence. Follow
+[Deploy a fleet through MCP](../mcp/Fleet.md) to install and qualify existing
+GPU hosts over SSH. The [MCP contract](../MCP-Contracts.md) records availability
+and the pending live qualification.
 
 The client supplies the model and conversation, then launches the server under
 your local account. The server exchanges messages through stdin and stdout.
@@ -101,7 +102,8 @@ PY
 
 The fleet registry schema requires an adapter settings path. This example
 reserves `site-settings.json`; the inspection tools do not read that file.
-SSH adapter settings remain part of the planned fleet deployment workflow.
+The [fleet deployment procedure](../mcp/Fleet.md) supplies those settings when
+you enable fleet actions.
 The example has only the `inspect` grant and no action grants or router endpoint.
 
 The server requires `state_dir` and `artifact_root` to be owned by its user with

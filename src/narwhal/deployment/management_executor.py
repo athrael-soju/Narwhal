@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -21,10 +23,10 @@ from uuid import uuid4
 from narwhal.diagnostics.management_artifacts import ArtifactStore
 
 from . import stages
-from .management_access import AccessError, InspectionAccess, clean_command, directory
+from .management_access import AccessError, InspectionAccess, clean_command, directory, read_input
 from .management_audit import operation_event
 from .management_exports import public_value
-from .management_records import OperationError, utc_now, uuid_string
+from .management_records import OperationError, encode_record, utc_now, uuid_string
 from .management_registry import ManagementRegistry
 from .management_store import OperationStore
 
@@ -236,6 +238,83 @@ class StageContext:
 
         self.update(change)
 
+    def _helper_intent(self, receipt: dict[str, Any], slot: str | None) -> None:
+        if slot is None:
+            self.record_intent(receipt)
+            return
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,127}", slot):
+            raise OperationError("invalid_input", "Helper slot must be a fixed adapter alias")
+        receipt["resource_id"] = f"helper-slot:{self.stage_id}:{slot}"
+        record = self.read()
+        row = next(row for row in record["stages"] if row["stage_id"] == self.stage_id)
+        previous = next(
+            (item for item in row["effects"] if item["resource_id"] == receipt["resource_id"]), None
+        )
+        if previous is not None:
+            identity = previous.get("identity")
+            if (
+                previous["effect"] != "absent"
+                or previous["kind"] != "measurement_helper"
+                or previous["host_id"] != "management"
+                or previous["owner"]["operation_id"] != self.operation_id
+                or previous["owner"]["stage_id"] != self.stage_id
+                or not isinstance(identity, dict)
+                or "boot_id" not in identity
+                or "processes" not in identity
+                or stages.active(identity)
+            ):
+                if previous["effect"] == "absent":
+                    self.record_effect({**previous, "effect": "unknown"})
+                raise OperationError(
+                    "recovery_required", "Previous helper slot has unresolved ownership"
+                )
+            token = uuid_string(previous["owner"]["launch_token"])
+            name = f"helper-{token}.receipt.json"
+            content = encode_record(previous)
+            with directory(self.output_dir, private=True) as parent:
+                try:
+                    fd = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=parent,
+                    )
+                except FileExistsError:
+                    if read_input(self.output_dir / name) != content:
+                        raise OperationError(
+                            "recovery_required", "Helper history differs from its terminal receipt"
+                        ) from None
+                else:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.fsync(parent)
+            receipt["history"] = {
+                "retired": previous.get("history", {}).get("retired", 0) + 1,
+                "last_receipt": name,
+                "last_sha256": hashlib.sha256(content).hexdigest(),
+            }
+
+        def replace(current: dict[str, Any]) -> None:
+            stage = next(row for row in current["stages"] if row["stage_id"] == self.stage_id)
+            actual = next(
+                (
+                    item
+                    for item in stage["effects"]
+                    if item["resource_id"] == receipt["resource_id"]
+                ),
+                None,
+            )
+            if actual != previous:
+                raise OperationError("recovery_required", "Helper slot changed before launch")
+            stage["effects"] = [
+                item for item in stage["effects"] if item["resource_id"] != receipt["resource_id"]
+            ] + [receipt]
+
+        self.assert_current()
+        self.update(replace)
+
     def run_command(
         self,
         command: list[str],
@@ -244,9 +323,12 @@ class StageContext:
         env: dict[str, str] | None = None,
         pass_fds: tuple[int, ...] = (),
         retain_on_success: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
+        helper_slot: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Execute a trusted fixed command with persisted, gated helper ownership."""
         self.assert_current()
+        if helper_slot is not None and retain_on_success is not None:
+            raise OperationError("invalid_input", "Reusable helper slots cannot retain services")
         cleanup = self.stage["cleanup"]
         launch_token = str(uuid4())
         receipt: dict[str, Any] = {
@@ -262,12 +344,12 @@ class StageContext:
             "effect": "unknown",
             "observed_at": utc_now(),
         }
-        self.record_intent(receipt)
         transferred: dict[int, int] = {}
         with directory(self.target.artifact_root, private=True, create=True):
             pass
         with directory(self.output_dir, private=True, create=True):
             pass
+        self._helper_intent(receipt, helper_slot)
 
         def observed(evidence: dict[str, Any]) -> None:
             released = evidence.get("supervisor_returncode") == 0 and "cleanup" not in evidence
@@ -280,7 +362,10 @@ class StageContext:
                     for pid, ticks in evidence["processes"].items()
                     if not released or transferred.get(int(pid)) != ticks
                 },
+                "evidence_name": Path(evidence["evidence"]).name,
             }
+            if "cleanup" in evidence:
+                receipt["identity"]["cleanup"] = self.redactor.value(evidence["cleanup"])
             receipt["effect"] = (
                 "absent"
                 if (
@@ -442,6 +527,16 @@ def _finish(
     errors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     record = context.read()
+    try:
+        context.store.check_cleanup_complete(record)
+    except OperationError as error:
+        if error.code != "cleanup_incomplete":
+            raise
+        return _recovery(
+            context,
+            "Cleanup ownership remains unresolved",
+            [_error("recovery_required", error.message), *(errors or [])],
+        )
     errors = context.redactor.value(errors or [])
     store = ArtifactStore(str(context.registry.registry_id), context.target)
     reference = store.export(
@@ -499,7 +594,16 @@ def _finish(
             "command_result": last,
         }
 
-    completed = context.update(change)
+    try:
+        completed = context.update(change)
+    except OperationError as error:
+        if error.code != "cleanup_incomplete":
+            raise
+        return _recovery(
+            context,
+            "Cleanup ownership remains unresolved",
+            [_error("recovery_required", error.message), *errors],
+        )
     operation_event(
         context.registry,
         "operation_finished",
@@ -947,7 +1051,12 @@ def run_operation(
                         if outcome.command_result
                         else None,
                     )
-                    value["artifacts"].extend(outcome.artifacts)
+                    value["artifacts"] = list(
+                        {
+                            item["artifact_id"]: item
+                            for item in [*value["artifacts"], *outcome.artifacts]
+                        }.values()
+                    )
 
                 current = context.update(completed)
                 if any(
@@ -1146,7 +1255,11 @@ def _reconcile_operation(
             errors=context.redactor.value(outcome.errors),
             artifacts=outcome.artifacts,
         )
-        value["artifacts"].extend(outcome.artifacts)
+        value["artifacts"] = list(
+            {
+                item["artifact_id"]: item for item in [*value["artifacts"], *outcome.artifacts]
+            }.values()
+        )
 
     record = context.update(findings)
     if (

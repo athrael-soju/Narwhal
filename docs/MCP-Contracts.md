@@ -12,14 +12,15 @@ and return redacted results. It also exposes `plan_inspect`, `operation_list`,
 `operation_inspect` and `operation_cancel` through the durable store and shared
 coordinator.
 
-The installed `local-dev-v1` adapter exposes `plan_prepare`, `plan_execute`
-and `operation_resume` for local dev actions. Registry-bound dev CLI commands
+The installed `local-dev-v1` and `ssh-v1` adapters expose `plan_prepare`,
+`plan_execute` and `operation_resume` for their registered actions. Registry-bound dev CLI commands
 use the same coordinator. Follow [Manage a local dev instance](mcp/Local-Dev.md)
 for its prerequisites and workflow. `monitoring_status`, `metrics_query`,
 `host_inventory` and `host_logs` provide bounded monitoring and local host
 inspection. Follow [Inspect monitoring through MCP](mcp/Observability.md) for
-registration and result interpretation. The SSH fleet provider remains
-**planned behaviour**.
+registration and result interpretation. Follow [Deploy a fleet through MCP](mcp/Fleet.md)
+for the SSH deployment workflow and its host prerequisites. Live qualification
+of this unreleased fleet adapter remains pending.
 
 The distribution remains `narwhal-inference`, with an optional `mcp`
 extra and a `narwhal-mcp` executable. The server runs on a Linux management
@@ -51,25 +52,23 @@ The configuration and diagnostic tools invoke finite installed commands with
 diagnostic collection, engine launch, local development, profiling and preflight
 retain their documented behaviour. The inspection adapters select `--format
 json` and preserve each command's outcome and evidence after redaction. They
-read registered local inputs and router endpoints. Execution tools can request
-local dev changes and verification under the target's action grants.
+read registered local inputs and router endpoints. Execution tools request local dev or SSH fleet work under the target's action
+grants.
 
-The [HTTP inspection routes](HTTP-API.md) supply live router state. Site tooling
-currently coordinates [Gates A–G](Deploy.md) and
-[monitoring startup](observability/01-Start-and-Verify.md). The proposed adapter
-makes those workflows callable through the same operation runner used by MCP
-and management CLI entry points. The operation core persists requests, reserves
+The [HTTP inspection routes](HTTP-API.md) supply live router state. The SSH adapter coordinates [Gates A–G](Deploy.md) and
+[monitoring startup](observability/01-Start-and-Verify.md) through the persistent
+operation runner. The operation core persists requests, reserves
 canonical resources and supplies detached workers to installed adapters.
 For an existing instance, the local dev adapter acquires its lifecycle lock
 before rechecking inputs and changing state. New-instance initialization
 requires the selected directory to remain absent and refuses to overwrite a
-concurrent creation. The planned fleet adapter must integrate its commands
-before operators can submit managed fleet work.
+concurrent creation. The SSH adapter records remote job ownership before
+dispatch and rechecks retained engine generations before dependent work.
 
 Prometheus continues to scrape router and engine metrics. Observability tools
 inspect monitoring health and query registered expressions within fixed limits.
-Host tools collect registered local inventory and log sources. Fleet monitoring
-startup and remote host transport belong to the planned SSH adapter. Website
+Host tools collect registered inventory and log sources. The SSH adapter owns
+fleet monitoring startup and remote host access. Website
 crawling and content ingestion are outside this specification.
 
 ## Ownership
@@ -104,8 +103,10 @@ client/protocol combinations that have been checked.
 The installed contract manifest includes version 1 of
 `narwhal.management-registry`, `narwhal.management-result`,
 `narwhal.deployment-plan`, `narwhal.management-snapshot` and
-`narwhal.management-operation`, plus `narwhal.local-dev-settings` version 1.
-Their readers and writers belong to the management core and local dev adapter.
+`narwhal.management-operation`, plus `narwhal.local-dev-settings`,
+`narwhal.ssh-settings` and `narwhal.ssh-recipe` version 1. The SSH adapter ships
+its settings and recipe schemas under `narwhal.deployment`. Their readers
+belong to their respective package owners.
 
 [MCP Fleet Operations v1](https://github.com/athrael-soju/Narwhal/issues/147)
 tracks delivery and qualification. The inspection tools have no authority to

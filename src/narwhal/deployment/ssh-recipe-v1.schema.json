@@ -1,0 +1,288 @@
+{
+  "$defs": {
+    "FabricRecipe": {
+      "additionalProperties": false,
+      "properties": {
+        "transport": {
+          "default": "ucx_tcp",
+          "enum": [
+            "ucx_tcp",
+            "ucx_rdma"
+          ],
+          "title": "Transport",
+          "type": "string"
+        },
+        "duration_s": {
+          "default": 10,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Duration S",
+          "type": "integer"
+        },
+        "test_port": {
+          "default": 5201,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Test Port",
+          "type": "integer"
+        },
+        "repeats": {
+          "default": 1,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Repeats",
+          "type": "integer"
+        },
+        "prompt_tokens": {
+          "default": 8192,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "transfer_budget_ms": {
+          "default": 1000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Transfer Budget Ms",
+          "type": "integer"
+        },
+        "utilization": {
+          "default": 0.7,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Utilization",
+          "type": "number"
+        },
+        "gid_index": {
+          "default": 0,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Gid Index",
+          "type": "integer"
+        }
+      },
+      "title": "FabricRecipe",
+      "type": "object"
+    },
+    "LoadRecipe": {
+      "additionalProperties": false,
+      "properties": {
+        "rates": {
+          "items": {
+            "exclusiveMinimum": 0,
+            "maximum": 100000,
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Rates",
+          "type": "array"
+        },
+        "requests": {
+          "default": 200,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Requests",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 8192,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 64,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 1729,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "ttft_ms": {
+          "default": 2000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Ttft Ms",
+          "type": "integer"
+        },
+        "tpot_us": {
+          "default": 33300,
+          "maximum": 86400000000,
+          "minimum": 1,
+          "title": "Tpot Us",
+          "type": "integer"
+        },
+        "attainment": {
+          "default": 0.95,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Attainment",
+          "type": "number"
+        },
+        "request_timeout_ms": {
+          "default": 120000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Request Timeout Ms",
+          "type": "integer"
+        },
+        "max_inflight": {
+          "default": 64,
+          "maximum": 4096,
+          "minimum": 1,
+          "title": "Max Inflight",
+          "type": "integer"
+        },
+        "max_lag_ms": {
+          "default": 50,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Max Lag Ms",
+          "type": "integer"
+        },
+        "local_router_port": {
+          "default": 18000,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Local Router Port",
+          "type": "integer"
+        },
+        "local_prometheus_port": {
+          "default": 19090,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Local Prometheus Port",
+          "type": "integer"
+        },
+        "local_grafana_port": {
+          "default": 13000,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Local Grafana Port",
+          "type": "integer"
+        }
+      },
+      "title": "LoadRecipe",
+      "type": "object"
+    },
+    "ProfilingRecipe": {
+      "additionalProperties": false,
+      "properties": {
+        "prefill_lens": {
+          "items": {
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 64,
+          "minItems": 3,
+          "title": "Prefill Lens",
+          "type": "array"
+        },
+        "decode_concurrency": {
+          "items": {
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 64,
+          "minItems": 2,
+          "title": "Decode Concurrency",
+          "type": "array"
+        },
+        "decode_input_lens": {
+          "items": {
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 64,
+          "minItems": 2,
+          "title": "Decode Input Lens",
+          "type": "array"
+        },
+        "decode_tokens": {
+          "default": 64,
+          "maximum": 1000000,
+          "minimum": 3,
+          "title": "Decode Tokens",
+          "type": "integer"
+        },
+        "decode_repeats": {
+          "default": 1,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Decode Repeats",
+          "type": "integer"
+        },
+        "prefill_repeats": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 3,
+          "title": "Prefill Repeats",
+          "type": "integer"
+        }
+      },
+      "title": "ProfilingRecipe",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "narwhal.ssh-recipe",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "environment": {
+      "maxProperties": 256,
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {
+          "type": "string"
+        }
+      },
+      "title": "Environment",
+      "type": "object"
+    },
+    "environment_refs": {
+      "maxProperties": 64,
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "type": "string"
+        }
+      },
+      "title": "Environment Refs",
+      "type": "object"
+    },
+    "profiling": {
+      "$ref": "#/$defs/ProfilingRecipe"
+    },
+    "fabric": {
+      "$ref": "#/$defs/FabricRecipe"
+    },
+    "load": {
+      "$ref": "#/$defs/LoadRecipe"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version"
+  ],
+  "title": "SSHRecipe",
+  "type": "object"
+}

@@ -17,6 +17,7 @@ from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_
 from ..engines.client import EngineError
 from ..engines.stream import sse_token_count
 from ..engines.validation import recovery_pairs, validation_pairs
+from ..profiling.generation import profile_generation_problems, read_generation
 
 if TYPE_CHECKING:
     from ..serving.router import NarwhalRouter
@@ -483,7 +484,8 @@ async def check_process_identities(
     manager: LifecycleManager = router.lifecycle
     contract = cfg.engine_contract
     if contract is None:
-        manager.identities_ready = True
+        # Startup and takeover own readiness for contract-free fleets. A
+        # concurrent liveness sweep must not release a takeover's profile gate.
         return []
     async with manager.lock:
         if not controls_fleet(router):
@@ -518,9 +520,15 @@ async def check_process_identities(
                 ) as client:
                     response = await client.get(spec.attestation_url)
                     response.raise_for_status()
-                failures = verify_attestation(response.json(), contract, identity)
+                payload = response.json()
+                failures = verify_attestation(payload, contract, identity)
                 if failures:
                     return None, "attestation: " + "; ".join(failures)
+                problems = profile_generation_problems(
+                    router.profiles, spec.iid, payload["attestation_digest"]
+                )
+                if problems:
+                    return None, "; ".join(problems)
                 return identity.process_start_time_seconds, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 return None, f"process identity unavailable: {type(exc).__name__}"
@@ -576,6 +584,48 @@ async def capture_process_identities(
         else:
             starts[iid] = identity.process_start_time_seconds
     return starts, failures
+
+
+async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
+    """Keep health and inference probes from restoring stale or operator-held engines."""
+    from .standby import controls_fleet
+
+    manager = router.lifecycle
+    async with manager.lock:
+        if (
+            not controls_fleet(router)
+            or router.lifecycle_blocked
+            or iid in router.scheduler.draining
+        ):
+            return False
+        if router.cfg.engine_restart_policy == "whole_wave" and iid in router.scheduler.ejected:
+            manager.require_restart_wave("engine recovery requires a managed whole-wave restart")
+            return False
+        spec = next(spec for spec in router.cfg.engines if spec.iid == iid)
+        try:
+            generation = await read_generation(
+                spec,
+                router.cfg.engine_contract,
+                timeout_s=router.cfg.health_timeout_s,
+                headers=router.cfg.engine_headers(),
+                transport=router.lifecycle_transport,
+            )
+            problems = profile_generation_problems(router.profiles, iid, generation.digest)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            problems = [f"{iid} profile generation unreadable: {type(exc).__name__}"]
+        if (
+            not controls_fleet(router)
+            or router.lifecycle_blocked
+            or iid in router.scheduler.draining
+        ):
+            return False
+        if not problems:
+            return True
+        router.scheduler.eject(iid)
+        manager._emit("profile_recovery_blocked", iid=iid, error="; ".join(problems))
+        if router.cfg.engine_restart_policy == "whole_wave":
+            manager.require_restart_wave("profile generation could not be verified")
+        return False
 
 
 def _single_pairs(target: EngineSpec, peers: list[EngineSpec]) -> list[tuple[str, str]]:
@@ -673,7 +723,8 @@ async def validate_readmission(
             try:
                 response = await client.get(spec.attestation_url)
                 response.raise_for_status()
-                failures = verify_attestation(response.json(), contract, identity)
+                payload = response.json()
+                failures = verify_attestation(payload, contract, identity)
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"attestation unreadable: {type(exc).__name__}")
                 continue
@@ -681,6 +732,13 @@ async def validate_readmission(
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
+                problems = profile_generation_problems(
+                    router.profiles, spec.iid, payload["attestation_digest"]
+                )
+                for problem in problems:
+                    outcome.fail(spec.iid, problem)
+                if not problems:
+                    outcome.ok(spec.iid, "profile generation")
             try:
                 models = await client.get(
                     f"{spec.url}/v1/models", headers=router.engines._auth(None)
@@ -750,8 +808,16 @@ async def validate_readmission(
                 async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
                     response = await client.get(spec.attestation_url)
                     response.raise_for_status()
-                if verify_attestation(response.json(), contract, live):
+                payload = response.json()
+                if verify_attestation(payload, contract, live):
                     raise ValueError("attestation changed during validation")
+                problems = profile_generation_problems(
+                    router.profiles, spec.iid, payload["attestation_digest"]
+                )
+                for problem in problems:
+                    outcome.fail(spec.iid, problem)
+                if problems:
+                    router.scheduler.eject(spec.iid)
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 identity_failed = True
                 outcome.fail(

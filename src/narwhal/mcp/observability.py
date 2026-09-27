@@ -14,8 +14,8 @@ from narwhal.deployment.management_access import AccessError, now
 from narwhal.deployment.management_records import OperationError
 from narwhal.deployment.management_registry import ManagementRegistry, ManagementTarget
 from narwhal.observability.management_http import endpoint
-from narwhal.observability.management_local import LocalSiteProvider
 from narwhal.observability.management_metrics import query_metrics, query_parameters
+from narwhal.observability.management_site import RegisteredSiteProvider
 from narwhal.observability.management_status import observe_monitoring, timestamp
 from narwhal.observability.management_types import SiteProvider, SourceCapture
 
@@ -57,7 +57,7 @@ class ObservabilityTools(InspectionTools):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(registry)
-        self.site = site_provider or LocalSiteProvider(self.access)
+        self.site = site_provider or RegisteredSiteProvider(self.access)
         self.transport = transport
 
     def _observations(self, target: ManagementTarget, rows: list[dict]) -> list[dict]:
