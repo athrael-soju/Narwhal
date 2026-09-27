@@ -14,9 +14,23 @@ The profile file declares:
 }
 ```
 
-With `engine_contract` configured, the profiler reads each engine's process identity and verified attestation before its sweep, repeats the read after the sweep, and saves the attestation digest with the fit. The sample sidecar retains the full attestation response, including the process start, contract fields, and their evidence sources. With `engine_contract` omitted, the same two reads bind the fit to the live `/version` and `/metrics` process identity.
+The profiler reads each engine's identity before and after its sweep. With
+`engine_contract`, it verifies attestation and saves the digest with the fit.
+The sample sidecar stores the full attestation response, including the process
+start, contract fields, and evidence sources. Without `engine_contract`, it
+saves a digest of the process identity from `/version` and `/metrics`.
 
-Preflight and router startup read the live generation for every configured engine. On a digest mismatch, they name the affected engine and require a fresh profile before admission. Preflight also checks measured decode bounds and error evidence before pricing capacity.
+Preflight and startup check every configured engine's profile against its
+live generation. Readmission and automatic recovery repeat this check before
+returning an engine to placement. These checks cover every stored variant.
+
+Missing generation evidence or a digest mismatch requires a fresh profile;
+the error names the engine. Preflight also checks measured decode bounds and
+fit errors before pricing capacity.
+
+Restart the router to load updated profiles. For fleets with `engine_contract`,
+[activate the fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles).
+Resume preserves lifecycle holds and drain identities until readmission.
 
 A malformed profile aborts the operation with the affected file, engine, and field:
 
@@ -53,7 +67,7 @@ true
 
 `NaN` and `Infinity` abort profile loading during JSON decoding, before the row validator examines engine IDs.
 
-Preflight and router startup reject rows without `generation_digest` with `profile has no generation evidence`, even when the store's schema version is current.
+Preflight, router startup, and recovery reject rows without `generation_digest` with `profile has no generation evidence`, even when the store's schema version is current.
 
 Run `narwhal-profile` against the current engine processes into a fresh store and keep its `.samples.json` sidecar.
 

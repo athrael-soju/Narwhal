@@ -132,7 +132,8 @@ Failure semantics:
 
 ### `POST /narwhal/lifecycle/readmit`
 
-Send the engine ID to readmit:
+Readmission requires a complete `engine_contract`. Send the engine ID to
+readmit:
 
 ```json
 {
@@ -144,17 +145,32 @@ Narwhal runs these checks before releasing the candidate's lifecycle hold:
 
 1. health
 2. process-bound attestation
-3. configured model
-4. direct generation
-5. role-compatible KV transfer
-6. final health
+3. loaded profile generations against the verified live generation
+4. configured model
+5. direct generation
+6. role-compatible KV transfer
+7. final health
+
+`profile generation` checks every loaded variant for the candidate and its
+role-permitted peers. Missing profiles, missing generation evidence, or a
+digest mismatch keep the candidate excluded; the error names the engine to
+reprofile. `generation` reports the direct completion probe.
 
 For a planned restart, Narwhal requires a process start newer than the drain record before releasing the hold. After a transient breaker ejection, it can validate and readmit the running process.
 
 HTTP `409` leaves candidates that fail validation blocked.
 
+To load updated profiles, follow
+[Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+to restart the router with its lifecycle hold preserved. Then repeat
+readmission.
+
 ### Whole-wave restart policy
 
-With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the whole wave to service after every replacement passes validation with a newer start.
+With `recovery.engine_restart_policy: whole_wave`, drain and readmission
+apply to the complete fleet. Drain records each member's process start. When
+`wave.ready_to_stop` becomes true, restart the fleet through its supervisor.
+Readmission returns the whole wave to service after every replacement passes
+validation with a newer process start.
 
 See [Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) for the external-supervisor restart sequence and whole-wave requirements.

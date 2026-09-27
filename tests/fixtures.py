@@ -3,7 +3,11 @@
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
+
 from narwhal.config import FleetConfig
+from narwhal.engines.attestation import EngineIdentity
+from narwhal.profiling.generation import identity_generation
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
 
@@ -40,6 +44,27 @@ def fleet(root):
     for spec in cfg.engines:
         store.put(profile(spec.iid))
     return cfg
+
+
+def bind_identity_profiles(router):
+    """Bind contract-free profiles and serve identities whose start times tests can change."""
+    assert router.cfg.engine_contract is None
+    starts = dict.fromkeys((spec.iid for spec in router.cfg.engines), 100.0)
+    by_url = {spec.url: spec.iid for spec in router.cfg.engines}
+
+    def respond(request):
+        iid = by_url[str(request.url).rsplit("/", 1)[0]]
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "fixture"})
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text=f"process_start_time_seconds {starts[iid]}\n")
+        raise AssertionError(request.url.path)
+
+    for iid, start in starts.items():
+        generation = identity_generation(EngineIdentity("fixture", start))
+        router.profiles.put(replace(router.profiles.get(iid), generation_digest=generation.digest))
+    router.lifecycle_transport = httpx.MockTransport(respond)
+    return starts
 
 
 def invalid_token_choices():
