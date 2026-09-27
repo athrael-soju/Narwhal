@@ -128,9 +128,12 @@ documented router GET endpoints. Its successful `data` is
 | `data` | Object, string or `null` |
 | `artifact_id` | UUID or `null` |
 
-The adapter preserves each endpoint's HTTP status and redacted body. An HTTP
-200 from `/health` does not establish admission readiness. A `/ready` response
-with HTTP 503 remains a successful observation of a router that is not ready.
+The adapter retains each received HTTP status and redacts response bodies.
+If excessive JSON nesting prevents body processing, the adapter discards that
+body, reports `source_unavailable` and preserves the other observations.
+An HTTP 200 from `/health` does not establish admission readiness. A `/ready`
+response with HTTP 503 remains a successful observation of a router that is
+not ready.
 Redirects produce `unavailable`; the client follows none. Transport failures,
 timeouts and other unsuccessful HTTP responses produce failed observations.
 
@@ -382,9 +385,10 @@ command results for inspection.
 
 Diagnostic collection allows at most 128 source records, 5 seconds per source,
 30 seconds overall and 8,388,608 bytes retained per source. `timeout_s` may
-lower the overall budget. Source records include selection outcomes; reaching
-the cap makes the collection partial. The source-count limit applies to MCP collection;
-the underlying CLI has no source-count limit unless `--max-sources` is set.
+lower the overall budget. Source records include selection outcomes. If the
+collector omits additional sources to stay within the cap, the collection
+becomes partial. The limit on source records applies to MCP collection;
+the underlying CLI applies no such limit unless `--max-sources` is set.
 
 Each status source has at most five seconds within the overall call deadline.
 The adapter caps a source body at 262,144 bytes, including bytes received while

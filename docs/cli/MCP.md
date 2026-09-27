@@ -100,8 +100,10 @@ The example has only the `inspect` grant and no action grants or router endpoint
 The server requires `state_dir` and `artifact_root` to be owned by its user with
 mode `0700`. The working directory, each input file and the directory containing
 that file must belong to that user and deny group and other write access.
-Input access rejects symlinks in every path component and fleet files larger
-than 8 MiB. Relative paths in the copied fleet resolve from `runs/mcp`.
+Input access rejects symlinks in every path component. `config_inspect`,
+`config_validate` and `fleet_status` reject fleet files larger than 8 MiB.
+`diagnostics_collect` retains at most 8 MiB of input per source and marks larger
+sources `truncated`. Relative paths in the copied fleet resolve from `runs/mcp`.
 Retain `registry_id` when editing a registry used for continued inspection.
 
 ## 3. Configure a client
@@ -164,11 +166,11 @@ PY
 
 A successful check prints the negotiated protocol version, the six inspection
 tools, `targets: ['example-fleet']` and `config_validate: success`. The client then
-closes the session. The result establishes that the server can read the
-registration, enforce its access rules and invoke the installed offline config
-validator. The example fleet still contains placeholder hardware and model
-names. Validation checks the configuration fields and their relationships;
-live engine identity, profiles and readiness require deployment qualification.
+closes the session. This check verifies registry loading, target discovery and
+a successful call to the installed offline configuration validator. The example
+fleet still contains placeholder hardware and model names. Validation checks
+the configuration fields and their relationships; live engine identity,
+profiles and readiness require deployment qualification.
 
 The installed wheel has been checked with MCP Python SDK 2.2.0 clients on Python
 3.11, 3.12 and 3.13, using protocol versions `2025-11-25` and `2026-07-28`.
@@ -198,5 +200,6 @@ exports under `artifact_root`; `artifact_read` retrieves them by ID. See
 and collection limits.
 
 To remove this example after closing the session, delete its `runs/mcp`
-directory, including the copied fleet, registry and inspection records. Keep
-the registry and state for targets whose artifacts you need to read later.
+directory, including the copied fleet, registry and inspection records. For
+targets whose artifacts you need later, retain the registry, `state_dir` and
+`artifact_root`.

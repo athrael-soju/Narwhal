@@ -89,7 +89,7 @@ Paths in this table are relative to `src/narwhal/`. Put changes in the package t
 
 The [MCP contract](docs/MCP-Contracts.md) assigns management registration to
 `deployment/` and protocol handling to `mcp/`. The server currently validates
-registries and provides an empty tool list. Planned deployment plans, persisted
+registries and exposes six inspection tools. Planned deployment plans, persisted
 operations and the site adapter interface belong to `deployment/`.
 
 When adding a tool, keep its operation with the existing package owner and

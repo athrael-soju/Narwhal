@@ -104,9 +104,14 @@ actions check containment and identity when accessing them.
 The inspection tools require `working_directory`, each local input file and
 the directory containing that file to belong to the server's user and deny
 group and other write access. They reject symlinks in every component of a path
-they open. Fleet input files must be regular files no larger than 8 MiB. The configuration
-adapter holds the opened fleet file descriptor while invoking the installed
-CLI, so replacing its path cannot redirect that command to another file.
+they open. Fleet input files must be regular files. `config_inspect`,
+`config_validate` and `fleet_status` reject fleet files larger than 8 MiB.
+`diagnostics_collect` retains at most 8 MiB of input per source and marks larger
+sources `truncated`.
+
+The configuration adapter holds the opened fleet file descriptor while invoking
+the installed CLI, so replacing its path cannot redirect that command to another
+file.
 Private storage roots must have mode `0700`; inspection creates a missing root
 only when its parent already exists.
 
