@@ -8,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,6 +26,13 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
     fleet = root / "fleet.json"
     fleet.write_bytes((source / "config/fleet.example.json").read_bytes())
     fleet.chmod(0o600)
+    instance = root / "instance"
+    instance.mkdir(mode=0o700)
+    (instance / "fleet.json").write_bytes(fleet.read_bytes())
+    (instance / "fleet.json").chmod(0o600)
+    log = root / "router.log"
+    log.write_text("token=installed-secret-value prompt=installed-request-content\n")
+    log.chmod(0o600)
     registry = root / "registry.json"
     registry.write_text(
         json.dumps(
@@ -43,7 +52,26 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
                         "endpoints": {"router_env": "MCP_CHECK_ROUTER"},
                         "credential_env": ["MCP_CHECK_SECRET"],
                         "adapter": {"id": "ssh-v1", "settings_path": str(root / "site.json")},
-                    }
+                    },
+                    {
+                        "id": "local-observation",
+                        "kind": "dev",
+                        "working_directory": str(root),
+                        "artifact_root": str(root / "local-artifacts"),
+                        "fleet_file": None,
+                        "instance_dir": str(instance),
+                        "adapter": {"id": "local-dev-v1", "settings_path": None},
+                        "endpoints": {
+                            "router_env": "MCP_CHECK_ROUTER",
+                            "prometheus_env": "MCP_CHECK_ROUTER",
+                            "grafana_env": "MCP_CHECK_ROUTER",
+                        },
+                        "credential_env": ["MCP_CHECK_SECRET"],
+                        "queries": [
+                            {"id": "ready", "kind": "instant", "expression": "narwhal_router_ready"}
+                        ],
+                        "logs": [{"id": "router", "host_id": "local", "source": str(log)}],
+                    },
                 ],
             }
         )
@@ -54,7 +82,7 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
     )
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr:
         async with Client(
-            stdio_client(parameters, errlog=stderr), mode="legacy", read_timeout_seconds=5
+            stdio_client(parameters, errlog=stderr), mode="legacy", read_timeout_seconds=35
         ) as client:
             listing = await client.list_tools()
             assert {tool.name for tool in listing.tools} == {
@@ -72,6 +100,10 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
                 "plan_prepare",
                 "plan_execute",
                 "operation_resume",
+                "monitoring_status",
+                "metrics_query",
+                "host_inventory",
+                "host_logs",
             }, listing
             targets = await client.call_tool("target_list", {})
             assert targets.structured_content["data"]["targets"][0]["id"] == "installed", targets
@@ -103,6 +135,37 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
                     payload = path.read_bytes()
                     assert b"installed-secret-value" not in payload, path
                     assert b"installed-request-content" not in payload, path
+            for name, arguments in (
+                ("monitoring_status", {}),
+                ("metrics_query", {"query_id": "ready"}),
+                ("host_logs", {"log_id": "router"}),
+                ("host_inventory", {"host_id": "local"}),
+            ):
+                observed = await client.call_tool(
+                    name, {"target_id": "local-observation", **arguments}
+                )
+                document = observed.structured_content
+                assert document["outcome"] in {"success", "degraded"}, document
+                if name == "monitoring_status":
+                    assert document["outcome"] == "success", document
+                    assert document["data"]["readiness"] == "pass", document
+                elif name == "metrics_query":
+                    assert document["data"]["complete"], document
+                    assert document["data"]["series"][0]["samples"][0]["value"] == "1", document
+                elif name == "host_logs":
+                    assert document["data"]["complete"], document
+                    retained = await client.call_tool(
+                        "artifact_read",
+                        {
+                            "target_id": "local-observation",
+                            "artifact_id": document["data"]["artifact_id"],
+                        },
+                    )
+                    text = retained.structured_content["data"]["text"]
+                    assert "installed-secret-value" not in text, text
+                    assert "installed-request-content" not in text, text
+                else:
+                    assert document["data"]["snapshot_artifact_id"], document
             rejected = await client.call_tool("config_inspect", {"target_id": "unregistered"})
             assert rejected.is_error, rejected
             assert rejected.structured_content["errors"][0]["code"] == "target_not_found", rejected
@@ -163,9 +226,71 @@ class RouterFixture(BaseHTTPRequestHandler):
             "detail": "installed-secret-value",
             "prompt": "installed-request-content",
         }
+        origin = f"http://127.0.0.1:{self.server.server_port}"
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        routes = {
+            "/api/v1/status/buildinfo": {"status": "success", "data": {"version": "3.14.0"}},
+            "/api/health": {"database": "ok", "version": "13.2.1"},
+            "/api/datasources/name/Prometheus": {"type": "prometheus", "url": origin},
+            "/api/dashboards/uid/narwhal-router": {
+                "dashboard": {
+                    "uid": "narwhal-router",
+                    "templating": {
+                        "list": [
+                            {
+                                "name": "router",
+                                "includeAll": True,
+                                "allValue": ".*",
+                                "current": {"value": "$__all"},
+                            }
+                        ]
+                    },
+                    "panels": [{"expr": 'narwhal_router_ready{instance=~"$router"}'}],
+                }
+            },
+            "/api/v1/targets": {
+                "status": "success",
+                "data": {
+                    "activeTargets": [
+                        {
+                            "scrapePool": "narwhal-router",
+                            "scrapeUrl": origin + "/metrics",
+                            "health": "up",
+                            "lastScrape": timestamp,
+                            "labels": {},
+                        },
+                        *(
+                            {
+                                "scrapePool": "engines",
+                                "scrapeUrl": f"http://node{i}:8000/metrics",
+                                "health": "up",
+                                "lastScrape": timestamp,
+                                "labels": {"iid": f"n{i}"},
+                            }
+                            for i in range(2)
+                        ),
+                    ]
+                },
+            },
+            "/api/v1/query": {
+                "status": "success",
+                "data": {
+                    "resultType": "vector",
+                    "result": [{"metric": {}, "value": [time.time(), "1"]}],
+                },
+            },
+        }
+        if self.path == "/ready":
+            document["status"] = "ready"
+        if self.path.split("?")[0] in routes:
+            document = routes[self.path.split("?")[0]]
         if self.path in {"/narwhal/state", "/narwhal/lifecycle"}:
             document.update(schema=self.path.replace("/narwhal/", "narwhal."), schema_version=1)
-        payload = json.dumps(document).encode()
+        payload = (
+            b"Prometheus Server is Ready."
+            if self.path == "/-/ready"
+            else json.dumps(document).encode()
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))

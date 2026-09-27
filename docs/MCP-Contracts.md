@@ -15,8 +15,11 @@ coordinator.
 The installed `local-dev-v1` adapter exposes `plan_prepare`, `plan_execute`
 and `operation_resume` for local dev actions. Registry-bound dev CLI commands
 use the same coordinator. Follow [Manage a local dev instance](mcp/Local-Dev.md)
-for its prerequisites and workflow. The SSH fleet and observability adapters
-remain **planned behaviour**.
+for its prerequisites and workflow. `monitoring_status`, `metrics_query`,
+`host_inventory` and `host_logs` provide bounded monitoring and local host
+inspection. Follow [Inspect monitoring through MCP](mcp/Observability.md) for
+registration and result interpretation. The SSH fleet provider remains
+**planned behaviour**.
 
 The distribution remains `narwhal-inference`, with an optional `mcp`
 extra and a `narwhal-mcp` executable. The server runs on a Linux management
@@ -29,6 +32,7 @@ CLI, documented HTTP endpoints and a site adapter. It has no model dependency.
 | Contract | Use it to define |
 | --- | --- |
 | [Registration and permissions](mcp/Registration.md) | How the operator binds target IDs to local inputs, endpoints and allowed actions. |
+| [Monitoring and host evidence](mcp/Observability.md) | How to register monitoring inputs, interpret readiness and read frozen host evidence. |
 | [Tools and results](mcp/Tools.md) | Tool arguments, results, errors and artifact access. |
 | [Plans and deployment adapter](mcp/Deployment.md) | How the executor records deployment inputs and checks each gate. |
 | [Operations and recovery](mcp/Operations.md) | What the executor persists and how it resumes interrupted work. |
@@ -62,10 +66,11 @@ requires the selected directory to remain absent and refuses to overwrite a
 concurrent creation. The planned fleet adapter must integrate its commands
 before operators can submit managed fleet work.
 
-Prometheus continues to scrape router and engine metrics. The planned
-observability tools configure monitoring, inspect its health and query those
-metrics within fixed limits. Host tools collect registered inventory and log
-sources. Website crawling and content ingestion are outside this specification.
+Prometheus continues to scrape router and engine metrics. Observability tools
+inspect monitoring health and query registered expressions within fixed limits.
+Host tools collect registered local inventory and log sources. Fleet monitoring
+startup and remote host transport belong to the planned SSH adapter. Website
+crawling and content ingestion are outside this specification.
 
 ## Ownership
 

@@ -19,6 +19,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from narwhal.observability.management_targets import (
+    StartupError,
+    _expressions,  # noqa: F401 - preserve the operator helper import
+    verify_dashboard_contract,
+    verify_targets,
+)
+from narwhal.observability.management_types import GRAFANA_VERSION, PROMETHEUS_VERSION
 from tools.observability.artifacts import stage_artifacts
 from tools.observability.make_targets import TargetContract, load_contract
 
@@ -28,14 +35,8 @@ GRAFANA_PORT = 3000
 DEFAULT_READY_TIMEOUT_S = 60.0
 COMMAND_TIMEOUT_S = 10.0
 COMPOSE_UP_TIMEOUT_S = 300.0
-PROMETHEUS_IMAGE = "prom/prometheus:v3.14.0"
-PROMETHEUS_VERSION = "3.14.0"
-GRAFANA_IMAGE = "grafana/grafana:13.2.1"
-GRAFANA_VERSION = "13.2.1"
-
-
-class StartupError(RuntimeError):
-    """Describe an operator-correctable startup failure."""
+PROMETHEUS_IMAGE = f"prom/prometheus:v{PROMETHEUS_VERSION}"
+GRAFANA_IMAGE = f"grafana/grafana:{GRAFANA_VERSION}"
 
 
 @dataclass(frozen=True)
@@ -464,52 +465,6 @@ def http_get(url: str, timeout_s: float) -> tuple[int, str]:
         return response.status, response.read().decode("utf-8", errors="replace")
 
 
-def _expressions(value: object) -> list[str]:
-    """Return every Prometheus expression embedded in a dashboard document."""
-    if isinstance(value, dict):
-        found = [value["expr"]] if isinstance(value.get("expr"), str) else []
-        for child in value.values():
-            found.extend(_expressions(child))
-        return found
-    if isinstance(value, list):
-        return [expression for child in value for expression in _expressions(child)]
-    return []
-
-
-def verify_dashboard_contract(document: dict[str, object]) -> None:
-    """Require a default router selection that produces populated panel queries."""
-    dashboard = document.get("dashboard")
-    if not isinstance(dashboard, dict) or dashboard.get("uid") != "narwhal-router":
-        raise StartupError("Grafana dashboard UID narwhal-router is unavailable")
-    templating = dashboard.get("templating")
-    variables = templating.get("list") if isinstance(templating, dict) else None
-    variable_list = variables if isinstance(variables, list) else []
-    router = next(
-        (
-            variable
-            for variable in variable_list
-            if isinstance(variable, dict)
-            if variable.get("name") == "router"
-        ),
-        None,
-    )
-    if not isinstance(router, dict):
-        raise StartupError("Grafana dashboard requires the router variable")
-    current = router.get("current")
-    if (
-        not router.get("includeAll")
-        or router.get("allValue") != ".*"
-        or not isinstance(current, dict)
-        or current.get("value") != "$__all"
-    ):
-        raise StartupError("Grafana router variable must default to every configured target")
-    expressions = _expressions(dashboard)
-    if any('instance="$router"' in expression for expression in expressions):
-        raise StartupError("Grafana router panels require regex instance matching")
-    if not any('instance=~"$router"' in expression for expression in expressions):
-        raise StartupError("Grafana dashboard contains zero router-scoped panel queries")
-
-
 def _verify_http(service: Service, get: HttpGet, prometheus_url: str) -> None:
     base = f"http://{service.listener.authority}"
     if service.name == "prometheus":
@@ -552,76 +507,18 @@ def _verify_targets(
     contract: TargetContract,
     get: HttpGet,
 ) -> None:
-    """Require the deployed target identities, scrape health and router readiness."""
+    """Read target evidence and apply the shared deployment readiness checks."""
     base = f"http://{prometheus.listener.authority}"
     status, body = get(f"{base}/api/v1/targets", 2.0)
     if status != 200:
         raise StartupError(f"Prometheus targets returned HTTP {status}")
     document = json.loads(body)
-    data = document.get("data")
-    active = data.get("activeTargets") if isinstance(data, dict) else None
-    if not isinstance(active, list):
-        raise StartupError("Prometheus targets response requires activeTargets")
-
-    router_rows = [row for row in active if row.get("scrapePool") == "narwhal-router"]
-    if len(router_rows) != 1:
-        raise StartupError(f"Prometheus discovered {len(router_rows)} router targets; expected 1")
-    router = router_rows[0]
-    if _scrape_authority(router.get("scrapeUrl")) != contract.router:
-        raise StartupError(
-            f"Prometheus router target uses {router.get('scrapeUrl')!r}; expected {contract.router}"
-        )
-    if router.get("health") != "up":
-        raise StartupError(
-            f"Prometheus router target {contract.router} reports "
-            f"{router.get('health')}: {router.get('lastError', '')}"
-        )
-
-    expected_engines = dict(contract.engines)
-    engine_rows = [row for row in active if row.get("scrapePool") == "engines"]
-    actual_engines: dict[str, str] = {}
-    for row in engine_rows:
-        labels = row.get("labels")
-        iid = labels.get("iid") if isinstance(labels, dict) else None
-        if not isinstance(iid, str):
-            raise StartupError("Prometheus engine target requires iid")
-        if iid in actual_engines:
-            raise StartupError(f"Prometheus engine target {iid!r} appears more than once")
-        actual_engines[iid] = _scrape_authority(row.get("scrapeUrl"))
-        if row.get("health") != "up":
-            raise StartupError(
-                f"Prometheus engine target {iid} reports "
-                f"{row.get('health')}: {row.get('lastError', '')}"
-            )
-    if actual_engines != expected_engines:
-        raise StartupError(
-            f"Prometheus engine targets use {actual_engines!r}; expected {expected_engines!r}"
-        )
-
     query = f'narwhal_router_ready{{job="narwhal-router",instance="{contract.router}"}}'
     encoded = urllib.parse.urlencode({"query": query})
     status, body = get(f"{base}/api/v1/query?{encoded}", 2.0)
     if status != 200:
         raise StartupError(f"Prometheus router readiness query returned HTTP {status}")
-    result_document = json.loads(body)
-    result_data = result_document.get("data")
-    result = result_data.get("result") if isinstance(result_data, dict) else None
-    if not isinstance(result, list) or len(result) != 1:
-        size = len(result) if isinstance(result, list) else 0
-        raise StartupError(f"Prometheus router readiness returned {size} series; expected 1")
-    value = result[0].get("value") if isinstance(result[0], dict) else None
-    if not isinstance(value, list) or len(value) != 2 or value[1] != "1":
-        raise StartupError("Prometheus router readiness metric reports zero")
-
-
-def _scrape_authority(value: object) -> str:
-    """Return the authority from one Prometheus scrape URL."""
-    if not isinstance(value, str):
-        raise StartupError("Prometheus target requires scrapeUrl")
-    parsed = urllib.parse.urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise StartupError(f"Prometheus target uses invalid scrape URL {value!r}")
-    return parsed.netloc
+    verify_targets(contract, document, json.loads(body))
 
 
 def wait_collection(

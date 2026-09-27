@@ -58,11 +58,16 @@ def main(argv: list[str] | None = None) -> int:
         from narwhal.deployment.management_coordinator import OperationCoordinator
 
         from .inspection import inspection_adapters
+        from .observability import observability_adapters
         from .operations import operation_adapters
 
         coordinator = OperationCoordinator(registry, registry_path=Path(selected))
         coordinator.reconcile_startup()
-        adapters = (*inspection_adapters(registry), *operation_adapters(registry, coordinator))
+        adapters = (
+            *inspection_adapters(registry),
+            *operation_adapters(registry, coordinator),
+            *observability_adapters(registry),
+        )
         asyncio.run(serve(adapters))
     except KeyboardInterrupt:
         return 130

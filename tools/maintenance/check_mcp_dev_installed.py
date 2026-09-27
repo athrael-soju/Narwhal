@@ -288,7 +288,7 @@ async def check(root: Path, source: Path, *, fixture_provenance: bool) -> None:
 
     async with client() as selected:
         tools = await selected.list_tools()
-        assert len(tools.tools) == 14, tools
+        assert len(tools.tools) == 18, tools
         legacy_status = await call(selected, "dev_status", {"target_id": "legacy"})
         assert legacy_status["outcome"] == "success", legacy_status
         assert legacy_status["data"]["status"] == "stopped", legacy_status
