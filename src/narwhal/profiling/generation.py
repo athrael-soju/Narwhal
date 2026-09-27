@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..config.model import EngineContract, EngineSpec
-from ..engines.attestation import fetch_engine_identity, verify_attestation
+from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
+
+if TYPE_CHECKING:
+    from .store import ProfileStore
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,18 @@ class GenerationEvidence:
 
     digest: str
     document: dict[str, Any]
+
+
+def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
+    """Derive the profile binding for a fleet without an attestation contract."""
+    document: dict[str, Any] = {
+        "engine": {
+            "vllm_version": identity.vllm_version,
+            "process_start_time_seconds": identity.process_start_time_seconds,
+        }
+    }
+    raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return GenerationEvidence("sha256:" + sha256(raw).hexdigest(), document)
 
 
 async def read_generation(
@@ -34,14 +49,7 @@ async def read_generation(
         spec.url, timeout_s=timeout_s, headers=headers, transport=transport
     )
     if contract is None:
-        document: dict[str, Any] = {
-            "engine": {
-                "vllm_version": identity.vllm_version,
-                "process_start_time_seconds": identity.process_start_time_seconds,
-            }
-        }
-        raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-        return GenerationEvidence("sha256:" + sha256(raw).hexdigest(), document)
+        return identity_generation(identity)
     if not spec.attestation_url:
         raise ValueError(f"{spec.iid}: attestation_url is required for profile generation")
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
@@ -61,3 +69,17 @@ def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
     if saved != live:
         return f"{iid} profile generation differs from the live engine; reprofile before admission"
     return None
+
+
+def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
+    """Check every loaded variant before an engine regains scheduling eligibility."""
+    profiles = store.profiles_for_engine(iid)
+    if not profiles:
+        return [f"{iid} has no loaded profile; reprofile before admission"]
+    return list(
+        dict.fromkeys(
+            problem
+            for profile in profiles
+            if (problem := generation_problem(iid, profile.generation_digest, live)) is not None
+        )
+    )

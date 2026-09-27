@@ -12,7 +12,7 @@ from narwhal.runtime import monitoring
 from narwhal.runtime.lifecycle import ValidationOutcome
 from narwhal.runtime.monitoring import MonitoringLedger, monitor_once, readmit, sweep_liveness
 from narwhal.serving.app import create_app
-from tests.fixtures import fleet
+from tests.fixtures import bind_identity_profiles, fleet
 
 
 class MonitoringLedgerTests(unittest.TestCase):
@@ -76,6 +76,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         cfg.monitor_failure_limit = 1
         cfg.liveness_every = 0
         self.router = create_app(cfg).state.router
+        bind_identity_profiles(self.router)
         self.addAsyncCleanup(self.router.engines.aclose)
 
     async def test_controller_failure_preserves_cleanup_and_handoff_stages(self):

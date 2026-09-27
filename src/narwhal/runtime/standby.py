@@ -162,16 +162,22 @@ async def standby_loop(
                                     return
                                 router.lease_epoch = lease.epoch
                                 router.lease_holder = lease.holder
-                                from .lifecycle import check_process_identities
-
-                                router.lifecycle.identities_ready = (
-                                    router.cfg.engine_contract is None
+                                from .lifecycle import (
+                                    allow_profile_recovery,
+                                    check_process_identities,
                                 )
+
+                                router.lifecycle.identities_ready = False
                                 router.controller.clear_prefill_risk()
                                 router.control_wakeup.clear()
                                 router.standby = False
                                 try:
-                                    await check_process_identities(router)
+                                    if router.cfg.engine_contract is None:
+                                        for instance in router.scheduler.live_instances():
+                                            await allow_profile_recovery(router, instance.iid)
+                                        router.lifecycle.identities_ready = True
+                                    else:
+                                        await check_process_identities(router)
                                 except BaseException:
                                     router.standby = True
                                     router.failover_blocked = "identity validation interrupted"

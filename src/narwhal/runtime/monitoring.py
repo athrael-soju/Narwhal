@@ -13,6 +13,7 @@ from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import (
     ValidationOutcome,
+    allow_profile_recovery,
     check_process_identities,
     validate_readmission,
 )
@@ -222,6 +223,8 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
                 continue
             # Health-only readmission clears the health-evidence classes;
             # inference classes wait on request-path or probe evidence.
+            if not await allow_profile_recovery(router, iid):
+                continue
             router.scheduler.record_answer(iid, "health")
             back.append(iid)
             log.info("readmitted %s: /health answered", iid)
@@ -276,6 +279,10 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
         if ok is True:
             # A health 200 is recovery evidence: it clears the
             # health-evidence classes and lifts the quarantine.
+            if iid in router.scheduler.quarantined and not await allow_profile_recovery(
+                router, iid
+            ):
+                continue
             router.scheduler.record_answer(iid, "health")
             continue
         if ok is None:
