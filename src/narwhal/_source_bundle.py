@@ -17,21 +17,36 @@ BUNDLE = "_source_bundle.tar.gz"
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 
 
-def package_files(root: Path, *, allowed: set[str] | None = None) -> dict[str, bytes]:
-    """Read package sources and resources without following package symlinks."""
+def package_files(
+    root: Path,
+    *,
+    allowed: set[str] | None = None,
+    resource_links: dict[str, Path] | None = None,
+) -> dict[str, bytes]:
+    """Read package files, with build-only exceptions for approved resource links."""
     selected = {}
     for path in sorted(root.rglob("*")):
         if "__pycache__" in path.parts or path.suffix == ".pyc":
             continue
         if path.name in {METADATA, BUNDLE} and path.parent == root:
             continue
+        name = path.relative_to(root).as_posix()
         if path.is_symlink():
-            raise ValueError("Package source must not contain symlinks")
+            target = (resource_links or {}).get(name)
+            if (
+                target is None
+                or target.resolve(strict=True) != target
+                or not stat.S_ISREG(target.lstat().st_mode)
+                or path.resolve(strict=True) != target
+            ):
+                raise ValueError("Package source must not contain unapproved symlinks")
+            selected[name] = target
+            continue
         if path.is_dir():
             continue
         if not stat.S_ISREG(path.stat().st_mode):
             raise ValueError("Package source must contain regular files")
-        selected[path.relative_to(root).as_posix()] = path
+        selected[name] = path
     if allowed is not None and set(selected) - allowed:
         raise ValueError("Package contains files outside the approved source manifest")
     return {name: path.read_bytes() for name, path in selected.items()}
@@ -44,9 +59,10 @@ def create_bundle(
     version: str,
     verified: bool,
     allowed: set[str] | None = None,
+    resource_links: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     """Bind a build's package bytes to its full source revision."""
-    files = package_files(root, allowed=allowed)
+    files = package_files(root, allowed=allowed, resource_links=resource_links)
     manifest = {
         "schema": "narwhal.build-provenance",
         "schema_version": 1,

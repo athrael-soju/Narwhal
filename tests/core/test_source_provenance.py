@@ -1,8 +1,11 @@
 """Keep source artifacts verifiable after installation and source-archive rebuilds."""
 
 import copy
+import hashlib
 import importlib.util
+import io
 import json
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,6 +79,103 @@ class SourceProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest"):
             verify_bundle(self.root, self.document, self.bundle)
 
+    def test_tracked_fixture_link_is_frozen_as_regular_bundle_and_installed_file(self):
+        repository = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location(
+            "narwhal_build_fixture_test", repository / "_narwhal_build.py"
+        )
+        backend = importlib.util.module_from_spec(spec)
+        with patch.dict("sys.modules", {"setuptools": SimpleNamespace(build_meta=MagicMock())}):
+            spec.loader.exec_module(backend)
+        allowed, links = backend._tracked_sources()
+        resource = repository / "src/narwhal/fleet.example.json"
+        target = repository / "config/fleet.example.json"
+        if resource.is_symlink():
+            self.assertEqual(links, {"fleet.example.json": target})
+        else:
+            # Source distributions retain the fixture as an ordinary package file.
+            self.assertEqual(links, {})
+            self.assertEqual(resource.read_bytes(), target.read_bytes())
+        document, bundle = create_bundle(
+            resource.parent,
+            commit="a" * 40,
+            version="1.0",
+            verified=True,
+            allowed=allowed,
+            resource_links=links,
+        )
+        content = target.read_bytes()
+        self.assertEqual(document["files"][resource.name], hashlib.sha256(content).hexdigest())
+        installed = self.root / "installed"
+        installed.mkdir()
+        with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as archive:
+            member = archive.getmember(resource.name)
+            self.assertTrue(member.isfile())
+            self.assertEqual(archive.extractfile(member).read(), content)
+            for member in archive:
+                if member.name == "manifest.json":
+                    continue
+                path = installed / member.name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(member).read())
+        self.assertEqual(verify_bundle(installed, document, bundle), document)
+        (installed / resource.name).unlink()
+        (installed / resource.name).symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "symlinks"):
+            verify_bundle(installed, document, bundle)
+
+    def test_declared_fixture_link_cannot_escape_to_untracked_content(self):
+        spec = importlib.util.spec_from_file_location(
+            "narwhal_build_escape_test", Path(__file__).resolve().parents[2] / "_narwhal_build.py"
+        )
+        backend = importlib.util.module_from_spec(spec)
+        with patch.dict("sys.modules", {"setuptools": SimpleNamespace(build_meta=MagicMock())}):
+            spec.loader.exec_module(backend)
+        repository = self.root / "repository"
+        package = repository / "src/narwhal"
+        package.mkdir(parents=True)
+        target = repository / "config/fleet.example.json"
+        target.parent.mkdir()
+        target.write_text('{"approved":true}')
+        outside = self.root / "private.json"
+        outside.write_text('{"private_token":"must-not-enter-bundle"}')
+        resource = package / "fleet.example.json"
+        resource.symlink_to(outside)
+        tracked = (
+            "120000 " + "a" * 40 + " 0\tsrc/narwhal/fleet.example.json\0"
+            "100644 " + "b" * 40 + " 0\tconfig/fleet.example.json\0"
+        )
+        with (
+            patch.object(backend, "ROOT", repository),
+            patch.object(backend, "_git", return_value=tracked),
+        ):
+            allowed, links = backend._tracked_sources()
+            with (
+                patch.object(Path, "read_bytes", side_effect=AssertionError("Read private data")),
+                self.assertRaisesRegex(ValueError, "symlinks"),
+            ):
+                create_bundle(
+                    package,
+                    commit="a" * 40,
+                    version="1.0",
+                    verified=True,
+                    allowed=allowed,
+                    resource_links=links,
+                )
+            resource.unlink()
+            resource.symlink_to(target)
+            target.unlink()
+            target.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "tracked regular target"):
+                backend._tracked_sources()
+            target.unlink()
+            target.write_text("{}")
+            with (
+                patch.object(backend, "_git", return_value=tracked.split("\0", 1)[0] + "\0"),
+                self.assertRaisesRegex(ValueError, "tracked regular target"),
+            ):
+                backend._tracked_sources()
+
     def test_untracked_and_ignored_package_files_are_rejected_before_reading(self):
         private = self.root / ".env"
         private.write_text("PRIVATE_TOKEN=must-not-enter-a-source-bundle")
@@ -141,7 +241,10 @@ class SourceProvenanceTests(unittest.TestCase):
             patch.object(
                 backend.subprocess,
                 "check_output",
-                return_value="src/narwhal/provenance.py\0src/narwhal/template.json\0",
+                return_value=(
+                    "100644 " + "a" * 40 + " 0\tsrc/narwhal/provenance.py\0"
+                    "100644 " + "b" * 40 + " 0\tsrc/narwhal/template.json\0"
+                ),
             ) as git,
             self.assertRaisesRegex(ValueError, "outside the approved"),
             backend._provenance(),

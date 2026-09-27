@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import stat
 import subprocess
 import tomllib
 import zipfile
@@ -16,6 +17,7 @@ from setuptools import build_meta
 
 ROOT = Path(__file__).resolve().parent
 PACKAGE = ROOT / "src/narwhal"
+RESOURCE_LINKS = {"fleet.example.json": "config/fleet.example.json"}
 
 
 def _git(*arguments):
@@ -37,6 +39,38 @@ def _helpers():
     return module
 
 
+def _tracked_sources():
+    """Approve package paths and the repository's declared fixture resource link."""
+    tracked = _git("ls-files", "--stage", "-z", "--", "src/narwhal", *RESOURCE_LINKS.values())
+    entries = {}
+    for entry in tracked.split("\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split("\t", 1)
+        mode, _object_id, stage = metadata.split(" ")
+        if stage != "0":
+            raise ValueError("Package build requires resolved source entries")
+        entries[name] = mode
+    allowed = {
+        name.removeprefix("src/narwhal/") for name in entries if name.startswith("src/narwhal/")
+    }
+    if not allowed:
+        raise ValueError("Package build requires a tracked source manifest")
+    resource_links = {}
+    for name, destination in RESOURCE_LINKS.items():
+        if entries.get("src/narwhal/" + name) != "120000":
+            continue
+        target = ROOT / destination
+        if (
+            entries.get(destination) not in {"100644", "100755"}
+            or target.resolve(strict=True) != target
+            or not stat.S_ISREG(target.lstat().st_mode)
+        ):
+            raise ValueError("Package resource link requires an approved tracked regular target")
+        resource_links[name] = target
+    return allowed, resource_links
+
+
 @contextlib.contextmanager
 def _provenance():
     helper = _helpers()
@@ -51,12 +85,9 @@ def _provenance():
         return
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     try:
-        tracked = _git("ls-files", "-z", "--", "src/narwhal")
-        allowed = {name.removeprefix("src/narwhal/") for name in tracked.split("\0") if name}
-        if not allowed:
-            raise ValueError("Package build requires a tracked source manifest")
+        allowed, resource_links = _tracked_sources()
         # Check names before reading package payloads, including ignored files.
-        helper.package_files(PACKAGE, allowed=allowed)
+        helper.package_files(PACKAGE, allowed=allowed, resource_links=resource_links)
         commit = _git("rev-parse", "HEAD").strip()
         dirty = _git("status", "--porcelain", "--untracked-files=normal")
         verified = not dirty.strip()
@@ -65,7 +96,12 @@ def _provenance():
             "Package build requires Git metadata or a retained source bundle"
         ) from error
     document, bundle = helper.create_bundle(
-        PACKAGE, commit=commit, version=version, verified=verified, allowed=allowed
+        PACKAGE,
+        commit=commit,
+        version=version,
+        verified=verified,
+        allowed=allowed,
+        resource_links=resource_links,
     )
     try:
         metadata_path.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n")
