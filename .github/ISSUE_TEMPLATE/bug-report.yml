@@ -13,7 +13,7 @@ body:
     id: reproduce
     attributes:
       label: Steps to reproduce
-      description: Include the smallest commands or sequence of steps that trigger the failure. Remove credentials, live addresses, private paths, and hardware/model identifiers.
+      description: Provide a minimal sequence of commands or steps that reproduces the failure. Remove credentials, live addresses, private paths, and hardware/model identifiers.
     validations:
       required: true
   - type: textarea
@@ -32,7 +32,7 @@ body:
     id: topology
     attributes:
       label: Topology and required capabilities
-      description: For engine or fleet failures, include node count, engine count and roles, shared or dedicated device allocation, parallelism sizes, and KV connector. Keep hardware and model identities in private execution records; describe the relevant capability or compatibility constraint here. Leave this empty when topology is unrelated to the failure.
+      description: If the failure depends on the deployment layout, include node count, engine count and roles, shared or dedicated device allocation, parallelism sizes, and KV connector. Keep hardware and model identities in private execution records; describe the relevant capability or compatibility constraint here.
     validations:
       required: false
   - type: textarea
