@@ -7,7 +7,7 @@ VENV_PYTHON ?= .venv/bin/python
 BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 
 
-.PHONY: setup test unit lint format types links publication versions check docs-build observe
+.PHONY: setup sync test unit lint format types links publication versions check docs-build observe
 .PHONY: coverage
 
 .venv/bin/python:
@@ -15,6 +15,9 @@ BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 	.venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
 
 setup: .venv/bin/python
+
+sync: $(BOOTSTRAP)
+	$(VENV_PYTHON) -m pip install -e '.[dev]' -c constraints-dev.txt
 
 test: unit
 

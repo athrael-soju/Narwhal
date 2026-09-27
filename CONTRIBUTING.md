@@ -27,6 +27,21 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
 ```
 
+`make setup` creates the development environment when it is missing. After
+pulling changes to `pyproject.toml` or `constraints-dev.txt`, refresh the installed
+development dependencies from the repository root:
+
+```bash
+make sync
+```
+
+`make sync` reuses `.venv`, or creates it when missing. It installs the editable
+development extra against `constraints-dev.txt` without removing the environment
+or local working files. To use another existing environment, pass its Python
+executable as `VENV_PYTHON`, for example `make sync VENV_PYTHON=/path/to/venv/bin/python`
+after replacing the path. With this override, `make sync` does not create `.venv`.
+An installation failure stops the command with a nonzero exit status.
+
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
