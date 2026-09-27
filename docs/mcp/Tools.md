@@ -1,19 +1,15 @@
 # Tools and results (proposed)
 
-This page defines the planned tool arguments, results and errors for the
-[MCP contract](../MCP-Contracts.md). Registration binds target IDs to inputs.
-Plan preparation records the proposed changes and their inputs before execution.
+This page specifies tool arguments, results and errors for the
+[MCP contract](../MCP-Contracts.md). The unreleased [server command](../cli/MCP.md)
+exposes six inspection tools; the catalogue identifies them below. The remaining
+tools are planned. Registration binds each target ID to its inputs and access
+grants.
 
-The unreleased [server command](../cli/MCP.md) implements typed dispatch and the
-version 1 management result envelope, but advertises no production tools.
-Protocol tests use fixture adapters to check calls, rejected arguments and
-error mapping.
-
-Each adapter must enforce its operation's permissions, redact returned content
-and keep its result within the response limit. The current dispatcher returns
-`outcome: error` with code `adapter_failed` when a handler returns an invalid
-or oversized result. The artifact store and full-result export behaviour below
-remain planned; the current dispatcher cannot retain an oversized result.
+The inspection adapters enforce those grants, redact returned content and keep
+each result within the response limit. They retain oversized results as private
+artifacts. The dispatcher returns `outcome: error` with code `adapter_failed`
+if an adapter returns an invalid result or fails to apply the response limit.
 
 ## Common argument rules
 
@@ -43,14 +39,17 @@ cancel an accepted operation.
 | `limit` | Integer `1..100` | `20` |
 
 The server lists results from an immutable snapshot and returns
-`next_cursor: string|null`. A cursor identifies the target, filters and snapshot.
-Reusing it with different inputs returns `invalid_cursor`; otherwise it remains
-valid while the snapshot exists. Target lists sort by target ID. Operation lists
-sort by creation time descending, then operation ID ascending.
+`next_cursor: string|null`. A target-list cursor binds the registry snapshot
+and requested `limit`. Reusing it after a registry change, with another limit,
+or after its stored snapshot is removed returns `invalid_cursor`. Target lists
+sort by target ID and survive a server restart with the same registry and state.
+A page may contain fewer than `limit` entries to satisfy the response byte limit.
+Planned operation-list cursors also bind the target and filters; operation
+lists sort by creation time descending, then operation ID ascending.
 
 The maximum serialized `structuredContent` is 262,144 bytes. When a production
 adapter exceeds this limit, it must retain the complete redacted result as an
-artifact and return a reference, following
+artifact within the export size limit and return a reference, following
 [Artifact references and bounds](#artifact-references-and-bounds).
 
 ## Tool catalogue
@@ -61,26 +60,26 @@ marked optional; common arguments above also apply.
 
 The result shapes below describe the management envelope's `data` field.
 
-| Tool | Purpose | Owner |
-| --- | --- | --- |
-| `target_list` | List permitted registered targets. | Deployment registry |
-| `config_inspect` | Read effective fleet configuration. | `config/` |
-| `config_validate` | Validate a fleet file offline. | `config/` |
-| `fleet_status` | Read router status and state. | `serving/`, `runtime/` |
-| `dev_status` | Read a dev instance's recorded status. | `dev/` |
-| `diagnostics_collect` | Collect selected incident evidence. | `diagnostics/` |
-| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter |
-| `plan_inspect` | Read a saved plan and its input references. | Plan store |
-| `plan_execute` | Submit a saved plan for execution. | Shared executor |
-| `operation_list` | List operations for a target. | Operation store |
-| `operation_inspect` | Read one operation's state. | Operation store |
-| `operation_cancel` | Request cancellation and bounded cleanup. | Shared executor |
-| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor |
-| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter |
-| `metrics_query` | Run a registered Prometheus query. | Observability adapter |
-| `host_inventory` | Collect inventory from a registered host. | Site adapter |
-| `host_logs` | Collect a selected log source. | Site adapter |
-| `artifact_read` | Read a retained redacted export. | Artifact store |
+| Tool | Purpose | Owner | Availability |
+| --- | --- | --- | --- |
+| `target_list` | List permitted registered targets. | Deployment registry | Implemented |
+| `config_inspect` | Read effective fleet configuration. | `config/` | Implemented |
+| `config_validate` | Validate a fleet file offline. | `config/` | Implemented |
+| `fleet_status` | Read router status and state. | `serving/`, `runtime/` | Implemented |
+| `dev_status` | Read a dev instance's recorded status. | `dev/` | Planned |
+| `diagnostics_collect` | Collect selected incident evidence. | `diagnostics/` | Implemented |
+| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Planned |
+| `plan_inspect` | Read a saved plan and its input references. | Plan store | Planned |
+| `plan_execute` | Submit a saved plan for execution. | Shared executor | Planned |
+| `operation_list` | List operations for a target. | Operation store | Planned |
+| `operation_inspect` | Read one operation's state. | Operation store | Planned |
+| `operation_cancel` | Request cancellation and bounded cleanup. | Shared executor | Planned |
+| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Planned |
+| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Planned |
+| `metrics_query` | Run a registered Prometheus query. | Observability adapter | Planned |
+| `host_inventory` | Collect inventory from a registered host. | Site adapter | Planned |
+| `host_logs` | Collect a selected log source. | Site adapter | Planned |
+| `artifact_read` | Read a retained redacted export. | Artifact store | Implemented |
 
 ### Targets and configuration
 
@@ -93,13 +92,21 @@ The result shapes below describe the management envelope's `data` field.
 A `TargetSummary` contains `id`, `kind`, `capabilities`, `actions`, `adapter_id`,
 `recipes: [{id, kind}]`, and arrays of aliases named `query_ids`, `log_ids` and
 `host_ids`. It excludes credentials, environment values, source paths and SSH
-destinations. A host alias identifies a registered host; discovery must still
-establish its live identity.
+destinations. Listing includes only targets with `inspect`. For dev targets,
+`host_ids` includes `local`. For fleet targets, the current listing derives
+host aliases from registered log entries and does not open SSH settings or
+discover hosts. Later discovery must establish each host's live identity.
 
 `config_inspect` and `config_validate` take no arguments beyond the common
 fields. They call `narwhal config inspect --format json` and
 `narwhal config validate --format json`, respectively, and return an
-effective-config document. All three tools complete synchronously.
+effective-config document. The adapter opens the registered fleet file, checks
+its ownership, permissions and 8 MiB size limit, then passes the open descriptor
+to the installed CLI. The CLI runs in the registered working directory with
+the target's permitted environment. The result preserves the CLI envelope and
+effective configuration after redaction. Both config tools validate offline;
+neither result establishes live fleet readiness. All three tools complete
+synchronously.
 
 ### Fleet and local status
 
@@ -107,9 +114,10 @@ effective-config document. All three tools complete synchronously.
 synchronously. `dev_status` requires a dev target, calls
 `narwhal dev status --format json`, and returns the existing dev lifecycle state.
 
-`fleet_status` reads `/health`, `/ready`, `/narwhal/state` and
-`/narwhal/lifecycle` through the documented router GET endpoints. Its successful
-`data` is `{sources: Observation[]}`. Each observation contains:
+`fleet_status` resolves the registered `endpoints.router_env` variable, then
+reads `/health`, `/ready`, `/narwhal/state` and `/narwhal/lifecycle` through the
+documented router GET endpoints. Its successful `data` is
+`{sources: Observation[]}`. Each observation contains:
 
 | Field | Type |
 | --- | --- |
@@ -120,16 +128,30 @@ synchronously. `dev_status` requires a dev target, calls
 | `data` | Object, string or `null` |
 | `artifact_id` | UUID or `null` |
 
-The adapter preserves each endpoint's status and body. An HTTP 200 from `/health`
-does not establish admission readiness. An unhealthy service response remains
-an observation of that service; an unavailable endpoint is a failed observation.
-Missing required sources produce a degraded result.
+The adapter retains each received HTTP status and redacts response bodies.
+If excessive JSON nesting prevents body processing, the adapter discards that
+body, reports `source_unavailable` and preserves the other observations.
+An HTTP 200 from `/health` does not establish admission readiness. A `/ready`
+response with HTTP 503 remains a successful observation of a router that is
+not ready.
+Redirects produce `unavailable`; the client follows none. Transport failures,
+timeouts and other unsuccessful HTTP responses produce failed observations.
+
+The state and lifecycle routes must return their supported version 1 document
+contracts. A missing or unsupported contract produces `unsupported_contract`
+and `outcome: invalid_input`, while preserving the other observations. Other
+source failures produce `degraded` when response bodies or artifacts remain,
+or `error` when collection retains none.
 
 ### Diagnostic collection
 
 `diagnostics_collect` calls `narwhal diagnostics collect --format json` with the
 registered fleet or instance and a fresh private output directory. It completes
 synchronously and may write diagnostic artifacts within the registered target.
+The registered `endpoints.router_env` variable must resolve to the router URL.
+The collector reads the router's five diagnostic routes, including `/metrics`,
+and the local sources selected by the
+[diagnostic collection contract](../Diagnostic-Bundles.md#source-selection).
 
 The tool accepts optional `include_request_content: boolean=false`. Setting it
 to `true` requires the matching registry permission. The tool does not expose
@@ -145,6 +167,24 @@ The successful result contains:
   source_count: integer
 }
 ```
+
+`bundle_artifact_id` identifies a JSON index of the captured sources and their
+artifact IDs. `manifest_artifact_id` identifies the redacted versioned manifest,
+with collection status and per-source outcomes. The adapter exports each
+captured source separately and removes the temporary collection directory when
+the call ends. Read the index, manifest and individual sources through
+`artifact_read`; paths in the command result describe the collection run and
+do not grant access to those paths.
+
+Before writing a temporary fleet snapshot, the adapter redacts it. Its manifest
+row identifies the capture as `redacted_registered_fleet_snapshot` and records
+the original captured bytes' hash and size. It omits the temporary file's
+modification time. Other source exports retain their collected provenance.
+
+Missing, excluded, timed-out or truncated sources make the collection partial.
+An export failure also produces a partial manifest and retains the source's
+error. A partial collection returns `outcome: degraded` with the command result
+and any retained artifacts.
 
 ### Plans
 
@@ -343,15 +383,24 @@ command results for inspection.
 
 ### Collection and query limits
 
-Diagnostic collection uses the existing defaults: 5 seconds per source,
-30 seconds overall, and 8,388,608 bytes retained per source. `timeout_s` may
-lower the overall budget.
+Diagnostic collection allows at most 128 source records, 5 seconds per source,
+30 seconds overall and 8,388,608 bytes retained per source. `timeout_s` may
+lower the overall budget. Source records include selection outcomes. If the
+collector omits additional sources to stay within the cap, the collection
+becomes partial. The limit on source records applies to MCP collection;
+the underlying CLI applies no such limit unless `--max-sources` is set.
 
 Each status source has at most five seconds within the overall call deadline.
-The adapter caps a source body at 262,144 bytes. Larger bodies become artifacts
-within the collection limits and produce a truncated observation. The adapter
-compares each snapshot's age with the target's `freshness_s`; an old capture
-cannot establish present readiness.
+The adapter caps a source body at 262,144 bytes, including bytes received while
+streaming. For a larger body, it exports the retained redacted prefix and
+returns `status: truncated`, `data: null` and its `artifact_id`. That artifact
+has `complete: false`.
+
+The router endpoints have no top-level capture timestamp. `observed_at` records
+the start of each GET. At the end of collection, the adapter compares the
+elapsed time since that start with the target's `freshness_s`; an otherwise
+successful observation older than that limit becomes `stale`. Engine startup
+times and nested event timestamps do not measure the age of the response.
 
 For a range metric query, `start` must precede `end` and the window must be at
 most 3600 seconds. The adapter rejects future query times. It returns at most
@@ -369,7 +418,10 @@ source. If a required host utility is unavailable, it reports incomplete
 inventory; it must not infer the missing hardware information.
 
 `host_logs.max_bytes` and `artifact_read.max_bytes` accept `1..65536`.
-`artifact_read.offset` is an integer greater than or equal to zero. Host log
+`artifact_read.offset` is an integer greater than or equal to zero. The artifact
+tool returns at most 32,768 bytes of content per call even when `max_bytes`
+requests more. This leaves room for JSON escaping and envelope fields within
+the response cap. Follow `next_offset` until it is `null`. Host log
 collection captures the last requested bytes of the selected regular file.
 Later changes to the source do not alter that export. If the source is shortened,
 the tool reports `complete: false`.
@@ -451,6 +503,7 @@ record and terminal result.
 | `resource_busy`, `fleet_busy` | failed_gate | Inspect the operation or serving work that holds the resource. |
 | `recovery_required`, `operation_not_resumable` | failed_gate | Resolve the recorded ownership or effects before another action. |
 | `artifact_missing`, `artifact_changed`, `unsupported_media_type` | error | Select a retained supported export. |
+| `artifact_too_large` | error | Reduce the source size below the export limit. |
 | `source_unavailable`, `source_stale`, `source_truncated`, `query_incomplete` | degraded or error | Inspect the source evidence and correct the cause. |
 | `result_too_large` | See below | Read the retained result artifact. |
 
@@ -492,8 +545,12 @@ deployment evidence.
 
 The artifact store keeps immutable regular files scoped to one target. It
 rejects symbolic-link traversal, credential files and reads outside the allowed
-root. A raw private record and its filtered export have different identities
-and hashes; plan and evidence validation still use the original identity.
+root. Each export holds at most 16 MiB of UTF-8 content; an export that exceeds
+that limit returns `artifact_too_large`. The store binds the export to the
+registry ID and target registration, then verifies that binding,
+ownership, permissions and content hash before every read. A raw private record
+and its filtered export have different identities and hashes; plan and evidence
+validation still use the original identity.
 
 Adapters follow the [diagnostic content policy](../Diagnostic-Bundles.md#content-policy)
 when redacting exports. If a site's free-text format needs additional filtering,
@@ -509,7 +566,8 @@ export reference separately reports whether collection was complete. The store
 supports UTF-8 text, JSON and JSONL. If an export is missing or its hash changed,
 the reader must not follow the same ID to a new live source.
 
-When a valid result exceeds the response cap, the adapter must:
+When a valid result exceeds the response cap and fits within the export limit,
+the adapter must:
 
 1. Store the complete redacted result locally.
 2. Set `data: {result_artifact_id: UUID}` and include its reference in `artifacts`.

@@ -13,8 +13,10 @@ import re
 import stat
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -46,7 +48,9 @@ _REQUEST_KEY = re.compile(
     re.I,
 )
 _SENSITIVE_TEXT = re.compile(
-    r"(?i)(?:[\"']?(?:[\w-]*[_-])?(?:password|passwd|secret|token|api[_-]?key|"
+    # Scan a variable-length field prefix only at its boundary. Repeating that
+    # scan at each character makes long unbroken source lines quadratic.
+    r"(?i)(?:[\"']?(?:(?<![\w-])[\w-]*[_-])?(?:password|passwd|secret|token|api[_-]?key|"
     r"authorization|private[_-]?key|credential[s]?|access[_-]?key)[\"']?\s*[:=]\s*)"
 )
 _REQUEST_TEXT = re.compile(
@@ -218,10 +222,9 @@ def _read(path: Path, maximum: int, deadline: float) -> _Read:
             return _Read(bytes(chunks[:maximum]), True, metadata.st_mtime_ns)
 
 
-def _selected(run: Path, include_request_content: bool) -> list[Path]:
+def _selected(run: Path, include_request_content: bool, maximum: int | None = None) -> list[Path]:
     names = ["fleet.json", "profiles.json", "teardown.json", "router-state.json"]
-    files = [run / name for name in names if (run / name).exists()]
-    for pattern in (
+    patterns = (
         "*.log",
         "*.stdout",
         "*.stderr",
@@ -235,11 +238,18 @@ def _selected(run: Path, include_request_content: bool) -> list[Path]:
         "verify-*/*.log",
         "verify-*/*.stdout",
         "verify-*/*.stderr",
-    ):
-        files.extend(sorted(run.glob(pattern)))
-    if include_request_content:
-        files.extend(sorted(run.glob("journal.jsonl")))
-    return [path for path in files if include_request_content or path.name not in _REQUEST_FILES]
+    )
+
+    def candidates() -> Iterator[Path]:
+        yield from (run / name for name in names if (run / name).exists())
+        for pattern in (*patterns, *(("journal.jsonl",) if include_request_content else ())):
+            paths = run.glob(pattern)
+            yield from sorted(paths) if maximum is None else paths
+
+    selected = (
+        path for path in candidates() if include_request_content or path.name not in _REQUEST_FILES
+    )
+    return list(selected if maximum is None else islice(selected, maximum + 1))
 
 
 async def collect(
@@ -253,6 +263,7 @@ async def collect(
     source_timeout: float = 5.0,
     timeout: float = 30.0,
     max_source_bytes: int = 8 * 1024 * 1024,
+    max_sources: int | None = None,
     include_request_content: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
@@ -269,6 +280,10 @@ async def collect(
             raise ValueError(f"{name} must be finite and positive")
     if max_source_bytes < 1:
         raise ValueError("--max-source-bytes must be positive")
+    if max_sources is not None and (
+        type(max_sources) is not int or max_sources < len(SNAPSHOTS) + 2
+    ):
+        raise ValueError("--max-sources must allow at least seven source records")
     if instance is not None and run is not None:
         raise ValueError("choose --instance or --run")
     started = time.monotonic()
@@ -323,11 +338,25 @@ async def collect(
                 }
             )
     if run is not None:
-        sources.extend(_selected(run, include_request_content))
+        sources.extend(_selected(run, include_request_content, max_sources))
         if not run.is_dir():
             sources.append(run)
     sources.extend(artifacts)
     sources = list(dict.fromkeys(sources))
+    if max_sources is not None:
+        available = max_sources - len(SNAPSHOTS) - len(manifest["sources"])
+        if len(sources) > available:
+            sources = sources[: max(0, available - 1)]
+            manifest["sources"].append(
+                {
+                    "source": "selection",
+                    "kind": "selection",
+                    "status": "truncated",
+                    "error": "source count limit reached; additional sources were omitted",
+                    "collected_at": _now(),
+                }
+            )
+        manifest["policy"]["max_sources"] = max_sources
     # References are collected before endpoint bodies or artifact values reach the export.
     for path in sources:
         if path.suffix == ".json" and not path.is_symlink() and not _credential_file(path):
@@ -487,6 +516,11 @@ def add_commands(commands: Any) -> None:
         default=8 * 1024 * 1024,
         help="Maximum bytes read from each source",
     )
+    collect_parser.add_argument(
+        "--max-sources",
+        type=int,
+        help="Maximum source records including HTTP and selection outcomes; at least seven",
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -507,6 +541,7 @@ def run(args: argparse.Namespace) -> int:
                 source_timeout=args.source_timeout,
                 timeout=args.timeout,
                 max_source_bytes=args.max_source_bytes,
+                max_sources=args.max_sources,
                 include_request_content=args.include_request_content,
             )
         )

@@ -5,9 +5,11 @@ requests an operation and inspects its result. Use it when implementing the
 server or an operation adapter.
 
 The [MCP server command](cli/MCP.md) is **unreleased work** on the MCP milestone
-branch. It validates a local registry and advertises an empty tool list.
-The tools, deployment adapter and shared operation runner below remain
-**planned behaviour**.
+branch. It validates a local registry and exposes `target_list`,
+`config_inspect`, `config_validate`, `fleet_status`, `diagnostics_collect` and
+`artifact_read`. These tools enforce target inspection grants, bound collection
+and return redacted results. The remaining tools, deployment adapter and shared
+operation runner below remain **planned behaviour**.
 
 The distribution remains `narwhal-inference`, with an optional `mcp`
 extra and a `narwhal-mcp` executable. The server runs on a Linux management
@@ -25,18 +27,21 @@ CLI, documented HTTP endpoints and a site adapter. It has no model dependency.
 | [Operations and recovery](mcp/Operations.md) | What the executor persists and how it resumes interrupted work. |
 | [Worked cases](mcp/Worked-Cases.md) | Expected results for deployment, failure, duplicate submission and recovery. |
 
-These pages define the proposed version 1 contracts. Fields are required unless
-their entry specifies an omission default. `null` is allowed only where stated. Input
-objects reject unknown fields. Output readers tolerate added fields within a
-supported document version, while preserving unknown diagnostic codes.
+These pages define the version 1 contracts and identify their availability.
+Fields are required unless their entry specifies an omission default. `null`
+is allowed only where stated. Input objects reject unknown fields. Output
+readers tolerate added fields within a supported document version, while
+preserving unknown diagnostic codes.
 
 ## Existing behaviour and new work
 
-Finite installed commands already support
+The configuration and diagnostic tools invoke finite installed commands with
 [versioned command results](Command-Results.md). Configuration inspection,
 diagnostic collection, engine launch, local development, profiling and preflight
-retain their documented behaviour. An MCP operation adapter must select
-`--format json` where supported and preserve the command's outcome and evidence.
+retain their documented behaviour. The inspection adapters select `--format
+json` and preserve each command's outcome and evidence after redaction. They
+read registered local inputs and router endpoints; only the planned execution
+tools can request deployment changes or active measurements.
 
 The [HTTP inspection routes](HTTP-API.md) supply live router state. Site tooling
 currently coordinates [Gates A–G](Deploy.md) and
@@ -85,6 +90,6 @@ result adapter implement those formats. Deployment plan and operation document
 names remain outside the manifest until their readers and writers ship.
 
 [MCP Fleet Operations v1](https://github.com/athrael-soju/Narwhal/issues/147)
-tracks delivery. Issue #149 covers the server; #150–#155 cover operations and
-execution boundaries; #156 covers the assembled package and live fleet
-qualification. The proposed runner has not passed GPU or recovery qualification.
+tracks delivery and qualification. The inspection tools have no authority to
+start engines or qualify a fleet. The proposed runner has not passed GPU or
+recovery qualification.

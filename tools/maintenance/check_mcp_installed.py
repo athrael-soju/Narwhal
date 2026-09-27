@@ -6,7 +6,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from mcp import Client, StdioServerParameters, stdio_client
@@ -14,10 +16,13 @@ from mcp import Client, StdioServerParameters, stdio_client
 import narwhal
 
 
-async def check_console(root: Path, env: dict[str, str]) -> None:
-    """Start the installed console using a private registry with no adapters."""
+async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
+    """Start the installed console using a private registry and real offline configuration tools."""
     state = root / "management"
     state.mkdir(mode=0o700)
+    fleet = root / "fleet.json"
+    fleet.write_bytes((source / "config/fleet.example.json").read_bytes())
+    fleet.chmod(0o600)
     registry = root / "registry.json"
     registry.write_text(
         json.dumps(
@@ -26,7 +31,19 @@ async def check_console(root: Path, env: dict[str, str]) -> None:
                 "schema_version": 1,
                 "registry_id": str(uuid.uuid4()),
                 "state_dir": str(state),
-                "targets": [],
+                "targets": [
+                    {
+                        "id": "installed",
+                        "kind": "fleet",
+                        "working_directory": str(root),
+                        "artifact_root": str(root / "artifacts"),
+                        "fleet_file": str(fleet),
+                        "instance_dir": None,
+                        "endpoints": {"router_env": "MCP_CHECK_ROUTER"},
+                        "credential_env": ["MCP_CHECK_SECRET"],
+                        "adapter": {"id": "ssh-v1", "settings_path": str(root / "site.json")},
+                    }
+                ],
             }
         )
     )
@@ -39,7 +56,42 @@ async def check_console(root: Path, env: dict[str, str]) -> None:
             stdio_client(parameters, errlog=stderr), mode="legacy", read_timeout_seconds=5
         ) as client:
             listing = await client.list_tools()
-            assert listing.tools == [], listing
+            assert {tool.name for tool in listing.tools} == {
+                "target_list",
+                "config_inspect",
+                "config_validate",
+                "fleet_status",
+                "diagnostics_collect",
+                "artifact_read",
+            }, listing
+            targets = await client.call_tool("target_list", {})
+            assert targets.structured_content["data"]["targets"][0]["id"] == "installed", targets
+            for name in ("config_inspect", "config_validate"):
+                checked = await client.call_tool(name, {"target_id": "installed"})
+                assert not checked.is_error, checked
+                document = checked.structured_content
+                assert document["outcome"] == "success", document
+                assert document["data"]["schema"] == "narwhal.effective-config", document
+                assert document["data"]["source"] == str(fleet), document
+            status = await client.call_tool("fleet_status", {"target_id": "installed"})
+            assert status.structured_content["outcome"] == "success", status
+            collected = await client.call_tool("diagnostics_collect", {"target_id": "installed"})
+            assert collected.structured_content["outcome"] == "success", collected
+            artifact = collected.structured_content["data"]["manifest_artifact_id"]
+            retained = await client.call_tool(
+                "artifact_read",
+                {"target_id": "installed", "artifact_id": artifact},
+            )
+            assert retained.structured_content["outcome"] == "success", retained
+            assert "narwhal.diagnostic-bundle" in retained.structured_content["data"]["text"]
+            for path in (root / "artifacts").rglob("*"):
+                if path.is_file():
+                    payload = path.read_bytes()
+                    assert b"installed-secret-value" not in payload, path
+                    assert b"installed-request-content" not in payload, path
+            rejected = await client.call_tool("config_inspect", {"target_id": "unregistered"})
+            assert rejected.is_error, rejected
+            assert rejected.structured_content["errors"][0]["code"] == "target_not_found", rejected
 
 
 async def check_adapter(root: Path, source: Path, env: dict[str, str]) -> None:
@@ -84,6 +136,29 @@ async def check_adapter(root: Path, source: Path, env: dict[str, str]) -> None:
                 assert marker in diagnostics, diagnostics
 
 
+class RouterFixture(BaseHTTPRequestHandler):
+    """Return synthetic CPU observations to the installed inspection tools."""
+
+    def log_message(self, *args):
+        """Keep fixture HTTP diagnostics out of the test output."""
+
+    def do_GET(self):
+        """Supply each documented router route without running an inference service."""
+        document = {
+            "status": "ok",
+            "detail": "installed-secret-value",
+            "prompt": "installed-request-content",
+        }
+        if self.path in {"/narwhal/state", "/narwhal/lifecycle"}:
+            document.update(schema=self.path.replace("/narwhal/", "narwhal."), schema_version=1)
+        payload = json.dumps(document).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
 def main() -> None:
     """Verify that the installed distribution supplies MCP protocol behaviour."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -98,8 +173,19 @@ def main() -> None:
     env.pop("NARWHAL_MANAGEMENT_REGISTRY", None)
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        asyncio.run(check_console(root, env))
-        asyncio.run(check_adapter(root, source, env))
+        with ThreadingHTTPServer(("127.0.0.1", 0), RouterFixture) as server:
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            env.update(
+                MCP_CHECK_ROUTER=f"http://127.0.0.1:{server.server_port}",
+                MCP_CHECK_SECRET="installed-secret-value",
+            )
+            try:
+                asyncio.run(check_console(root, source, env))
+                asyncio.run(check_adapter(root, source, env))
+            finally:
+                server.shutdown()
+                worker.join(timeout=2)
     print("Installed MCP console and adapter checks passed")
 
 
