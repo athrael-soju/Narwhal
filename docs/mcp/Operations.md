@@ -267,6 +267,24 @@ plan. The executor limits teardown to the plan's recorded ownership scope,
 preserves evidence, and rejects any resource whose identity no longer matches
 the deployment's ownership receipts.
 
+For `deployment_cleanup`, admission requires the selected execution to be
+terminal or in `recovery_required`. If it requires recovery, the executor must
+confirm that its recorded worker is absent. An expired heartbeat does not
+establish absence. The cleanup plan must reserve exactly the selected
+operation's resources on the same target.
+
+The store transfers those reservations to the cleanup operation in the same
+transaction that accepts it. Reservations held by another operation block
+admission. The selected operation keeps its original record and evidence;
+later reconciliation of that record cannot release the cleanup operation's
+reservations.
+
+If cleanup itself fails, a fresh cleanup plan can select that cleanup
+operation. The store checks the retained predecessor requests and plans back
+to the original fleet execution, rejects cycles, and accepts at most 16
+predecessor records, including the selected operation and original execution.
+Each predecessor must identify the same target and resource set.
+
 ## Disconnect, interruption and recovery
 
 The worker runs independently of the stdio MCP process. Closing the client
