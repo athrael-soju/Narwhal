@@ -25,7 +25,16 @@ if TYPE_CHECKING:
 
 CONTEXT_ENV = "NARWHAL_MANAGEMENT_CONTEXT_FD"
 _MAX_BYTES = 65536
-_SEALS = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+# Linux UAPI linux/fcntl.h fixes these values even when Python's build headers
+# omit their fcntl exports. The kernel still enforces and reports every seal.
+_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
+_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
+_SEALS = (
+    getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+    | getattr(fcntl, "F_SEAL_GROW", 0x0004)
+    | getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+    | getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+)
 
 
 @dataclass(frozen=True)
@@ -147,7 +156,7 @@ def command_context(
             raise _denied()
         os.fchmod(descriptor, 0o600)
         os.write(descriptor, raw)
-        fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, _SEALS)
+        fcntl.fcntl(descriptor, _F_ADD_SEALS, _SEALS)
         with directory(registry.state_dir, private=True, create=True) as parent:
             grant = os.open(
                 name,
@@ -218,7 +227,7 @@ def command_exit_reporter() -> Callable[[int], None] | None:
             raise _denied()
         descriptor = int(selected)
         _private(descriptor)
-        if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & _SEALS != _SEALS:
+        if fcntl.fcntl(descriptor, _F_GET_SEALS) & _SEALS != _SEALS:
             raise _denied()
         raw = os.pread(descriptor, _MAX_BYTES + 1, 0)
         payload = _decode(raw)
@@ -304,7 +313,7 @@ def inherited_context(instance: Path | None = None) -> dict[str, Any] | None:
             raise _denied()
         descriptor = int(selected)
         _private(descriptor)
-        if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & _SEALS != _SEALS:
+        if fcntl.fcntl(descriptor, _F_GET_SEALS) & _SEALS != _SEALS:
             raise _denied()
         raw = os.pread(descriptor, _MAX_BYTES + 1, 0)
         payload = _decode(raw)

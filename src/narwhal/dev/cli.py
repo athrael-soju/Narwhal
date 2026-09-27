@@ -36,9 +36,10 @@ def main(argv: list[str] | None = None) -> int:
 
     def dispatch(values: list[str]) -> int:
         nonlocal reporter
-        from ..deployment.management_context import command_exit_reporter
+        if "NARWHAL_MANAGEMENT_CONTEXT_FD" in os.environ:
+            from ..deployment.management_context import command_exit_reporter
 
-        reporter = command_exit_reporter()
+            reporter = command_exit_reporter()
         try:
             code = _main(values, completion=completion)
         except KeyboardInterrupt:

@@ -166,6 +166,51 @@ class ManagementContextTests(unittest.TestCase):
             self.assertEqual(descriptor_only.returncode, 2, descriptor_only.stderr)
         self.assertFalse(list((self.root / "state").glob("command-*.json")))
 
+    def test_linux_kernel_seals_work_when_python_omits_the_constants(self):
+        script = """
+import fcntl, os
+for name in ("F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE",
+             "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL"):
+    if hasattr(fcntl, name):
+        delattr(fcntl, name)
+from narwhal.deployment import management_context as context
+descriptor = os.memfd_create("narwhal-seal-test", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+try:
+    os.write(descriptor, b"credential")
+    fcntl.fcntl(descriptor, context._F_ADD_SEALS, context._SEALS)
+    assert fcntl.fcntl(descriptor, context._F_GET_SEALS) & context._SEALS == context._SEALS
+    for change in (lambda: os.pwrite(descriptor, b"changed", 0),
+                   lambda: os.ftruncate(descriptor, 0),
+                   lambda: os.ftruncate(descriptor, 64)):
+        try:
+            change()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("Kernel allowed a sealed credential to change")
+finally:
+    os.close(descriptor)
+"""
+        child = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(child.returncode, 0, child.stderr)
+
+    def test_unbound_help_does_not_import_management_context(self):
+        script = """
+import os, sys
+os.environ.pop("NARWHAL_MANAGEMENT_CONTEXT_FD", None)
+os.environ.pop("NARWHAL_MANAGEMENT_REGISTRY", None)
+sys.modules["narwhal.deployment.management_context"] = None
+from narwhal.dev.cli import main
+raise SystemExit(main(["--help"]))
+"""
+        child = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertIn("usage: narwhal", child.stdout)
+
     def test_authenticated_child_retains_its_text_exit_outside_the_json_result(self):
         with self.issue() as credential:
             child = self.child(credential, "command-error")

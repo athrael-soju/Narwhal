@@ -373,9 +373,16 @@ class ManagedCliTests(unittest.TestCase):
                         original_text_code = dev_cli.main(arguments)
                     except KeyboardInterrupt:
                         original_text_code = 130
-                    with patch(
-                        "narwhal.deployment.management_context.command_exit_reporter",
-                        return_value=captured.append,
+                    with (
+                        patch.dict(os.environ, {"NARWHAL_MANAGEMENT_CONTEXT_FD": "fixture"}),
+                        patch(
+                            "narwhal.deployment.management_context.command_exit_reporter",
+                            return_value=captured.append,
+                        ),
+                        patch(
+                            "narwhal.deployment.management_context.inherited_context",
+                            return_value=None,
+                        ),
                     ):
                         command = self.invoke(dev_cli.main, arguments)
                 self.assertEqual(original_text_code, text_code)
