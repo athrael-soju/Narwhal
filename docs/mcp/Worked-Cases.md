@@ -1,8 +1,10 @@
 # MCP contract worked cases
 
-These cases specify how the proposed version 1 management executor responds
-to successful work, failures, retries and interruptions. The operation tools
-are not yet available. The cases provide inputs, expected states and retained
+These cases specify how the version 1 management executor responds to
+successful work, failures, retries and interruptions. The unreleased server
+exposes tools for retained operations, but production execution adapters are not
+installed. The cases describe the complete workflow once an adapter supplies
+the required actions. They provide inputs, expected states and retained
 evidence for implementation checks; they contain no live fleet measurements.
 
 Use the [tool catalogue](Tools.md) for argument and result fields, the
@@ -127,14 +129,14 @@ these fields:
 }
 ```
 
-The executor reuses only stages whose evidence remains valid. It collects a
-new sample for the changed route and continues through Gates E to G. The child
-operation moves through `queued → running → succeeded`; the parent stays
-`failed`.
+The current core runs every stage in the corrected plan again. It collects a
+new sample for the changed route and completes Gates A to G with new evidence.
+The child operation moves through `queued → running → succeeded`; the parent
+stays `failed`.
 
 The client can inspect both route fingerprints, both samples and the corrected
-plan. The child's stage records identify which evidence the executor reused
-and why it remained valid.
+plan. The child's stage records leave `reused_from` null; the parent retains
+the evidence from the failed attempt.
 
 ## 3. Duplicate and conflicting submissions
 
@@ -192,8 +194,10 @@ boot ID, PID and process start ticks with the live host. The identity check
 fails, so it moves the operation from `running` to `recovery_required` and
 retains its resource reservations.
 
-The coordinator inspects the adapter's recorded launch intention and the live
-engine identity within a finite inspection budget.
+The adapter's recovery workflow then calls the core's reconciliation procedure
+to inspect the recorded launch intention and live engine identity within a
+finite budget. This adapter workflow is not installed in the current build;
+startup and operation inspection only check local worker identity.
 
 `operation_inspect` returns `success`, with state `recovery_required`, null
 terminal result fields and the recovery error codes. The full snapshot
@@ -248,24 +252,25 @@ those resources in place.
 ## 7. Stale engine generation or changed inputs
 
 After preparation, an engine restarts with the same launch configuration.
-When the agent calls `plan_execute`, the executor detects that the live
-generation differs from the plan binding. It returns `stale_plan` before
-executing any stage.
+The `plan_execute` call checks retained inputs and the local binding, reserves
+resources and returns an accepted operation. Before performing the first
+stage, the worker detects that the live generation differs from the plan
+binding. It records `stale_plan` and finishes with
+`result.status: "failed_gate"` without performing that stage.
 
-If the generation changes after the executor accepts the operation, the next
-precondition check fails. The queued or running operation finishes with
-`result.status: "failed_gate"`, after reconciliation if any external work
-remains unresolved.
+If the generation changes during execution, the next precondition check fails.
+The operation reaches the same failed result after reconciliation, if any
+external work remains unresolved.
 
 The agent requests fresh preparation to record the new generation. In the
 next execution, the executor captures its live cache, obtains attestation,
 profiles that generation and runs full preflight. If the cache geometry
 changed, it recalculates the fabric budget.
 
-The executor may reuse an existing directed sample when its documented link
-fingerprint still matches and the sample meets the new budget. An engine
-restart alone therefore does not require another measurement of every
-directed link.
+The current core runs the new plan's stages again. A future fleet adapter may
+reuse a directed sample only when its documented link fingerprint still
+matches and the sample meets the new budget, following the
+[evidence reuse contract](Operations.md#resumption-and-evidence-reuse).
 
 Changes to the source revision, image, model, recipe or deployment
 configuration also invalidate the corresponding plan binding. The agent must

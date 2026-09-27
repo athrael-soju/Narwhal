@@ -2,9 +2,10 @@
 
 This page specifies tool arguments, results and errors for the
 [MCP contract](../MCP-Contracts.md). The unreleased [server command](../cli/MCP.md)
-exposes six inspection tools; the catalogue identifies them below. The remaining
-tools are planned. Registration binds each target ID to its inputs and access
-grants.
+exposes ten tools; the catalogue identifies them below. Preparation, execution
+and resumption require an execution adapter, and none are installed in this
+build. Those tools are absent from discovery. Registration binds each target ID
+to its inputs and access grants.
 
 The inspection adapters enforce those grants, redact returned content and keep
 each result within the response limit. They retain oversized results as private
@@ -44,7 +45,7 @@ and requested `limit`. Reusing it after a registry change, with another limit,
 or after its stored snapshot is removed returns `invalid_cursor`. Target lists
 sort by target ID and survive a server restart with the same registry and state.
 A page may contain fewer than `limit` entries to satisfy the response byte limit.
-Planned operation-list cursors also bind the target and filters; operation
+Operation-list cursors also bind the target registration and requested limit; operation
 lists sort by creation time descending, then operation ID ascending.
 
 The maximum serialized `structuredContent` is 262,144 bytes. When a production
@@ -68,13 +69,13 @@ The result shapes below describe the management envelope's `data` field.
 | `fleet_status` | Read router status and state. | `serving/`, `runtime/` | Implemented |
 | `dev_status` | Read a dev instance's recorded status. | `dev/` | Planned |
 | `diagnostics_collect` | Collect selected incident evidence. | `diagnostics/` | Implemented |
-| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Planned |
-| `plan_inspect` | Read a saved plan and its input references. | Plan store | Planned |
-| `plan_execute` | Submit a saved plan for execution. | Shared executor | Planned |
-| `operation_list` | List operations for a target. | Operation store | Planned |
-| `operation_inspect` | Read one operation's state. | Operation store | Planned |
-| `operation_cancel` | Request cancellation and bounded cleanup. | Shared executor | Planned |
-| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Planned |
+| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Requires execution adapter |
+| `plan_inspect` | Read a saved plan and its input references. | Plan store | Implemented |
+| `plan_execute` | Submit a saved plan for execution. | Shared executor | Requires execution adapter |
+| `operation_list` | List operations for a target. | Operation store | Implemented |
+| `operation_inspect` | Read one operation's state. | Operation store | Implemented |
+| `operation_cancel` | Record cancellation for an operation. | Shared executor | Implemented |
+| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Requires execution adapter |
 | `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Planned |
 | `metrics_query` | Run a registered Prometheus query. | Observability adapter | Planned |
 | `host_inventory` | Collect inventory from a registered host. | Site adapter | Planned |
@@ -217,7 +218,9 @@ operation ID records acceptance; inspect the operation to learn its outcome.
 ```
 
 The plan store redacts the plan and input exports. `locally_stale` reports the
-local check only; the executor must revalidate live inputs before execution.
+local registration, recipe and available adapter checks. An absent adapter
+does not by itself make an immutable plan stale. Execution still requires that
+adapter and fresh checks of live inputs.
 
 ### Operations
 
@@ -242,10 +245,25 @@ record.
 cleanup has finished. Cancelling execution requires the original action's
 current grants. Cancelling preparation requires only `inspect`.
 
+The request is durable even when the tool response is lost. If no worker has
+claimed the queued operation, the coordinator records terminal cancellation
+and its evidence without launching work. A worker that has already claimed it
+handles the request under its cleanup budget. Repeat the same cancel call to
+inspect the current summary and retained record.
+
+For a lost worker, cancellation can stop local temporary helpers recorded by
+the shared command runner, after verifying their ownership and process
+identities. It does not stop remote resources or services retained by completed
+stages. Unknown effects keep the operation in `recovery_required`, with its
+reservations held. See the [cancellation contract](Operations.md#deadlines-and-cancellation)
+for the cleanup boundary.
+
 `operation_resume` requires the original action's current grants and uses
-`request_id` for deduplication. The executor reconciles live state and validates
-checkpoints before creating the child attempt. An accepted request returns
-`{operation_id: UUID}` for that new attempt.
+`request_id` for deduplication. Before creating the child, the coordinator checks
+that the parent has reconciled to `failed` or `cancelled` and validates the
+fresh plan's retained inputs and local binding. The worker checks live inputs
+before it performs a stage. Every stage runs again with new records and
+evidence. An accepted request returns `{operation_id: UUID}` for that new attempt.
 
 ### Monitoring and metrics
 
@@ -493,13 +511,15 @@ record and terminal result.
 
 | Code | Tool outcome | Action |
 | --- | --- | --- |
-| `target_not_found`, `object_not_found` | invalid_input | Select a registered target and IDs belonging to it. |
+| `target_not_found`, `object_not_found`, `plan_not_found` | invalid_input | Select a registered target and IDs belonging to it. |
 | `unsupported_contract` | invalid_input | Supply a supported document version. |
 | `invalid_cursor` | invalid_input | Restart listing. |
 | `permission_denied` | invalid_input | Have the operator update the local grant. |
 | `request_id_conflict`, `plan_scope_mismatch` | invalid_input | Correct the mismatched request. |
 | `operation_record_removed` | error | Inspect the retained tombstone or archive. |
 | `stale_plan`, `adapter_prerequisite_missing` | failed_gate | Correct the inputs or prerequisites, then prepare a new plan. |
+| `adapter_unavailable` | failed_gate | Use a build with the required execution adapter. |
+| `plan_evidence_missing`, `plan_evidence_changed` | failed_gate | Restore the retained inputs or prepare a new plan. |
 | `resource_busy`, `fleet_busy` | failed_gate | Inspect the operation or serving work that holds the resource. |
 | `recovery_required`, `operation_not_resumable` | failed_gate | Resolve the recorded ownership or effects before another action. |
 | `artifact_missing`, `artifact_changed`, `unsupported_media_type` | error | Select a retained supported export. |

@@ -7,6 +7,14 @@ selected NVIDIA GPU and targets 8 GB of VRAM or less. The optional
 four-engine configuration. Templates select the model, runtime and memory
 budget; `gpu.product` pins a model of card when a recipe requires one.
 
+In the unreleased MCP build, setting `NARWHAL_MANAGEMENT_REGISTRY` opts
+`init`, `up`, `verify` and `down` into the
+[management registry](../mcp/Registration.md#registry-changes-and-retention).
+The command matches `--instance` to one target and checks its action grants.
+With no execution adapters installed, an authorised call exits 1 with
+`adapter_unavailable` before reading the instance or starting work. `status`
+remains available. Commands without that variable retain the behaviour below.
+
 `narwhal dev init` writes a private instance containing its model and runtime
 pins, memory budget, unique ports, engine launch records and fleet config.
 The installed template assigns one prefill and one decode role. Repeating

@@ -87,10 +87,11 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 
 Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
 
-The [MCP contract](docs/MCP-Contracts.md) assigns management registration to
-`deployment/` and protocol handling to `mcp/`. The server currently validates
-registries and exposes six inspection tools. Planned deployment plans, persisted
-operations and the site adapter interface belong to `deployment/`.
+The [MCP contract](docs/MCP-Contracts.md) assigns management registration,
+deployment plans, persisted operations and the adapter interface to
+`deployment/`. The unreleased server exposes six inspection tools and four
+tools for retained plans, operation records and cancellation. Protocol handling
+belongs to `mcp/`. Dev and fleet execution adapters remain planned.
 
 When adding a tool, keep its operation with the existing package owner and
 put only its MCP schema, dispatch and result mapping in `mcp/`. Site automation

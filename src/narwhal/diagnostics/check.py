@@ -1013,6 +1013,14 @@ def _main(argv: list[str]) -> int:
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
         ap.error("choose --evidence-out or --verify-evidence")
+    if args.verify_evidence is None:
+        from ..deployment.management_cli import guard_bound_command
+
+        denied = guard_bound_command(
+            "narwhal-check", action="fleet_preflight", fleet=Path(args.fleet)
+        )
+        if denied is not None:
+            return denied
     if args.evidence_out is not None:
         results.add_artifact("directed_kv_evidence", args.evidence_out)
     from ..cli_errors import failure

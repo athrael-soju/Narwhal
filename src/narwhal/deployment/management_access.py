@@ -51,6 +51,7 @@ def directory(path: Path, *, private: bool = False, create: bool = False) -> Ite
             if create and final:
                 with contextlib.suppress(FileExistsError):
                     os.mkdir(part, mode=0o700, dir_fd=fd)
+                    os.fsync(fd)
             try:
                 fd = os.open(
                     part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd

@@ -1,15 +1,24 @@
 # MCP deployment plans and site adapters
 
-This page specifies the proposed version 1 deployment plan and site adapter
+This page specifies the version 1 deployment plan and site adapter
 interfaces for implementers of the [MCP milestone](../MCP-Contracts.md).
-These interfaces are not available yet. Operators deploying a fleet use
-[Deploy a fleet](../Deploy.md).
+The unreleased core stores immutable plans and input snapshots and exposes
+`plan_inspect`. The distribution has no production execution adapters, so
+`plan_prepare` and `plan_execute` are absent from MCP discovery. Operators
+deploying a fleet use [Deploy a fleet](../Deploy.md).
 
 A plan fixes the inputs, stages and execution budgets for one registered target.
 The deployment executor checks those recorded inputs before it starts work.
 Site adapters perform host operations and return evidence. The executor orders
 deployment gates, prevents conflicting operations, and owns operation state and
 recovery.
+
+An adapter implementation supplies its fixed manifest, preparation procedure,
+stage execution and read-only reconciliation. The core checks the manifest,
+persists accepted work and runs callbacks in a detached worker. Synthetic
+adapters can exercise these interfaces; a production adapter must provide the
+host and GPU evidence required by the deployment gates before it can qualify
+a fleet.
 
 ## Prepare and execute a plan
 
@@ -126,7 +135,7 @@ All fields below are required. Nullable values are allowed only where stated.
 
 | Field | Contract |
 | --- | --- |
-| `registration_digest` | SHA-256 of the target registration and referenced adapter settings at preparation, excluding credential values. |
+| `registration_digest` | SHA-256 of the registry ID, target with defaults, resolved nonsecret endpoints, adapter settings and registered recipe hashes at preparation. Credential values are excluded. |
 | `adapter` | `{id, version, assets_sha256}`: registered adapter, exact implementation version, digest of its asset manifest. |
 | `source` | `{commit, distribution_version, wheel_sha256, bundle_sha256}`: approved source and installed artifact identities. |
 | `recipe` | `{recipe_id, sha256}` for the selected immutable recipe, or null under the condition below. |
@@ -240,9 +249,11 @@ concurrency or batch sizes based only on available headroom.
 
 The overall execution budget is the sum of every stage's `timeout_ms`,
 `term_grace_ms`, `kill_grace_ms` and `reconcile_ms`. It starts when execution
-begins. Before starting a stage, the executor checks that its execution and
-cleanup budgets fit within the remaining time. Permitted concurrency may
-shorten the actual operation. The recorded outer budgets must include nested
+begins. Worker bookkeeping consumes part of that budget, so the first stage
+may receive less action time to preserve its full cleanup allowance. Later
+stages start only when their full execution and cleanup budgets fit within the
+remaining time. Permitted concurrency may shorten the actual operation.
+The recorded outer budgets must include nested
 commands and their cleanup, including an interrupted Docker client's final
 termination grace.
 
@@ -308,10 +319,12 @@ original failed or cancelled attempt remains recorded. For an interrupted
 attempt, the executor must first reconcile its effects and reach one of those
 terminal states.
 
-The executor may reuse a completed stage only when its evidence has a passing
-verdict and each input digest, applicable live identity, adapter version and
-prerequisite verdict still matches. Missing or ambiguous evidence cannot satisfy
-a gate.
+The current core runs all stages in a resumed plan again. The contract permits
+future evidence reuse only when a completed stage has a passing verdict and
+each input digest, applicable live identity, adapter version and prerequisite
+verdict still matches. Missing or ambiguous evidence cannot satisfy a gate.
+The table below identifies the minimum evidence a fleet adapter must refresh
+when implementing reuse.
 
 | Changed input | Evidence that must be refreshed |
 | --- | --- |

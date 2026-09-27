@@ -2,6 +2,13 @@
 
 Prepare and run vLLM engines from the existing `narwhal.engine-launch` record. The `native` backend runs the checked Python environment on Linux or WSL2; `container` retains the existing Docker launch path. Both use the same model, GPU allocation, ports, NIXL connector and runtime argument checks.
 
+In the unreleased MCP build, every action exits 1 with `adapter_unavailable`
+when `NARWHAL_MANAGEMENT_REGISTRY` is set. The launcher rejects the call before
+reading launch inputs, writing artifacts or starting helpers. The command has
+no fleet selector through which to establish a registered target, and managed
+execution adapters are not installed. Help and version output remain available;
+see the [management binding](../mcp/Registration.md#registry-changes-and-retention).
+
 The native path requires `NARWHAL_MODEL_REVISION` alongside the launch environment produced during deployment. A local GGUF file can be selected with `NARWHAL_MODEL_PATH`; preparation records its SHA-256. Each run directory is immutable. A fresh start needs a fresh directory.
 
 For GGUF, pin `vllm-gguf-plugin` in `runtime.expected_packages` and keep the model path inside its snapshot directory so the loader can find companion files. Supply the base model tokenizer and configuration through `--tokenizer` and `--hf-config-path` in `runtime.extra_args`.

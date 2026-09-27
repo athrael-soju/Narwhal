@@ -8,8 +8,14 @@ The [MCP server command](cli/MCP.md) is **unreleased work** on the MCP milestone
 branch. It validates a local registry and exposes `target_list`,
 `config_inspect`, `config_validate`, `fleet_status`, `diagnostics_collect` and
 `artifact_read`. These tools enforce target inspection grants, bound collection
-and return redacted results. The remaining tools, deployment adapter and shared
-operation runner below remain **planned behaviour**.
+and return redacted results. It also exposes `plan_inspect`, `operation_list`,
+`operation_inspect` and `operation_cancel` through the durable store and shared
+coordinator.
+
+The distribution has no execution adapters. Preparation, execution and
+resumption are absent from MCP discovery, and registry-bound CLI mutations and
+measurements fail before they start. The deployment, dev and observability
+adapters remain **planned behaviour**.
 
 The distribution remains `narwhal-inference`, with an optional `mcp`
 extra and a `narwhal-mcp` executable. The server runs on a Linux management
@@ -47,8 +53,11 @@ The [HTTP inspection routes](HTTP-API.md) supply live router state. Site tooling
 currently coordinates [Gates A–G](Deploy.md) and
 [monitoring startup](observability/01-Start-and-Verify.md). The proposed adapter
 makes those workflows callable through the same operation runner used by MCP
-and management CLI entry points. Existing instance locks and stage records do
-not yet provide that shared runner or complete fleet resumption.
+and management CLI entry points. The operation core persists requests, reserves
+canonical resources and supplies detached workers to installed adapters.
+Existing instance locks continue to protect their lifecycle records. Production
+dev and fleet adapters must integrate those commands before operators can submit
+managed work.
 
 Prometheus continues to scrape router and engine metrics. The planned
 observability tools configure monitoring, inspect its health and query those
@@ -84,12 +93,15 @@ mapping; those adapters are absent from the installed tool list. The
 [server command reference](cli/MCP.md) records the SDK constraint and the
 client/protocol combinations that have been checked.
 
-The installed contract manifest includes `narwhal.management-registry` version
-1 and `narwhal.management-result` version 1 because the registry reader and
-result adapter implement those formats. Deployment plan and operation document
-names remain outside the manifest until their readers and writers ship.
+The installed contract manifest includes version 1 of
+`narwhal.management-registry`, `narwhal.management-result`,
+`narwhal.deployment-plan`, `narwhal.management-snapshot` and
+`narwhal.management-operation`. Their readers and writers belong to the
+management core. The presence of these formats does not enable an execution
+adapter.
 
 [MCP Fleet Operations v1](https://github.com/athrael-soju/Narwhal/issues/147)
 tracks delivery and qualification. The inspection tools have no authority to
-start engines or qualify a fleet. The proposed runner has not passed GPU or
-recovery qualification.
+start engines or qualify a fleet. The operation core's synthetic adapters
+exercise persistence and recovery without GPU work. Production adapters still
+require live fleet qualification.

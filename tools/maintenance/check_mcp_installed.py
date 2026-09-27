@@ -63,9 +63,18 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
                 "fleet_status",
                 "diagnostics_collect",
                 "artifact_read",
+                "operation_list",
+                "operation_inspect",
+                "operation_cancel",
+                "plan_inspect",
             }, listing
             targets = await client.call_tool("target_list", {})
             assert targets.structured_content["data"]["targets"][0]["id"] == "installed", targets
+            operations = await client.call_tool("operation_list", {"target_id": "installed"})
+            assert operations.structured_content["data"] == {
+                "operations": [],
+                "next_cursor": None,
+            }, operations
             for name in ("config_inspect", "config_validate"):
                 checked = await client.call_tool(name, {"target_id": "installed"})
                 assert not checked.is_error, checked
