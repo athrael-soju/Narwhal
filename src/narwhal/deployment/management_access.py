@@ -10,7 +10,7 @@ import stat
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from narwhal.contracts import FLEET, validate_document
@@ -259,9 +259,15 @@ class InspectionAccess:
             "outcome": outcome,
             "error_codes": codes,
         }
+        self.write_audit("inspection", row)
+
+    def write_audit(
+        self, stream_name: Literal["inspection", "execution"], row: dict[str, Any]
+    ) -> None:
+        """Append one prepared receipt to an owned private file and synchronize it."""
         root = self.registry.state_dir
         with directory(root, private=True, create=True) as fd:
-            name = f"inspection-{self.registry.registry_id}.jsonl"
+            name = f"{stream_name}-{self.registry.registry_id}.jsonl"
             descriptor = os.open(
                 name,
                 os.O_WRONLY
@@ -280,7 +286,7 @@ class InspectionAccess:
                     or metadata.st_uid != os.getuid()
                     or stat.S_IMODE(metadata.st_mode) != 0o600
                 ):
-                    raise AccessError("permission_denied", "Inspection audit file is unsafe")
+                    raise AccessError("permission_denied", "Management audit file is unsafe")
                 stream.write((json.dumps(row, separators=(",", ":")) + "\n").encode())
                 stream.flush()
                 os.fsync(stream.fileno())

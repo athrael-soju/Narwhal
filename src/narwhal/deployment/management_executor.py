@@ -22,6 +22,7 @@ from narwhal.diagnostics.management_artifacts import ArtifactStore
 
 from . import stages
 from .management_access import AccessError, InspectionAccess, clean_command, directory
+from .management_audit import operation_event
 from .management_exports import public_value
 from .management_records import OperationError, utc_now, uuid_string
 from .management_registry import ManagementRegistry
@@ -498,7 +499,16 @@ def _finish(
             "command_result": last,
         }
 
-    return context.update(change)
+    completed = context.update(change)
+    operation_event(
+        context.registry,
+        "operation_finished",
+        completed,
+        outcome=completed["result"]["status"],
+        codes=[error["code"] for error in completed["result"]["errors"]],
+        required=False,
+    )
+    return completed
 
 
 def cancel_queued_operation(
@@ -536,13 +546,28 @@ def _recovery(context: StageContext, reason: str, errors: list[dict[str, Any]]) 
             required_actions=["Reconcile recorded effects before another execution"],
         )
 
-    return context.update(change)
+    record = context.update(change)
+    operation_event(
+        context.registry,
+        "recovery_required",
+        record,
+        outcome="recovery_required",
+        codes=[error["code"] for error in errors],
+        required=False,
+    )
+    return record
 
 
 def _known_helpers_stopped(record: dict[str, Any]) -> bool:
     for row in record["stages"]:
         for receipt in row["effects"]:
             if receipt["kind"] != "measurement_helper":
+                continue
+            if receipt["host_id"] != "management":
+                # Remote PIDs and boot IDs cannot be tested against this host's /proc.
+                # Only the adapter's explicit absence observation settles that helper.
+                if receipt["effect"] != "absent":
+                    return False
                 continue
             identity = receipt.get("identity")
             if identity is None:
@@ -873,9 +898,10 @@ def run_operation(
                     row.update(_stage_record(stage["stage_id"]))
                     row["cleanup_budgets"] = stage["cleanup"]
 
-                context.update(started)
+                current = context.update(started)
                 with _bounded(context.deadline - time.monotonic()):
                     context.assert_current()
+                    operation_event(context.registry, "stage_started", current, outcome="started")
                     if before_stage is not None:
                         before_stage(context)
                     context.assert_current()
@@ -947,6 +973,14 @@ def run_operation(
                     )
 
                 current = context.update(settled)
+                operation_event(
+                    context.registry,
+                    "stage_finished",
+                    current,
+                    outcome=outcome.status,
+                    codes=[error["code"] for error in outcome.errors],
+                    artifacts=outcome.artifacts,
+                )
                 if current["cancellation"]["requested_at"] is not None:
                     return _finish(
                         context, "cancelled", "interrupted", data=data, errors=outcome.errors
@@ -1006,7 +1040,15 @@ def run_operation(
         if row is not None and row["state"] == "running":
             row.update(state="cancelled" if cancelled else "failed", finished_at=utc_now())
 
-    context.update(failed)
+    failed_record = context.update(failed)
+    operation_event(
+        context.registry,
+        "stage_finished",
+        failed_record,
+        outcome="interrupted" if cancelled else "error",
+        codes=[code],
+        required=False,
+    )
     current = context.read()
     if any(
         item["effect"] == "unknown" for row in current["stages"] for item in row["effects"]
