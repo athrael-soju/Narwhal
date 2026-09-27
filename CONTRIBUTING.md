@@ -12,6 +12,9 @@ git fetch upstream
 git switch -c describe-your-change upstream/main
 ```
 
+Run `make help` from the repository root to list contributor commands and their
+overrides. Help works before environment setup and does not install dependencies.
+
 Install the development tools and local checks.
 
 ```bash
@@ -43,6 +46,18 @@ after replacing the path. With this override, `make sync` does not create `.venv
 An installation failure stops the command with a nonzero exit status.
 
 `make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
+
+`make lint` and `make format` report lint and formatting errors without editing
+files. To apply safe Ruff lint fixes and then format `src/`, `tools/` and `tests/`,
+run:
+
+```bash
+make fix
+```
+
+This command edits files. Review the diff before committing. If lint errors
+remain, the command stops before formatting; address those errors and rerun it.
+`make fix` honours `VENV_PYTHON`, as do the lint and formatting checks.
 
 `make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
 
