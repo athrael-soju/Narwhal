@@ -84,11 +84,12 @@ Narwhal appends router operation events to the request journal for:
 - engine lifecycle operations;
 - monitoring health.
 
-When a health or inference recovery probe cannot verify the engine's loaded
-profile generations, Narwhal keeps the engine ejected and writes an
+If a health or inference recovery probe cannot verify the engine's loaded
+profile generations, Narwhal excludes the engine from placement and writes an
 `engine_lifecycle` event with `action: profile_recovery_blocked`. The event
-includes the engine `iid`, the failed check in `error`, and the router's
-monotonic `at` timestamp. Inspect the [profile binding](02-Profiles.md#validate-the-engine-cost-model)
+records the engine `iid`, the failed check in `error`, and `at` as Unix
+wall-clock seconds. Inspect the engine's
+[profile generation evidence](02-Profiles.md#validate-the-engine-cost-model)
 before retrying recovery.
 
 Monitoring writes these event types:
