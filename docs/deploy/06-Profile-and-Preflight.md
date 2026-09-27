@@ -65,7 +65,7 @@ The full preflight runs these gates:
 
 | Gate       | What must pass                                                                                                                                                                                              |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reach`    | Every engine answers inside configured health budget.                                                                                                                                                       |
+| `reach`    | Every engine returns HTTP 200 with the configured health HTTP I/O timeout.                                                                                                                                   |
 | `contract` | Attestation matches current process and declared runtime.                                                                                                                                                   |
 | `profile`  | Each saved generation digest matches its live engine; profile IDs match the fleet and measured decode errors stay within policy.                                                                            |
 | `model`    | Every engine serves the configured model.                                                                                                                                                                   |
