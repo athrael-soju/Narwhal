@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import subprocess
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 
@@ -14,24 +18,61 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
+from ..deployment.management_records import OperationError
 from . import lifecycle, template
+
+
+@dataclass
+class _Completion:
+    text_exit_code: int | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
     """Dispatch finite development and offline configuration operations."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     selected, _ = results.output_arguments(arguments)
-    return results.invoke(
+    completion = _Completion()
+    reporter: Callable[[int], None] | None = None
+
+    def dispatch(values: list[str]) -> int:
+        nonlocal reporter
+        if "NARWHAL_MANAGEMENT_CONTEXT_FD" in os.environ:
+            from ..deployment.management_context import command_exit_reporter
+
+            reporter = command_exit_reporter()
+        try:
+            code = _main(values, completion=completion)
+        except KeyboardInterrupt:
+            completion.text_exit_code = 130
+            raise
+        except SystemExit as exc:
+            completion.text_exit_code = (
+                0 if exc.code is None else exc.code if isinstance(exc.code, int) else 1
+            )
+            raise
+        except Exception:
+            if completion.text_exit_code is None:
+                completion.text_exit_code = 1
+            raise
+        if completion.text_exit_code is None:
+            completion.text_exit_code = code
+        return code
+
+    code = results.invoke(
         "narwhal",
         arguments,
-        _main,
+        dispatch,
         operation="dev",
         capture_child_stdout=selected[:1] not in (["config"], ["diagnostics"]),
     )
+    if reporter is not None and completion.text_exit_code is not None:
+        reporter(completion.text_exit_code)
+    return code
 
 
-def _main(argv: list[str]) -> int:
+def _main(argv: list[str], *, completion: _Completion | None = None) -> int:
     """Dispatch the local development lifecycle."""
+    completion = completion or _Completion()
     parser = argparse.ArgumentParser(
         prog="narwhal",
         description="Manage a local shared-GPU development fleet",
@@ -150,7 +191,12 @@ def _main(argv: list[str]) -> int:
             "verify": "dev_verify",
             "down": "dev_down",
         }
-        denied = guard_bound_command("narwhal", action=managed_actions[args.action], instance=root)
+        denied = guard_bound_command(
+            "narwhal",
+            action=managed_actions[args.action],
+            instance=root,
+            arguments={**vars(args), "argv": argv},
+        )
         if denied is not None:
             return denied
     results.set_data({"instance": str(root)})
@@ -161,24 +207,33 @@ def _main(argv: list[str]) -> int:
         try:
             lifecycle.instance(root)
         except (OSError, ValueError, KeyError, TypeError) as exc:
+            completion.text_exit_code = 2
             if results.json_mode():
                 raise
             return failure("narwhal", f"{context}: load instance", exc, 2)
     try:
         if args.action == "init":
+            from ..deployment.management_context import CONTEXT_ENV, inherited_context
+
+            managed = CONTEXT_ENV in os.environ
             reused = root.exists()
-            template.materialize(
-                root,
-                model_dir=args.model_dir,
-                model_path=args.model,
-                fabric_interface=args.interface,
-                gpu_uuid=args.gpu,
-                template=lifecycle.read(args.template) if args.template else None,
-                engine_count=args.engine_count,
-                port_base=args.port_base,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                device_allowance=args.device_allowance,
-            )
+            with lifecycle.locked(root) if managed and reused else contextlib.nullcontext():
+                if managed:
+                    inherited_context(root)
+                options = {"expected_absent": True} if managed and not reused else {}
+                template.materialize(
+                    root,
+                    model_dir=args.model_dir,
+                    model_path=args.model,
+                    fabric_interface=args.interface,
+                    gpu_uuid=args.gpu,
+                    template=lifecycle.read(args.template) if args.template else None,
+                    engine_count=args.engine_count,
+                    port_base=args.port_base,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                    device_allowance=args.device_allowance,
+                    **options,
+                )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
         else:
             operation = {
@@ -194,14 +249,24 @@ def _main(argv: list[str]) -> int:
             results.record_error("instance_degraded", "Development instance requires recovery")
         print(json.dumps(result, indent=2))
         return 1 if result["status"] == "degraded" else 0
+    except OperationError as exc:
+        from ..deployment.management_cli import operation_error_status
+
+        status = operation_error_status(exc.code)
+        results.set_status(status)
+        results.record_error(exc.code, exc.message, stage="dev " + args.action)
+        print(f"narwhal: {context}: {exc.code}: {exc.message}", file=sys.stderr)
+        return results.EXIT_CODES[status]
     except metadata.PackageNotFoundError as exc:
         results.record_error("runtime_package_missing", str(exc), stage="runtime-package")
         return failure("narwhal", f"{context}: load runtime package", exc, 2)
     except lifecycle.LifecycleDocumentError as exc:
+        completion.text_exit_code = 2
         if results.json_mode():
             raise
         return failure("narwhal", f"{context}: load lifecycle", exc, 2)
     except (KeyError, TypeError) as exc:
+        completion.text_exit_code = 2
         if results.json_mode():
             raise
         input_operation = (
@@ -211,9 +276,10 @@ def _main(argv: list[str]) -> int:
         )
         return failure("narwhal", f"{context}: {input_operation}", exc, 2)
     except (OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
+        completion.text_exit_code = 2 if args.action == "init" else 1
         if results.json_mode():
             raise
-        return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
+        return failure("narwhal", context, exc, completion.text_exit_code)
 
 
 if __name__ == "__main__":

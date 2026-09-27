@@ -1,7 +1,8 @@
 # setuptools 77 is the PEP 639 floor for `license` as an SPDX expression.
 [build-system]
 requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+build-backend = "_narwhal_build"
+backend-path = ["."]
 
 [project]
 # The distribution name differs from the import package.
@@ -69,8 +70,8 @@ Repository = "https://github.com/athrael-soju/Narwhal"
 Issues = "https://github.com/athrael-soju/Narwhal/issues"
 
 [tool.setuptools.package-data]
-narwhal = ["py.typed", "fleet.example.json"]
-"narwhal.dev" = ["small-cuda-v1.json", "reference-v1.json"]
+narwhal = ["py.typed", "fleet.example.json", "_build_provenance.json", "_source_bundle.tar.gz"]
+"narwhal.dev" = ["small-cuda-v1.json", "reference-v1.json", "*-v1.schema.json"]
 
 [tool.ruff]
 line-length = 100

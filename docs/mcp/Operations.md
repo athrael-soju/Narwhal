@@ -8,10 +8,10 @@ coordinator and detached worker implement persistence, reservations and
 execution for registered adapters. MCP exposes record listing, inspection and
 cancellation requests, together with plan inspection.
 
-Production execution adapters are not installed. Preparation, execution and
-resumption are absent from MCP discovery. The lifecycle below describes how
-the core handles work supplied by an adapter; the existing dev and fleet
-commands require their own adapters before they can submit managed work.
+The installed local dev adapter supports preparation, execution and resumption
+through MCP and registry-bound dev CLI commands. The SSH fleet adapter remains
+planned. Follow [Manage a local dev instance](Local-Dev.md) for an operator
+procedure; the lifecycle below defines the shared executor contract.
 
 ## Submission and lookup
 
@@ -281,19 +281,20 @@ conflicting work. If the recorded worker is alive and its identity matches,
 it keeps the operation. If the worker is dead or its identity differs, the
 coordinator marks active work `recovery_required`.
 
+The coordinator also launches queued operations that already have an accepted
+request, provided their action grants and installed adapter remain available.
+
 For local processes, the coordinator compares the host boot ID, PID and process
 start ticks. For remote services, it uses the adapter's resource identities.
 A reused PID or a different engine generation cannot establish ownership.
 
-Startup and `operation_inspect` check local worker identity without invoking
-the adapter. If the worker is lost, these checks retain the operation in
-`recovery_required`. Reading an operation never starts cleanup.
-
-The core also provides bounded, read-only adapter reconciliation. When called
-with an adapter, it inspects recorded intentions, receipts, helper identities
-and live state before deciding whether the operation can become terminal.
-Production adapters still need to connect this procedure to their recovery
-workflow; the current frontend does not run remote reconciliation callbacks.
+Startup and `operation_inspect` check local worker identity in the frontend.
+If the worker is lost, the coordinator records `recovery_required` and schedules
+bounded, read-only reconciliation in a detached worker when the target's
+adapter is installed. The local dev adapter inspects recorded intentions,
+receipts, helper identities and live process state before deciding whether the
+operation can become terminal. Reading an operation never starts cleanup.
+Remote reconciliation remains part of the planned SSH fleet adapter.
 
 Before repeating an interrupted installation or launch, the coordinator must
 establish whether the original action took effect. A remote action may have
@@ -363,26 +364,35 @@ it may attest engines concurrently, as specified by the
 | --- | --- |
 | Configuration, status, operation and bounded evidence reads | The reader uses a committed snapshot and reports its observation time and partial failures. Reads may run alongside changes. |
 | Install, launch, replace, stop or cleanup | The executor reserves the affected host installation, engines, GPUs, ports and services exclusively. |
-| Profiling, KV preflight and verification traffic | The executor reserves the affected fleet resources for measurement, verifies that serving is idle and controls admission for the recorded measurement. |
+| Profiling, KV preflight and verification traffic | The executor reserves the affected resources for measurement. The adapter checks the action's prerequisites before sending probes. |
 | Fabric qualification | The executor excludes other fleet measurements, verifies idle engines and measures one directed edge at a time. |
 | Capacity trial | The executor reserves the workload exclusively. Only the recorded trial may introduce traffic. |
 | Monitoring startup | The executor reserves the monitoring services, ports and configuration exclusively. Clients may continue bounded queries. |
 
-Preparation may inspect a busy fleet. Before sending probes, the executor
-checks whether serving traffic or leases violate the action's requirement for
-idle engines. If they do, it returns `fleet_busy`. A plan that drains traffic
-must describe that change and require the corresponding permission. A request
-to profile does not itself authorise the executor to interrupt traffic.
+Local dev operators must stop client traffic during startup and verification.
+The coordinator's reservations exclude cooperating management actions; they do
+not control HTTP admission. Before verification probes, the local dev adapter
+checks the owned router's reported activity and returns `fleet_busy` if it
+observes active requests. A standby router or a nonzero HA epoch returns
+`prerequisite_failed` because the adapter does not coordinate HA leases.
+That observation does not prevent later requests, so the operator must keep
+client traffic stopped until the operation finishes.
+
+Preparation may inspect a busy fleet. The planned fleet adapter must establish
+the idle state required by each measurement and manage admission when its
+recipe calls for that control. A plan that drains traffic must describe that
+change and require the corresponding permission. A request to profile does
+not itself authorise the executor to interrupt traffic.
 
 The existing `dev` instance lock continues to protect its lifecycle document.
 The executor acquires the coordinator before that lock. CLI execution adapters
 must give commands invoked within an operation a verified context that joins
 the parent's reservation. Supported CLI invocations using the
 [`NARWHAL_MANAGEMENT_REGISTRY` binding](Registration.md#registry-changes-and-retention)
-currently reject measurement and mutation with `adapter_unavailable` because
-those adapters are absent. Once installed, they must enter the same coordinator
-and receive their own operation identity. Version 1 requires one management
-authority for each resource set.
+enter the same coordinator for dev initialization, startup, verification and
+teardown. Fleet commands still reject managed execution with
+`adapter_unavailable`. Version 1 requires one management authority for each
+resource set.
 
 The coordinator cannot prevent commands from older installations or manual
 changes on a host. Before measurements or changes, the adapter must check

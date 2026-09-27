@@ -241,6 +241,8 @@ class StageContext:
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
+        pass_fds: tuple[int, ...] = (),
+        retain_on_success: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Execute a trusted fixed command with persisted, gated helper ownership."""
         self.assert_current()
@@ -260,23 +262,32 @@ class StageContext:
             "observed_at": utc_now(),
         }
         self.record_intent(receipt)
+        transferred: dict[int, int] = {}
         with directory(self.target.artifact_root, private=True, create=True):
             pass
         with directory(self.output_dir, private=True, create=True):
             pass
 
         def observed(evidence: dict[str, Any]) -> None:
+            released = evidence.get("supervisor_returncode") == 0 and "cleanup" not in evidence
             receipt["identity"] = {
                 "boot_id": evidence["boot_id"],
                 "pid": evidence["pid"],
                 "start_ticks": evidence["processes"].get(evidence["pid"], -1),
-                "processes": {str(pid): ticks for pid, ticks in evidence["processes"].items()},
+                "processes": {
+                    str(pid): ticks
+                    for pid, ticks in evidence["processes"].items()
+                    if not released or transferred.get(int(pid)) != ticks
+                },
             }
             receipt["effect"] = (
                 "absent"
-                if "cleanup" in evidence
-                and not evidence["cleanup"].get("surviving_processes")
-                and "error" not in evidence["cleanup"]
+                if (
+                    "cleanup" in evidence
+                    and not evidence["cleanup"].get("surviving_processes")
+                    and "error" not in evidence["cleanup"]
+                )
+                or (released and not stages.active(receipt["identity"]))
                 else "unknown"
             )
             receipt["observed_at"] = utc_now()
@@ -295,6 +306,63 @@ class StageContext:
             observed(evidence)
             self.assert_current()
 
+        def transfer_services(evidence: dict[str, Any]) -> None:
+            self.assert_current()
+            assert retain_on_success is not None
+            effects = retain_on_success(evidence)
+            live = stages.active(evidence)
+            covered: dict[int, int] = {}
+            resource_ids: set[str] = set()
+            for effect in effects:
+                identity = effect.get("identity") or {}
+                owner = effect.get("owner") or {}
+                if (
+                    effect.get("effect") != "confirmed"
+                    or effect.get("kind") not in self.stage.get("retain_on_success", [])
+                    or effect.get("host_id") != "management"
+                    or owner.get("operation_id") != self.operation_id
+                    or owner.get("stage_id") != self.stage_id
+                    or identity.get("boot_id") != evidence["boot_id"]
+                    or effect.get("resource_id") in resource_ids
+                ):
+                    raise OperationError(
+                        "ownership_conflict", "Retained service receipt is invalid"
+                    )
+                resource_ids.add(effect["resource_id"])
+                processes = identity.get("processes", {})
+                if not processes:
+                    raise OperationError(
+                        "ownership_conflict", "Retained service has no process identity"
+                    )
+                for pid_text, ticks in processes.items():
+                    pid = int(pid_text)
+                    if pid == evidence["pid"] or pid in covered or live.get(pid) != ticks:
+                        raise OperationError(
+                            "ownership_conflict", "Retained service identity changed"
+                        )
+                    covered[pid] = ticks
+            if {pid: ticks for pid, ticks in live.items() if pid != evidence["pid"]} != covered:
+                raise OperationError(
+                    "ownership_conflict", "Helper has an unrecorded surviving process"
+                )
+            self.assert_current()
+            safe_effects = [self.redactor.value(effect) for effect in effects]
+            for safe, effect in zip(safe_effects, effects, strict=True):
+                safe["owner"] = dict(effect["owner"])
+
+            def transfer(record: dict[str, Any]) -> None:
+                row = next(row for row in record["stages"] if row["stage_id"] == self.stage_id)
+                row["effects"] = [
+                    item for item in row["effects"] if item["resource_id"] not in resource_ids
+                ] + safe_effects
+
+            self.update(transfer)
+            transferred.update(covered)
+
+        def before_release(evidence: dict[str, Any]) -> None:
+            with _bounded(min(self.deadline, self.operation_deadline) - time.monotonic()):
+                transfer_services(evidence)
+
         def cancelled() -> bool:
             if time.monotonic() - self._last_heartbeat > 0.5:
                 self.update(lambda record: record["worker"].update(heartbeat_at=utc_now()))
@@ -312,6 +380,9 @@ class StageContext:
                 log=self.output_dir / f"{launch_token}.log",
                 cwd=cwd,
                 env=env,
+                pass_fds=pass_fds,
+                retain_descendants=retain_on_success is not None,
+                before_release=before_release if retain_on_success is not None else None,
                 timeout=max(
                     0.001,
                     min(
@@ -827,13 +898,32 @@ def run_operation(
                     "failed_gate",
                     "invalid_input",
                     "error",
+                    "interrupted",
                 }:
                     raise OperationError("invalid_input", "Adapter returned an invalid outcome")
-                context.assert_current()
                 for receipt in outcome.effects:
                     context.record_effect(receipt)
                 data = context.redactor.value(outcome.data)
-                current = context.read()
+
+                def completed(value: dict[str, Any], outcome: StageOutcome = outcome) -> None:
+                    if outcome.status == "interrupted" and value["state"] == "running":
+                        value["state"] = "cancelling"
+                        value["cancellation"] = {
+                            "requested_at": utc_now(),
+                            "reason": "Installed command reported interruption",
+                        }
+                    row = next(
+                        row for row in value["stages"] if row["stage_id"] == context.stage_id
+                    )
+                    row.update(
+                        artifacts=outcome.artifacts,
+                        command_result=clean_command(outcome.command_result, context.redactor)
+                        if outcome.command_result
+                        else None,
+                    )
+                    value["artifacts"].extend(outcome.artifacts)
+
+                current = context.update(completed)
                 if any(
                     item["effect"] == "unknown"
                     for row in current["stages"]
@@ -843,21 +933,25 @@ def run_operation(
                         context, "Stage effects or helpers require reconciliation", outcome.errors
                     )
 
-                def completed(value: dict[str, Any], outcome: StageOutcome = outcome) -> None:
+                def settled(value: dict[str, Any], outcome: StageOutcome = outcome) -> None:
                     row = next(
                         row for row in value["stages"] if row["stage_id"] == context.stage_id
                     )
                     row.update(
-                        state="succeeded" if outcome.status == "success" else "failed",
+                        state="cancelled"
+                        if outcome.status == "interrupted"
+                        else "succeeded"
+                        if outcome.status == "success"
+                        else "failed",
                         finished_at=utc_now(),
-                        artifacts=outcome.artifacts,
-                        command_result=clean_command(outcome.command_result, context.redactor)
-                        if outcome.command_result
-                        else None,
                     )
-                    value["artifacts"].extend(outcome.artifacts)
 
-                context.update(completed)
+                current = context.update(settled)
+                if current["cancellation"]["requested_at"] is not None:
+                    return _finish(
+                        context, "cancelled", "interrupted", data=data, errors=outcome.errors
+                    )
+                context.assert_current()
                 if outcome.status != "success":
                     return _finish(
                         context,
@@ -935,6 +1029,27 @@ def reconcile_operation(
     timeout_s: float = 30,
 ) -> dict[str, Any]:
     """Inspect a lost worker and effects without restarting commands or cleanup."""
+    context = StageContext(registry, target_id, operation_id, fence=None, read_only=True)
+    record = context.read()
+    if record["state"] in _TERMINAL | {"queued"} or worker_alive(record["worker"]):
+        return record
+    with _recovery_lock(context) as acquired:
+        if not acquired:
+            return context.read()
+        return _reconcile_operation(
+            registry, target_id, operation_id, adapter=adapter, timeout_s=timeout_s
+        )
+
+
+def _reconcile_operation(
+    registry: ManagementRegistry,
+    target_id: str,
+    operation_id: str,
+    *,
+    adapter: ExecutionAdapter | None,
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Reconcile while excluding another reconciliation or explicit cleanup."""
     context = StageContext(
         registry,
         target_id,
@@ -977,6 +1092,8 @@ def reconcile_operation(
 
     def findings(value: dict[str, Any]) -> None:
         for stage in value["stages"]:
+            if stage["state"] in {"succeeded", "reused"}:
+                continue
             for index, row in enumerate(stage["effects"]):
                 receipt = observed.get(row["resource_id"], row)
                 safe = context.redactor.value(receipt)
@@ -998,8 +1115,10 @@ def reconcile_operation(
         return record
     if record["cancellation"]["requested_at"] is not None:
         return _finish(context, "cancelled", "interrupted", errors=outcome.errors)
-    if outcome.complete and all(
-        row["state"] in {"succeeded", "reused"} for row in record["stages"]
+    if (
+        record["tool"] != "plan_prepare"
+        and outcome.complete
+        and all(row["state"] in {"succeeded", "reused"} for row in record["stages"])
     ):
         return _finish(context, "succeeded", "success", errors=outcome.errors)
     return _finish(

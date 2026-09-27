@@ -1107,7 +1107,9 @@ def _main(argv: list[str]) -> int:
     from ..deployment.management_cli import guard_bound_command
 
     results.set_operation("merge" if args.merge else "refit" if args.refit_samples else "profile")
-    denied = guard_bound_command("narwhal-profile", action="fleet_profile", fleet=Path(args.fleet))
+    denied = guard_bound_command(
+        "narwhal-profile", action="fleet_profile", fleet=Path(args.fleet), arguments=vars(args)
+    )
     if denied is not None:
         return denied
     try:

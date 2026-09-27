@@ -1,16 +1,15 @@
 # `narwhal-mcp`
 
 `narwhal-mcp` starts a local Model Context Protocol (MCP) server over stdio.
-This command is **unreleased work on the MCP milestone branch**. It exposes six
-inspection tools: `target_list`, `config_inspect`, `config_validate`,
-`fleet_status`, `diagnostics_collect` and `artifact_read`. Four more tools read
-retained plans and operations or record cancellation: `plan_inspect`,
-`operation_list`, `operation_inspect` and `operation_cancel`.
+This command is **unreleased work on the MCP milestone branch**. It exposes
+fourteen tools for target and configuration inspection, local dev status,
+diagnostics, artifacts, plans and persistent operations. The installed
+`local-dev-v1` adapter executes the local dev lifecycle through `plan_prepare`,
+`plan_execute` and `operation_resume`.
 
-The operation store and coordinator are available, but the distribution has no
-execution adapters. `plan_prepare`, `plan_execute` and `operation_resume` are
-absent from discovery. Deployment and measurement remain planned in the
-[MCP contract](../MCP-Contracts.md).
+Follow [Manage a local dev instance through MCP](../mcp/Local-Dev.md) to register
+and operate a CUDA dev instance. The SSH fleet and observability adapters
+remain planned in the [MCP contract](../MCP-Contracts.md).
 
 The client supplies the model and conversation, then launches the server under
 your local account. The server exchanges messages through stdin and stdout.
@@ -100,7 +99,7 @@ PY
 
 The fleet registry schema requires an adapter settings path. This example
 reserves `site-settings.json`; the inspection tools do not read that file.
-Deployment adapter settings remain part of the planned deployment workflow.
+SSH adapter settings remain part of the planned fleet deployment workflow.
 The example has only the `inspect` grant and no action grants or router endpoint.
 
 The server requires `state_dir` and `artifact_root` to be owned by its user with
@@ -170,7 +169,7 @@ asyncio.run(main())
 PY
 ```
 
-A successful check prints the negotiated protocol version, the ten available
+A successful check prints the negotiated protocol version, the fourteen available
 tools, `targets: ['example-fleet']` and `config_validate: success`. The client then
 closes the session. This check verifies registry loading, target discovery and
 a successful call to the installed offline configuration validator. The example
@@ -209,9 +208,10 @@ and collection limits.
 
 Setting `NARWHAL_MANAGEMENT_REGISTRY` also opts supported finite CLI commands
 into the [management binding](../mcp/Registration.md#registry-changes-and-retention).
-Commands that change a deployment or write measurement artifacts fail with
-`adapter_unavailable` until their execution adapters are installed. Configuration,
-diagnostic and status reads remain available.
+Bound dev commands use the persistent runner and wait for their result. Fleet
+commands that change a deployment or write measurement artifacts still fail
+with `adapter_unavailable`. Configuration, diagnostic and status reads remain
+available.
 
 To remove this example after closing the session, delete its `runs/mcp`
 directory, including the copied fleet, registry and inspection records. For

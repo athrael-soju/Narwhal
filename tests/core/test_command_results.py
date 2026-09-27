@@ -34,6 +34,40 @@ def call(command, arguments):
 
 
 class CommandResultTests(unittest.TestCase):
+    def test_adopted_command_preserves_artifact_states_and_diagnostic_context(self):
+        document = {
+            "schema": "narwhal.command-result",
+            "schema_version": 1,
+            "command": "narwhal",
+            "operation": "dev verify",
+            "status": "degraded",
+            "exit_code": 3,
+            "data": {"status": "degraded"},
+            "artifacts": [
+                {"kind": "lifecycle", "path": "/private/lifecycle.json", "state": "updated"}
+            ],
+            "errors": [
+                {
+                    "code": "instance_degraded",
+                    "message": "Retained failure",
+                    "command": "narwhal",
+                    "stage": "verify",
+                    "context": {"generation": "original"},
+                }
+            ],
+        }
+
+        def callback(arguments):
+            results.set_operation("dev verify")
+            results.adopt_result(document)
+            return 3
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            code = results.invoke("narwhal", ["--format", "json"], callback)
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(stdout.getvalue()), document)
+
     def test_schema_is_advertised_and_future_versions_are_rejected(self):
         document, stderr = call(check.main, ["--print-contract-versions"])
         self.assertEqual(document["status"], "success")

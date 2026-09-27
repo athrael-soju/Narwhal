@@ -10,7 +10,9 @@ import threading
 from pathlib import Path
 
 
-def launch_worker(registry_path: Path, target_id: str, operation_id: str) -> None:
+def launch_worker(
+    registry_path: Path, target_id: str, operation_id: str, *, reconcile: bool = False
+) -> None:
     """Start fixed package code without inheriting any client transport handles."""
     child = subprocess.Popen(
         [
@@ -23,6 +25,7 @@ def launch_worker(registry_path: Path, target_id: str, operation_id: str) -> Non
             target_id,
             "--operation",
             operation_id,
+            *(["--reconcile"] if reconcile else []),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -38,12 +41,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--operation", required=True)
+    parser.add_argument("--reconcile", action="store_true")
     args = parser.parse_args(argv)
     os.umask(0o077)
-    from .management_coordinator import run_worker
+    args.registry = args.registry.absolute()
+    os.environ["NARWHAL_MANAGEMENT_REGISTRY"] = str(args.registry)
+    from .management_coordinator import OperationCoordinator, run_worker
+    from .management_registry import load_registry
 
     try:
-        run_worker(args.registry, args.target, args.operation)
+        if args.reconcile:
+            coordinator = OperationCoordinator(load_registry(args.registry), args.registry)
+            coordinator.reconcile_worker(args.target, args.operation)
+        else:
+            run_worker(args.registry, args.target, args.operation)
     except Exception:
         return 1
     return 0

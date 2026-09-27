@@ -4,6 +4,8 @@ include Makefile .gitignore .pre-commit-config.yaml .env.example
 include .release-please-manifest.json release-please-config.json
 include constraints-dev.txt
 include mkdocs.yml
+include _narwhal_build.py
+include src/narwhal/_source_bundle.tar.gz
 include config/engine-attestation.example.json config/engine-launch.example.json
 include config/fleet.example.json config/hosts.example.json
 recursive-include .github *.yml

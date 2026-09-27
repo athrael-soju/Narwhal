@@ -11,8 +11,9 @@ In the unreleased MCP build, setting `NARWHAL_MANAGEMENT_REGISTRY` opts
 `init`, `up`, `verify` and `down` into the
 [management registry](../mcp/Registration.md#registry-changes-and-retention).
 The command matches `--instance` to one target and checks its action grants.
-With no execution adapters installed, an authorised call exits 1 with
-`adapter_unavailable` before reading the instance or starting work. `status`
+An authorised command prepares a plan, executes it through the persistent
+runner and waits for the original command result. Explicit initialization flags
+must match the [registered recipe and settings](../mcp/Local-Dev.md). `status`
 remains available. Commands without that variable retain the behaviour below.
 
 `narwhal dev init` writes a private instance containing its model and runtime

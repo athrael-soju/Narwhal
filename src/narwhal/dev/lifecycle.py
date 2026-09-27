@@ -7,6 +7,8 @@ import contextlib
 import fcntl
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import threading
@@ -103,7 +105,14 @@ def write(path: Path, value: dict) -> None:
         ) as output:
             json.dump(value, output, indent=2)
             output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
         temporary.replace(path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -123,12 +132,56 @@ def instance(root: Path) -> dict:
 @contextlib.contextmanager
 def locked(root: Path) -> Iterator[None]:
     """Serialize lifecycle mutations while status reads the last atomic state."""
-    with (root / "lifecycle.lock").open("a") as lock:
+    descriptor = os.open(
+        root / "lifecycle.lock",
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        0o600,
+    )
+    with os.fdopen(descriptor, "a") as lock:
+        metadata = os.fstat(lock.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o022
+            or metadata.st_nlink != 1
+        ):
+            raise ValueError("instance lifecycle lock is unsafe")
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ValueError("another lifecycle command owns this instance") from exc
         yield
+
+
+def _managed_inputs(root: Path, managed: dict | None) -> None:
+    """Reject indirect ownership paths before a registered lifecycle action uses them."""
+    if managed is None:
+        return
+    from narwhal.deployment.management_access import AccessError, directory, read_object
+
+    with directory(root, private=True):
+        try:
+            state = read_object(root / "lifecycle.json")
+        except AccessError as error:
+            if error.code == "input_missing":
+                return
+            raise
+    run = Path(state.get("run", ""))
+    if run.parent != root or not re.fullmatch(r"run-[0-9a-f]{12}", run.name):
+        raise ValueError("registered dev generation must remain within its instance")
+    with directory(run, private=True):
+        pass
+    for folder, directories, files in os.walk(run, followlinks=False):
+        base = Path(folder)
+        for name in directories:
+            if (base / name).is_symlink():
+                raise ValueError("registered dev generation contains an indirect directory")
+        for name in files:
+            if name.endswith(".stage.json") or name in {
+                "native-process.json",
+                "management-owner.json",
+            }:
+                read_object(base / name)
 
 
 def _busy(root: Path) -> bool:
@@ -141,6 +194,8 @@ def _busy(root: Path) -> bool:
 
 def _run(root: Path, module: str, args: list[str], log: str) -> None:
     # Preserve write order so buffered progress cannot follow the final diagnostic.
+    from narwhal.deployment.management_context import inherited_fds
+
     command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
     result = stages.run(
@@ -149,6 +204,7 @@ def _run(root: Path, module: str, args: list[str], log: str) -> None:
         log=root / f"{log}.log",
         cwd=root,
         retain_descendants=log == "native-start-shared",
+        pass_fds=inherited_fds(),
     )
     if result.returncode:
         path = root / f"{log}.log"
@@ -161,6 +217,11 @@ def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env
     run = Path(state["run"])
     command = [sys.executable, "-m", module, *args]
     write(run / f"{name}.command.json", {"argv": command})
+    environment = {
+        key: value
+        for key, value in env.items()
+        if key not in {"NARWHAL_MANAGEMENT_CONTEXT_FD", "NARWHAL_MANAGEMENT_REGISTRY"}
+    }
     with (run / f"{name}.log").open("w") as output:
         child = subprocess.Popen(  # noqa: S603 - installed modules and explicit argv
             command,
@@ -169,7 +230,7 @@ def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env
             stdin=subprocess.DEVNULL,
             start_new_session=True,
             cwd=run,
-            env=env,
+            env=environment,
         )
     try:
         identity = native_engine.process_identity(child.pid)
@@ -198,6 +259,8 @@ def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env
             error.add_note(f"{name} cleanup: {cleanup_error}")
         raise
     record = {"name": name, "identity": identity}
+    if "management_owner" in state:
+        record["management_owner"] = state["management_owner"]
     state["processes"].append(record)
     write(root / "lifecycle.json", state)
     return record
@@ -321,8 +384,12 @@ def _stop(root: Path, state: dict) -> None:
 
 def up(root: Path) -> dict:
     """Launch a fresh owned generation, profile it and start its router."""
+    from narwhal.deployment.management_context import inherited_context
+
     config = instance(root)
     with locked(root):
+        managed = inherited_context(root)
+        _managed_inputs(root, managed)
         if (root / "lifecycle.json").exists():
             previous = _read_state(root)
             if previous.get("phase") != "stopped":
@@ -339,6 +406,9 @@ def up(root: Path) -> dict:
         run = root / f"run-{uuid.uuid4().hex[:12]}"
         run.mkdir(mode=0o700)
         state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
+        if managed is not None:
+            state["management_owner"] = managed["owner"]
+            write(run / "management-owner.json", managed["owner"])
         write(root / "lifecycle.json", state)
         try:
             with memory_samples(run, config["gpu_uuid"], "up"):
@@ -457,8 +527,11 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
 
 def verify(root: Path) -> dict:
     """Run current-process preflight, all eligible KV paths and a routed completion."""
+    from narwhal.deployment.management_context import inherited_context
+
     config = instance(root)
     with locked(root):
+        _managed_inputs(root, inherited_context(root))
         state = _read_state(root)
         if state.get("phase") not in {"launched", "ready", "degraded"}:
             raise ValueError("dev verify requires a launched instance")
@@ -636,8 +709,11 @@ def status(root: Path) -> dict:
 
 def down(root: Path) -> dict:
     """Stop the selected instance's matching process groups and retain its measurements."""
+    from narwhal.deployment.management_context import inherited_context
+
     instance(root)
     with locked(root):
+        _managed_inputs(root, inherited_context(root))
         if (root / "lifecycle.json").exists():
             _stop(root, _read_state(root))
     return status(root)

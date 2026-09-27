@@ -13,6 +13,30 @@ from typing import Any
 from .contracts import versioned
 
 
+def verified_source() -> dict[str, Any]:
+    """Verify installed build bytes before binding a management plan to them."""
+    from ._source_bundle import BUNDLE, METADATA, verify_bundle
+
+    root = Path(__file__).resolve().parent
+    try:
+        document = json.loads((root / METADATA).read_bytes())
+        if not isinstance(document, dict):
+            raise ValueError("Package build provenance must be an object")
+        verified = verify_bundle(root, document, (root / BUNDLE).read_bytes())
+        if not verified["verified"] or verified["commit"] is None:
+            raise ValueError("Package was not built from a clean verified source revision")
+        if verified["distribution_version"] != _version():
+            raise ValueError("Installed distribution version differs from its source artifact")
+    except (OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("Installed package has no verifiable source artifact") from error
+    return {
+        "commit": verified["commit"],
+        "distribution_version": verified["distribution_version"],
+        "wheel_sha256": None,
+        "bundle_sha256": verified["bundle_sha256"],
+    }
+
+
 def stamp(extra: dict[str, Any] | None = None, *, contract: str | None = None) -> dict[str, Any]:
     """Return package and source version metadata with optional run fields."""
     meta = {

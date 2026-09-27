@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -40,6 +41,7 @@ class _Result:
     artifacts: dict[Path, tuple[str, tuple[int, int] | None]] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)
     secrets: set[str] = field(default_factory=set)
+    adopted: dict[str, Any] | None = None
 
 
 _active: ContextVar[_Result | None] = ContextVar("command_result", default=None)
@@ -78,6 +80,24 @@ def set_status(status: str) -> None:
     if status not in EXIT_CODES:
         raise ValueError(f"unknown command status {status!r}")
     if (result := _active.get()) is not None:
+        result.status = status
+
+
+def adopt_result(document: dict[str, Any]) -> None:
+    """Preserve a completed managed command's envelope, including artifact states."""
+    from .contracts import validate_document
+
+    validate_document(document, COMMAND_RESULT)
+    status = document.get("status")
+    if status not in EXIT_CODES or document.get("exit_code") != EXIT_CODES[status]:
+        raise ValueError("Managed command returned an inconsistent outcome")
+    if (result := _active.get()) is not None:
+        if (
+            document.get("command") != result.command
+            or document.get("operation") != result.operation
+        ):
+            raise ValueError("Managed command returned a different operation")
+        result.adopted = deepcopy(document)
         result.status = status
 
 
@@ -335,6 +355,12 @@ def invoke(
                 "errors": result.errors,
             },
         )
+
+        if result.adopted is not None:
+            payload = result.adopted
+            artifacts = payload["artifacts"]
+            result.data = payload["data"]
+            result.errors = payload["errors"]
 
         # Schema identity, status codes and hashes are wire metadata. Apply credential
         # redaction to operator data and diagnostic text before JSON escaping.

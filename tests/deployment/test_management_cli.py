@@ -1,6 +1,7 @@
 """Keep registry-bound CLI calls outside lifecycle and measurement callbacks."""
 
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -8,11 +9,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
+from narwhal import command_results
 from narwhal.deployment import launch_engine
+from narwhal.deployment.management_records import OperationError
+from narwhal.deployment.management_registry import load_registry
 from narwhal.dev import cli as dev_cli
 from narwhal.diagnostics import check
 from narwhal.profiling import probe
@@ -65,6 +71,11 @@ class ManagedCliTests(unittest.TestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        adapters = patch(
+            "narwhal.deployment.management_coordinator.installed_adapters", return_value={}
+        )
+        adapters.start()
+        self.addCleanup(adapters.stop)
 
     def save(self):
         self.registry.write_text(json.dumps(self.document))
@@ -234,3 +245,180 @@ class ManagedCliTests(unittest.TestCase):
             result = self.invoke(dev_cli.main, ["dev", "up", "--instance", str(self.instance)])
             self.assertEqual(result["status"], "success", result)
             up.assert_called_once_with(self.instance)
+
+    def test_bound_dev_returns_original_command_after_preparation_and_execution(self):
+        prepare_id, execution_id, plan_id = (str(uuid4()) for _ in range(3))
+        command = {
+            "schema": "narwhal.command-result",
+            "schema_version": 1,
+            "command": "narwhal",
+            "operation": "dev verify",
+            "status": "degraded",
+            "exit_code": 3,
+            "data": {"status": "degraded", "problems": ["retained failure"]},
+            "artifacts": [
+                {
+                    "kind": "lifecycle",
+                    "path": str(self.instance / "lifecycle.json"),
+                    "state": "updated",
+                }
+            ],
+            "errors": [
+                {
+                    "code": "instance_degraded",
+                    "command": "narwhal",
+                    "message": "Retained failure",
+                    "stage": "verify",
+                }
+            ],
+        }
+        records = [
+            {"state": "succeeded", "result": {"data": {"plan_id": plan_id}}},
+            {
+                "operation_id": execution_id,
+                "state": "failed",
+                "result": {"status": "failed_gate", "command_result": command},
+            },
+        ]
+        with (
+            patch("narwhal.deployment.management_coordinator.OperationCoordinator") as factory,
+            patch("narwhal.deployment.management_cli._wait", side_effect=records) as waiting,
+            patch.object(dev_cli.lifecycle, "verify") as unmanaged,
+        ):
+            coordinator = factory.return_value
+            coordinator.submit_prepare.return_value = {"operation_id": prepare_id}
+            coordinator.submit_execute.return_value = {"operation_id": execution_id}
+            response = self.invoke(
+                dev_cli.main, ["dev", "verify", "--instance", str(self.instance)]
+            )
+        self.assertEqual(response, command)
+        unmanaged.assert_not_called()
+        self.assertEqual(coordinator.submit_prepare.call_args.args[:3], ("dev", "dev_verify", {}))
+        self.assertEqual(coordinator.submit_execute.call_args.args[:2], ("dev", plan_id))
+        self.assertEqual(
+            [call.args[2] for call in waiting.call_args_list], [prepare_id, execution_id]
+        )
+
+    def test_managed_failures_under_lifecycle_lock_preserve_their_codes(self):
+        self.instance.mkdir(mode=0o700)
+        cases = (
+            ("stale_plan", "failed_gate", 1),
+            ("permission_denied", "invalid_input", 2),
+            ("stage_cancelled", "interrupted", 130),
+            ("stage_timeout", "error", 4),
+        )
+        for code, status, exit_code in cases:
+
+            def fail_under_lock(root, error_code=code):
+                self.assertEqual(root, self.instance)
+                with (
+                    (root / "lifecycle.lock").open() as handle,
+                    self.assertRaises(BlockingIOError),
+                ):
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                raise OperationError(error_code, "Managed input check failed")
+
+            with (
+                self.subTest(code=code),
+                patch("narwhal.deployment.management_cli.guard_bound_command", return_value=None),
+                patch.object(dev_cli.lifecycle, "instance", return_value={}),
+                patch(
+                    "narwhal.deployment.management_context.inherited_context",
+                    side_effect=fail_under_lock,
+                ),
+                patch.object(dev_cli.lifecycle, "_read_state") as read_state,
+            ):
+                result = self.invoke(
+                    dev_cli.main, ["dev", "verify", "--instance", str(self.instance)]
+                )
+            self.assertEqual(result["status"], status, result)
+            self.assertEqual(result["exit_code"], exit_code, result)
+            self.assertEqual(result["errors"][0]["code"], code, result)
+            self.assertEqual(result["errors"][0]["stage"], "dev verify", result)
+            read_state.assert_not_called()
+
+    def test_private_completion_preserves_text_exits_and_the_original_json(self):
+        from narwhal.deployment.management_cli import _return_operation
+
+        registry = load_registry(self.registry)
+        registry.state_dir.mkdir(mode=0o700)
+        cases = (
+            ("init", "materialize", ValueError("Bad template"), 2, 2),
+            ("init", "materialize", OSError("Cannot write instance"), 2, 4),
+            ("up", "instance", OSError("Cannot read instance"), 2, 4),
+            ("up", "up", ValueError("Lifecycle gate failed"), 1, 2),
+            ("up", "up", OSError("Service launch failed"), 1, 4),
+            ("up", "up", metadata.PackageNotFoundError("runtime"), 2, 2),
+            ("verify", "verify", {"status": "degraded"}, 1, 3),
+            ("verify", "verify", KeyboardInterrupt(), 130, 130),
+        )
+        for action, method, outcome, text_code, json_code in cases:
+            with self.subTest(action=action, method=method, outcome=outcome):
+                module = dev_cli.template if method == "materialize" else dev_cli.lifecycle
+                behavior = (
+                    {"side_effect": outcome}
+                    if isinstance(outcome, BaseException)
+                    else {"return_value": outcome}
+                )
+                captured = []
+                arguments = ["dev", action, "--instance", str(self.instance)]
+                with (
+                    patch.dict(os.environ, {}, clear=True),
+                    patch.object(dev_cli.lifecycle, "instance", return_value={}),
+                    patch.object(module, method, **behavior),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    try:
+                        original_text_code = dev_cli.main(arguments)
+                    except KeyboardInterrupt:
+                        original_text_code = 130
+                    with (
+                        patch.dict(os.environ, {"NARWHAL_MANAGEMENT_CONTEXT_FD": "fixture"}),
+                        patch(
+                            "narwhal.deployment.management_context.command_exit_reporter",
+                            return_value=captured.append,
+                        ),
+                        patch(
+                            "narwhal.deployment.management_context.inherited_context",
+                            return_value=None,
+                        ),
+                    ):
+                        command = self.invoke(dev_cli.main, arguments)
+                self.assertEqual(original_text_code, text_code)
+                self.assertEqual(captured, [original_text_code])
+                self.assertEqual(command["exit_code"], json_code, command)
+                self.assertNotIn("text_exit_code", json.dumps(command))
+                operation_id = str(uuid4())
+                record = {
+                    "operation_id": operation_id,
+                    "action": "dev_" + action,
+                    "stages": [{"stage_id": action}],
+                    "result": {"command_result": command},
+                }
+                receipt = registry.state_dir / f"dev-exit-{operation_id}.json"
+                receipt.write_text(
+                    json.dumps(
+                        {
+                            "operation_id": operation_id,
+                            "stage_id": action,
+                            "action": record["action"],
+                            "text_exit_code": captured[0],
+                        }
+                    )
+                )
+                receipt.chmod(0o600)
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    retained_text_code = _return_operation(record, registry=registry)
+                self.assertEqual(retained_text_code, original_text_code)
+                self.assertEqual(json.loads(output.getvalue()), command["data"])
+
+                def retained(arguments, record=record):
+                    return command_results.invoke(
+                        "narwhal",
+                        arguments,
+                        lambda _: _return_operation(record, registry=registry),
+                        operation=record["result"]["command_result"]["operation"],
+                    )
+
+                self.assertEqual(self.invoke(retained, []), command)

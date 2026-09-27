@@ -8,8 +8,9 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
-from tools.measurement import benchmark_runner
+from tools.measurement import benchmark_evidence, benchmark_runner
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request
@@ -24,10 +25,13 @@ if mode == 'warmup':
 for name in ('a', 'b') if mode == 'restart' else ('a',):
     if name == 'b':
         urllib.request.urlopen(base + '/restart').read()
-        time.sleep(0.2)
+        urllib.request.urlopen(base + '/sample/run-b/0').read()
     urllib.request.urlopen(base + '/start/' + name).read()
     rows.append({'client_rid': name, 'sent': True, 'outcome': 'completed'})
-    time.sleep(0.2)
+    if mode == 'restart':
+        urllib.request.urlopen(base + '/sample/run-' + name + '/1').read()
+    else:
+        time.sleep(0.2)
 target = pathlib.Path(directory) / 'client'
 target.mkdir(exist_ok=True)
 (target / 'requests.jsonl').write_text(''.join(json.dumps(row) + '\\n' for row in rows))
@@ -52,6 +56,9 @@ class EvidenceTests(unittest.TestCase):
         self.pools = {"prefill": ["e0"], "decode": ["e1"]}
         self.missing_journal = False
         self.fail_engine = False
+        self.run_transition = threading.Lock()
+        self.sample_observed = threading.Condition()
+        self.observed_counters = set()
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -96,34 +103,43 @@ class EvidenceTests(unittest.TestCase):
                 elif self.path == "/engine-metrics":
                     status = 503 if outer.fail_engine else 200
                     body = "engine_running_requests 0\n"
+                elif self.path.startswith("/sample/"):
+                    _, _, run, offered = self.path.split("/")
+                    with outer.sample_observed:
+                        observed = outer.sample_observed.wait_for(
+                            lambda: (run, int(offered)) in outer.observed_counters, timeout=2
+                        )
+                    status, body = (200 if observed else 503), {"observed": observed}
                 elif self.path == "/restart":
-                    outer.run_id = "run-b"
-                    outer.offered = 0
-                    outer.flips = 0
-                    outer.flip_history = []
+                    with outer.run_transition:
+                        outer.run_id = "run-b"
+                        outer.offered = 0
+                        outer.flips = 0
+                        outer.flip_history = []
                     body = {"ok": True}
                 elif self.path.startswith("/start/"):
                     name = self.path.rsplit("/", 1)[1]
-                    outer.offered += 1
-                    outer.served += 1
-                    if name == "a":
-                        outer.flips += 1
-                        outer.pools = {"prefill": ["e1"], "decode": ["e0"]}
-                        outer.flip_history = [
-                            {"at": 1.0, "iid": "e1", "to": "prefill", "by": "reactive"}
-                        ]
-                    if not outer.missing_journal:
-                        with outer.journal.open("a") as file:
-                            file.write(
-                                json.dumps(
-                                    {
-                                        "run": outer.run_id,
-                                        "client_rid": name,
-                                        "terminal": "completed",
-                                    }
+                    with outer.run_transition:
+                        outer.offered += 1
+                        outer.served += 1
+                        if name == "a":
+                            outer.flips += 1
+                            outer.pools = {"prefill": ["e1"], "decode": ["e0"]}
+                            outer.flip_history = [
+                                {"at": 1.0, "iid": "e1", "to": "prefill", "by": "reactive"}
+                            ]
+                        if not outer.missing_journal:
+                            with outer.journal.open("a") as file:
+                                file.write(
+                                    json.dumps(
+                                        {
+                                            "run": outer.run_id,
+                                            "client_rid": name,
+                                            "terminal": "completed",
+                                        }
+                                    )
+                                    + "\n"
                                 )
-                                + "\n"
-                            )
                     body = {"ok": True}
                 else:
                     status, body = 404, {"error": "unknown path"}
@@ -194,18 +210,36 @@ class EvidenceTests(unittest.TestCase):
         plan_path = self.root / "plan.json"
         plan_path.write_text(json.dumps(plan))
         out = self.root / "run"
-        status = benchmark_runner.main(
-            [
-                "--base",
-                self.base,
-                "--model",
-                "test-model",
-                "--plan",
-                str(plan_path),
-                "--out",
-                str(out),
-            ]
-        )
+        sample = benchmark_evidence.EvidenceCollector.sample
+
+        def observed_sample(collector):
+            # Keep fixture mutations between complete state/metrics observations.
+            with self.run_transition:
+                sample(collector)
+                latest = collector.samples[-1]
+                counters = benchmark_evidence.metric_values(latest.get("router_metrics", ""))
+                with self.sample_observed:
+                    self.observed_counters.add(
+                        (
+                            latest.get("state", {}).get("journal_run"),
+                            counters.get("narwhal_offered_total"),
+                        )
+                    )
+                    self.sample_observed.notify_all()
+
+        with patch.object(benchmark_evidence.EvidenceCollector, "sample", observed_sample):
+            status = benchmark_runner.main(
+                [
+                    "--base",
+                    self.base,
+                    "--model",
+                    "test-model",
+                    "--plan",
+                    str(plan_path),
+                    "--out",
+                    str(out),
+                ]
+            )
         return status, json.loads((out / "point-a/evidence.json").read_text()), out
 
     def test_role_change_and_counts_are_reconciled(self):

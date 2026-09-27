@@ -277,6 +277,8 @@ def run(
     timeout: float | None = None,
     retain_descendants: bool = False,
     before_start: Callable[[dict], None] | None = None,
+    before_release: Callable[[dict], None] | None = None,
+    pass_fds: tuple[int, ...] = (),
     observe: Callable[[dict], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
     cleanup_grace: float | None = None,
@@ -323,7 +325,7 @@ def run(
     failure: type[StageTimeout] | type[StageCancelled] | None = None
     child = None
     returncode: int | None = None
-    release_failure: OSError | None = None
+    release_failure: Exception | None = None
     owned: dict[int, int] = {}
     buffers = [bytearray(), bytearray()]
     output_truncated = False
@@ -366,6 +368,7 @@ def run(
                         str(result_path),
                         str(release_path),
                         *(["--start-fd", str(gate_read)] if before_start is not None else []),
+                        *(["--pass-fds", ",".join(map(str, pass_fds))] if pass_fds else []),
                         *command,
                     ],
                     cwd=cwd,
@@ -374,7 +377,7 @@ def run(
                     stdout=subprocess.PIPE if redact else outputs[0],
                     stderr=subprocess.PIPE if redact else outputs[1],
                     start_new_session=True,
-                    pass_fds=(gate_read,) if before_start is not None else (),
+                    pass_fds=(*pass_fds, *((gate_read,) if before_start is not None else ())),
                 )
                 if redact is not None:
                     assert child.stdout is not None and child.stderr is not None
@@ -410,18 +413,30 @@ def run(
             except KeyboardInterrupt:
                 failure = StageCancelled
             finally:
-                if child is not None and retain_descendants and returncode == 0 and not failure:
+                if (
+                    child is not None
+                    and retain_descendants
+                    and returncode == 0
+                    and not failure
+                    and not output_truncated
+                ):
                     try:
+                        _discover(owned, child.pid)
+                        context["returncode"] = returncode
+                        if before_release is not None:
+                            before_release(context)
                         release_path.touch(mode=0o600)
                         child.wait(timeout=kill)
-                    except OSError as error:
-                        release_failure = error
-                        context["release_error"] = str(error)
                     except KeyboardInterrupt:
                         failure = StageCancelled
                     except subprocess.TimeoutExpired:
                         failure = StageTimeout
                         context["release_error"] = "supervisor release exceeded kill grace"
+                    except Exception as error:
+                        release_failure = error
+                        context["release_error"] = (
+                            redact(str(error).encode()).decode() if redact else str(error)
+                        )
                 if child is not None and (
                     failure
                     or output_truncated

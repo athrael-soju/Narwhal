@@ -9,8 +9,8 @@ The unreleased [server command](../cli/MCP.md) validates this document at
 startup. Inspection tools check the target's `inspect` grant before accessing
 inputs, endpoints or retained plans and operations. Cancellation also checks
 the original action's grants, except when cancelling preparation. The operation
-core enforces these permissions; production execution adapters remain planned
-in the [MCP contract](../MCP-Contracts.md).
+core and installed local dev adapter enforce these permissions. The SSH fleet
+and observability adapters remain planned in the [MCP contract](../MCP-Contracts.md).
 
 ## Registry document
 
@@ -234,12 +234,13 @@ helpers.
 | `narwhal dev init/up/verify/down` | Match `--instance` and check the corresponding `dev_*` action. |
 | `narwhal-profile` | Match `--fleet` and check `fleet_profile`, including refit and merge modes that write qualification artifacts. |
 | `narwhal-check` preflight | Match `--fleet` and check `fleet_preflight`, including `--no-kv`. |
-| `narwhal-engine` actions | No registered fleet selector is available; reject managed execution before preparing files or starting helpers. |
+| Direct `narwhal-engine` invocations | No registered fleet selector is available; reject managed execution before preparing files or starting helpers. |
 
-The distribution has no execution adapters. After the binding and grant checks,
-these commands return `failed_gate` with code `adapter_unavailable` and exit 1.
+The local dev commands prepare a plan, submit an operation and wait for its
+result. The fleet commands still return `failed_gate` with code
+`adapter_unavailable` and exit 1 after the binding and grant checks.
 An empty registry variable is an input error for commands that resolve a target.
-`narwhal-engine` rejects bound execution regardless of the variable's value.
+Direct `narwhal-engine` invocations reject bound execution regardless of the variable's value.
 An environment variable containing an operation ID cannot bypass these checks.
 
 Configuration, diagnostic collection and `dev status` retain their inspection
@@ -247,17 +248,18 @@ behaviour. `narwhal-check --verify-evidence` reads retained evidence and live
 identities without running new transfer probes; it also remains available.
 Help, version, example-config and contract-manifest output remain available.
 
-Future CLI execution adapters must retain the existing arguments and result
-contracts. A direct command will create its plan and operation internally,
-then acquire the same permissions and reservations as an MCP call. A nested
-command must join its parent's reservation through local context authenticated
-by the executor.
+A bound dev command retains its existing arguments and command result.
+Explicit initialization flags must match the registered recipe and settings;
+see [local dev registration](Local-Dev.md). The command creates its plan and
+operation internally and uses the same reservations as MCP. Fixed nested
+commands join their parent operation through an authenticated inherited file
+descriptor. An operation ID or token supplied in the environment grants no access.
 
 For the MCP server, explicit `--registry` takes precedence over
 `NARWHAL_MANAGEMENT_REGISTRY`; absence of both is a startup error. Existing CLI
 invocations without that variable retain their current behaviour and are
 outside the shared-coordination guarantee. The MCP startup binding and the
-finite-command rejection checks above are part of the unreleased server work.
+finite-command coordination above are part of the unreleased server work.
 
 The server loads its inspection registry snapshot on startup; restart it after
 editing the registry. The operation coordinator rereads the registry before

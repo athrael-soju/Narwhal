@@ -1017,7 +1017,7 @@ def _main(argv: list[str]) -> int:
         from ..deployment.management_cli import guard_bound_command
 
         denied = guard_bound_command(
-            "narwhal-check", action="fleet_preflight", fleet=Path(args.fleet)
+            "narwhal-check", action="fleet_preflight", fleet=Path(args.fleet), arguments=vars(args)
         )
         if denied is not None:
             return denied

@@ -32,13 +32,14 @@ Current interfaces are:
 | Deployment plan (unreleased) | `narwhal.deployment-plan` | 1 |
 | Preparation snapshot (unreleased) | `narwhal.management-snapshot` | 1 |
 | Management operation (unreleased) | `narwhal.management-operation` | 1 |
+| Local dev adapter settings (unreleased) | `narwhal.local-dev-settings` | 1 |
 
 The unreleased [MCP server](../cli/MCP.md) reads management registries and
-validates the results returned by registered adapters. Its ten tools inspect
+validates the results returned by registered adapters. Its fourteen tools inspect
 targets, configuration, status, diagnostics, artifacts, plans and operations,
-and record cancellation requests. The management core reads and writes the
-plan, snapshot and operation formats above. Production execution adapters are
-not installed, so preparation, execution and resumption tools remain absent
-from discovery.
+and record cancellation requests. They also prepare, execute and resume local
+dev lifecycle actions through the installed `local-dev-v1` adapter. The management
+core reads and writes the plan, snapshot and operation formats above. The SSH
+fleet and observability adapters remain planned.
 
 Compare installed and candidate contract manifests before upgrading. If a field change breaks an existing reader, assign the interface a new schema version. Retain the previous code, configuration, profiles, and compatible state as one rollback set.

@@ -138,6 +138,7 @@ nav:
       - MCP fleet operations:
           - Contract overview: MCP-Contracts.md
           - Registration and permissions: mcp/Registration.md
+          - Manage a local dev instance: mcp/Local-Dev.md
           - Tools and results: mcp/Tools.md
           - Plans and site adapters: mcp/Deployment.md
           - Operations and recovery: mcp/Operations.md

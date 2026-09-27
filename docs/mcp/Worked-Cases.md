@@ -2,9 +2,9 @@
 
 These cases specify how the version 1 management executor responds to
 successful work, failures, retries and interruptions. The unreleased server
-exposes tools for retained operations, but production execution adapters are not
-installed. The cases describe the complete workflow once an adapter supplies
-the required actions. They provide inputs, expected states and retained
+installs the `local-dev-v1` adapter; the fleet adapter required by these cases
+remains planned. The cases describe the fleet workflow once that adapter
+supplies the required actions. They provide inputs, expected states and retained
 evidence for implementation checks; they contain no live fleet measurements.
 
 Use the [tool catalogue](Tools.md) for argument and result fields, the

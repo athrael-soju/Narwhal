@@ -17,6 +17,7 @@ def main() -> None:
     result = Path(sys.argv[1])
     release = Path(sys.argv[2])
     command = sys.argv[3:]
+    pass_fds: tuple[int, ...] = ()
     if command[:1] == ["--start-fd"]:
         gate = int(command[1])
         command = command[2:]
@@ -25,6 +26,9 @@ def main() -> None:
                 return
         finally:
             os.close(gate)
+    if command[:1] == ["--pass-fds"]:
+        pass_fds = tuple(int(value) for value in command[1].split(","))
+        command = command[2:]
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0):
         raise OSError(ctypes.get_errno(), "could not enable isolated helper reaping")
@@ -32,7 +36,7 @@ def main() -> None:
     # stays alive through TERM so descendants retain an ownership anchor.
     signal.signal(signal.SIGTERM, lambda signum, frame: None)
     signal.signal(signal.SIGINT, lambda signum, frame: None)
-    child = subprocess.Popen(command)
+    child = subprocess.Popen(command, pass_fds=pass_fds)
     code = child.wait()
     temporary = result.with_suffix(".pending")
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:

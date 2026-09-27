@@ -32,6 +32,22 @@ def process_identity(pid: int) -> dict[str, int | str]:
     return {"pid": pid, "boot_id": boot_id, "start_ticks": int(fields[19])}
 
 
+def write_process_identity(run: Path, identity: dict) -> None:
+    """Commit launch ownership before readiness checks or releasing the launcher."""
+    path = run / "native-process.json"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(identity, stream, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    parent = os.open(run, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
 def _owns_process(identity: dict) -> bool:
     try:
         return process_identity(identity["pid"]) == identity
@@ -113,7 +129,11 @@ def _checked_plan(run: Path, plan: dict) -> dict:
 def _environment(run: Path) -> dict[str, str]:
     values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
     return {
-        **os.environ,
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"NARWHAL_MANAGEMENT_CONTEXT_FD", "NARWHAL_MANAGEMENT_REGISTRY"}
+        },
         "VLLM_API_KEY": "",
         **values,
         "NARWHAL_CAPTURE_CACHE": "1",
@@ -221,6 +241,9 @@ def stop(run: Path) -> None:
 
 def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
     """Launch checked engines sequentially against live shared GPU headroom."""
+    from .management_context import inherited_context
+
+    managed = inherited_context()
     if ready_seconds < 1:
         raise ValueError("ready_seconds must be positive")
     selected = validate_shared_runs(runs, backend="native")
@@ -260,6 +283,8 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                     raise ValueError(f"free GPU memory is below the {budget} MiB allocation")
                 if (run / "native-process.json").exists():
                     raise ValueError("native launch already has a process record")
+                if managed is not None:
+                    stages.write_evidence(run / "management-owner.json", managed["owner"])
                 log_fd = os.open(run / "startup.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(log_fd, "w") as log:
                     process = subprocess.Popen(
@@ -270,7 +295,7 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                         start_new_session=True,
                     )
                 identity = process_identity(process.pid)
-                write_private(run / "native-process.json", json.dumps(identity, indent=2) + "\n")
+                write_process_identity(run, identity)
                 _wait_ready(run, plan, identity, ready_seconds)
                 key = _environment(run).get("VLLM_API_KEY", "")
                 headers = {"Authorization": f"Bearer {key}"} if key else None
