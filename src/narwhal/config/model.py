@@ -10,7 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from ..scheduling.control import SLO, Thresholds
-from ..serving.policy import ServingPolicy
+from ..serving.policy import ContinuationPolicy, ServingPolicy
 from ..types import Role
 
 
@@ -205,6 +205,7 @@ class FleetConfig:
     # Data-pool capacity also bounds admitted originals; phase waits hold no connection.
     max_connections: int = 512
     serving: ServingPolicy = field(default_factory=ServingPolicy)
+    continuation: ContinuationPolicy = field(default_factory=ContinuationPolicy)
     # Reserved connections for health and recovery probes. Validation resolves
     # zero to max(4, 2 per engine) and stores the result here.
     control_connections: int = 0

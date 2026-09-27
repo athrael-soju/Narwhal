@@ -20,6 +20,10 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         config.serving.validate()
     except ValueError as exc:
         problems.append(str(exc))
+    try:
+        config.continuation.validate()
+    except ValueError as exc:
+        problems.append(str(exc))
     positive = [
         ("slo.ttft_s", config.slo.ttft_s),
         ("slo.tpot_s", config.slo.tpot_s),

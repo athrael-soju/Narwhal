@@ -18,6 +18,8 @@ JOURNAL = "journal"
 STATE = "state"
 METRICS = "metrics"
 ATTESTATION = "attestation"
+REPLAY_QUALIFICATION = "replay_qualification"
+REPLAY_CAPTURE = "replay_capture"
 CLI = "cli"
 COMMAND_RESULT = "command_result"
 DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
@@ -42,6 +44,8 @@ CONTRACTS: dict[str, Contract] = {
     STATE: Contract("narwhal.state"),
     METRICS: Contract("narwhal.metrics"),
     ATTESTATION: Contract("narwhal.attestation"),
+    REPLAY_QUALIFICATION: Contract("narwhal.replay-qualification"),
+    REPLAY_CAPTURE: Contract("narwhal.replay-capture"),
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),

@@ -10,7 +10,7 @@ from typing import NoReturn
 
 from ..contracts import FLEET, ContractVersionError, validate_document
 from ..scheduling.control import SLO, Thresholds
-from ..serving.policy import ServingPolicy
+from ..serving.policy import ContinuationPolicy, ServingPolicy
 from ..types import Role
 from .environment import resolve_endpoint
 from .model import (
@@ -92,11 +92,13 @@ def load(path: str | Path) -> FleetConfig:
         )
     controller_raw = _read_section(problems, raw, "controller")
     serving_raw = _read_section(problems, raw, "serving")
+    continuation_raw = _read_section(problems, raw, "continuation")
     engine_raw = _read_section(problems, raw, "engine")
     recovery_raw = _read_section(problems, raw, "recovery")
     profiles_raw = _read_section(problems, raw, "profiles")
     _check_unknown(problems, "controller", controller_raw, _CONTROLLER_KEYS)
     _check_unknown(problems, "serving", serving_raw, _SERVING_KEYS)
+    _check_unknown(problems, "continuation", continuation_raw, _CONTINUATION_KEYS)
     _check_unknown(problems, "engine", engine_raw, _ENGINE_KEYS)
     _check_unknown(problems, "recovery", recovery_raw, _RECOVERY_KEYS)
     _check_unknown(problems, "profiles", profiles_raw, _PROFILE_KEYS)
@@ -137,6 +139,13 @@ def load(path: str | Path) -> FleetConfig:
     serving = ServingPolicy(**{k: v for k, v in serving_raw.items() if k in serving_keys})
     try:
         serving.validate()
+    except ValueError as exc:
+        problems.append(str(exc))
+    continuation = ContinuationPolicy(
+        **{k: v for k, v in continuation_raw.items() if k in _CONTINUATION_KEYS}
+    )
+    try:
+        continuation.validate()
     except ValueError as exc:
         problems.append(str(exc))
     advisory = _read_bool(problems, "controller.advisory", controller_raw.get("advisory", False))
@@ -410,6 +419,7 @@ def load(path: str | Path) -> FleetConfig:
             problems, "serving.max_connections", serving_raw.get("max_connections", 512)
         ),
         serving=serving,
+        continuation=continuation,
         control_connections=_read_int(
             problems,
             "engine.control_connections",
@@ -516,6 +526,7 @@ _KNOWN_KEYS = {
     "slo",
     "controller",
     "serving",
+    "continuation",
     "engine",
     "recovery",
     "profiles",
@@ -578,6 +589,7 @@ _SERVING_KEYS = {
     "graceful_timeout_s",
     *(f.name for f in fields(ServingPolicy)),
 }
+_CONTINUATION_KEYS = {f.name for f in fields(ContinuationPolicy)}
 _ENGINE_KEYS = {
     "connector",
     "dialect",

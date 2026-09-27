@@ -8,11 +8,11 @@ import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from narwhal.config import FleetConfig
+from narwhal.config import ContinuationPolicy, FleetConfig
 from narwhal.config.serialization import document
 from narwhal.diagnostics import check
 from narwhal.serving.policy import ServingPolicy
@@ -168,6 +168,7 @@ class ConfigTests(unittest.TestCase):
             ("controller", "thresholds"),
             ("controller", "reactive"),
             ("serving",),
+            ("continuation",),
             ("engine",),
             ("recovery",),
             ("recovery", "health"),
@@ -390,6 +391,108 @@ class ConfigTests(unittest.TestCase):
             self.load({**self.raw, "serving": {"max_attempts": 4}})
         with self.assertRaisesRegex(ValueError, "max_attempts"):
             replace(self.load(self.raw), serving=replace(policy, max_attempts=4)).validate()
+
+    def test_continuation_defaults_preserve_disabled_serving(self):
+        """Omitted and empty policies retain zero reservations and no qualification input."""
+        for raw in (self.raw, {**self.raw, "continuation": {}}):
+            with self.subTest(policy=raw.get("continuation")):
+                cfg = self.load(raw)
+                self.assertEqual(cfg.continuation, ContinuationPolicy())
+                self.assertEqual(document(cfg)["continuation"], asdict(ContinuationPolicy()))
+        example = FleetConfig.load(ROOT / "config/fleet.example.json")
+        self.assertEqual(example.continuation, ContinuationPolicy())
+
+    def test_continuation_round_trip_does_not_open_qualification(self):
+        """Offline config validation preserves a pinned path without loading its evidence."""
+        policy = ContinuationPolicy(
+            enabled=True,
+            max_attempts=2,
+            recovery_budget=3,
+            recovery_replenish=0.1,
+            max_context_tokens=1024,
+            max_history_bytes=65536,
+            max_retained_bytes=131072,
+            qualification_path="runs/not-created/qualification.json",
+            qualification_sha256="a" * 64,
+        )
+        cfg = self.load({**self.raw, "continuation": asdict(policy)})
+        self.assertEqual(cfg.continuation, policy)
+        cfg.save(self.path)
+        self.assertEqual(FleetConfig.load(self.path), cfg)
+        self.assertEqual(document(cfg)["continuation"], asdict(policy))
+
+    def test_continuation_rejects_mistyped_values_even_when_disabled(self):
+        """Disabled policies still reject coercion, negative bounds and malformed digest pins."""
+        invalid = [
+            ("enabled", 1),
+            ("enabled", "false"),
+            ("recovery_replenish", True),
+            ("recovery_replenish", "0.1"),
+            ("recovery_replenish", -0.1),
+            ("recovery_replenish", 1.1),
+            ("recovery_replenish", float("inf")),
+            ("recovery_replenish", float("nan")),
+            ("recovery_replenish", 10**400),
+            ("qualification_path", None),
+            ("qualification_path", "runs/invalid\x00path"),
+            ("qualification_sha256", None),
+            ("qualification_sha256", "A" * 64),
+            ("qualification_sha256", "a" * 63),
+            ("qualification_sha256", "g" * 64),
+        ]
+        for name in (
+            "max_attempts",
+            "recovery_budget",
+            "max_context_tokens",
+            "max_history_bytes",
+            "max_retained_bytes",
+        ):
+            invalid.extend((name, value) for value in (True, -1, 1.0, "1"))
+        cfg = self.load(self.raw)
+        for name, value in invalid:
+            policy = replace(ContinuationPolicy(), **{name: value})
+            with self.subTest(name=name, value=value):
+                with self.assertRaisesRegex(ValueError, f"continuation.{name}"):
+                    replace(cfg, continuation=policy).validate()
+                with self.assertRaises(ValueError):
+                    self.load({**self.raw, "continuation": asdict(policy)})
+        with self.assertRaisesRegex(ValueError, "continuation must be an object"):
+            self.load({**self.raw, "continuation": []})
+
+    def test_enabled_continuation_requires_capacity_and_qualification(self):
+        """Activation requires every resource bound and a pinned qualification record."""
+        policy = ContinuationPolicy(
+            enabled=True,
+            max_attempts=1,
+            recovery_budget=1,
+            max_context_tokens=2,
+            max_history_bytes=4096,
+            max_retained_bytes=4096,
+            qualification_path="runs/qualification.json",
+            qualification_sha256="0" * 64,
+        )
+        for name, value in (
+            ("max_attempts", 0),
+            ("recovery_budget", 0),
+            ("max_context_tokens", 0),
+            ("max_context_tokens", 1),
+            ("max_history_bytes", 0),
+            ("max_retained_bytes", 0),
+            ("max_history_bytes", 4097),
+            ("qualification_path", ""),
+            ("qualification_path", " "),
+            ("qualification_sha256", ""),
+        ):
+            with self.subTest(name=name, value=value), self.assertRaisesRegex(ValueError, name):
+                self.load({**self.raw, "continuation": asdict(replace(policy, **{name: value}))})
+        for replenish in (0, 0.0, 1, 1.0):
+            with self.subTest(replenish=replenish):
+                self.load(
+                    {
+                        **self.raw,
+                        "continuation": asdict(replace(policy, recovery_replenish=replenish)),
+                    }
+                )
 
     def test_check_cli_uses_native_fleet_config(self):
         """Preflight loads the native fleet document and rejects retired source selectors."""

@@ -10,15 +10,18 @@ import re
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
 from ..cli_support import add_version_argument
-from ..config import EngineContract
 from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
+
+if TYPE_CHECKING:
+    from ..config import EngineContract
+    from .replay import ReplayCapture
 
 ATTESTATION_PATH = "/v1/attestation"
 _PROCESS_START = re.compile(
@@ -75,6 +78,8 @@ class AttestationDocument:
 
 def _read_contract(raw: Any) -> EngineContract:
     """Build an EngineContract without coercing ambiguous JSON values."""
+    from ..config import EngineContract
+
     if not isinstance(raw, dict):
         raise ValueError("attestation contract must be an object")
     defaults = EngineContract().fields()
@@ -295,9 +300,16 @@ def build_app(
     *,
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
+    continuation: ReplayCapture | None = None,
 ) -> FastAPI:
     """Build a sidecar that stops attesting after its engine process changes."""
     app = FastAPI(title="narwhal-engine-attestation")
+    if continuation is not None and (
+        continuation.identity != bound_identity
+        or continuation.attestation_digest
+        != make_attestation(document, bound_identity)["attestation_digest"]
+    ):
+        raise ValueError("continuation capture does not match the bound engine attestation")
 
     async def current_identity() -> EngineIdentity:
         try:
@@ -327,6 +339,14 @@ def build_app(
         identity = await current_identity()
         return make_attestation(document, identity)
 
+    if continuation is not None:
+        replay_capture = continuation
+
+        @app.get(ATTESTATION_PATH + "/continuation")
+        async def replay_attestation() -> dict[str, Any]:
+            await current_identity()
+            return replay_capture.fields()
+
     return app
 
 
@@ -336,6 +356,10 @@ def main(argv: list[str] | None = None) -> int:
     add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
     parser.add_argument("--engine-base", required=True, help="vLLM HTTP base URL")
+    parser.add_argument(
+        "--continuation-document",
+        help="private replay capture bound to this engine process and attestation",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8010, help="TCP port (default: %(default)s)")
     parser.add_argument(
@@ -351,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         document = AttestationDocument.load(args.document)
+        from .replay import ReplayCapture
+
+        continuation = (
+            ReplayCapture.load(args.continuation_document) if args.continuation_document else None
+        )
     except (OSError, ValueError) as exc:
         return failure("narwhal-attest", f"load document {args.document}", exc, 2)
     try:
@@ -360,10 +389,17 @@ def main(argv: list[str] | None = None) -> int:
                 f"engine runs vLLM {identity.vllm_version}, "
                 f"document expects {document.contract.vllm_version}"
             )
+        app = build_app(
+            document,
+            args.engine_base,
+            identity,
+            timeout_s=args.timeout_s,
+            continuation=continuation,
+        )
     except (OSError, ValueError, httpx.HTTPError) as exc:
         return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)
     uvicorn.run(
-        build_app(document, args.engine_base, identity, timeout_s=args.timeout_s),
+        app,
         host=args.host,
         port=args.port,
     )

@@ -21,6 +21,14 @@ from ..types import (
 )
 from .connector import KvConnector, NixlConnector, PrefillResult
 from .dialect import EngineDialect, VllmDialect
+from .replay import (
+    ReplayCapture,
+    ReplayError,
+    ReplayEvent,
+    ReplayEventReader,
+    ReplayQualification,
+    ReplayUnavailable,
+)
 from .stream import sse_error, sse_token_bearing
 
 
@@ -72,6 +80,8 @@ FIRST_OUTPUT_DETAIL = "no first token within"
 STREAM_SILENCE_DETAIL = "engine went silent between tokens"
 STREAM_UNTERMINATED_DETAIL = "stream ended before the [DONE] terminator"
 STREAM_EMPTY_DETAIL = "stream ended with [DONE] before any token arrived"
+STREAM_CONTINUATION_DETAIL = "invalid continuation stream"
+_REPLAY_CHUNK_LIMIT = 64 * 1024
 NO_HANDOFF_DETAIL = "no handoff"
 
 # The probe runs the plain completion route every dialect serves.
@@ -83,7 +93,7 @@ def leg_failure_class(exc: BaseException) -> str | None:
     """Return the breaker failure class, or None for local pool timeouts
     and non-overload 4xx responses.
     """
-    if isinstance(exc, httpx.PoolTimeout):
+    if isinstance(exc, httpx.PoolTimeout | ReplayUnavailable):
         return None
     if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
         return LEG_CONNECTION
@@ -98,7 +108,9 @@ def leg_failure_class(exc: BaseException) -> str | None:
             return LEG_STREAM
         if exc.status == 200 and detail.startswith(NO_HANDOFF_DETAIL):
             return LEG_KV_HANDOFF
-        if detail.startswith(STREAM_UNTERMINATED_DETAIL) or detail.startswith(STREAM_EMPTY_DETAIL):
+        if detail.startswith(
+            (STREAM_UNTERMINATED_DETAIL, STREAM_EMPTY_DETAIL, STREAM_CONTINUATION_DETAIL)
+        ):
             return LEG_STREAM
         return LEG_INFERENCE_STATUS
     # Unclassified failures require health verification.
@@ -295,7 +307,13 @@ class EngineClient:
         return leg
 
     async def prefill(
-        self, url: str, endpoint: str, body: dict[str, Any], headers: dict[str, str]
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        redact_errors: bool = False,
     ) -> PrefillResult:
         """Run prefill and bind the handoff to its producer and request ID."""
         leg = self._prefill_leg(body)
@@ -323,8 +341,13 @@ class EngineClient:
             raise httpx.ReadTimeout(
                 f"prefill exceeded its {self._prefill_timeout:g}s elapsed deadline"
             ) from exc
+        except httpx.HTTPError as exc:
+            if redact_errors:
+                raise _redact_transport(exc, "prefill") from None
+            raise
         if r.status_code != 200:
-            raise EngineError("prefill", url, r.status_code, r.text)
+            detail = "continuation prefill request rejected by engine" if redact_errors else r.text
+            raise EngineError("prefill", url, r.status_code, detail)
 
         try:
             return self.kv.prefill_result(
@@ -336,6 +359,10 @@ class EngineClient:
                 ),
             )
         except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+            if redact_errors:
+                raise EngineError(
+                    "prefill", url, 200, f"{NO_HANDOFF_DETAIL}: invalid continuation descriptor"
+                ) from None
             raise EngineError(
                 "prefill",
                 url,
@@ -445,6 +472,154 @@ class EngineClient:
                     yield line
                     if done:
                         return
+
+    async def verify_continuation(
+        self,
+        qualification: ReplayQualification,
+        iid: str,
+        url: str,
+        attestation_url: str,
+    ) -> ReplayCapture:
+        """Check an approved engine identity through the reserved control pool."""
+        return await qualification.verify(
+            iid,
+            url,
+            attestation_url,
+            client=self._control,
+            headers=self._auth(None),
+            timeout_s=self._health_timeout,
+        )
+
+    async def decode_continuation(
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        kv_params: PrefillResult | None,
+        first_token_timeout_s: float | None = None,
+        *,
+        qualification: ReplayQualification,
+        iid: str,
+        attestation_url: str,
+        max_event_bytes: int,
+    ) -> AsyncGenerator[ReplayEvent, None]:
+        """Read qualified complete events, verifying the process after HTTP opens.
+
+        Serving verifies candidates before dispatch. This second check prevents
+        output commitment if the process changed while the HTTP request opened.
+        """
+        if endpoint != "/v1/completions":
+            raise ReplayError("continuation requires the completion route")
+        request = {
+            **qualification.contract.request_settings(),
+            **body,
+            "return_token_ids": True,
+            "stream_interval": 1,
+        }
+        replay_headers = {
+            name: value
+            for name, value in self._auth(headers).items()
+            if name.lower() != "accept-encoding"
+        }
+        replay_headers["accept-encoding"] = "identity"
+        prompt = qualification.contract.validate_request(request)
+        reader = ReplayEventReader(
+            qualification.contract,
+            prompt,
+            request["max_tokens"],
+            max_event_bytes,
+            stop_token_ids=request.get("stop_token_ids", []),
+        )
+        try:
+            leg = self.kv.decode_body(request, kv_params, url=url, endpoint=endpoint)
+        except (ValueError, TypeError) as exc:
+            raise ReplayError("continuation KV request is invalid") from exc
+        budget_s = first_token_timeout_s or 0.0
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget_s if budget_s > 0 else None
+        first = True
+        timeouts = self._data.timeout.as_dict()
+        if deadline is not None:
+            timeouts["read"] = None
+        async with AsyncExitStack() as stack:
+            opening = stack.enter_async_context(
+                self._data.stream(
+                    "POST",
+                    f"{url}{endpoint}",
+                    json=leg,
+                    headers=replay_headers,
+                    timeout=httpx.Timeout(**timeouts),
+                )
+            )
+            try:
+                remaining = max(0.0, deadline - loop.time()) if deadline is not None else None
+                response = await asyncio.wait_for(opening, timeout=remaining)
+            except TimeoutError as exc:
+                raise EngineError("decode", url, 504, _first_token_detail(budget_s, 0)) from exc
+            except httpx.HTTPError as exc:
+                raise _redact_transport(exc, "decode") from None
+            if deadline is not None:
+                response.stream = _GapBoundStream(
+                    response.stream, lambda: None if first else self._read_timeout
+                )
+            if response.status_code != 200:
+                raise EngineError(
+                    "decode", url, response.status_code, "continuation request rejected by engine"
+                )
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise EngineError("decode", url, 502, STREAM_CONTINUATION_DETAIL)
+            try:
+                remaining = max(0.0, deadline - loop.time()) if deadline is not None else None
+                await asyncio.wait_for(
+                    self.verify_continuation(qualification, iid, url, attestation_url),
+                    timeout=remaining,
+                )
+            except TimeoutError as exc:
+                raise ReplayUnavailable(
+                    "continuation identity verification exceeded its deadline"
+                ) from exc
+            chunks = response.aiter_raw()
+            metadata = 0
+            while True:
+                try:
+                    if first and deadline is not None:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        chunk = await asyncio.wait_for(anext(chunks), timeout=remaining)
+                    else:
+                        chunk = await anext(chunks)
+                except StopAsyncIteration:
+                    try:
+                        reader.finish()
+                    except ReplayError as exc:
+                        raise EngineError("decode", url, 502, STREAM_CONTINUATION_DETAIL) from exc
+                    return
+                except TimeoutError as exc:
+                    raise EngineError(
+                        "decode", url, 504, _first_token_detail(budget_s, metadata)
+                    ) from exc
+                except httpx.ReadTimeout as exc:
+                    detail = (
+                        _first_token_detail(budget_s, metadata) if first else STREAM_SILENCE_DETAIL
+                    )
+                    raise EngineError("decode", url, 504, detail) from exc
+                except httpx.HTTPError as exc:
+                    raise _redact_transport(exc, "decode") from None
+                try:
+                    if len(chunk) > _REPLAY_CHUNK_LIMIT:
+                        raise ReplayError("continuation transport chunk exceeds its byte limit")
+                    for event in reader.feed(chunk):
+                        if event.generated_ids:
+                            first = False
+                        elif first:
+                            metadata += 1
+                        yield event
+                        if event.kind == "done":
+                            return
+                except ReplayError as exc:
+                    raise EngineError("decode", url, 502, STREAM_CONTINUATION_DETAIL) from exc
 
     async def probe_inference(
         self, url: str, *, prefill_url: str | None = None, deadline_s: float | None = None
@@ -556,3 +731,9 @@ def _first_token_detail(budget_s: float, metadata: int) -> str:
         frames = f"{metadata} metadata frame" + ("s" if metadata != 1 else "")
         return f"{FIRST_OUTPUT_DETAIL} {budget_s:g}s: {frames} but no token"
     return f"{FIRST_OUTPUT_DETAIL} {budget_s:g}s: no frames at all"
+
+
+def _redact_transport(exc: httpx.HTTPError, phase: str) -> httpx.HTTPError:
+    """Preserve transport classification while removing upstream diagnostic content."""
+    exc.args = (f"continuation {phase} transport failure",)
+    return exc

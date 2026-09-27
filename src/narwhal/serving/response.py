@@ -10,25 +10,59 @@ import anyio
 from fastapi.responses import StreamingResponse
 from starlette.types import Message, Receive, Scope, Send
 
+from .continuation import CommitGroup
 from .lifecycle import RequestLifecycle
 
 
 class RequestStreamResponse(StreamingResponse):
     """Own the upstream iterator and deadline through ASGI response teardown."""
 
-    def __init__(self, stream: AsyncGenerator[str, None], lifecycle: RequestLifecycle) -> None:
+    def __init__(
+        self, stream: AsyncGenerator[str | CommitGroup, None], lifecycle: RequestLifecycle
+    ) -> None:
         self.lifecycle = lifecycle
         self.upstream = stream
         self.closed = False
+        self._asgi_active = False
+        self._pending_group: CommitGroup | None = None
+        if lifecycle.continuation is not None:
+            lifecycle.continuation_response_owned = True
         self.iterator = self._iterate()
         super().__init__(self.iterator, media_type="text/event-stream")
 
-    async def _iterate(self) -> AsyncGenerator[str, None]:
+    async def _iterate(self) -> AsyncGenerator[str | bytes, None]:
         try:
             async for line in self.upstream:
-                yield line
+                if isinstance(line, CommitGroup):
+                    self._pending_group = line
+                    yield line.data
+                    self._pending_group = None
+                else:
+                    yield line
+                del line
         finally:
-            await self._close_upstream()
+            try:
+                await self._close_upstream()
+            finally:
+                if not self._asgi_active:
+                    self._release_history()
+
+    async def stream_response(self, send: Send) -> None:
+        """Drop each committed group before fetching the next bounded group."""
+        if self.lifecycle.continuation is None:
+            await super().stream_response(send)
+            return
+        await send(
+            {"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers}
+        )
+        async for chunk in self.body_iterator:
+            if isinstance(chunk, str):
+                chunk = chunk.encode(self.charset)
+            try:
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+            finally:
+                del chunk
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     async def _close_upstream(self) -> None:
         if self.closed:
@@ -45,13 +79,23 @@ class RequestStreamResponse(StreamingResponse):
         try:
             await self.iterator.aclose()
         finally:
-            await self._close_upstream()
+            try:
+                await self._close_upstream()
+            finally:
+                if not self._asgi_active:
+                    self._release_history()
+
+    def _release_history(self) -> None:
+        self._pending_group = None
+        if self.lifecycle.continuation is not None:
+            self.lifecycle.continuation.close()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Hold the deadline through client writes and always close ownership."""
         started = False
         finished = False
         error_sent = False
+        self._asgi_active = True
 
         async def record_send(message: Message) -> None:
             nonlocal started, finished, error_sent
@@ -59,6 +103,15 @@ class RequestStreamResponse(StreamingResponse):
             if message["type"] == "http.response.start":
                 started = True
             elif message["type"] == "http.response.body":
+                group = self._pending_group
+                history = self.lifecycle.continuation
+                if group is not None and history is not None:
+                    if message.get("body") is not group.data:
+                        raise RuntimeError("ASGI body differs from its continuation group")
+                    history.commit(group, self.lifecycle.router._clock())
+                    self.lifecycle.tokens = history.committed_count
+                    self.lifecycle.output_started = True
+                    self._pending_group = None
                 finished = not message.get("more_body", False)
                 if message.get("body") and self.lifecycle.terminal == "expired":
                     error_sent = True
@@ -101,4 +154,8 @@ class RequestStreamResponse(StreamingResponse):
                     }
                 )
         finally:
-            await self.aclose()
+            try:
+                await self.aclose()
+            finally:
+                self._asgi_active = False
+                self._release_history()

@@ -6,8 +6,13 @@ Narwhal does not yet resume a stream after its decode worker fails. The
 [current failure response](../http-api/03-Backend-and-Failures.md#retries)
 still applies.
 
-Continuation keeps the original router and client connection alive while a
-healthy worker recomputes the prompt and committed generated prefix. It does
+The unreleased implementation provides
+[request opt-in](../http-api/01-Requests.md#continuation-opt-in), bounded
+history, capability checks and ASGI commitment tracking. Recovery dispatch
+is the next gate in [#194](https://github.com/athrael-soju/Narwhal/issues/194).
+
+The recovery design keeps the original router and client connection alive
+while a healthy worker recomputes the prompt and committed generated prefix. It does
 not preserve the failed worker's future output, accept client reconnections
 or recover a failed router.
 
@@ -47,10 +52,10 @@ output, tools, multimodal content and custom generation processors. Use an
 allowlist for continuation request fields so an unrecognised extension
 cannot silently change these semantics.
 
-An explicit continuation request outside the qualified subset must receive
+An explicit continuation request outside the qualified subset receives
 HTTP 400 before dispatch. Ordinary requests retain their existing behaviour.
-The request opt-in and deployment policy belong to
-[#193](https://github.com/athrael-soju/Narwhal/issues/193).
+The [deployment policy](../configuration/02-Serving-and-Role-Control.md#44-opt-in-continuation-state)
+defaults to disabled and requires explicit opt-in for each request.
 
 ## Output commitment
 
@@ -59,10 +64,9 @@ output after the corresponding ASGI body send returns successfully. ASGI
 does not acknowledge client receipt; a successful send establishes that the
 server accepted the bytes on the existing connection.
 
-The continuation reader must parse complete upstream SSE events, including
-their blank-line terminators. The existing engine client exposes data lines
-before that delimiter; its ordinary streaming reader does not establish this
-framing guarantee.
+The continuation reader parses complete upstream SSE events, including
+their blank-line terminators. The ordinary streaming reader exposes data
+lines before that delimiter.
 
 Validate each completion event before retaining it: one choice at index `0`,
 string text and valid generated token IDs. Validate usage events separately.
@@ -95,13 +99,13 @@ leaves that group's IDs uncommitted.
 The first frame with a non-null `finish_reason` and any subsequent usage
 metadata remain pending until a complete `[DONE]` event arrives. Send that
 terminal group once. On a recoverable upstream failure before `[DONE]`,
-discard the group and resume from the preceding committed frontier if the
-remaining budgets allow.
+recovery dispatch must discard the group and resume from the preceding
+committed frontier if the remaining budgets allow.
 
 ## Replay and bounds
 
 Let `P` be the original prompt IDs, `G` the committed generated IDs and `M`
-the original output limit. A recovery attempt receives exactly `P + G`, with
+the original output limit. A recovery attempt must receive exactly `P + G`, with
 `max_tokens = M - len(G)`. Discard observed IDs that never reached the
 committed frontier. They consume computation but do not consume the client's
 delivered-token budget.

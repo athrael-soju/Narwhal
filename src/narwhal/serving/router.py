@@ -17,6 +17,7 @@ from ..contracts import STATE, versioned
 from ..engines.client import EngineClient, EngineError, InferenceProbe, leg_failure_class
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
+from ..engines.replay import ReplayQualification
 from ..observability.journal import RunJournal
 from ..observability.metrics import Histogram, buckets_for
 from ..profiling.store import ProfileStore
@@ -29,8 +30,16 @@ from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
 from ..types import Instance, Phase, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
+from .continuation import HistoryBudget
+from .continuation_request import (
+    ContinuationRequestError,
+    ContinuationUnavailable,
+)
+from .continuation_request import (
+    prepare_request as prepare_continuation_request,
+)
 from .dispatch import Dispatcher
-from .execution import request_error, serve_request
+from .execution import _terminal_failure, request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
 from .retry import RetryBudget
 
@@ -54,6 +63,22 @@ class NarwhalRouter:
     ) -> None:
         self.cfg = cfg
         cfg.serving.validate()
+        cfg.continuation.validate()
+        dialect = lookup_dialect(cfg.dialect)
+        if cfg.continuation.enabled and not dialect.token_ids:
+            raise ValueError("continuation requires a dialect with exact token IDs")
+        self.replay_qualification = (
+            ReplayQualification.load(
+                cfg.continuation.qualification_path, cfg.continuation.qualification_sha256
+            )
+            if cfg.continuation.enabled
+            else None
+        )
+        if (
+            self.replay_qualification is not None
+            and self.replay_qualification.contract.model != cfg.model
+        ):
+            raise ValueError("continuation qualification does not match the configured model")
         self.journal = journal
         if max_concurrent is not None and max_concurrent > cfg.max_connections:
             # Check admission capacity against the pool before building clients.
@@ -151,7 +176,7 @@ class NarwhalRouter:
             health_timeout_s=cfg.health_timeout_s,
             transport=transport,
             kv=lookup_connector(cfg.connector),
-            dialect=lookup_dialect(cfg.dialect),
+            dialect=dialect,
             model=cfg.model,
             engine_api_key=cfg.resolve_engine_key(),
         )
@@ -209,6 +234,10 @@ class NarwhalRouter:
         self.dispatcher = Dispatcher(self)
         self.monitor.on_capacity_change = self.dispatcher.notify
         self.retry_budget = RetryBudget(cfg.serving.retry_budget, cfg.serving.retry_replenish)
+        self.continuation_budget = RetryBudget(
+            cfg.continuation.recovery_budget, cfg.continuation.recovery_replenish
+        )
+        self.continuation_memory = HistoryBudget(cfg.continuation.max_retained_bytes)
         self.queue_wait = Histogram(buckets_for(cfg.serving.queue_timeout_s or cfg.slo.ttft_s))
         # Measure how long admitted work occupies capacity.
         self._seat_since: dict[str, float] = {}
@@ -283,6 +312,14 @@ class NarwhalRouter:
         state = lifecycle or RequestLifecycle.offered(self, headers, arrived=arrived)
         rid, arrived = state.rid, state.arrived
         req = state.request
+        try:
+            body, state.continuation_requested = prepare_continuation_request(
+                endpoint, body, self.cfg.continuation, self.replay_qualification
+            )
+        except (ContinuationRequestError, ContinuationUnavailable) as exc:
+            invalid_continuation = _terminal_failure(state, exc)
+            invalid_continuation.headers["x-request-id"] = rid
+            return invalid_continuation
         req.input_len = self.estimate_length(body)
         req.wanted_len = int(body.get("max_tokens") or 0)
         state.sized = True
