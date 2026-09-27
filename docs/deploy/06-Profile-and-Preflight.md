@@ -39,7 +39,7 @@ Choose input lengths that span the served range and include its longest admitted
 
 Each sample uses a unique prompt prefix and a fresh handoff on a role-permitted directed pair. The live tokenizer sizes the prompt to at most the requested token count. The command probes every permitted pair and records actual input tokens, prefill time, time from starting decode to the first generated token, and failed or expired attempts. Write the artifact to a fresh path under the ignored `runs/` tree.
 
-A complete artifact has at least 100 successful samples and no failed attempts per pair and input length, with unchanged engine generations. For each group, the command computes `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`; its printed candidate is the largest group result. Diagnose failed transfers and observation expiries before using the candidate. A larger observation bound changes only the diagnostic run.
+A complete artifact has at least 100 successful samples per pair and input length, with every attempt successful and engine generations unchanged. For each group, the command computes `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`; its printed candidate is the largest group result. Diagnose failed transfers and observation expiries before using the candidate. A larger observation bound changes only the diagnostic run.
 
 Each attempt, including prompt sizing, prefill, and decode completion, remains bounded by `serving.request_timeout_s`. An attempt that expires after producing its first token is retained as `request_expired` and excluded from the candidate calculation.
 
