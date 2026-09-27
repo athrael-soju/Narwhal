@@ -1,5 +1,5 @@
 name: Bug report
-description: Something the router, a gate, or a harness did wrong
+description: Report a failure in installation, CLI commands, or fleet operation
 labels: ["bug"]
 body:
   - type: textarea
@@ -7,6 +7,13 @@ body:
     attributes:
       label: What happened, and what should have happened
       description: One paragraph each. If a request failed, include the HTTP status and any error body.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest commands or sequence of steps that trigger the failure. Remove credentials, live addresses, private paths, and hardware/model identifiers.
     validations:
       required: true
   - type: textarea
@@ -25,13 +32,13 @@ body:
     id: topology
     attributes:
       label: Topology and required capabilities
-      description: Node count, engine count and roles, shared or dedicated device allocation, parallelism sizes, and KV connector. Keep hardware and model identities in private execution records; describe the relevant capability or compatibility constraint here.
+      description: For engine or fleet failures, include node count, engine count and roles, shared or dedicated device allocation, parallelism sizes, and KV connector. Keep hardware and model identities in private execution records; describe the relevant capability or compatibility constraint here. Leave this empty when topology is unrelated to the failure.
     validations:
-      required: true
+      required: false
   - type: textarea
     id: versions
     attributes:
       label: Versions
-      description: "`pip show narwhal-inference | head -2`, `python --version`, and the engine (vLLM) version. If you have a journal, its first line names the exact build that wrote it."
+      description: "`python -m pip show narwhal-inference | head -2`, `python --version`, and the engine version when relevant. If you have a journal, its first line names the exact build that wrote it."
     validations:
       required: true
