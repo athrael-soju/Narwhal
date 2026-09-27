@@ -132,7 +132,8 @@ Failure semantics:
 
 ### `POST /narwhal/lifecycle/readmit`
 
-Send the engine ID to readmit:
+Readmission requires a complete `engine_contract`. Send the engine ID to
+readmit:
 
 ```json
 {
@@ -150,22 +151,26 @@ Narwhal runs these checks before releasing the candidate's lifecycle hold:
 6. role-compatible KV transfer
 7. final health
 
-`profile generation` must pass for every loaded profile variant of each
-participant. A missing profile, missing generation evidence, or a mismatched
-digest keeps the candidate excluded and names the engine that requires
-reprofiling. `generation` reports the separate direct completion probe.
+`profile generation` checks every loaded variant for the candidate and its
+role-permitted peers. Missing profiles, missing generation evidence, or a
+digest mismatch keep the candidate excluded; the error names the engine to
+reprofile. `generation` reports the direct completion probe.
 
 For a planned restart, Narwhal requires a process start newer than the drain record before releasing the hold. After a transient breaker ejection, it can validate and readmit the running process.
 
 HTTP `409` leaves candidates that fail validation blocked.
 
-Updating profile files does not change the running router's loaded store.
-Follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
-to load fresh measurements through router resume while preserving the
-lifecycle hold, then repeat readmission.
+Updating profile files does not reload the running router's store. Follow
+[Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+to restart the router with fresh measurements and the lifecycle hold
+preserved, then repeat readmission.
 
 ### Whole-wave restart policy
 
-With `recovery.engine_restart_policy: whole_wave`, Narwhal requires full-fleet drain and readmit actions. The drain records each member's process start; the supervisor restarts the fleet when `wave.ready_to_stop` becomes true, and readmission returns the whole wave to service after every replacement passes validation with a newer start.
+With `recovery.engine_restart_policy: whole_wave`, drain and readmission
+apply to the complete fleet. Drain records each member's process start. When
+`wave.ready_to_stop` becomes true, restart the fleet through its supervisor.
+Readmission returns the whole wave to service after every replacement passes
+validation with a newer process start.
 
 See [Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) for the external-supervisor restart sequence and whole-wave requirements.
