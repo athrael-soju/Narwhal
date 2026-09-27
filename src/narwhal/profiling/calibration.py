@@ -308,6 +308,7 @@ async def calibrate(
                                             dialect,
                                             timeout_s=observation_timeout_s,
                                             prefix=uuid4().hex + " ",
+                                            max_input_tokens=target,
                                         )
                                     row["actual_input_tokens"] = actual
                                     if actual + 4 > context_limit:

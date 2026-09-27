@@ -139,22 +139,46 @@ async def make_prompt(
     chars_per_token: float = 3.8,
     timeout_s: float = 30.0,
     prefix: str = "",
+    max_input_tokens: int | None = None,
 ) -> tuple[str, int]:
     """Build a prompt near `target` tokens and return its fitted-axis count.
 
     Dialects without an exact-count route use the configured character ratio.
+    An optional input bound requires exact counts and preserves the supplied
+    prefix while shortening the remainder. Sizing fails if it cannot fit.
     """
     word = "benchmark "
     dialect = dialect or VllmDialect()
+    if max_input_tokens is not None and max_input_tokens < 1:
+        raise ValueError("max_input_tokens must be positive")
     if dialect.tokenize_path is None:
+        if max_input_tokens is not None:
+            raise RuntimeError("bounded prompt sizing requires an exact-count tokenizer route")
         text = (prefix + word * max(1, target))[: max(1, int(target * chars_per_token))]
         return text, max(1, round(len(text) / chars_per_token))
     text = prefix + word * max(1, target)
+    minimum_chars = max(1, len(prefix)) if max_input_tokens is not None else 1
     got = await _tokenize(client, url, model, text, dialect, timeout_s)
     if got != target:
-        scaled = max(1, int(len(text) * target / got))
+        scaled = max(minimum_chars, int(len(text) * target / got))
         text = text[:scaled]
         got = await _tokenize(client, url, model, text, dialect, timeout_s)
+    if max_input_tokens is not None:
+        for _ in range(16):
+            if got <= max_input_tokens:
+                break
+            if len(text) <= minimum_chars:
+                raise RuntimeError(
+                    f"prompt prefix requires {got} tokens, exceeding input bound {max_input_tokens}"
+                )
+            scaled = max(minimum_chars, int(len(text) * max_input_tokens / got))
+            text = text[: min(len(text) - 1, scaled)]
+            got = await _tokenize(client, url, model, text, dialect, timeout_s)
+        if got > max_input_tokens:
+            raise RuntimeError(
+                f"prompt still has {got} tokens after 16 sizing attempts "
+                f"for input bound {max_input_tokens}"
+            )
     return text, got
 
 

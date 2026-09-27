@@ -216,6 +216,51 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 9)
         self.assertEqual(len(text), 50)
 
+    async def test_bounded_prompt_fits_context_with_fixed_prefix_token_cost(self):
+        """A random prefix's token cost defeats a single character-ratio resize."""
+        prefix = "0123456789abcdef0123456789abcdef "
+        observed_counts = []
+
+        def tokenize(request):
+            prompt = json.loads(request.content)["prompt"]
+            self.assertTrue(prompt.startswith(prefix))
+            count = 20 + (len(prompt) - len(prefix) + 9) // 10
+            observed_counts.append(count)
+            return httpx.Response(200, json={"count": count})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
+            for target in (128, 512, 1020):
+                with self.subTest(target=target):
+                    observed_counts.clear()
+                    text, count = await probe.make_prompt(
+                        client,
+                        "http://e",
+                        "stub",
+                        target,
+                        prefix=prefix,
+                        max_input_tokens=target,
+                    )
+                    self.assertGreater(observed_counts[1], target)
+                    self.assertEqual(count, target)
+                    self.assertEqual(count, observed_counts[-1])
+                    self.assertTrue(text.startswith(prefix))
+                    self.assertLessEqual(count + 4, 1024)
+
+    async def test_bounded_prompt_rejects_prefix_that_cannot_fit(self):
+        calls = 0
+
+        def tokenize(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"count": 20})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
+            with self.assertRaisesRegex(RuntimeError, "prefix requires 20 tokens"):
+                await probe.make_prompt(
+                    client, "http://e", "stub", 8, prefix="unique ", max_input_tokens=8
+                )
+        self.assertLessEqual(calls, 16)
+
     async def test_tokenize_failures_abort_measurement(self):
         """Unavailable or invalid exact counts prevent fitting against an estimated axis."""
         for response in (
