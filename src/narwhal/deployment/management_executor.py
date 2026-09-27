@@ -518,6 +518,16 @@ def _error(code: str, message: str) -> dict[str, Any]:
     return {"code": code, "message": message}
 
 
+def _merge_errors(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Retain earlier failure evidence once when reconciliation repeats an observation."""
+    merged: list[dict[str, Any]] = []
+    for group in groups:
+        for error in group:
+            if error not in merged:
+                merged.append(error)
+    return merged
+
+
 def _finish(
     context: StageContext,
     state: str,
@@ -537,7 +547,10 @@ def _finish(
             "Cleanup ownership remains unresolved",
             [_error("recovery_required", error.message), *(errors or [])],
         )
-    errors = context.redactor.value(errors or [])
+    errors = _merge_errors(
+        context.redactor.value(record["recovery"]["errors"]),
+        context.redactor.value(errors or []),
+    )
     store = ArtifactStore(str(context.registry.registry_id), context.target)
     reference = store.export(
         (
@@ -646,7 +659,10 @@ def _recovery(context: StageContext, reason: str, errors: list[dict[str, Any]]) 
         record["recovery"].update(
             reason=reason,
             observed_at=utc_now(),
-            errors=context.redactor.value(errors),
+            errors=_merge_errors(
+                context.redactor.value(record["recovery"]["errors"]),
+                context.redactor.value(errors),
+            ),
             required_actions=["Reconcile recorded effects before another execution"],
         )
 
@@ -656,7 +672,7 @@ def _recovery(context: StageContext, reason: str, errors: list[dict[str, Any]]) 
         "recovery_required",
         record,
         outcome="recovery_required",
-        codes=[error["code"] for error in errors],
+        codes=[error["code"] for error in record["recovery"]["errors"]],
         required=False,
     )
     return record
@@ -1252,7 +1268,10 @@ def _reconcile_operation(
                 stage["effects"][index] = safe
         value["recovery"].update(
             observed_at=utc_now(),
-            errors=context.redactor.value(outcome.errors),
+            errors=_merge_errors(
+                context.redactor.value(value["recovery"]["errors"]),
+                context.redactor.value(outcome.errors),
+            ),
             artifacts=outcome.artifacts,
         )
         value["artifacts"] = list(
@@ -1280,6 +1299,6 @@ def _reconcile_operation(
         context,
         "failed",
         "error",
-        errors=outcome.errors
+        errors=record["recovery"]["errors"]
         or [_error("operation_interrupted", "Worker stopped before required work completed")],
     )

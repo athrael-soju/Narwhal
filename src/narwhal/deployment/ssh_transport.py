@@ -330,10 +330,15 @@ class SSHTransport:
                     raise OperationError(
                         "invalid_input", "SSH helper request exceeds its byte limit"
                     )
-                descriptor = os.memfd_create(
-                    "narwhal-ssh-request", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
-                )
-                try:
+                with contextlib.ExitStack() as descriptors:
+                    descriptor = os.memfd_create(
+                        "narwhal-ssh-request", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+                    )
+                    descriptors.callback(os.close, descriptor)
+                    response = os.memfd_create(
+                        "narwhal-ssh-response", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+                    )
+                    descriptors.callback(os.close, response)
                     os.write(descriptor, data)
                     fcntl.fcntl(
                         descriptor,
@@ -347,8 +352,10 @@ class SSHTransport:
                             "narwhal.deployment.ssh_transport",
                             "--request-fd",
                             str(descriptor),
+                            "--response-fd",
+                            str(response),
                         ],
-                        pass_fds=(descriptor, known_fd),
+                        pass_fds=(descriptor, response, known_fd),
                         helper_slot="ssh-" + host_id,
                     )
                     if completed.returncode:
@@ -356,9 +363,7 @@ class SSHTransport:
                             "source_unavailable",
                             "SSH exchange failed; remote effects remain unknown",
                         )
-                    raw = completed.stdout.encode()
-                finally:
-                    os.close(descriptor)
+                    raw = _control_response(response)
         try:
             result = ssh_worker._decode(raw)
             if result.get("ok") is False:
@@ -552,11 +557,41 @@ def re_code(value: str) -> bool:
     )
 
 
-def main() -> int:
+def _control_response(descriptor: int) -> bytes:
+    """Read one immutable bounded reply without routing control data through log redaction."""
     try:
-        if len(sys.argv) != 3 or sys.argv[1] != "--request-fd":
+        if (
+            fcntl.fcntl(descriptor, ssh_worker._F_GET_SEALS) & ssh_worker._SEALS
+            != ssh_worker._SEALS
+            or not 0 < os.fstat(descriptor).st_size <= MAX_EXCHANGE
+        ):
+            raise ValueError
+        result = os.pread(descriptor, MAX_EXCHANGE + 1, 0)
+        if not result or len(result) > MAX_EXCHANGE:
+            raise ValueError
+        return result
+    except (OSError, ValueError):
+        raise OperationError(
+            "invalid_input", "SSH control response is unavailable or unsafe"
+        ) from None
+
+
+def main() -> int:
+    response = None
+    response_ready = False
+    try:
+        if len(sys.argv) != 5 or sys.argv[1] != "--request-fd" or sys.argv[3] != "--response-fd":
             raise OperationError("invalid_input", "SSH helper arguments are invalid")
-        raw = os.pread(int(sys.argv[2]), 2 * MAX_EXCHANGE + 1, 0)
+        descriptor, response = int(sys.argv[2]), int(sys.argv[4])
+        if fcntl.fcntl(response, ssh_worker._F_GET_SEALS) or os.fstat(response).st_size:
+            raise OperationError("invalid_input", "SSH control response descriptor is invalid")
+        response_ready = True
+        if (
+            fcntl.fcntl(descriptor, ssh_worker._F_GET_SEALS) & ssh_worker._SEALS
+            != ssh_worker._SEALS
+        ):
+            raise OperationError("invalid_input", "SSH helper request is not sealed")
+        raw = os.pread(descriptor, 2 * MAX_EXCHANGE + 1, 0)
         if len(raw) > 2 * MAX_EXCHANGE:
             raise OperationError("invalid_input", "SSH helper request exceeds its limit")
         request = ssh_worker._decode(raw)
@@ -569,7 +604,19 @@ def main() -> int:
         result = (
             b'{"ok":false,"error":{"code":"source_unavailable","message":"SSH exchange failed"}}'
         )
-    sys.stdout.buffer.write(result + b"\n")
+    try:
+        if not response_ready or response is None or len(result) > MAX_EXCHANGE:
+            raise ValueError
+        offset = 0
+        while offset < len(result):
+            offset += os.write(response, result[offset:])
+        fcntl.fcntl(response, ssh_worker._F_ADD_SEALS, ssh_worker._SEALS)
+    except (OSError, ValueError):
+        sys.stderr.write("SSH control response could not be returned\n")
+        return 2
+    # StageContext persists and redacts stdout. Ownership identifiers belong only
+    # in the sealed control reply and must not become discovered secret values.
+    sys.stdout.write(json.dumps({"response_bytes": len(result)}) + "\n")
     return 0
 
 

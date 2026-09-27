@@ -43,6 +43,9 @@ class CPUAdapter:
         if self.mode == "unknown":
             context.record_intent(self.receipt(context, "unknown"))
             raise RuntimeError("private-error-marker")
+        if self.mode == "ownership-conflict":
+            context.record_intent(self.receipt(context, "unknown"))
+            raise OperationError("ownership_conflict", "Remote admission receipt changed owner")
         if self.mode == "unknown-success":
             context.record_intent(self.receipt(context, "unknown"))
             return StageOutcome()
@@ -666,8 +669,83 @@ class ManagementExecutorTests(unittest.TestCase):
                 self.registry, "cpu", operation_id, adapter=CPUAdapter(self.root)
             )
         self.assertEqual(known["state"], "failed")
+        self.assertEqual(known["result"]["errors"][0]["code"], "operation_interrupted")
         self.assertEqual(known["stages"][0]["effects"][0]["effect"], "confirmed")
         self.assertEqual((self.root / "effect").read_text(), "one effect")
+
+    def test_reconciliation_preserves_failure_when_effect_absence_is_confirmed(self):
+        operation_id = self.admit()
+        adapter = CPUAdapter(self.root, "ownership-conflict")
+        failed = run_operation(self.registry, "cpu", operation_id, adapter=adapter, plan=self.plan)
+        self.assertEqual(failed["state"], "recovery_required")
+        original = failed["recovery"]["errors"]
+        self.assertEqual(original[0]["code"], "ownership_conflict")
+        with (
+            patch("narwhal.deployment.management_executor.worker_alive", return_value=False),
+            patch.object(adapter, "execute_stage", side_effect=AssertionError("cannot replay")),
+        ):
+            pending = reconcile_operation(self.registry, "cpu", operation_id)
+            self.assertEqual(pending["recovery"]["errors"], original)
+            completed = reconcile_operation(self.registry, "cpu", operation_id, adapter=adapter)
+        self.assertEqual(completed["state"], "failed")
+        self.assertEqual(completed["result"]["errors"], original)
+        self.assertEqual(completed["stages"][0]["effects"][0]["effect"], "absent")
+        events = [
+            json.loads(line)
+            for line in next((self.root / "state").glob("execution-*.jsonl"))
+            .read_text()
+            .splitlines()
+        ]
+        self.assertEqual(events[-1]["event"], "operation_finished")
+        self.assertEqual(events[-1]["error_codes"], ["ownership_conflict"])
+
+    def test_repeated_reconciliation_retains_distinct_redacted_errors_once(self):
+        operation_id = self.admit()
+        adapter = CPUAdapter(self.root, "ownership-conflict")
+        failed = run_operation(self.registry, "cpu", operation_id, adapter=adapter, plan=self.plan)
+        original = failed["recovery"]["errors"]
+        observation = ReconcileOutcome(
+            helpers_stopped=False,
+            errors=[*original, {"code": "probe_failed", "message": "private-observation-marker"}],
+        )
+        with (
+            patch("narwhal.deployment.management_executor.worker_alive", return_value=False),
+            patch.dict(os.environ, {"CPU_SECRET": "private-observation-marker"}),
+        ):
+            with patch.object(adapter, "reconcile", return_value=observation):
+                for _ in range(2):
+                    pending = reconcile_operation(
+                        self.registry, "cpu", operation_id, adapter=adapter
+                    )
+                    self.assertEqual(pending["state"], "recovery_required")
+                    self.assertEqual(
+                        [error["code"] for error in pending["recovery"]["errors"]],
+                        ["ownership_conflict", "probe_failed"],
+                    )
+                    self.assertNotIn("private-observation-marker", json.dumps(pending))
+            with patch.object(adapter, "reconcile", side_effect=RuntimeError("private-error")):
+                for _ in range(2):
+                    pending = reconcile_operation(
+                        self.registry, "cpu", operation_id, adapter=adapter
+                    )
+                    self.assertNotIn("private-error", json.dumps(pending))
+            completed = reconcile_operation(self.registry, "cpu", operation_id, adapter=adapter)
+        self.assertEqual(completed["state"], "failed")
+        self.assertEqual(
+            [error["code"] for error in completed["result"]["errors"]],
+            ["ownership_conflict", "probe_failed", "recovery_required"],
+        )
+
+    def test_reconciliation_cancellation_retains_the_initiating_failure(self):
+        operation_id = self.admit()
+        adapter = CPUAdapter(self.root, "ownership-conflict")
+        failed = run_operation(self.registry, "cpu", operation_id, adapter=adapter, plan=self.plan)
+        self.store.request_cancel("cpu", operation_id)
+        with patch("narwhal.deployment.management_executor.worker_alive", return_value=False):
+            completed = reconcile_operation(self.registry, "cpu", operation_id, adapter=adapter)
+        self.assertEqual(completed["state"], "cancelled")
+        self.assertEqual(completed["result"]["status"], "interrupted")
+        self.assertEqual(completed["result"]["errors"], failed["recovery"]["errors"])
 
     def test_worker_crash_before_launch_gate_does_not_start_command(self):
         operation_id = self.admit()

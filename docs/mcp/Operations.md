@@ -330,6 +330,11 @@ The SSH adapter compares remote supervisors, ownership receipts and surviving
 processes or containers. Failed or unavailable observations leave effects
 unknown and keep reservations in place.
 
+Reconciliation retains the errors that put the operation in recovery and adds
+errors from the new observations. Once the operation becomes terminal, its
+result includes those errors. `operation_interrupted` identifies an incomplete
+operation whose retained record contains no earlier error.
+
 Before repeating an interrupted installation or launch, the coordinator must
 establish whether the original action took effect. A remote action may have
 completed before its receipt was written to disk. If a host remains unreachable
