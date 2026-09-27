@@ -505,6 +505,7 @@ def _finish_cleanup(
     error = None
     try:
         containers = _stop_containers(record, deadline)
+        record.pop("container_error", None)
     except WorkerError as exc:
         error = exc.code
     remaining = _members(known, record["supervisor"])
@@ -833,6 +834,20 @@ def cancel(root: Path, job_id: str) -> dict[str, Any]:
             directory, "cancel.json", _encoded({"owner": record["owner"], "fence": record["fence"]})
         )
         if not record["supervisor_present"]:
+            failure = record.get("error")
+            completed_cleanup = (
+                type(record.get("exit_code")) is int
+                and isinstance(record.get("cleanup"), dict)
+                and isinstance(failure, dict)
+                and failure.get("code")
+                in {
+                    "command_failed",
+                    "stage_cancelled",
+                    "stage_timeout",
+                    "source_truncated",
+                    "adapter_failed",
+                }
+            )
             record["state"] = "cancelled"
             _finish_cleanup(
                 directory,
@@ -841,8 +856,10 @@ def cancel(root: Path, job_id: str) -> dict[str, Any]:
                 record["term_grace_ms"],
                 record["kill_grace_ms"],
             )
-            # Loss of the supervisor may have hidden a process before its first receipt.
-            record["state"] = "recovery_required"
+            # A recorded child exit and supervisor cleanup permit a fresh absence check.
+            # A lost supervisor may have hidden a process before its first receipt.
+            if not completed_cleanup:
+                record["state"] = "recovery_required"
             _record(directory, record)
     return status(root, job_id)
 

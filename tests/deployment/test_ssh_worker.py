@@ -160,6 +160,46 @@ class RemoteJobTests(unittest.TestCase):
         self.assertEqual(cancelled["state"], "recovery_required")
         self.assertEqual(cancelled["observed_processes"], {})
 
+    def test_failed_completed_job_cleanup_replaces_stale_container_observation(self):
+        from narwhal.deployment.ssh_adapter import remote_absent
+
+        job = self.job("raise SystemExit(1)")
+        worker.submit(self.root, job)
+        record = self.wait(job["job_id"], {"failed"})
+        os.waitpid(record["supervisor"]["pid"], 0)
+        self.assertEqual(record["exit_code"], 1)
+        original_error = record["error"].copy()
+        record["state"] = "recovery_required"
+        record["container_error"] = "source_unavailable"
+        record["cleanup"]["error"] = "source_unavailable"
+        with worker._directory(self.root / job["job_id"]) as directory:
+            worker._record(directory, record)
+        cancelled = worker.cancel(self.root, job["job_id"])
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertNotIn("container_error", cancelled)
+        self.assertEqual(cancelled["error"], original_error)
+        self.assertIsNone(cancelled["cleanup"]["error"])
+        self.assertTrue(remote_absent(cancelled))
+        self.assertTrue(remote_absent(worker.cancel(self.root, job["job_id"])))
+
+    def test_repeated_cleanup_after_lost_supervisor_cannot_prove_completed_child_absence(self):
+        job = self.job("import os,time; child=os.fork(); time.sleep(30) if child==0 else None")
+        worker.submit(self.root, job)
+        record = self.wait(job["job_id"], {"running"})
+        until = time.monotonic() + 5
+        while record.get("exit_code") != 0 and time.monotonic() < until:
+            time.sleep(0.01)
+            record = worker.status(self.root, job["job_id"])
+        self.assertEqual(record["exit_code"], 0)
+        os.kill(record["supervisor"]["pid"], signal.SIGKILL)
+        os.waitpid(record["supervisor"]["pid"], 0)
+        for _ in range(2):
+            cancelled = worker.cancel(self.root, job["job_id"])
+            self.assertEqual(cancelled["state"], "recovery_required")
+            self.assertEqual(cancelled["error"]["code"], "recovery_required")
+            self.assertEqual(cancelled["exit_code"], 0)
+            self.assertIn("cleanup", cancelled)
+
     def test_output_limit_stops_the_job(self):
         job = self.job(
             "import sys,time; sys.stderr.write('x'*70000); sys.stderr.flush(); time.sleep(30)"
@@ -523,6 +563,41 @@ class ProbeTests(unittest.TestCase):
             ):
                 worker._stop_containers(record, time.monotonic() + 2)
             self.assertEqual(command.call_count, 3)
+
+    def test_cleanup_clears_old_container_error_only_after_fresh_observation(self):
+        from narwhal.deployment.ssh_adapter import remote_absent
+
+        initiating_error = {"code": "command_failed", "message": "Remote job did not complete"}
+        record = {
+            "supervisor": None,
+            "supervisor_present": False,
+            "observed_processes": {},
+            "state": "cancelled",
+            "error": initiating_error,
+            "container_error": "source_unavailable",
+        }
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            worker._directory(Path(temporary)) as directory,
+            patch.object(worker, "_members", return_value={}),
+            patch.object(
+                worker,
+                "_stop_containers",
+                side_effect=[worker.WorkerError("source_unavailable", "Docker unavailable"), []],
+            ),
+        ):
+            worker._finish_cleanup(directory, record, {}, 100, 100)
+            failed = worker._decode(worker._read(directory, "receipt.json"))
+            self.assertEqual(failed["container_error"], "source_unavailable")
+            self.assertEqual(failed["cleanup"]["error"], "source_unavailable")
+            self.assertFalse(remote_absent(failed))
+            record["state"] = "cancelled"
+            worker._finish_cleanup(directory, record, {}, 100, 100)
+            refreshed = worker._decode(worker._read(directory, "receipt.json"))
+            self.assertNotIn("container_error", refreshed)
+            self.assertIsNone(refreshed["cleanup"]["error"])
+            self.assertEqual(refreshed["error"], initiating_error)
+            self.assertTrue(remote_absent(refreshed))
 
     def test_checkpoint_matches_existing_manifest_and_follows_regular_hf_links(self):
         from tools.deployment.checkpoint_manifest import inspect_checkpoint
