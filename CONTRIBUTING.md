@@ -180,7 +180,15 @@ Site automation owns host credentials, source distribution, network configuratio
 
 ## Issues
 
-Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug report template selects `bug`; blank issues receive `triage`, which maintainers replace with the applicable label.
+Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose)
+to open a bug report, feature request or documentation correction. Bug reports
+require reproduction steps, expected and actual behaviour, and versions.
+Topology is optional; include it when an engine or fleet failure depends on the
+deployment layout. Documentation corrections require the affected page URL or
+repository path, the incorrect or missing guidance, and a proposed correction
+or description of the guidance needed.
+
+Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug, feature and documentation forms select `bug`, `enhancement` and `documentation`, respectively; blank issues receive `triage`, which maintainers replace with the applicable label.
 
 Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
