@@ -52,7 +52,18 @@ Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <br
 
 The suite runs `make check` on GitHub-hosted runners. It runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 also builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
 
-The CI jobs use synthetic test inputs and a standard read-only GitHub token. For a narrower pass, `make test` runs the unit suite.
+The CI jobs use synthetic test inputs and a standard read-only GitHub token.
+`make test` runs the unit suite. Pass unittest discovery options through
+`TEST_ARGS` to select tests or change verbosity:
+
+```bash
+make test TEST_ARGS='-k failover -v'
+```
+
+This command runs tests whose fully qualified names contain `failover`, with
+verbose output. Test failures produce a nonzero exit status. `make unit` and
+`make check` always run the full unit suite and ignore `TEST_ARGS`, including
+values supplied through the environment. All three targets honour `VENV_PYTHON`.
 
 ### Coverage and test scope
 
