@@ -117,8 +117,10 @@ returning the engine to placement:
 
 Failed validation returns HTTP 409 and keeps the engine blocked. Because
 `curl -f` discards that response body, query `GET /narwhal/lifecycle` for
-`engines.<id>.error` and `checks`. Some checks continue after a failure.
-Check for `state = active` and `accepts_new = true` in the readmission result.
+`engines.<id>.error` and `checks`. The initial participant checks continue
+across the cohort so one response can report more than one failure. Narwhal
+starts fabric validation after every participant check passes. On success,
+check for `state = active` and `accepts_new = true` in the readmission result.
 
 Verify the successful response and retain its checks:
 
@@ -319,8 +321,8 @@ PY
 ```
 
 An unreadable engine identity returns HTTP 503 and leaves that member's
-`old_process_start` unset. The whole fleet remains excluded. If identity
-collection reaches an engine that is already stopped:
+`old_process_start` unset. The whole fleet remains excluded. If an engine is
+already stopped when identity collection runs:
 
 1. Start that engine through its process manager while the fleet hold remains
    active. Wait for its process identity endpoints to answer.
@@ -507,9 +509,9 @@ Request [individual readmission](#73-request-readmission) or
 [whole-wave readmission](#82-restart-the-fleet). Verify its checks and a routed
 request before reopening external admission.
 
-The router can return HTTP 200 readiness during an individual hold while
-other engines remain eligible. Inspect the held engine's `accepts_new` value
-to confirm its exclusion.
+`/ready` can return HTTP 200 during an individual hold while other engines
+remain eligible. Inspect the held engine's `accepts_new` value to confirm its
+exclusion.
 
 ## 9. Detect process replacement
 

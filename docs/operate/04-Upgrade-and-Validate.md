@@ -47,8 +47,9 @@ Restore these as one unit:
 ## 11. Validate every release
 
 On an idle fleet, run the restart drill for `recovery.engine_restart_policy`
-and test router failover using the production supervisor and load balancer.
-Keep external admission closed until
+and test [router failover](../troubleshoot/02-Router-Recovery.md#router-failover)
+using the production supervisor and load balancer. Keep external admission
+closed until
 [service restoration](#restore-service-after-the-drill) is complete.
 
 Record the release, fleet configuration, role pins, profiles, immutable engine
@@ -171,9 +172,10 @@ Use `recovery.engine_restart_policy = whole_wave` and the prerequisites,
     PY
     ```
 
-5. Repair the failed member by starting its sidecar with the same attestation
-   document for the replacement process. Confirm its attestation endpoint
-   answers with the digest used by its new profile, then explicitly
+5. Repair the failed member by restarting its sidecar while the replacement
+   process remains unchanged, using the attestation inputs from profiling.
+   Confirm its attestation endpoint answers with the digest used by its new
+   profile, then explicitly
    [request and verify wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
    Repair alone must leave the wave held.
 6. Verify that every member passed the newer process identity, attestation,
@@ -188,9 +190,10 @@ Save the samples, readmission response, and lifecycle journal events.
 
 On a fleet with `recovery.engine_restart_policy = whole_wave`, wait until
 every engine is admitted and idle, then stop one sidecar through the
-production supervisor. The next successful engine health sweep detects the
-unavailable attestation. Set `recovery.liveness_every` to a nonzero value before
-the drill to enable detection on an idle fleet; see
+production supervisor. The next liveness sweep first confirms engine health,
+then detects the unavailable sidecar during process-identity and attestation
+checks. Set `recovery.liveness_every` to a nonzero value before the drill to
+enable detection on an idle fleet; see
 [Detect process replacement](03-Restart-Engines.md#9-detect-process-replacement)
 for the sampling interval.
 
