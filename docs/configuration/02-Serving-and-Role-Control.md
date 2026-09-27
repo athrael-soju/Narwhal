@@ -140,17 +140,19 @@ Set `engine.first_token_timeout_s` above the candidate in a [completed crossed-h
 
 For text and chat inputs, when `engine.tokenize` is enabled and the dialect provides an exact-count route, that route must answer within `engine.tokenize_timeout_s`. A failed call returns an engine error to the client. Disabled token counting and dialects without that route use `engine.chars_per_token`; measure the ratio for the served tokenizer. A completion prompt containing a nonempty, flat list of nonnegative integer token IDs uses its array length locally, regardless of `engine.tokenize`.
 
-Set `serving.prefill_timeout_s` from the longest admitted inputs and supported load. `narwhal-profile --observation-timeout-s` can extend diagnostic HTTP probes without changing serving limits. Set `engine.health_timeout_s` from health and identity latency measured under the intended load; a timed-out health probe counts as a failed liveness observation. Size `engine.decode_read_timeout_s` from observed inter-chunk gaps and the service's failure budget. Metadata chunks reset this transport-gap timer, so the end-to-end request deadline remains the final bound on generated output.
+Set `serving.prefill_timeout_s` from measurements of the longest admitted inputs under the supported load. For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the probe HTTP timeout.
 
-Check connection setup and local pool waits under workload load before setting `engine.connect_timeout_s` and `engine.pool_timeout_s`. Local pool exhaustion is inconclusive for engine health. Set `serving.request_timeout_s` from the supported output length and client deadline; the configured prefill and first-token limits cannot exceed it.
+Set `engine.health_timeout_s` from health and identity latency measured under the intended load. A timed-out health probe counts as a failed liveness observation.
 
-`serving.request_timeout_s` bounds the entire request, including decode streaming.
+Measure connection setup and local pool waits under the intended load before setting `engine.connect_timeout_s` and `engine.pool_timeout_s`. Local pool exhaustion leaves the engine-health verdict unchanged.
+
+`serving.request_timeout_s` bounds the entire request, including decode streaming. Set it from the supported output length and client deadline. The prefill and first-token limits must be at most this value.
 
 Engine prefill, tokenisation, and health calls retain the configured connection and pool limits when they apply their own phase timeout. The smaller phase budget controls if it expires first.
 
 `engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends when the first generated token arrives, so connection and response-header delays consume the same budget.
 
-After the first token, `engine.decode_read_timeout_s` bounds the silent gap between transport chunks. Partial SSE lines and metadata chunks reset that timer.
+After the first token, `engine.decode_read_timeout_s` bounds the silent gap between transport chunks. Partial SSE lines and metadata chunks reset that timer. Choose this limit from measured inter-chunk gaps and the service's failure budget.
 
 Set `engine.decode_read_timeout_s` to `0` to use the overall request deadline as the stream bound after the first token:
 

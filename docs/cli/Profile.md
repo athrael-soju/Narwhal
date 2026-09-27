@@ -33,7 +33,7 @@ narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --o
 
 These options apply to live measurement. The command validates supplied sweep values before selecting a mode; refits use the retained samples and merges use the source stores.
 
-If a working engine exceeds a profiler probe's built-in HTTP timeout, use `--observation-timeout-s` for a diagnostic sweep and retain that value with the sample sidecar. This option changes profiling observations; it does not change the fleet's serving deadlines.
+If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-timeout-s` for a diagnostic sweep. The profiler records the value in the sample sidecar. Serving requests use the deadlines in the fleet configuration.
 
 | Option                      | Default                                   | Contract                                                                                                                                                                                                     |
 | --------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
