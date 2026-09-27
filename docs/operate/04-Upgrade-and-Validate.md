@@ -142,7 +142,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the prerequisites,
 4. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values and
    start this sampler while the wave is held. It saves each observation,
    fails if it observes partial readmission, and exits after complete readmission.
-   Press Ctrl+C to stop it if the repair or readmission cannot proceed.
+   To end the sampler before readmission, press Ctrl+C.
 
     ```bash
     python3 - "$ROUTER_URL" "$RUN_DIR/wave-samples.jsonl" <<'PY'
@@ -200,9 +200,9 @@ Wait for readiness withdrawal and exclusion of every member. Retain the
 Confirm drain captures identities before every engine and sidecar is replaced,
 then verify complete readmission and a routed request.
 
-To qualify the already-stopped-engine branch of that procedure, stop an
-engine rather than its sidecar. Retain the failed drain response with its
-missing identity, the temporary process start, and the successful drain retry.
+To test the already-stopped-engine case, stop an engine. Retain the failed
+drain response with its missing identity, the temporary process start, and
+the successful drain retry.
 The temporary process must also be replaced after the drain. Record the
 tested trigger and branch with the results.
 
@@ -222,8 +222,8 @@ Keep external admission closed until these steps complete:
    HTTP 200. Send a routed request and match its client result to the journal
    and counters, then restore external admission.
 
-A handoff for a subset cannot resume into a fleet with a different engine
-set. Complete the subset's held readmission first. For a router replacement
-with the same fleet, use [profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles)
+Resume requires the same engine set. Complete the subset's held readmission
+first. For a router replacement with the same fleet, use
+[profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles)
 to preserve an outstanding hold. Preserve the original and drill journals
 and state snapshots.

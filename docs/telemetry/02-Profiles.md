@@ -28,11 +28,9 @@ Missing generation evidence or a digest mismatch requires a fresh profile;
 the error names the engine. Preflight also checks measured decode bounds and
 fit errors before pricing capacity.
 
-Replacing profile files does not reload a running router's `ProfileStore`.
-After replacing an engine in a fleet with `engine_contract`,
-[activate the complete fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles).
+Restart the router to load updated profiles. For fleets with `engine_contract`,
+[activate the fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles).
 Resume preserves lifecycle holds and drain identities until readmission.
-Fleets without a contract also need a router restart to load fresh profiles.
 
 A malformed profile aborts the operation with the affected file, engine, and field:
 

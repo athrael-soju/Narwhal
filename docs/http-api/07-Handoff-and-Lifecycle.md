@@ -160,10 +160,10 @@ For a planned restart, Narwhal requires a process start newer than the drain rec
 
 HTTP `409` leaves candidates that fail validation blocked.
 
-Updating profile files does not reload the running router's store. Follow
+To load updated profiles, follow
 [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
-to restart the router with fresh measurements and the lifecycle hold
-preserved, then repeat readmission.
+to restart the router with its lifecycle hold preserved. Then repeat
+readmission.
 
 ### Whole-wave restart policy
 

@@ -115,9 +115,9 @@ Profile checks cover every loaded variant. With `engine_contract`, profile
 digests must match verified attestation. Without it, automatic recovery
 checks health or inference and matches profiles to the live process identity.
 
-Health and inference recovery, lifecycle readmission, and standby takeover
-keep an engine excluded if its profiles do not match. Replacing the profile
-file does not reload the running router's store.
+A profile mismatch keeps an engine excluded during health and inference
+recovery, lifecycle readmission, and standby takeover. The running router
+keeps its loaded profiles until restart.
 
 Operator drains survive:
 
