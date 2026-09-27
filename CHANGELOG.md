@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.1](https://github.com/athrael-soju/Narwhal/compare/v0.3.0...v0.3.1) (2026-09-27)
+
+
+### Fixes
+
+* calibrate and enforce fleet timeout budgets ([#158](https://github.com/athrael-soju/Narwhal/issues/158)) ([0629f01](https://github.com/athrael-soju/Narwhal/commit/0629f0150e022c4c8d83a6c9c06e057c491f4e71))
+* enforce profile generation before engine readmission ([#161](https://github.com/athrael-soju/Narwhal/issues/161)) ([03d3ac1](https://github.com/athrael-soju/Narwhal/commit/03d3ac1c062f7d2cd5269861c77b32dd04e31460))
+
+
+### Documentation
+
+* **agent:** define operator contract and plugin boundaries ([#140](https://github.com/athrael-soju/Narwhal/issues/140)) ([b142e6a](https://github.com/athrael-soju/Narwhal/commit/b142e6ab663382a6f8106c7cc05b1b125952c200))
+* clarify cancellation in deployment attainment ([#139](https://github.com/athrael-soju/Narwhal/issues/139)) ([2215401](https://github.com/athrael-soju/Narwhal/commit/2215401bb045f23f93c4ea3a3b44008f0d5d0e5a))
+* remove repeated guidance and clarify benchmark scope ([27b573c](https://github.com/athrael-soju/Narwhal/commit/27b573cb034d35eae31e546c8e59135c1752ac74))
+
 ## [0.3.0](https://github.com/athrael-soju/Narwhal/compare/v0.2.1...v0.3.0) (2026-09-25)
 
 
