@@ -156,6 +156,8 @@ def start_remote(request: dict[str, Any]) -> dict[str, Any]:
         )
     ):
         raise ValueError("Monitoring data volume ownership or placement differs from the operation")
+    binding_document = asdict(binding)
+    binding_document["targets"]["engines"] = [list(row) for row in contract.engines]
     return {
         "host_id": request["host_id"],
         "project": project,
@@ -173,7 +175,7 @@ def start_remote(request: dict[str, Any]) -> dict[str, Any]:
         ],
         "prometheus_url": prometheus,
         "grafana_url": grafana,
-        "binding": asdict(binding),
+        "binding": binding_document,
         "observation": observation,
     }
 

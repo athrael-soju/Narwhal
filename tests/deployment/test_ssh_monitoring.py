@@ -14,10 +14,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
+from narwhal.deployment import ssh_gates, ssh_workload
 from narwhal.deployment import ssh_monitoring as monitoring
-from narwhal.deployment.management_records import OperationError
+from narwhal.deployment.management_records import OperationError, encode_record
+from narwhal.deployment.ssh_settings import LoadRecipe
 from narwhal.deployment.ssh_worker import _labels
 from narwhal.observability.management_targets import TargetContract
+from narwhal.observability.management_types import MonitoringBinding
 
 OWNER = {
     "operation_id": "10000000-0000-4000-8000-000000000001",
@@ -247,6 +250,19 @@ class MonitoringTests(unittest.TestCase):
                     volumes[0]["Labels"] = {"io.narwhal.management.operation": "other"}
                 elif change == "malformed":
                     volumes[0] = "invalid"
+                contract = TargetContract(
+                    "router:8000", (("e0", "engine:8000"), ("e1", "engine:8001"))
+                )
+                observation = {
+                    "readiness": "pass",
+                    "sources": [
+                        {
+                            "source": "router_metric",
+                            "status": "ok",
+                            "data": {"result": [{"value": [1.5, "1"]}]},
+                        }
+                    ],
+                }
                 with (
                     patch.object(
                         monitoring.importlib,
@@ -260,12 +276,12 @@ class MonitoringTests(unittest.TestCase):
                     patch.object(
                         monitoring,
                         "build_targets",
-                        return_value=TargetContract("router:8000", (("e0", "engine:8000"),)),
+                        return_value=contract,
                     ),
                     patch.object(
                         monitoring,
                         "observe_monitoring",
-                        AsyncMock(return_value={"readiness": "pass", "sources": []}),
+                        AsyncMock(return_value=observation),
                     ) as observe,
                     patch.object(monitoring, "_command", return_value=json.dumps(volumes)),
                 ):
@@ -281,7 +297,49 @@ class MonitoringTests(unittest.TestCase):
                             failure = json.loads((root / "monitoring.failed.json").read_bytes())
                             self.assertEqual(failure["sources"][0]["retained_prefix"], "partial")
                     else:
-                        result = monitoring.start_remote(request)
+                        request["operation"] = "monitoring_start"
+                        request_path = root / "request.json"
+                        request_path.write_bytes(encode_record(request))
+                        previous_umask = os.umask(0o077)
+                        try:
+                            with patch(
+                                "narwhal.deployment.ssh_worker.inherited_owner", return_value=OWNER
+                            ):
+                                self.assertEqual(
+                                    ssh_gates.main(["--request", str(request_path)]), 0
+                                )
+                        finally:
+                            os.umask(previous_umask)
+                        saved = json.loads(Path(request["result_path"]).read_bytes())
+                        self.assertEqual(saved["owner"], OWNER)
+                        self.assertEqual(saved["operation"], "monitoring_start")
+                        result = saved["result"]
+                        self.assertEqual(result["observation"], observation)
+                        self.assertEqual(
+                            result["binding"]["targets"],
+                            {
+                                "router": contract.router,
+                                "engines": [["e0", "engine:8000"], ["e1", "engine:8001"]],
+                            },
+                        )
+                        with patch.object(
+                            ssh_workload, "observe_monitoring", AsyncMock(return_value=observation)
+                        ) as final_observe:
+                            self.assertEqual(
+                                ssh_workload._monitoring(
+                                    {
+                                        "binding": result["binding"],
+                                        "deadline": time.monotonic() + 10,
+                                        "freshness_s": request["freshness_s"],
+                                    },
+                                    LoadRecipe(),
+                                ),
+                                observation,
+                            )
+                        self.assertEqual(
+                            final_observe.call_args.args[0],
+                            MonitoringBinding(contract, "http://127.0.0.1:9090", "router"),
+                        )
                         self.assertEqual(
                             {row["name"] for row in result["volumes"]},
                             {row["Name"] for row in volumes},
