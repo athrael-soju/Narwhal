@@ -13,7 +13,7 @@ body:
     id: behaviour
     attributes:
       label: Desired behaviour
-      description: Describe the result you need and any constraints that affect it.
+      description: Describe the result, required capabilities, and constraints. Keep the scope hardware/GPU agnostic; hardware and model choices are made when work starts and retained in private execution records.
     validations:
       required: true
   - type: textarea

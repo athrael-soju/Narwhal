@@ -112,19 +112,38 @@ Apply the labels that match the work: `bug` for a confirmed failure or regressio
 
 Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
+### Milestone delivery
+
+Use this workflow for each newly scoped milestone:
+
+1. Create one parent issue in the milestone. Record its outcome, scope, exclusions, dependencies and acceptance gates.
+2. Create its integration branch, `milestone/<number>-<slug>`, from current `main`. Use the milestone number and record the branch and starting commit in the parent issue.
+3. Divide the work into native GitHub sub-issues under that parent, assigned to the same milestone. Give each sub-issue its package ownership, prerequisites, acceptance criteria and required checks. Choose the number of sub-issues to fit the work.
+4. When a sub-issue starts, create `issue/<number>-<slug>` from the integration branch after its prerequisites have merged. Its PR must target the integration branch. Update dependent work from that branch before review.
+5. Close each sub-issue explicitly after its PR merges and its acceptance criteria pass. Keep live qualification gates open until the required measurements pass. A failed feasibility gate blocks dependent implementation.
+6. Open the parent PR from the integration branch to `main`. Merge it after all sub-issues and milestone acceptance gates pass, then close the parent issue and milestone.
+
+Link cross-milestone prerequisites explicitly. Deliver their shared contracts through the owning milestone's merge to `main`, then update dependent integration branches from `main`.
+
+### Hardware and model selection
+
+Keep Narwhal's scope and shared contracts hardware/GPU agnostic. Milestones, issues and sub-issues describe required capabilities, topology, behaviour and acceptance gates without selecting hardware or models.
+
+Select hardware and model inputs when the corresponding work starts. Retain those selections, pinned execution inputs and raw evidence in the private locations described under [Working files and deployment artifacts](#working-files-and-deployment-artifacts). Keep hardware and model identities out of public milestone and issue text, comments and attachments, including copied configuration and logs. Public qualification records state the tested capabilities, outcomes, limits and a sanitised reference to the private evidence. A passing run qualifies only its measured scope.
+
 ## Pull requests
 
 Review the diff and commit messages and run the local checks before pushing.
 
-Push your branch to your fork and open a pull request against `athrael-soju/Narwhal:main`. Maintainers use short-lived branches in the same repository. Keep the branch limited to one coherent change, and open a draft while implementation or evidence gathering continues.
+Push your branch to your fork and open a pull request against the target branch in `athrael-soju/Narwhal`. Sub-issue PRs target their [milestone integration branch](#milestone-delivery); parent milestone PRs and standalone changes target `main`. Maintainers use branches in the same repository. Keep the branch limited to one coherent change, and open a draft while implementation or evidence gathering continues.
 
-Describe the problem, the resulting behaviour, and how you checked it. Link the relevant issue. Include reproduction steps for a bug fix and identify any checks that require hardware. Sanitize logs and configuration before attaching them.
+Describe the problem, the resulting behaviour, and how you checked it. Link the relevant issue and, for a sub-issue, its parent. Include reproduction steps for a bug fix and identify any checks that require hardware. Keep deployment selections in private execution records and sanitise logs and configuration before attaching them.
 
 Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The required PR title check validates the prefix before squash merge, and the prefix determines the release impact.
 
 Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
 
-Bring the branch up to date with `main` and run `make check` locally before merge. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
+Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, install the documentation extra with `.venv/bin/pip install -e '.[docs]'` and run `make docs-build`.
 
 A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
 

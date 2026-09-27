@@ -13,19 +13,19 @@ body:
     id: check
     attributes:
       label: narwhal-check output
-      description: Include existing preflight output when available. Remove credentials, live addresses, and private paths. Run fresh probes only on an idle fleet.
+      description: Include existing preflight output when available. Remove credentials, live addresses, private paths, and hardware/model identifiers. Run fresh probes only on an idle fleet.
       render: text
   - type: textarea
     id: config
     attributes:
       label: Fleet config, sanitized
-      description: Your fleet JSON with addresses elided. Include the SLOs, thresholds, and timeouts.
+      description: Include the SLOs, thresholds, and timeouts from your fleet JSON. Remove credentials, live addresses, private paths, and hardware/model identifiers.
       render: json
   - type: textarea
     id: topology
     attributes:
-      label: Hardware, model, and parallelism
-      description: GPU model and count per node, node count, engines per node, TP/EP/PP sizes, model revision and precision, and KV connector. Use a redacted identifier for a private model.
+      label: Topology and required capabilities
+      description: Node count, engine count and roles, shared or dedicated device allocation, parallelism sizes, and KV connector. Keep hardware and model identities in private execution records; describe the relevant capability or compatibility constraint here.
     validations:
       required: true
   - type: textarea
