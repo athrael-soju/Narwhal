@@ -289,6 +289,131 @@ class ProbeTests(unittest.TestCase):
             with self.assertRaises(worker.WorkerError):
                 worker.probe("checkpoint", {"model_dir": str(root)}, time.monotonic() + 1)
 
+    def test_checkpoint_hashes_four_files_concurrently_in_sorted_manifest_order(self):
+        from tools.deployment.checkpoint_manifest import inspect_checkpoint
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "config.json").write_text("{}")
+            for number in range(7):
+                (root / f"weights-{number}.safetensors").write_bytes(bytes([number]) * 31)
+            expected = inspect_checkpoint(root)
+            barrier = threading.Barrier(4, timeout=2)
+            lock = threading.Lock()
+            active = peak = 0
+            original = os.fdopen
+
+            @contextlib.contextmanager
+            def opened(fd, mode):
+                nonlocal active, peak
+                with original(fd, mode) as stream:
+                    with lock:
+                        active += 1
+                        peak = max(peak, active)
+                    first = True
+
+                    class Reader:
+                        def fileno(self):
+                            return stream.fileno()
+
+                        def read(self, size):
+                            nonlocal first
+                            self_test.assertEqual(size, 8 * 1024 * 1024)
+                            if first:
+                                first = False
+                                barrier.wait()
+                            return stream.read(size)
+
+                    try:
+                        yield Reader()
+                    finally:
+                        with lock:
+                            active -= 1
+
+            self_test = self
+            with patch.object(worker.os, "fdopen", side_effect=opened):
+                observed = worker._checkpoint(root, time.monotonic() + 5)
+            self.assertEqual(observed, expected)
+            self.assertEqual(peak, 4)
+            self.assertEqual(active, 0)
+
+    def test_checkpoint_deadline_closes_parallel_file_descriptors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "config.json").write_text("{}")
+            for number in range(3):
+                (root / f"weights-{number}.safetensors").write_bytes(b"weights")
+            opened_streams = []
+            original = os.fdopen
+            expired = threading.Event()
+            barrier = threading.Barrier(4, action=expired.set, timeout=5)
+
+            @contextlib.contextmanager
+            def opened(fd, mode):
+                with original(fd, mode) as stream:
+                    opened_streams.append(stream)
+
+                    class Reader:
+                        def fileno(self):
+                            return stream.fileno()
+
+                        def read(self, size):
+                            barrier.wait()
+                            return stream.read(size)
+
+                    yield Reader()
+
+            with (
+                patch.object(worker.os, "fdopen", side_effect=opened),
+                patch.object(
+                    worker.time, "monotonic", side_effect=lambda: 600 if expired.is_set() else 0
+                ),
+                self.assertRaises(worker.WorkerError) as raised,
+            ):
+                worker._checkpoint(root, 300)
+            self.assertEqual(raised.exception.code, "stage_timeout")
+            self.assertTrue(expired.is_set())
+            self.assertEqual(len(opened_streams), 4)
+            self.assertTrue(all(stream.closed for stream in opened_streams))
+
+    def test_checkpoint_rejects_file_replacement_during_parallel_hashing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config.json"
+            config.write_text("{}")
+            for number in range(3):
+                (root / f"weights-{number}.safetensors").write_bytes(b"weights")
+            original = os.fdopen
+
+            @contextlib.contextmanager
+            def opened(fd, mode):
+                with original(fd, mode) as stream:
+                    selected = Path(os.readlink(f"/proc/self/fd/{fd}")) == config
+                    first = True
+
+                    class Reader:
+                        def fileno(self):
+                            return stream.fileno()
+
+                        def read(self, size):
+                            nonlocal first
+                            data = stream.read(size)
+                            if selected and first:
+                                first = False
+                                replacement = root / "replacement"
+                                replacement.write_text("{}")
+                                os.replace(replacement, config)
+                            return data
+
+                    yield Reader()
+
+            with (
+                patch.object(worker.os, "fdopen", side_effect=opened),
+                self.assertRaises(worker.WorkerError) as raised,
+            ):
+                worker._checkpoint(root, time.monotonic() + 1)
+            self.assertEqual(raised.exception.code, "stale_plan")
+
     def test_image_probe_uses_fixed_inspection_and_returns_only_identity(self):
         image = "sha256:" + "a" * 64
         with patch.object(

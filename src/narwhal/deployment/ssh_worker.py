@@ -22,8 +22,10 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -868,13 +870,12 @@ def _checkpoint(path: Path, deadline: float) -> dict[str, Any]:
     root = path.resolve(strict=True)
     if not root.is_dir() or not (root / "config.json").is_file():
         raise WorkerError("invalid_input", "Registered checkpoint needs config.json")
-    files = []
-    for item in sorted(root.rglob("*")):
+    stopped = threading.Event()
+
+    def inspect_file(item: Path) -> dict[str, Any]:
+        if stopped.is_set() or time.monotonic() >= deadline:
+            raise WorkerError("stage_timeout", "Checkpoint inspection deadline expired")
         relative = item.relative_to(root)
-        if relative == Path("README.md") or relative.parts[:2] == (".cache", "huggingface"):
-            continue
-        if item.is_dir() and not item.is_symlink():
-            continue
         resolved = item.resolve(strict=True)
         fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as stream:
@@ -883,7 +884,7 @@ def _checkpoint(path: Path, deadline: float) -> dict[str, Any]:
                 raise WorkerError("invalid_input", "Checkpoint contains a nonregular entry")
             digest = hashlib.sha256()
             while data := stream.read(8 * 1024 * 1024):
-                if time.monotonic() >= deadline:
+                if stopped.is_set() or time.monotonic() >= deadline:
                     raise WorkerError("stage_timeout", "Checkpoint inspection deadline expired")
                 digest.update(data)
             after = os.fstat(stream.fileno())
@@ -894,11 +895,41 @@ def _checkpoint(path: Path, deadline: float) -> dict[str, Any]:
             or resolved.stat().st_ino != after.st_ino
         ):
             raise WorkerError("stale_plan", "Checkpoint changed during inspection")
-        files.append(
-            {"path": relative.as_posix(), "size": after.st_size, "sha256": digest.hexdigest()}
-        )
-        if len(files) > 100_000:
-            raise WorkerError("source_truncated", "Checkpoint file manifest exceeds its bound")
+        return {"path": relative.as_posix(), "size": after.st_size, "sha256": digest.hexdigest()}
+
+    files: list[dict[str, Any]] = []
+    batch: list[Path] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        try:
+            for item in sorted(root.rglob("*")):
+                relative = item.relative_to(root)
+                if relative == Path("README.md") or relative.parts[:2] == (
+                    ".cache",
+                    "huggingface",
+                ):
+                    continue
+                if item.is_dir() and not item.is_symlink():
+                    continue
+                if len(files) + len(batch) >= 100_000:
+                    raise WorkerError(
+                        "source_truncated", "Checkpoint file manifest exceeds its bound"
+                    )
+                batch.append(item)
+                if len(batch) == 4:
+                    pending = [pool.submit(inspect_file, selected) for selected in batch]
+                    files.extend(
+                        future.result(timeout=max(0, deadline - time.monotonic()))
+                        for future in pending
+                    )
+                    batch.clear()
+            pending = [pool.submit(inspect_file, selected) for selected in batch]
+            files.extend(
+                future.result(timeout=max(0, deadline - time.monotonic())) for future in pending
+            )
+        except TimeoutError:
+            raise WorkerError("stage_timeout", "Checkpoint inspection deadline expired") from None
+        finally:
+            stopped.set()
     encoded = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded) > MAX_RECEIPT - 1024:
         raise WorkerError("source_truncated", "Checkpoint file manifest exceeds its bound")

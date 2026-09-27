@@ -21,6 +21,11 @@ and an existing model directory on each engine host. The checked launcher must
 support that image and accelerator. Each launch must declare a positive
 `--max-num-seqs` value for profiling limits.
 
+Each checkpoint check reads the full set of model files. Plan preparation checks
+each host; launch repeats the check for the selected engines. The SSH worker
+hashes up to four files concurrently and fails the check if a file changes or
+its deadline expires.
+
 The management workstation needs Git, OpenSSH and the installed MCP extra.
 Password authentication also needs `sshpass`. Register a known-hosts file with
 the expected host keys. The adapter disables SSH configuration files and checks
