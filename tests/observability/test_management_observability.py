@@ -161,6 +161,30 @@ class MonitoringTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await self.observe())["readiness"], "fail")
                 self.documents[route] = original
 
+    async def test_one_timed_out_source_keeps_completed_observations(self):
+        async def request(request):
+            if request.url.path == "/api/health":
+                await asyncio.sleep(1)
+            payload = self.documents[request.url.path]
+            arguments = {"text": payload} if isinstance(payload, str) else {"json": payload}
+            return httpx.Response(200, **arguments)
+
+        document = await observe_monitoring(
+            self.binding,
+            prometheus_url="http://prometheus:9090",
+            grafana_url="http://grafana:3000",
+            router_url="http://router:8000",
+            deadline=time.monotonic() + 0.2,
+            freshness_s=60,
+            redactor=Redactor(False),
+            transport=httpx.MockTransport(request),
+        )
+        sources = {row["source"]: row for row in document["sources"]}
+        self.assertEqual(document["readiness"], "unknown", document)
+        self.assertEqual(sources["grafana_health"]["status"], "timeout")
+        self.assertEqual(sources["prometheus_targets"]["status"], "ok")
+        self.assertEqual(sources["router_ready"]["status"], "ok")
+
     async def test_stream_cap_redirect_and_absolute_timeout_preserve_evidence(self):
         calls = []
 

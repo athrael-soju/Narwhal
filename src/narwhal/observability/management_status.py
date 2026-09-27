@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from time import monotonic
 from typing import Any
 
 import httpx
@@ -183,8 +182,4 @@ async def observe_monitoring(
                 for url, name, params in sources
             )
         )
-    if monotonic() > deadline:
-        for row in observations:
-            if row["status"] == "ok":
-                row.update(status="timeout", error_code="source_unavailable")
     return evaluate_monitoring(binding, observations, freshness_s=freshness_s)
