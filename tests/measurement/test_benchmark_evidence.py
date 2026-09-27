@@ -119,26 +119,27 @@ class EvidenceTests(unittest.TestCase):
                     body = {"ok": True}
                 elif self.path.startswith("/start/"):
                     name = self.path.rsplit("/", 1)[1]
-                    outer.offered += 1
-                    outer.served += 1
-                    if name == "a":
-                        outer.flips += 1
-                        outer.pools = {"prefill": ["e1"], "decode": ["e0"]}
-                        outer.flip_history = [
-                            {"at": 1.0, "iid": "e1", "to": "prefill", "by": "reactive"}
-                        ]
-                    if not outer.missing_journal:
-                        with outer.journal.open("a") as file:
-                            file.write(
-                                json.dumps(
-                                    {
-                                        "run": outer.run_id,
-                                        "client_rid": name,
-                                        "terminal": "completed",
-                                    }
+                    with outer.run_transition:
+                        outer.offered += 1
+                        outer.served += 1
+                        if name == "a":
+                            outer.flips += 1
+                            outer.pools = {"prefill": ["e1"], "decode": ["e0"]}
+                            outer.flip_history = [
+                                {"at": 1.0, "iid": "e1", "to": "prefill", "by": "reactive"}
+                            ]
+                        if not outer.missing_journal:
+                            with outer.journal.open("a") as file:
+                                file.write(
+                                    json.dumps(
+                                        {
+                                            "run": outer.run_id,
+                                            "client_rid": name,
+                                            "terminal": "completed",
+                                        }
+                                    )
+                                    + "\n"
                                 )
-                                + "\n"
-                            )
                     body = {"ok": True}
                 else:
                     status, body = 404, {"error": "unknown path"}
@@ -212,7 +213,7 @@ class EvidenceTests(unittest.TestCase):
         sample = benchmark_evidence.EvidenceCollector.sample
 
         def observed_sample(collector):
-            # Keep the fake restart between complete state/metrics observations.
+            # Keep fixture mutations between complete state/metrics observations.
             with self.run_transition:
                 sample(collector)
                 latest = collector.samples[-1]
