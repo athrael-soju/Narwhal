@@ -97,6 +97,7 @@ nav:
       - Request flow and topology: concepts/01-Request-and-Topology.md
       - Role control and capacity floors: concepts/02-Role-Control.md
       - Failure, readmission, and state: concepts/03-Failure-and-State.md
+      - Stream continuation contract: concepts/04-Stream-Continuation.md
   - Reference:
       - Configuration:
           - Overview: Configuration.md
