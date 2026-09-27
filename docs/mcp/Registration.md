@@ -6,8 +6,9 @@ references and allowed actions. Create and maintain this file on the management
 workstation; MCP tools cannot edit it.
 
 The unreleased [server command](../cli/MCP.md) validates this document at
-startup. The permissions and shared execution rules below define the planned
-operations in the [MCP contract](../MCP-Contracts.md).
+startup. Its six inspection tools check the target's `inspect` grant before
+accessing its inputs or endpoints. Execution grants, plans and shared operation
+coordination remain planned in the [MCP contract](../MCP-Contracts.md).
 
 ## Registry document
 
@@ -21,16 +22,16 @@ document and does not change the `NARWHAL_FLEET` serving contract.
 | --- | --- |
 | `schema`, `schema_version` | Literal `narwhal.management-registry`, integer `1`. |
 | `registry_id` | UUID, retained across server restarts and registry edits. |
-| `state_dir` | Absolute local directory for the executor, deduplication index, reservations, plans and operations. |
+| `state_dir` | Absolute private local directory for inspection audit receipts and listing snapshots. The planned executor also stores its deduplication index, reservations, plans and operations here. |
 | `targets` | Array of target entries, at most 100; unique `id` values. |
 
 The registry requires mode `0600` and ownership by the server's operating-system
 user. It must be a regular file at most 1 MiB; the loader rejects a symlink at
-the final path component and duplicate JSON keys. Planned executor private files
-require mode `0600`, private directories `0700`, and the same ownership.
-The executor requires atomic writes and locks in `state_dir`. V1 does not
-support network filesystems that cannot provide them. The server validates the
-complete registry before exposing tools.
+the final path component and duplicate JSON keys. Inspection state and artifact
+files require mode `0600`; their private directories require mode `0700` and
+the same ownership. The server validates the complete registry before exposing
+tools. The planned executor requires atomic writes and locks in `state_dir`;
+V1 cannot coordinate operations on filesystems that lack those guarantees.
 
 For a new deployment, register the paths to prepared local inputs and the host
 aliases. Engines and profiles need not exist yet. For an existing deployment,
@@ -100,8 +101,20 @@ inside a fleet file retain Narwhal's existing working-directory semantics.
 Config inspection may resolve those paths before the files exist; subsequent
 actions check containment and identity when accessing them.
 
+The inspection tools require `working_directory`, each local input file and
+the directory containing that file to belong to the server's user and deny
+group and other write access. They reject symlinks in every component of a path
+they open. Fleet input files must be regular files no larger than 8 MiB. The configuration
+adapter holds the opened fleet file descriptor while invoking the installed
+CLI, so replacing its path cannot redirect that command to another file.
+Private storage roots must have mode `0700`; inspection creates a missing root
+only when its parent already exists.
+
 At call time, the executor resolves each endpoint variable to an HTTP(S) URL.
-It rejects embedded URL credentials and redirects to unregistered origins.
+It rejects embedded URL credentials. `fleet_status` also rejects URL query
+strings and fragments, ignores proxy settings from the environment and follows
+no redirects. A redirect produces an unavailable observation. Planned adapters
+must reject redirects to unregistered origins.
 Tools may access only registered origins and engine endpoints resolved from
 the target's fleet. Environment names match `[A-Za-z_][A-Za-z0-9_]*`.
 
@@ -109,6 +122,15 @@ The executor or adapter resolves credentials locally and excludes their values
 from tool arguments, plans and responses. Credential redaction applies even
 when `allow_request_content` is true. A missing endpoint variable fails the
 tools that require it; offline config validation remains available.
+
+Inspection subprocesses receive a fixed `PATH` and locale plus the target's
+declared credential variables and environment references used by its fleet.
+The diagnostic subprocess also receives known credential values under internal
+redaction variable names so it removes them before writing captured evidence.
+The adapter rejects environment overrides that can alter command execution,
+including `HOME`, `PATH`, `PYTHON*`, `LD_*` and `DYLD_*`. Audit receipts record
+the tool, target ID, time, outcome and error codes without argument or credential
+values.
 
 For a fleet, the adapter settings and discovery snapshot supply host aliases
 and SSH trust bindings. Tools cannot supply an SSH destination, port forward,
@@ -210,7 +232,7 @@ For the MCP server, explicit `--registry` takes precedence over
 invocations without that variable retain their current behaviour and are
 outside the shared-coordination guarantee. The MCP startup binding is part of
 the unreleased server. The proposed finite management CLI bindings and
-shared coordination remain implementation work for #151.
+shared coordination remain planned.
 
 The server loads a registry snapshot on startup; restart it after editing the
 registry. The planned executor validates edits atomically during reload or

@@ -23,7 +23,9 @@ The repository checkout carries deployment helpers and development checks. Run `
 The MCP milestone branch adds `narwhal-mcp` and the optional `mcp` extra.
 The base wheel installs the entry point; running the server requires the extra.
 `narwhal-mcp --help` and `--version` work without it. The server accepts local
-stdio initialization and returns an empty tool list.
+stdio sessions and exposes six tools for registered target listing,
+configuration inspection and validation, router status, diagnostic collection
+and redacted artifact reads. Deployment and recovery tools remain planned.
 
 Use the [MCP installation and client procedure](cli/MCP.md) with a checkout or
 wheel containing that unreleased work.

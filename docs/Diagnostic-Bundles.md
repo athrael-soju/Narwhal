@@ -27,10 +27,13 @@ Create the parent directory first and choose a fresh `--out` path for each route
 | `--source-timeout SECONDS` | Per-source deadline, default `5`. |
 | `--timeout SECONDS` | Overall collection budget, default `30`. |
 | `--max-source-bytes BYTES` | Maximum input bytes retained per source, default `8388608`. |
+| `--max-sources COUNT` | Optional maximum source records, including HTTP and selection outcomes. Minimum `7`; omitted by default. |
 | `--include-request-content` | Include journal and completion artifacts and request fields. |
 | `--format text\|json` | Text summary or the [command result contract](Command-Results.md). |
 
 Run selection includes `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs and stage stdout/stderr files. It also includes JSON, log and stage output files directly under `engine-*` and `verify-*` directories. `--include-request-content` adds `journal.jsonl` and completion artifacts. Use `--artifact` for supervisor status, ingress logs or deployment evidence stored elsewhere. Artifact reads require regular files and reject symbolic links in the selected path.
+
+If `--max-sources` limits the selection, the manifest records a `truncated` selection row and the bundle is partial. The cap includes the five HTTP sources and any selection outcome. Within a bounded run selection, file order follows directory enumeration.
 
 The collector retains up to the byte limit, marks the source `truncated`, and continues within the remaining overall budget. Endpoint deadlines include response streaming; a response that stalls after its headers or first bytes retains its HTTP status and available body. Local file reads check the deadline between bounded reads. Use local files for incident collection; filesystem operations inherit their mount's I/O behaviour.
 

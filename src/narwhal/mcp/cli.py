@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     from narwhal.deployment.management_registry import load_registry
 
     try:
-        load_registry(Path(selected))
+        registry = load_registry(Path(selected))
     except (OSError, ValueError) as exc:
         detail = (
             "document fields failed validation"
@@ -55,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(name)s: %(message)s")
     try:
-        asyncio.run(serve())
+        from .inspection import inspection_adapters
+
+        asyncio.run(serve(inspection_adapters(registry)))
     except KeyboardInterrupt:
         return 130
     except Exception:
