@@ -152,3 +152,28 @@ A decode failure after HTTP `200` has already been committed emits a terminal SS
 ```text
 data: {"error": ...}
 ```
+
+### Continuation failures
+
+The unreleased [continuation opt-in](01-Requests.md#continuation-opt-in)
+retains committed output state. Recovery dispatch is not yet implemented.
+Ordinary retries still stop after the first committed output group.
+
+The router verifies a selected engine's qualification before each prefill or
+decode dispatch, then rechecks the decode process after opening its stream.
+A missing or stale capability returns HTTP `503` before response headers,
+or a terminal SSE error after headers. This local eligibility failure does
+not add engine-breaker evidence.
+
+Continuation reads complete SSE events and verifies the echoed prompt IDs,
+generated IDs, finish metadata and final terminator. A malformed stream
+fails with a content-free error. Exceeding the retained-history or original
+output limit emits an explicit stream error and closes the response. Pending
+output stays uncommitted. A valid completion at exactly `max_tokens` finishes
+normally with `finish_reason: "length"`.
+
+A failed or cancelled client write terminates the original request because
+the server may have accepted part of that write. Continuation buffers remain
+reserved until the response unwinds, including while a client write is
+blocked. Prompt text, generated text and token arrays are excluded from
+continuation diagnostics and journal error details.

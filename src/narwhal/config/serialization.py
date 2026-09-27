@@ -68,6 +68,7 @@ def document(config: FleetConfig) -> dict[str, Any]:
             "graceful_timeout_s": config.graceful_timeout_s,
             **asdict(config.serving),
         },
+        "continuation": asdict(config.continuation),
         "engine": {
             "connector": config.connector,
             "dialect": config.dialect,

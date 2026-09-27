@@ -32,9 +32,24 @@ Narwhal closes each original completion request with one terminal row, attaching
 | `attempts`, `decode_attempts`                | Prefill and decode dispatch counts for the original request.                                                                                                          |
 | `attempt_failures`                           | Bounded records for failed attempts, including failures followed by successful retries.                                                                               |
 | `queue_wait_s`, `duration_s`                 | Total admission and dispatch wait, and complete request lifetime on the router clock.                                                                                 |
-| `decode_tpot_s`                              | Time from first to last observed output token divided by `output_tokens - 1`. Null when fewer than two tokens were observed or exact token accounting is unavailable. |
+| `decode_tpot_s`                              | Time from first to last observed output token divided by `output_len - 1`. Null when `output_len` is less than two or exact token accounting is unavailable. |
 | `decode_tokens_observed`, `upstream_seconds` | Tokens observed across every attempt and summed HTTP-leg duration, including failed work, transfer time, and waiting.                                                 |
 | `error`                                      | Failure or refusal detail. Successful and cancelled requests use null.                                                                                                |
+
+For [opted-in continuation](../http-api/01-Requests.md#continuation-opt-in),
+`output_len` counts generated IDs only after their ASGI body send returns
+successfully. Pending IDs are excluded, including after a failed or cancelled
+write. This boundary acknowledges server acceptance, not client receipt.
+`decode_tokens_observed` includes IDs read from upstream even when their
+output never commits.
+
+Continuation keeps `first_byte_s` and the first/last token timestamps at the
+upstream observation boundary. An empty-text token or a pending group can
+therefore start this timing before ASGI accepts any output. `decode_tpot_s`
+uses those observation timestamps and the committed `output_len` denominator;
+it does not measure the client's delivery interval. Continuation diagnostics
+exclude prompt text, generated text and token arrays from `error` and
+`attempt_failures`.
 
 Each `attempt_failures` entry can record:
 

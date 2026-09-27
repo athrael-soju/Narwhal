@@ -16,6 +16,8 @@ def completion_body_error(body: Any) -> tuple[str, str | None] | None:
     """
     if not isinstance(body, dict):
         return "the request body must be a JSON object", None
+    if "narwhal_continuation" in body and type(body["narwhal_continuation"]) is not bool:
+        return "narwhal_continuation must be a boolean", "narwhal_continuation"
     model = body.get("model")
     if model is not None and not isinstance(model, str):
         return "model must be a string", "model"

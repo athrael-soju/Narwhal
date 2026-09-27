@@ -8,6 +8,9 @@
 | Requested model differs from the configured model                            | `404` | `model_not_found`                                                |
 | `n > 1` or `best_of > 1`                                                     | `400` | Invalid sampling width                                           |
 | Unsupported non-streaming audio, modality, or tool request                   | `400` | `invalid_request_error` naming the option in `param`             |
+| Explicit continuation is disabled, unsupported, or cannot fit per-request bounds | `400` | Invalid continuation request |
+| Other requests occupy the continuation history ceiling | `429` | `Retry-After: 1` |
+| A selected engine lacks a current continuation qualification before response headers | `503` | `continuation_unavailable` |
 | Request exceeds `serving.max_request_bytes`                                  | `413` | `request_too_large`                                              |
 | HTTP retention limit is full                                                 | `429` | `Retry-After: 1`                                                 |
 | Admission queue is full                                                      | `429` | `Retry-After: 1`                                                 |
@@ -36,7 +39,28 @@ Global accounting classifies terminal conditions as follows:
 
 ### Streaming responses
 
-Narwhal forwards streaming delta fields in the engine's response shape, applying its token-ID exposure rules.
+For ordinary requests, Narwhal forwards streaming delta fields in the engine's
+response shape, applying its token-ID exposure rules.
+
+For [opted-in continuation](01-Requests.md#continuation-opt-in), Narwhal emits
+one response identity throughout the stream: `id` is `cmpl-` followed by the
+router request ID, `created` is the original request's history-allocation
+time in Unix seconds, `model` is the configured model, and `object` is
+`text_completion`. Each completion has one choice at index `0`.
+
+Continuation buffers events until they reach a
+[qualified byte boundary](../concepts/04-Stream-Continuation.md#output-commitment).
+It sends each pending group in one ASGI body message and counts its token IDs
+as committed only after that send returns. A successful send acknowledges
+server acceptance of the bytes; it does not prove client receipt. Empty-text
+and grouped-token events may therefore delay delivery. Finish and usage
+events remain pending until a complete `[DONE]` event arrives.
+
+If `return_token_ids` is `true`, each continuation completion includes its
+generated `token_ids`, and only the first completion includes the original
+`prompt_token_ids`. Otherwise, continuation responses omit both ID fields.
+When the backend supplies final usage, Narwhal recomputes its counts from the
+original prompt IDs and generated IDs, counting each once.
 
 ### Non-streaming assembly
 

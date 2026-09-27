@@ -15,6 +15,7 @@ The native fleet document accepts these top-level keys:
 - `slo`
 - `controller`
 - `serving`
+- `continuation`
 - `engine`
 - `recovery`
 - `profiles`
@@ -38,6 +39,10 @@ engine.tokenize must be a boolean; serving.max_connections must be an integer; c
 Relative fleet and profile paths resolve from the checkout root when used by the deployment workflow.
 
 `narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` values from its working directory.
+
+`continuation.qualification_path` also resolves from the router's working
+directory. Config validation checks its value and digest format without
+opening the qualification record.
 
 The `--journal` flag selects a journal path. By default, `narwhal-serve` writes `journal.jsonl` beside `profiles.path`.
 

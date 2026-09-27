@@ -93,6 +93,60 @@ A client should treat either condition as a failed response:
 
 Any client-side retry must fit inside the caller's remaining deadline.
 
+### 4.4 Opt-in continuation state
+
+The top-level `continuation` section controls retained state for the
+[stream continuation contract](../concepts/04-Stream-Continuation.md).
+Continuation requires both `continuation.enabled: true` and an explicit
+`narwhal_continuation: true` in a supported completion request. Omitting the
+request field or setting it to `false` keeps ordinary serving behaviour.
+
+This unreleased implementation retains output state and validates commitment.
+Recovery dispatch remains pending in
+[#194](https://github.com/athrael-soju/Narwhal/issues/194), so the recovery
+attempt and credit settings do not yet schedule replacement work. Enabling
+the policy already requires positive `max_attempts` and `recovery_budget`.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `continuation.enabled` | `false` | Allows explicit request opt-in after qualification and capacity checks. |
+| `continuation.max_attempts` | `0` | Reserved for recovery dispatch: maximum recovery attempts per original request, excluding its initial attempt. |
+| `continuation.recovery_budget` | `0` | Initial and maximum router-wide recovery credits, reserved for recovery dispatch at one credit per attempt. |
+| `continuation.recovery_replenish` | `0.0` | Credits added after each successful opted-in original request, capped by `recovery_budget`. Range zero to one. |
+| `continuation.max_context_tokens` | `0` | Maximum original prompt length plus requested `max_tokens`, in tokens. |
+| `continuation.max_history_bytes` | `0` | Per-request byte reservation for retained token IDs, pending frames and output buffers. |
+| `continuation.max_retained_bytes` | `0` | Router-wide ceiling on continuation byte reservations. |
+| `continuation.qualification_path` | `""` | Path to the private, reviewed backend qualification record. Relative paths use the router's working directory. |
+| `continuation.qualification_sha256` | `""` | SHA-256 of the qualification file's bytes, written as 64 lowercase hexadecimal digits. |
+
+All count and byte fields require nonnegative integers; booleans are invalid.
+When continuation is enabled, each must be positive, `max_context_tokens`
+must be at least two, and `max_retained_bytes` must be at least
+`max_history_bytes`. Enabling the policy also requires a nonempty qualification
+path and its digest. The configuration loader validates these values without
+opening the record; successful config validation does not qualify a backend.
+
+Router startup also requires a dialect that advertises exact token IDs.
+The pinned qualification record must name the fleet's configured model.
+
+Choose the context limit within the qualified backend's capacity. Each
+request must leave enough history space for its prompt, requested output and
+pending frames. The router reserves `max_history_bytes` before dispatch and
+retains that reservation until the request's continuation buffers are
+released. These reservations are separate from the HTTP body and ordinary
+response limits in `serving`.
+
+The quota covers retained continuation history and its serialisation buffers,
+including a replay prompt copy. Incoming request, transport and parsed-event
+objects are outside this quota, so it does not bound total request memory or
+process RSS. Continuation rejects compressed responses and raw transport
+chunks larger than 64 KiB. Each complete SSE event is also bounded by the
+smaller of the history's pending-frame capacity and `serving.max_response_bytes`.
+
+Keep qualification records in an ignored location such as `runs/`. A pinned
+file records the reviewed contract; its presence does not establish that the
+running engine still matches the qualified process and tokenizer.
+
 ---
 
 ## 5. Placement

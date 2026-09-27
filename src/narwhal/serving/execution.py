@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -16,11 +17,27 @@ from ..engines.client import (
     EngineError,
 )
 from ..engines.connector import HandoffExpired, PrefillResult
+from ..engines.replay import ReplayUnavailable
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
 from ..types import Instance, Phase, Request
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
+from .continuation import (
+    CommitGroup,
+    ContinuationHistory,
+    HistoryCapacityError,
+    HistoryLimitExceeded,
+)
+from .continuation_output import encode_event
+from .continuation_request import (
+    ContinuationOverloaded,
+    ContinuationRequestError,
+    ContinuationUnavailable,
+)
+from .continuation_request import (
+    prepare_request as prepare_continuation_request,
+)
 from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
 from .response import RequestStreamResponse
@@ -79,6 +96,12 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
 
 
 def _status_of(exc: BaseException) -> int:
+    if isinstance(exc, ContinuationRequestError | HistoryCapacityError):
+        return 400
+    if isinstance(exc, ContinuationOverloaded):
+        return 429
+    if isinstance(exc, ContinuationUnavailable | ReplayUnavailable):
+        return 503
     if isinstance(exc, RequestExpired | QueueExpired | HandoffExpired):
         return 504
     if isinstance(exc, NoEngine):
@@ -91,7 +114,9 @@ def _status_of(exc: BaseException) -> int:
 
 
 def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool) -> None:
-    if isinstance(exc, RequestExpired | ResponseLimitExceeded):
+    if isinstance(
+        exc, RequestExpired | ResponseLimitExceeded | HistoryLimitExceeded | ReplayUnavailable
+    ):
         return
     router = state.router
     router._leg_failed(
@@ -161,14 +186,20 @@ async def _prepare_once(
         ):
             raise PlacementRefused(priced)
     state.phase = "prefill"
+    state.reserve(prefill)
+    if state.continuation is not None:
+        await _verify_continuation(state, prefill)
     state.begin_attempt()
     state.prefill_iid = prefill.iid
-    state.reserve(prefill)
     began = router._clock()
     try:
         kv = await state.wait(
             lambda: router.engines.prefill(
-                prefill.url, endpoint, body, state.engine_headers(headers, "prefill")
+                prefill.url,
+                endpoint,
+                body,
+                state.engine_headers(headers, "prefill"),
+                **({"redact_errors": True} if state.continuation is not None else {}),
             )
         )
     except Exception as exc:
@@ -176,7 +207,8 @@ async def _prepare_once(
         raise
     finally:
         state.record_upstream_time("prefill", began)
-    state.prefilled_at = router._clock()
+    if state.continuation is None or state.prefilled_at is None:
+        state.prefilled_at = router._clock()
     router.scheduler.record_answer(prefill.iid, "prefill")
     router.monitor.first_token(prefill.iid, req.rid)
     handoff_s = router.cfg.serving.handoff_timeout_s
@@ -187,9 +219,24 @@ async def _prepare_once(
         raise HandoffExpired("prefill consumed the configured KV handoff age allowance")
     decode = await _place(state, prefill=False, handoff_deadline=expires_at)
     state.reserve(decode)
+    if state.continuation is not None:
+        await _verify_continuation(state, decode)
     state.decode_iid = decode.iid
     state.phase = "decode"
     return PreparedAttempt(prefill, decode, kv, expires_at)
+
+
+async def _verify_continuation(state: RequestLifecycle, instance: Instance) -> None:
+    router = state.router
+    qualification = router.replay_qualification
+    if qualification is None:
+        raise ContinuationUnavailable("continuation qualification is unavailable")
+    spec = next(spec for spec in router.cfg.engines if spec.iid == instance.iid)
+    await state.wait(
+        lambda: router.engines.verify_continuation(
+            qualification, instance.iid, instance.url, spec.attestation_url
+        )
+    )
 
 
 async def prepare_attempt(
@@ -217,7 +264,19 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     kind = "expired" if expired else state.phase
     if isinstance(exc, NoEngine):
         kind = "backend_unavailable" if state.attempts else "no_schedulable_engines"
-    if isinstance(exc, NoEngine):
+    if isinstance(exc, ContinuationRequestError | HistoryCapacityError):
+        kind = "invalid_request_error"
+        public_detail = str(exc)
+    elif isinstance(exc, ContinuationOverloaded):
+        kind = "server_overloaded_error"
+        public_detail = "Continuation history capacity is occupied"
+    elif isinstance(exc, ContinuationUnavailable | ReplayUnavailable):
+        kind = "continuation_unavailable"
+        public_detail = "Qualified continuation capacity is unavailable"
+    elif isinstance(exc, HistoryLimitExceeded):
+        kind = "continuation_limit"
+        public_detail = "Continuation history or output limit exceeded"
+    elif isinstance(exc, NoEngine):
         public_detail = "Engine capacity is unavailable"
     elif isinstance(exc, RequestExpired | QueueExpired | HandoffExpired):
         public_detail = "Request deadline expired"
@@ -227,12 +286,30 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         public_detail = "Invalid non-streaming upstream response"
     else:
         public_detail = "Upstream request failed"
-    state.finish("expired" if expired else "failed", error=detail, status=status)
+    terminal = (
+        "expired"
+        if expired
+        else "invalid"
+        if status == 400
+        else "rejected"
+        if status == 429
+        else "failed"
+    )
+    state.finish(terminal, error=detail, status=status)
     state.outcome["public_error"] = public_detail
     return JSONResponse(
         status_code=status,
-        headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
-        content={"error": {"message": public_detail, "type": kind, "code": kind}},
+        headers={"retry-after": "1"}
+        if isinstance(exc, NoEngine | ContinuationOverloaded)
+        else None,
+        content={
+            "error": {
+                "message": public_detail,
+                "type": kind,
+                "code": kind,
+                **({"param": exc.param} if isinstance(exc, ContinuationRequestError) else {}),
+            }
+        },
     )
 
 
@@ -248,10 +325,22 @@ async def serve_request(
     lifecycle: RequestLifecycle | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Size an original request, prepare its first attempt and own its response."""
+    arrived = router._clock() if arrived is None else arrived
+    try:
+        if lifecycle is not None and lifecycle.continuation_requested:
+            continuation_requested = True
+        else:
+            body, continuation_requested = prepare_continuation_request(
+                endpoint, body, router.cfg.continuation, router.replay_qualification
+            )
+    except (ContinuationRequestError, ContinuationUnavailable) as exc:
+        state = lifecycle or RequestLifecycle(
+            router, Request(rid=rid, input_len=0), arrived, client_rid=headers.get("x-request-id")
+        )
+        return _terminal_failure(state, exc)
     invalid = request_error(router, body)
     if invalid is not None:
         return invalid
-    arrived = router._clock() if arrived is None else arrived
     req = Request(
         rid=rid,
         input_len=router.estimate_length(body),
@@ -260,10 +349,21 @@ async def serve_request(
     state = lifecycle or RequestLifecycle(
         router, req, arrived, client_rid=headers.get("x-request-id")
     )
+    state.continuation_requested = continuation_requested
     req = state.request
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
+        if state.continuation_requested:
+            reservation = router.continuation_memory.reserve(
+                router.cfg.continuation.max_history_bytes
+            )
+            if reservation is None:
+                raise ContinuationOverloaded("continuation history capacity is occupied")
+            state.continuation = ContinuationHistory.create(
+                body["prompt"], body["max_tokens"], reservation
+            )
+            state.continuation_created = int(time.time())
         req.input_len = await state.wait(lambda: router.input_length(body))
         if state.demand_observation is not None:
             router.controller.demand.resize_arrival(
@@ -282,7 +382,11 @@ async def serve_request(
     stream = run_decode(state, prepared, endpoint, body, engine_headers, streaming=streaming)
     if streaming:
         return RequestStreamResponse(stream, state)
-    chunks = [line async for line in stream]
+    chunks: list[str] = []
+    async for line in stream:
+        if not isinstance(line, str):
+            raise RuntimeError("continuation requires an ASGI stream")
+        chunks.append(line)
     if state.outcome["error"] is not None:
         return JSONResponse(
             status_code=state.outcome["status"],
@@ -317,7 +421,7 @@ async def _decode_attempt(
     endpoint: str,
     body: dict[str, Any],
     headers: dict[str, str],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str | CommitGroup, None]:
     router = state.router
     # A lost router lease fences new prefills. An already dispatched original
     # may drain its decode leg, preserving the warm-standby serving contract.
@@ -328,6 +432,15 @@ async def _decode_attempt(
     state.phase = "decode"
     state.decode_attempts += 1
     router.decode_attempts += 1
+    if state.continuation is not None:
+        continuation = _decode_continuation(state, prepared, endpoint, body, headers)
+        try:
+            async for group in continuation:
+                yield group
+                del group
+        finally:
+            await continuation.aclose()
+        return
     engine_body = body
     if router.engines.dialect.token_ids:
         engine_body = {**body, "return_token_ids": True, "stream_interval": 1}
@@ -400,6 +513,69 @@ async def _decode_attempt(
             state.record_upstream_time("decode", began)
 
 
+async def _decode_continuation(
+    state: RequestLifecycle,
+    prepared: PreparedAttempt,
+    endpoint: str,
+    body: dict[str, Any],
+    headers: dict[str, str],
+) -> AsyncGenerator[CommitGroup, None]:
+    router = state.router
+    history = state.continuation
+    qualification = router.replay_qualification
+    if history is None or qualification is None:
+        raise ContinuationUnavailable("continuation qualification is unavailable")
+    spec = next(spec for spec in router.cfg.engines if spec.iid == prepared.decode.iid)
+    upstream = router.engines.decode_continuation(
+        prepared.decode.url,
+        endpoint,
+        {**body, "return_token_ids": True, "stream_interval": 1},
+        state.engine_headers(headers, "decode"),
+        prepared.kv,
+        qualification=qualification,
+        iid=prepared.decode.iid,
+        attestation_url=spec.attestation_url,
+        max_event_bytes=min(history.pending_capacity, router.cfg.serving.max_response_bytes),
+        first_token_timeout_s=router.cfg.first_token_timeout_s,
+    )
+    began = router._clock()
+    try:
+        while True:
+            try:
+                event = await state.wait(lambda: anext(upstream))
+            except StopAsyncIteration:
+                break
+            count = len(event.generated_ids)
+            now = router._clock()
+            if count:
+                if state.first_at is None:
+                    state.first_at = now
+                state.last_at = now
+            for _ in range(count):
+                router.monitor.output_token(prepared.decode.iid, state.rid)
+            state.decode_tokens_observed += count
+            router.decode_tokens_observed += count
+            wire = encode_event(state, event, expose_ids=bool(body.get("return_token_ids")))
+            group = history.append(event, wire, now)
+            del wire, event
+            if group is not None:
+                yield group
+                if history.inflight is not None:
+                    raise RuntimeError("continuation group was not accepted by ASGI")
+            del group
+        if not history.terminal_committed:
+            raise RuntimeError("continuation stream lacks a committed terminal group")
+        router.scheduler.record_answer(prepared.decode.iid, "decode")
+    except Exception as exc:
+        _failed_leg(state, prepared.decode, exc, decode=True)
+        raise
+    finally:
+        try:
+            await upstream.aclose()
+        finally:
+            state.record_upstream_time("decode", began)
+
+
 async def run_decode(
     state: RequestLifecycle,
     prepared: PreparedAttempt,
@@ -408,7 +584,7 @@ async def run_decode(
     headers: dict[str, str],
     *,
     streaming: bool = False,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str | CommitGroup, None]:
     """Retry complete attempts until output commits; settle the original once."""
     try:
         while True:
@@ -418,9 +594,13 @@ async def run_decode(
             try:
                 async for frame in attempt:
                     if streaming:
-                        state.output_started = True
+                        if not isinstance(frame, CommitGroup):
+                            state.output_started = True
                         yield frame
+                        del frame
                     else:
+                        if not isinstance(frame, str):
+                            raise RuntimeError("continuation requires an ASGI stream")
                         size += len(frame.encode())
                         if size > state.router.cfg.serving.max_response_bytes:
                             raise ResponseLimitExceeded(

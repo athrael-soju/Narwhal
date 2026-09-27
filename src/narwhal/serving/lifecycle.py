@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..types import Instance, Phase, Request
+from .continuation import ContinuationHistory
 from .retry import transient
 
 if TYPE_CHECKING:
@@ -44,6 +45,11 @@ class RequestLifecycle:
         self.decode_attempts = 0
         self.attempt_failures: list[dict[str, Any]] = []
         self.output_started = False
+        self.continuation_requested = False
+        self.continuation: ContinuationHistory | None = None
+        self.continuation_response_owned = False
+        self.continuation_created: int | None = None
+        self.continuation_prompt_pending = False
         self.phase = "admission"
         self.queue_wait_s = 0.0
         self.owned: set[str] = set()
@@ -123,10 +129,14 @@ class RequestLifecycle:
         self.router.prefill_attempts += 1
         if self.attempts > 1:
             self.router.retry_attempts += 1
-        self.tokens = 0
-        self.first_at = self.last_at = self.prefilled_at = None
+        if self.continuation is None:
+            self.tokens = 0
+            self.first_at = self.last_at = self.prefilled_at = None
+        else:
+            self.continuation.discard_pending()
+            self.continuation_prompt_pending = self.continuation.committed_count > 0
         self.prefill_iid = self.decode_iid = None
-        self.request.output_len = 0
+        self.request.output_len = self.tokens
 
     def engine_headers(self, headers: dict[str, str], phase: str) -> dict[str, str]:
         """Give each engine leg a fresh ID while retaining client correlation locally."""
@@ -208,6 +218,8 @@ class RequestLifecycle:
         # visible as unsized demand.
         self.resolve_demand(retain_unsized=terminal != "invalid")
         self.release()
+        if self.continuation is not None and not self.continuation_response_owned:
+            self.continuation.close()
         measured = self.tokens if router.engines.dialect.token_ids else None
         self.outcome.update(error=error, status=status, tokens=measured, terminal=terminal)
         if terminal == "cancelled":
@@ -247,6 +259,8 @@ class RequestLifecycle:
         completed = terminal == "completed"
         if completed:
             router.retry_budget.succeeded()
+            if self.continuation_requested:
+                router.continuation_budget.succeeded()
             if measured is not None:
                 router.controller.saw_completion(req.input_len, req.wanted_len, measured)
         if terminal not in ("cancelled", "rejected", "invalid"):

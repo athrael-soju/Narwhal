@@ -47,7 +47,10 @@ Example:
 }
 ```
 
-Fields outside the router validation set pass through unchanged.
+For ordinary requests, fields outside the router validation set pass through
+unchanged. If present, `narwhal_continuation` must be a Boolean, including
+when continuation is disabled; `null` is invalid. Narwhal consumes this field
+and removes it from engine requests.
 
 ### Model handling
 
@@ -68,6 +71,49 @@ Non-streaming requests accept text output and function tools. Narwhal returns HT
 The error uses `invalid_request_error` and identifies the rejected option in `param`.
 
 Model and engine configuration determine actual support for input formats, reasoning, and function tools.
+
+### Continuation opt-in
+
+The unreleased continuation implementation validates and retains a replayable
+output prefix. Recovery dispatch after a worker failure remains pending in
+[#194](https://github.com/athrael-soju/Narwhal/issues/194); enabling this policy
+does not yet resume a failed stream.
+
+Continuation requires both `continuation.enabled: true` in the fleet
+configuration and `narwhal_continuation: true` in the request. An omitted or
+`false` request field uses ordinary serving. An explicit opt-in while the
+deployment policy is disabled returns HTTP `400`.
+
+Opted-in requests must use `/v1/completions`, `stream: true`, one nonempty flat
+array of nonnegative integer prompt IDs, and an explicit positive
+`max_tokens`. IDs must fit the qualified vocabulary. The original prompt
+length plus `max_tokens` must fit both the configured context bound and the
+qualified backend context bound; the output limit must also fit the
+qualified backend output bound.
+
+Narwhal supplies the [qualified generation settings](../concepts/04-Stream-Continuation.md#request-boundary)
+on every attempt. Explicit values must match those settings. Only these
+additional fields are accepted:
+
+| Field | Accepted values |
+| --- | --- |
+| `model` | Uses the [model handling](#model-handling) rules above |
+| `stop` | `null`, `[]`, or omitted |
+| `stop_token_ids` | An array containing only qualified stop IDs, or omitted |
+| `return_token_ids` | Boolean, or omitted |
+| `stream_interval` | `1`, or omitted |
+| `stream_options` | `null`, omitted, or an object containing only optional Boolean `include_usage` and optional `continuous_usage_stats: false` |
+
+Text prompts, chat, batches, nested token arrays, additional sampling
+controls and unrecognised fields return HTTP `400` before engine I/O.
+In particular, token stops require qualification; string stops are unsupported.
+
+Before dispatch, the router reserves the full per-request history quota.
+Insufficient space for the requested prompt and output returns HTTP `400`.
+When other requests occupy the router's history ceiling, admission returns
+HTTP `429` with `Retry-After: 1`. See the
+[continuation configuration](../configuration/02-Serving-and-Role-Control.md#44-opt-in-continuation-state)
+for byte limits and qualification inputs.
 
 ---
 

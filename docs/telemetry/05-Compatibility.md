@@ -18,6 +18,8 @@ Current interfaces are:
 | Effective fleet config | `narwhal.effective-config` |       1 |
 | Engine profile store | `narwhal.profiles`          |       1 |
 | Engine attestation   | `narwhal.attestation`       |       1 |
+| Replay qualification | `narwhal.replay-qualification` |    1 |
+| Replay process capture | `narwhal.replay-capture`  |       1 |
 | Router handoff       | `narwhal.handoff`           |       1 |
 | Router lease         | `narwhal.router-lease`      |       1 |
 | Engine lifecycle     | `narwhal.lifecycle`         |       1 |

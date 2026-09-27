@@ -1,11 +1,72 @@
-"""Explicit queue capacity and bounded retry settings for one router process."""
+"""Queue, retry and stream-continuation limits for one router process."""
 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 
 from .retry import RetryPolicy
+
+
+@dataclass(frozen=True)
+class ContinuationPolicy:
+    """Require explicit capacity and qualification before enabling continuation."""
+
+    enabled: bool = False
+    # Recovery attempts exclude the original prefill/decode attempt.
+    max_attempts: int = 0
+    recovery_budget: int = 0
+    recovery_replenish: float = 0.0
+    # The original prompt plus requested output must fit this token ceiling.
+    max_context_tokens: int = 0
+    max_history_bytes: int = 0
+    max_retained_bytes: int = 0
+    qualification_path: str = ""
+    qualification_sha256: str = ""
+
+    def validate(self) -> None:
+        """Validate policy values without opening the private qualification record."""
+        if type(self.enabled) is not bool:
+            raise ValueError("continuation.enabled must be a boolean")
+        counts = (
+            "max_attempts",
+            "recovery_budget",
+            "max_context_tokens",
+            "max_history_bytes",
+            "max_retained_bytes",
+        )
+        for name in counts:
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"continuation.{name} must be a nonnegative integer")
+        value = self.recovery_replenish
+        if type(value) not in (int, float) or not 0 <= value <= 1 or not math.isfinite(value):
+            raise ValueError("continuation.recovery_replenish must be finite and between 0 and 1")
+        if not isinstance(self.qualification_path, str) or "\x00" in self.qualification_path:
+            raise ValueError("continuation.qualification_path must be a path string")
+        if not isinstance(self.qualification_sha256, str) or (
+            self.qualification_sha256
+            and re.fullmatch(r"[0-9a-f]{64}", self.qualification_sha256) is None
+        ):
+            raise ValueError(
+                "continuation.qualification_sha256 must be empty or 64 lowercase hexadecimal digits"
+            )
+        if not self.enabled:
+            return
+        for name in counts:
+            if getattr(self, name) < 1:
+                raise ValueError(f"continuation.{name} must be positive when enabled")
+        if self.max_context_tokens < 2:
+            raise ValueError("continuation.max_context_tokens must be at least 2 when enabled")
+        if self.max_history_bytes > self.max_retained_bytes:
+            raise ValueError(
+                "continuation.max_history_bytes must not exceed continuation.max_retained_bytes"
+            )
+        if not self.qualification_path.strip():
+            raise ValueError("continuation.qualification_path is required when enabled")
+        if not self.qualification_sha256:
+            raise ValueError("continuation.qualification_sha256 is required when enabled")
 
 
 @dataclass(frozen=True)
