@@ -401,7 +401,28 @@ class OperationCoordinator:
             from .management_executor import reconcile_operation
 
             operation = reconcile_operation(self.registry, target_id, operation_id)
+            self._schedule_reconcile(target, operation)
         return self._operation_view(target, operation)
+
+    def _schedule_reconcile(self, target: ManagementTarget, operation: dict[str, Any]) -> None:
+        """Run bounded adapter inspection outside the MCP process and event loop."""
+        if (
+            operation["state"] == "recovery_required"
+            and self.registry_path is not None
+            and target.adapter.id in self.adapters
+        ):
+            from .management_worker import launch_worker
+
+            launch_worker(self.registry_path, target.id, operation["operation_id"], reconcile=True)
+
+    def reconcile_worker(self, target_id: str, operation_id: str) -> dict[str, Any]:
+        """Inspect resources under current inspection grants in a detached worker."""
+        from .management_executor import reconcile_operation
+
+        target = self._target(target_id)
+        return reconcile_operation(
+            self.registry, target_id, operation_id, adapter=self.adapters.get(target.adapter.id)
+        )
 
     def cancel_operation(self, target_id: str, operation_id: str) -> View:
         """Persist an idempotent cancellation request under current grants."""
@@ -418,6 +439,7 @@ class OperationCoordinator:
             from .management_executor import cancel_recovery_operation
 
             operation = cancel_recovery_operation(self.registry, target_id, operation_id)
+            self._schedule_reconcile(target, operation)
         return self._operation_view(target, operation)
 
     def reconcile_startup(self) -> None:
@@ -433,7 +455,10 @@ class OperationCoordinator:
                 page = self.store.list(target.id, limit=100, cursor=cursor)
                 for operation in page["operations"]:
                     if operation["state"] in {"running", "cancelling", "recovery_required"}:
-                        reconcile_operation(self.registry, target.id, operation["operation_id"])
+                        retained = reconcile_operation(
+                            self.registry, target.id, operation["operation_id"]
+                        )
+                        self._schedule_reconcile(target, retained)
                     elif operation["state"] == "queued" and target.adapter.id in self.adapters:
                         try:
                             self.authorize_action(target.id, operation["action"])

@@ -157,6 +157,7 @@ def _check_free_ports(ports: set[int], address: str) -> None:
     for port in sorted(ports):
         family = socket.AF_INET6 if ":" in address else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind((address, port))
             except OSError as exc:
@@ -196,9 +197,13 @@ def materialize(
     port_base: int | None = None,
     gpu_memory_utilization: float | None = None,
     device_allowance: float | None = None,
+    expected_absent: bool = False,
 ) -> Path:
     """Reuse matching explicit settings, or check the host and write a private instance."""
-    output = output.expanduser().resolve()
+    requested = output.expanduser().absolute()
+    output = requested.resolve()
+    if expected_absent and (output != requested or output.exists()):
+        raise ValueError("managed instance target must remain absent before initialization")
     existing = None
     saved = None
     if output.exists():
@@ -297,7 +302,7 @@ def materialize(
         if _sha256(model_dir / name) != expected:
             raise ValueError(f"tokenizer file {name} differs from the pinned revision")
     count = spec["allocation"]["engine_count"]
-    ports, used_ports = _port_layout(spec, count)
+    _, used_ports = _port_layout(spec, count)
     fraction = spec["allocation"]["gpu_memory_utilization"]
     allowance = spec["allocation"]["device_allowance"]
     fraction_decimal = Decimal(str(fraction))
@@ -328,6 +333,48 @@ def materialize(
     check_plugin(spec["runtime"])
     address = _address(fabric_interface)
     _check_free_ports(used_ports, "127.0.0.1")
+    documents = render_documents(
+        output,
+        spec=spec,
+        model_dir=model_dir,
+        model_path=model_path,
+        fabric_interface=fabric_interface,
+        address=address,
+        gpu=gpu,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="narwhal-dev-check-") as temporary:
+        trial = Path(temporary) / "fleet.json"
+        trial.write_text(json.dumps(documents["fleet.json"]))
+        load_fleet(trial)
+    output.mkdir(mode=0o700)
+    try:
+        for name, document in documents.items():
+            write_private(output / name, json.dumps(document, indent=2) + "\n")
+    except BaseException:
+        shutil.rmtree(output, ignore_errors=True)
+        raise
+    return output
+
+
+def render_documents(
+    output: Path,
+    *,
+    spec: dict,
+    model_dir: Path,
+    model_path: Path,
+    fabric_interface: str,
+    address: str,
+    gpu: dict[str, str],
+    engine_key_env: bool | None = None,
+) -> dict[str, dict]:
+    """Render checked instance inputs without creating or modifying the target."""
+    count = spec["allocation"]["engine_count"]
+    if engine_key_env is None:
+        engine_key_env = bool(os.environ.get("NARWHAL_ENGINE_API_KEY"))
+    ports, _ = _port_layout(spec, count)
+    fraction = spec["allocation"]["gpu_memory_utilization"]
+    allowance = spec["allocation"]["device_allowance"]
     hostname = socket.gethostname()
     group = f"{hostname}:{gpu['uuid']}"
     shared = {
@@ -385,11 +432,7 @@ def materialize(
         "recovery": {"state_path": str(output / "router-state.json")},
         "engine": {
             "first_token_timeout_s": 10.0,
-            **(
-                {"engine_api_key_env": "NARWHAL_ENGINE_API_KEY"}
-                if os.environ.get("NARWHAL_ENGINE_API_KEY")
-                else {}
-            ),
+            **({"engine_api_key_env": "NARWHAL_ENGINE_API_KEY"} if engine_key_env else {}),
         },
     }
     for index in range(count):
@@ -428,43 +471,26 @@ def materialize(
             }
         )
         selected_launch(launch, name, {})
-    router_url = f"http://127.0.0.1:{ports['router']}"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="narwhal-dev-check-") as temporary:
-        trial = Path(temporary) / "fleet.json"
-        trial.write_text(json.dumps(fleet))
-        load_fleet(trial)
-    output.mkdir(mode=0o700)
-    try:
-        write_private(output / "template.json", json.dumps(spec, indent=2) + "\n")
-        write_private(output / "fleet.json", json.dumps(fleet, indent=2) + "\n")
-        write_private(output / "engine-launch.json", json.dumps(launch, indent=2) + "\n")
-        write_private(
-            output / "instance.json",
-            json.dumps(
-                {
-                    "schema": "narwhal.dev-instance",
-                    "schema_version": 1,
-                    "backend": "native",
-                    "model_dir": str(model_dir),
-                    "model_path": str(model_path),
-                    "model_revision": spec["model"]["revision"],
-                    "model_config_sha256": _sha256(config_path),
-                    "gpu_uuid": gpu["uuid"],
-                    "fabric_interface": fabric_interface,
-                    "fabric_address": address,
-                    "router_url": router_url,
-                    "ucx_range": ports["ucx_range"],
-                    "ports": ports,
-                    "engine_count": count,
-                    "narwhal_version": metadata.version("narwhal-inference"),
-                    "python_executable": sys.executable,
-                },
-                indent=2,
-            )
-            + "\n",
-        )
-    except BaseException:
-        shutil.rmtree(output, ignore_errors=True)
-        raise
-    return output
+    return {
+        "template.json": spec,
+        "fleet.json": fleet,
+        "engine-launch.json": launch,
+        "instance.json": {
+            "schema": "narwhal.dev-instance",
+            "schema_version": 1,
+            "backend": "native",
+            "model_dir": str(model_dir),
+            "model_path": str(model_path),
+            "model_revision": spec["model"]["revision"],
+            "model_config_sha256": _sha256(model_dir / "config.json"),
+            "gpu_uuid": gpu["uuid"],
+            "fabric_interface": fabric_interface,
+            "fabric_address": address,
+            "router_url": f"http://127.0.0.1:{ports['router']}",
+            "ucx_range": ports["ucx_range"],
+            "ports": ports,
+            "engine_count": count,
+            "narwhal_version": metadata.version("narwhal-inference"),
+            "python_executable": sys.executable,
+        },
+    }

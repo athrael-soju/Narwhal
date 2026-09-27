@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -61,12 +62,16 @@ async def check_console(root: Path, source: Path, env: dict[str, str]) -> None:
                 "config_inspect",
                 "config_validate",
                 "fleet_status",
+                "dev_status",
                 "diagnostics_collect",
                 "artifact_read",
                 "operation_list",
                 "operation_inspect",
                 "operation_cancel",
                 "plan_inspect",
+                "plan_prepare",
+                "plan_execute",
+                "operation_resume",
             }, listing
             targets = await client.call_tool("target_list", {})
             assert targets.structured_content["data"]["targets"][0]["id"] == "installed", targets
@@ -196,6 +201,17 @@ def main() -> None:
                 server.shutdown()
                 worker.join(timeout=2)
     print("Installed MCP console and adapter checks passed")
+    subprocess.run(
+        [
+            sys.executable,
+            str(source / "tools/maintenance/check_mcp_dev_installed.py"),
+            "--source-root",
+            str(source),
+        ],
+        env=env,
+        check=True,
+        timeout=180,
+    )
 
 
 if __name__ == "__main__":

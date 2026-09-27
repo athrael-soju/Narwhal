@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field
@@ -17,6 +19,8 @@ from narwhal.deployment.management_access import (
     clean_command,
     open_input,
     parse_object,
+    read_input,
+    read_object,
 )
 from narwhal.deployment.management_commands import CommandError, run_command
 from narwhal.deployment.management_listing import list_targets
@@ -261,6 +265,56 @@ class InspectionTools:
             artifacts=artifacts,
         )
 
+    async def _dev_status(
+        self, inputs: TargetInput, target: ManagementTarget | None
+    ) -> dict[str, Any]:
+        if target is None:
+            raise AccessError("target_not_found", "Target is not registered")
+        if target.kind != "dev" or target.instance_dir is None:
+            raise AccessError("invalid_input", "Dev status requires a registered dev target")
+        self.access.check_storage(target)
+        document = read_object(target.instance_dir / "instance.json")
+        if document.get("schema") != "narwhal.dev-instance" or document.get("schema_version") != 1:
+            raise ContractVersionError("Dev instance version is unsupported")
+        expected = Path(document["python_executable"])
+        current = Path(sys.executable)
+        if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):
+            raise AccessError(
+                "invalid_input", "Run the MCP server in the instance's Python environment"
+            )
+        from narwhal.deployment.management_records import OperationError
+        from narwhal.dev.management_prepare import inspect_ownership
+
+        try:
+            ownership = inspect_ownership(target.instance_dir, document)
+        except OperationError as error:
+            raise AccessError(error.code, error.message) from None
+        fleet = {}
+        paths = [self.access.fleet_path(target)]
+        if ownership["run"] is not None:
+            paths.append(Path(ownership["run"]) / "fleet.json")
+        for path in paths:
+            try:
+                source = read_input(path)
+            except AccessError as error:
+                if error.code != "input_missing":
+                    raise
+            else:
+                try:
+                    fleet.update(parse_object(source))
+                except AccessError as error:
+                    if error.code != "invalid_input":
+                        raise
+        command = await run_command(
+            ["dev", "status", "--instance", str(target.instance_dir), "--format", "json"],
+            cwd=target.working_directory,
+            env=self.access.environment(target, fleet),
+            timeout_s=max(0.1, inputs.timeout_s - 0.5),
+        )
+        return from_command_result(
+            "dev_status", target.id, clean_command(command, self.access.redactor(target, fleet))
+        )
+
     async def _diagnostics(
         self,
         inputs: DiagnosticInput,
@@ -327,6 +381,12 @@ class InspectionTools:
                 self._status,
             ),
             (
+                "dev_status",
+                "Read a registered dev instance's lifecycle and current health",
+                TargetInput,
+                self._dev_status,
+            ),
+            (
                 "diagnostics_collect",
                 "Collect and retain bounded registered evidence",
                 DiagnosticInput,
@@ -352,5 +412,5 @@ class InspectionTools:
 
 
 def inspection_adapters(registry: ManagementRegistry) -> tuple[ToolAdapter[Any], ...]:
-    """Construct the six implemented tools without accessing target resources."""
+    """Construct the inspection tools without accessing target resources."""
     return InspectionTools(registry).adapters()

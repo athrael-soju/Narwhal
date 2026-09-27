@@ -4,11 +4,12 @@ With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
 
 `reach` → `contract` → `profile` → `model` → `pace` → `tokenize` → `produce` → `consume` → `slo`
 
-In the unreleased MCP build, setting `NARWHAL_MANAGEMENT_REGISTRY` requires
+In the unreleased MCP build, a direct invocation with `NARWHAL_MANAGEMENT_REGISTRY` requires
 preflight to match `--fleet` to one target with the `fleet_preflight` grants.
-The call then exits 1 with `adapter_unavailable` because execution adapters
-are not installed. The check also applies to `--no-kv`. Retained-evidence
-verification and the two print modes remain available; see the
+The call then exits 1 with `adapter_unavailable` because the fleet adapter
+remains planned. The check also applies to `--no-kv`. The installed local dev
+adapter invokes fixed preflight commands within its authenticated parent
+operation. Retained-evidence verification and the two print modes remain available; see the
 [management binding](../mcp/Registration.md#registry-changes-and-retention).
 
 | Option                      | Default                | Contract                                                                                    |

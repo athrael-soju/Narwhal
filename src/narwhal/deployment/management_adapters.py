@@ -35,7 +35,10 @@ class PreparedPlan:
 class ManagementAdapter(Protocol):
     """Keep resource discovery and effects inside a trusted package adapter."""
 
-    manifest: AdapterManifest
+    @property
+    def manifest(self) -> AdapterManifest:
+        """Return the verified implementation identity for admission and execution."""
+        ...
 
     def prepare(
         self,
@@ -67,4 +70,6 @@ class ManagementAdapter(Protocol):
 
 def installed_adapters() -> dict[str, ManagementAdapter]:
     """Enable adapters only after their action and recovery implementations ship."""
-    return {}
+    from narwhal.dev.management_adapter import LocalDevAdapter
+
+    return {"local-dev-v1": LocalDevAdapter()}

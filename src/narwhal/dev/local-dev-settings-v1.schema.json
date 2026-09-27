@@ -1,0 +1,276 @@
+{
+  "$defs": {
+    "ActionBudget": {
+      "additionalProperties": false,
+      "description": "Bound action execution and all three cleanup phases.",
+      "properties": {
+        "timeout_ms": {
+          "default": 300000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "ActionBudget",
+      "type": "object"
+    },
+    "Budgets": {
+      "additionalProperties": false,
+      "description": "Assign a finite deadline to each installed dev action.",
+      "properties": {
+        "dev_init": {
+          "$ref": "#/$defs/ActionBudget"
+        },
+        "dev_up": {
+          "$ref": "#/$defs/UpBudget"
+        },
+        "dev_verify": {
+          "$ref": "#/$defs/ActionBudget"
+        },
+        "dev_down": {
+          "$ref": "#/$defs/DownBudget"
+        }
+      },
+      "title": "Budgets",
+      "type": "object"
+    },
+    "DownBudget": {
+      "additionalProperties": false,
+      "description": "Keep the teardown timeout when operators override only cleanup settings.",
+      "properties": {
+        "timeout_ms": {
+          "default": 60000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "DownBudget",
+      "type": "object"
+    },
+    "InitSettings": {
+      "additionalProperties": false,
+      "description": "Expose the existing initialization overrides without a command escape.",
+      "properties": {
+        "model_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Path"
+        },
+        "model_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Dir"
+        },
+        "gpu_uuid": {
+          "anyOf": [
+            {
+              "pattern": "^GPU-[A-Za-z0-9-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Uuid"
+        },
+        "fabric_interface": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fabric Interface"
+        },
+        "engine_count": {
+          "anyOf": [
+            {
+              "maximum": 8,
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine Count"
+        },
+        "port_base": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port Base"
+        },
+        "gpu_memory_utilization": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Memory Utilization"
+        },
+        "device_allowance": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Allowance"
+        }
+      },
+      "title": "InitSettings",
+      "type": "object"
+    },
+    "UpBudget": {
+      "additionalProperties": false,
+      "description": "Keep the launch timeout when operators override only cleanup settings.",
+      "properties": {
+        "timeout_ms": {
+          "default": 3600000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "UpBudget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Select registered initialization inputs and finite action budgets.",
+  "properties": {
+    "schema": {
+      "const": "narwhal.local-dev-settings",
+      "default": "narwhal.local-dev-settings",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "init": {
+      "$ref": "#/$defs/InitSettings"
+    },
+    "budgets": {
+      "$ref": "#/$defs/Budgets"
+    }
+  },
+  "title": "DevSettings",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "narwhal.local-dev-settings.v1",
+  "required": [
+    "schema",
+    "schema_version"
+  ]
+}

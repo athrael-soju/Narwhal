@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "narwhal.dev-template.managed.v1",
+  "title": "Managed native dev template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "name",
+    "gpu",
+    "model",
+    "runtime",
+    "allocation",
+    "ports",
+    "slo",
+    "controller",
+    "profile"
+  ],
+  "properties": {
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reserve_mib"
+      ],
+      "properties": {
+        "product": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reserve_mib": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "minimum_total_mib": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "revision",
+        "filename",
+        "sha256",
+        "served_name",
+        "tokenizer_repository",
+        "tokenizer_revision",
+        "tokenizer_sha256"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$"
+        },
+        "filename": {
+          "type": "string",
+          "pattern": "^[^/\\\\]+\\.gguf$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "served_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantization": {
+          "type": "string"
+        },
+        "tokenizer_repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "tokenizer_revision": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|sha256:[0-9a-f]{64})$"
+        },
+        "tokenizer_sha256": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[^/\\\\]+$",
+            "not": {
+              "enum": [
+                ".",
+                ".."
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_packages",
+        "model_dtype",
+        "kv_cache_dtype",
+        "block_size",
+        "max_model_len",
+        "max_num_seqs",
+        "environment"
+      ],
+      "properties": {
+        "expected_packages": {
+          "type": "object",
+          "required": [
+            "vllm"
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "model_dtype": {
+          "enum": [
+            "float16",
+            "bfloat16"
+          ]
+        },
+        "kv_cache_dtype": {
+          "const": "auto"
+        },
+        "block_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_model_len": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_num_seqs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "VLLM_SSM_CONV_STATE_LAYOUT": {
+              "const": "DS"
+            },
+            "VLLM_USE_FLASHINFER_SAMPLER": {
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "VLLM_USE_V2_MODEL_RUNNER": {
+              "enum": [
+                "0",
+                "1"
+              ]
+            }
+          }
+        },
+        "gguf_plugin_source_revision": {
+          "type": "string"
+        },
+        "gguf_plugin_python_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "gguf_plugin_extension_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "allocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine_count",
+        "device_allowance",
+        "gpu_memory_utilization"
+      ],
+      "properties": {
+        "engine_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 8
+        },
+        "device_allowance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "gpu_memory_utilization": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "ports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "router",
+        "engine_first",
+        "attestation_first",
+        "nixl_first",
+        "ucx_range"
+      ],
+      "properties": {
+        "router": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "engine_first": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "attestation_first": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "nixl_first": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "ucx_range": {
+          "type": "string",
+          "pattern": "^[0-9]+-[0-9]+$",
+          "description": "Ordered ports in 1..65535; the complete operation must fit 4096 resource reservations."
+        }
+      }
+    },
+    "slo": {
+      "type": "object"
+    },
+    "controller": {
+      "type": "object"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "prefill_lens": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "decode_input_lens": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "decode_concurrency": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "decode_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "decode_repeats": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prefill_repeats": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "neighbour_prefill_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "neighbour_decode_input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "neighbour_decode_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "neighbour_prefill_rps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "neighbour_decode_rps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "schema": {
+      "const": "narwhal.dev-template"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string"
+    },
+    "role_cycle": {
+      "type": "object"
+    }
+  }
+}

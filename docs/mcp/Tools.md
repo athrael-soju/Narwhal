@@ -2,10 +2,9 @@
 
 This page specifies tool arguments, results and errors for the
 [MCP contract](../MCP-Contracts.md). The unreleased [server command](../cli/MCP.md)
-exposes ten tools; the catalogue identifies them below. Preparation, execution
-and resumption require an execution adapter, and none are installed in this
-build. Those tools are absent from discovery. Registration binds each target ID
-to its inputs and access grants.
+exposes fourteen tools; the catalogue identifies them below. The installed
+`local-dev-v1` adapter supports preparation, execution and resumption for local
+dev actions. Registration binds each target ID to its inputs and access grants.
 
 The inspection adapters enforce those grants, redact returned content and keep
 each result within the response limit. They retain oversized results as private
@@ -67,15 +66,15 @@ The result shapes below describe the management envelope's `data` field.
 | `config_inspect` | Read effective fleet configuration. | `config/` | Implemented |
 | `config_validate` | Validate a fleet file offline. | `config/` | Implemented |
 | `fleet_status` | Read router status and state. | `serving/`, `runtime/` | Implemented |
-| `dev_status` | Read a dev instance's recorded status. | `dev/` | Planned |
+| `dev_status` | Read a dev instance's recorded status. | `dev/` | Implemented |
 | `diagnostics_collect` | Collect selected incident evidence. | `diagnostics/` | Implemented |
-| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Requires execution adapter |
+| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Local dev actions implemented |
 | `plan_inspect` | Read a saved plan and its input references. | Plan store | Implemented |
-| `plan_execute` | Submit a saved plan for execution. | Shared executor | Requires execution adapter |
+| `plan_execute` | Submit a saved plan for execution. | Shared executor | Local dev actions implemented |
 | `operation_list` | List operations for a target. | Operation store | Implemented |
 | `operation_inspect` | Read one operation's state. | Operation store | Implemented |
 | `operation_cancel` | Record cancellation for an operation. | Shared executor | Implemented |
-| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Requires execution adapter |
+| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Local dev actions implemented |
 | `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Planned |
 | `metrics_query` | Run a registered Prometheus query. | Observability adapter | Planned |
 | `host_inventory` | Collect inventory from a registered host. | Site adapter | Planned |
@@ -113,7 +112,11 @@ synchronously.
 
 `fleet_status` and `dev_status` take only the common arguments and complete
 synchronously. `dev_status` requires a dev target, calls
-`narwhal dev status --format json`, and returns the existing dev lifecycle state.
+`narwhal dev status --format json`, and returns the existing dev lifecycle state
+and command result. Run the server in the Python environment recorded by the
+instance. The tool reads process ownership, HTTP health and retained
+verification evidence; it performs no GPU discovery or new transfer probes.
+An initialized instance with no running generation reports `stopped`.
 
 `fleet_status` resolves the registered `endpoints.router_env` variable, then
 reads `/health`, `/ready`, `/narwhal/state` and `/narwhal/lifecycle` through the

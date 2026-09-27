@@ -89,9 +89,9 @@ Paths in this table are relative to `src/narwhal/`. Put changes in the package t
 
 The [MCP contract](docs/MCP-Contracts.md) assigns management registration,
 deployment plans, persisted operations and the adapter interface to
-`deployment/`. The unreleased server exposes six inspection tools and four
-tools for retained plans, operation records and cancellation. Protocol handling
-belongs to `mcp/`. Dev and fleet execution adapters remain planned.
+`deployment/`. The unreleased server exposes fourteen tools, including the
+local dev lifecycle through `dev/management_adapter.py`. Protocol handling
+belongs to `mcp/`. The SSH fleet and observability adapters remain planned.
 
 When adding a tool, keep its operation with the existing package owner and
 put only its MCP schema, dispatch and result mapping in `mcp/`. Site automation

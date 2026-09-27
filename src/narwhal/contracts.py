@@ -26,6 +26,7 @@ MANAGEMENT_RESULT = "management_result"
 MANAGEMENT_OPERATION = "management_operation"
 DEPLOYMENT_PLAN = "deployment_plan"
 MANAGEMENT_SNAPSHOT = "management_snapshot"
+LOCAL_DEV_SETTINGS = "local_dev_settings"
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ CONTRACTS: dict[str, Contract] = {
     MANAGEMENT_OPERATION: Contract("narwhal.management-operation"),
     DEPLOYMENT_PLAN: Contract("narwhal.deployment-plan"),
     MANAGEMENT_SNAPSHOT: Contract("narwhal.management-snapshot"),
+    LOCAL_DEV_SETTINGS: Contract("narwhal.local-dev-settings"),
 }
 
 

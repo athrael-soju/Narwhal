@@ -285,7 +285,7 @@ class PlanTests(unittest.TestCase):
 
     def test_unavailable_adapter_and_revoked_grants_cannot_start_work(self):
         with self.assertRaises(OperationError) as error:
-            OperationCoordinator(self.registry).submit_prepare(
+            OperationCoordinator(self.registry, adapters={}).submit_prepare(
                 "dev", "dev_verify", {}, str(uuid4())
             )
         self.assertEqual(error.exception.code, "adapter_unavailable")

@@ -3,9 +3,9 @@
 This page specifies the version 1 deployment plan and site adapter
 interfaces for implementers of the [MCP milestone](../MCP-Contracts.md).
 The unreleased core stores immutable plans and input snapshots and exposes
-`plan_inspect`. The distribution has no production execution adapters, so
-`plan_prepare` and `plan_execute` are absent from MCP discovery. Operators
-deploying a fleet use [Deploy a fleet](../Deploy.md).
+`plan_inspect`. The installed `local-dev-v1` adapter supports preparation and
+execution for the [local dev lifecycle](Local-Dev.md). The SSH fleet adapter
+remains planned; operators deploying a fleet use [Deploy a fleet](../Deploy.md).
 
 A plan fixes the inputs, stages and execution budgets for one registered target.
 The deployment executor checks those recorded inputs before it starts work.
@@ -362,7 +362,10 @@ For `local-dev-v1`, the registered recipe is the existing `narwhal.dev-template`
 version 1 document consumed by dev initialization. The adapter's settings schema
 limits initialization overrides to the [dev CLI inputs](../cli/Dev.md), including
 model/tokenizer paths, GPU selection and interface. A null settings file selects
-the documented CLI defaults.
+the documented CLI defaults. The [local dev settings reference](Local-Dev.md#settings)
+lists the accepted fields, defaults and budgets. The package ships
+`local-dev-settings-v1.schema.json` and `dev-template-v1.schema.json` under
+`narwhal.dev`.
 
 For `ssh-v1`, the recipe supplies the nonsecret
 [deployment environment inputs](../configuration/04-Deployment-Inputs.md) and

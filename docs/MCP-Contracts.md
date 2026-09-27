@@ -6,16 +6,17 @@ server or an operation adapter.
 
 The [MCP server command](cli/MCP.md) is **unreleased work** on the MCP milestone
 branch. It validates a local registry and exposes `target_list`,
-`config_inspect`, `config_validate`, `fleet_status`, `diagnostics_collect` and
+`config_inspect`, `config_validate`, `fleet_status`, `dev_status`, `diagnostics_collect` and
 `artifact_read`. These tools enforce target inspection grants, bound collection
 and return redacted results. It also exposes `plan_inspect`, `operation_list`,
 `operation_inspect` and `operation_cancel` through the durable store and shared
 coordinator.
 
-The distribution has no execution adapters. Preparation, execution and
-resumption are absent from MCP discovery, and registry-bound CLI mutations and
-measurements fail before they start. The deployment, dev and observability
-adapters remain **planned behaviour**.
+The installed `local-dev-v1` adapter exposes `plan_prepare`, `plan_execute`
+and `operation_resume` for local dev actions. Registry-bound dev CLI commands
+use the same coordinator. Follow [Manage a local dev instance](mcp/Local-Dev.md)
+for its prerequisites and workflow. The SSH fleet and observability adapters
+remain **planned behaviour**.
 
 The distribution remains `narwhal-inference`, with an optional `mcp`
 extra and a `narwhal-mcp` executable. The server runs on a Linux management
@@ -46,8 +47,8 @@ The configuration and diagnostic tools invoke finite installed commands with
 diagnostic collection, engine launch, local development, profiling and preflight
 retain their documented behaviour. The inspection adapters select `--format
 json` and preserve each command's outcome and evidence after redaction. They
-read registered local inputs and router endpoints; only the planned execution
-tools can request deployment changes or active measurements.
+read registered local inputs and router endpoints. Execution tools can request
+local dev changes and verification under the target's action grants.
 
 The [HTTP inspection routes](HTTP-API.md) supply live router state. Site tooling
 currently coordinates [Gates A–G](Deploy.md) and
@@ -55,9 +56,11 @@ currently coordinates [Gates A–G](Deploy.md) and
 makes those workflows callable through the same operation runner used by MCP
 and management CLI entry points. The operation core persists requests, reserves
 canonical resources and supplies detached workers to installed adapters.
-Existing instance locks continue to protect their lifecycle records. Production
-dev and fleet adapters must integrate those commands before operators can submit
-managed work.
+For an existing instance, the local dev adapter acquires its lifecycle lock
+before rechecking inputs and changing state. New-instance initialization
+requires the selected directory to remain absent and refuses to overwrite a
+concurrent creation. The planned fleet adapter must integrate its commands
+before operators can submit managed fleet work.
 
 Prometheus continues to scrape router and engine metrics. The planned
 observability tools configure monitoring, inspect its health and query those
@@ -96,9 +99,8 @@ client/protocol combinations that have been checked.
 The installed contract manifest includes version 1 of
 `narwhal.management-registry`, `narwhal.management-result`,
 `narwhal.deployment-plan`, `narwhal.management-snapshot` and
-`narwhal.management-operation`. Their readers and writers belong to the
-management core. The presence of these formats does not enable an execution
-adapter.
+`narwhal.management-operation`, plus `narwhal.local-dev-settings` version 1.
+Their readers and writers belong to the management core and local dev adapter.
 
 [MCP Fleet Operations v1](https://github.com/athrael-soju/Narwhal/issues/147)
 tracks delivery and qualification. The inspection tools have no authority to

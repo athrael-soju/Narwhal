@@ -1574,7 +1574,7 @@ def _main(argv: list[str], *, structured: bool = True) -> int:
         from narwhal.deployment.management_cli import guard_bound_command
 
         results.set_operation(args.command)
-        denied = guard_bound_command("narwhal-engine")
+        denied = guard_bound_command("narwhal-engine", arguments=vars(args))
         if denied is not None:
             return denied
     if structured:

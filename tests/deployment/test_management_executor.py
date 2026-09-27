@@ -25,6 +25,7 @@ from narwhal.deployment.management_executor import (
     cancel_recovery_operation,
     reconcile_operation,
     run_operation,
+    worker_identity,
 )
 from narwhal.deployment.management_records import OperationError, canonical, utc_now
 from narwhal.deployment.management_registry import load_registry
@@ -211,6 +212,204 @@ class ManagementExecutorTests(unittest.TestCase):
             resources=["cpu:exclusive"],
         )
         return operation["operation_id"]
+
+    def test_success_transfers_only_confirmed_service_processes(self):
+        operation_id = self.admit()
+        self.plan["payload"]["stages"][0]["retain_on_success"] = ["router"]
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                def retain(evidence):
+                    processes = {
+                        str(pid): ticks
+                        for pid, ticks in stages.active(evidence).items()
+                        if pid != evidence["pid"]
+                    }
+                    return [
+                        {
+                            "resource_id": "dev:router",
+                            "kind": "router",
+                            "host_id": "management",
+                            "owner": {
+                                "operation_id": context.operation_id,
+                                "stage_id": context.stage_id,
+                                "launch_token": str(uuid4()),
+                            },
+                            "identity": {"boot_id": evidence["boot_id"], "processes": processes},
+                            "effect": "confirmed",
+                            "observed_at": utc_now(),
+                        }
+                    ]
+
+                context.run_command(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
+                        "'import time; time.sleep(30)'], start_new_session=True)",
+                    ],
+                    retain_on_success=retain,
+                )
+                return StageOutcome()
+
+        result = run_operation(
+            self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+        )
+        self.assertEqual(result["state"], "succeeded", result)
+        effects = {item["kind"]: item for item in result["stages"][0]["effects"]}
+        helper, router = effects["measurement_helper"], effects["router"]
+        self.assertEqual(helper["effect"], "absent")
+        self.assertFalse(stages.active(helper["identity"]))
+        self.assertTrue(stages.active(router["identity"]))
+
+    def test_unrecorded_survivor_prevents_release_and_is_cleaned(self):
+        operation_id = self.admit()
+        self.plan["payload"]["stages"][0]["retain_on_success"] = ["router"]
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                context.run_command(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
+                        "'import time; time.sleep(30)'], start_new_session=True)",
+                    ],
+                    retain_on_success=lambda evidence: [],
+                )
+                return StageOutcome()
+
+        result = run_operation(
+            self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+        )
+        self.assertEqual(result["state"], "failed", result)
+        self.assertIn("ownership_conflict", json.dumps(result["result"]))
+        self.assertFalse(stages.active(result["stages"][0]["effects"][0]["identity"]))
+
+    def test_command_descriptor_reaches_helper_through_supervisor(self):
+        descriptor = os.memfd_create("narwhal-test-context", os.MFD_CLOEXEC)
+        self.addCleanup(os.close, descriptor)
+        os.write(descriptor, b"authenticated-test-input")
+        result = stages.run(
+            [
+                sys.executable,
+                "-c",
+                f"import os; print(os.pread({descriptor}, 100, 0).decode())",
+            ],
+            stage="fd",
+            log=self.root / "fd.log",
+            pass_fds=(descriptor,),
+            before_start=lambda value: None,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "authenticated-test-input")
+
+    def test_inspection_reconciles_lost_worker_in_detached_process(self):
+        from narwhal.deployment.management_coordinator import OperationCoordinator
+
+        operation_id = self.admit()
+        identity = worker_identity()
+        identity["boot_id"] = str(uuid4())
+        self.store.claim("cpu", operation_id, identity)
+        coordinator = OperationCoordinator(self.registry, self.path)
+        view = coordinator.inspect_operation("cpu", operation_id)
+        self.assertEqual(view.data["operation"]["state"], "recovery_required")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            record = self.store.read("cpu", operation_id)
+            if record["state"] == "failed":
+                break
+            time.sleep(0.02)
+        self.assertEqual(record["state"], "failed", record)
+        self.assertEqual(record["result"]["errors"][0]["code"], "operation_interrupted")
+
+    def test_degraded_and_interrupted_commands_keep_original_results(self):
+        from narwhal import command_results, contracts
+
+        for status, state, outer in (
+            ("degraded", "failed", "failed_gate"),
+            ("interrupted", "cancelled", "interrupted"),
+        ):
+            with self.subTest(status=status):
+                operation_id = self.admit()
+                command = contracts.versioned(
+                    contracts.COMMAND_RESULT,
+                    {
+                        "command": "narwhal",
+                        "operation": "dev verify",
+                        "status": status,
+                        "exit_code": command_results.EXIT_CODES[status],
+                        "data": {"status": "degraded"},
+                        "errors": [],
+                        "artifacts": [],
+                    },
+                )
+
+                class Adapter:
+                    def execute_stage(
+                        adapter, context, stage, plan, status=status, command=command
+                    ):
+                        return StageOutcome(status=status, command_result=command)
+
+                result = run_operation(
+                    self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+                )
+                self.assertEqual(result["state"], state, result)
+                self.assertEqual(result["result"]["status"], outer)
+                self.assertEqual(result["result"]["command_result"], command)
+
+    def test_retention_callback_obeys_action_deadline_and_cleans_helper(self):
+        operation_id = self.admit(timeout=1000)
+        entered = []
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                def retain(evidence):
+                    entered.append(True)
+                    time.sleep(30)
+                    return []
+
+                context.run_command([sys.executable, "-c", "pass"], retain_on_success=retain)
+                return StageOutcome()
+
+        started = time.monotonic()
+        result = run_operation(
+            self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+        )
+        self.assertTrue(entered)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["result"]["errors"][0]["code"], "stage_timeout")
+        self.assertFalse(stages.active(result["stages"][0]["effects"][0]["identity"]))
+
+    def test_reconciled_preparation_cannot_succeed_without_retained_plan_result(self):
+        record, _ = self.store.admit(
+            target_id="cpu",
+            request_id=str(uuid4()),
+            tool="plan_prepare",
+            action="dev_up",
+            parameters={},
+        )
+        operation_id = record["operation_id"]
+        identity = worker_identity()
+        identity["boot_id"] = str(uuid4())
+        record = self.store.claim("cpu", operation_id, identity)
+        record["stages"][0].update(state="succeeded", started_at=utc_now(), finished_at=utc_now())
+        self.store.commit(
+            "cpu",
+            operation_id,
+            record,
+            expected_revision=record["revision"],
+            fence=record["worker"]["fence"],
+        )
+
+        class Adapter:
+            def reconcile(adapter, context, operation):
+                return ReconcileOutcome(helpers_stopped=True, complete=True)
+
+        result = reconcile_operation(self.registry, "cpu", operation_id, adapter=Adapter())
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["result"]["errors"][0]["code"], "operation_interrupted")
 
     def worker(self, operation_id, mode):
         child = subprocess.Popen(

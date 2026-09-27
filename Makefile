@@ -24,7 +24,7 @@ coverage: $(BOOTSTRAP)
 unit: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m unittest discover -s tests -t .
 
-SOURCES := src tools tests
+SOURCES := src tools tests _narwhal_build.py
 
 lint: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m ruff check $(SOURCES)

@@ -62,9 +62,9 @@ Record the version reported by `pip show` with the fleet configuration and engin
 
 ## MCP server (unreleased)
 
-The wheel built from this branch installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, `narwhal-check`, and `narwhal-mcp`. Starting the MCP server requires the optional `mcp` extra. Its ten tools inspect registered targets, configurations, router status, diagnostics, artifacts and retained plans and operations. Clients can also record cancellation requests for retained operations.
+The wheel built from this branch installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, `narwhal-check`, and `narwhal-mcp`. Starting the MCP server requires the optional `mcp` extra. Its fourteen tools inspect registered targets and retained evidence, prepare and execute local dev lifecycle plans, and request cancellation or resumption.
 
-Follow the [MCP server procedure](docs/cli/MCP.md) to install this unreleased code, register the example fleet and validate its configuration offline. The durable operation core has no installed execution adapters; deployment, measurement and resumption remain unavailable through MCP. The [MCP contract](docs/MCP-Contracts.md) defines the interfaces and their availability.
+Follow the [MCP server procedure](docs/cli/MCP.md) to install this unreleased code, register the example fleet and validate its configuration offline. The installed `local-dev-v1` adapter runs `dev init/up/verify/down`; `dev_status` reads the instance. Follow [Manage a local dev instance through MCP](docs/mcp/Local-Dev.md) for registration and execution. The SSH fleet and observability adapters remain planned. The [MCP contract](docs/MCP-Contracts.md) defines the interfaces and their availability.
 
 ## Narwhal dev
 

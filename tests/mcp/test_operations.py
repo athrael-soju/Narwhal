@@ -80,6 +80,7 @@ class OperationToolTests(unittest.IsolatedAsyncioTestCase):
                 "config_inspect",
                 "config_validate",
                 "fleet_status",
+                "dev_status",
                 "diagnostics_collect",
                 "artifact_read",
                 "operation_list",

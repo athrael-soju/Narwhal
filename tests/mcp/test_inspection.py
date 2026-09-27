@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +68,80 @@ class InspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["outcome"] for row in rows], ["started", "success"] * 2)
         self.assertNotIn(str(self.fleet), audit.read_text())
         self.assertEqual(audit.stat().st_mode & 0o777, 0o600)
+
+    def dev_target(self):
+        instance = self.root / "instance"
+        instance.mkdir(mode=0o700)
+        (instance / "fleet.json").write_bytes(self.fleet.read_bytes())
+        (instance / "fleet.json").chmod(0o600)
+        document = instance / "instance.json"
+        document.write_text(
+            json.dumps(
+                {
+                    "schema": "narwhal.dev-instance",
+                    "schema_version": 1,
+                    "python_executable": sys.executable,
+                }
+            )
+        )
+        document.chmod(0o600)
+        self.document["targets"][0].update(
+            kind="dev",
+            fleet_file=None,
+            instance_dir=str(instance),
+            adapter={"id": "local-dev-v1", "settings_path": None},
+        )
+        self.configure()
+        return instance
+
+    async def test_dev_status_reads_an_existing_cli_instance_without_router_or_gpu(self):
+        instance = self.dev_target()
+        (instance / "fleet.json").unlink()
+        response = await self.call("dev_status")
+        self.assertEqual(response["outcome"], "success", response)
+        self.assertEqual(
+            response["data"], {"instance": str(self.root / "instance"), "status": "stopped"}
+        )
+        self.assertEqual(response["command_result"]["operation"], "dev status")
+        self.assertEqual(response["command_result"]["exit_code"], 0)
+
+    async def test_dev_status_rejects_wrong_kind_and_interpreter_before_command(self):
+        with patch("narwhal.mcp.inspection.run_command", new_callable=AsyncMock) as command:
+            wrong_kind = await self.call("dev_status")
+            self.assertEqual(wrong_kind["outcome"], "invalid_input", wrong_kind)
+            instance = self.dev_target()
+            source = instance / "instance.json"
+            document = json.loads(source.read_text())
+            document["python_executable"] = str(self.root / "other-venv" / "bin" / "python")
+            source.write_text(json.dumps(document))
+            wrong_python = await self.call("dev_status")
+            self.assertEqual(wrong_python["outcome"], "invalid_input", wrong_python)
+            command.assert_not_awaited()
+
+    async def test_dev_status_preserves_degraded_command_outcome_and_evidence(self):
+        instance = self.dev_target()
+        document = {
+            "schema": "narwhal.command-result",
+            "schema_version": 1,
+            "command": "narwhal",
+            "operation": "dev status",
+            "status": "degraded",
+            "exit_code": 3,
+            "data": {"status": "degraded", "problems": ["verification failed"]},
+            "errors": [
+                {"code": "instance_degraded", "message": "Retained failure", "command": "narwhal"}
+            ],
+            "artifacts": [
+                {"kind": "lifecycle", "path": str(instance / "lifecycle.json"), "state": "existing"}
+            ],
+        }
+        with patch(
+            "narwhal.mcp.inspection.run_command", new_callable=AsyncMock, return_value=document
+        ):
+            response = await self.call("dev_status")
+        self.assertEqual(response["outcome"], "degraded", response)
+        self.assertEqual(response["errors"][0]["code"], "instance_degraded")
+        self.assertEqual(response["command_result"]["artifacts"], document["artifacts"])
 
     async def test_denial_and_invalid_arguments_precede_command_or_network(self):
         with (
