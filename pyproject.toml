@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # The distribution name differs from the import package.
 name = "narwhal-inference"
-version = "0.3.0"
+version = "0.3.1"
 description = "Adaptive hot-swap disaggregation for LLM inference"
 readme = "README.md"
 authors = [{ name = "Athrael Soju" }]
