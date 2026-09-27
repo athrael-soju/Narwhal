@@ -3,8 +3,8 @@
 This page specifies tool arguments, results and errors for the
 [MCP contract](../MCP-Contracts.md). The unreleased [server command](../cli/MCP.md)
 exposes eighteen tools; the catalogue identifies them below. The installed
-`local-dev-v1` adapter supports preparation, execution and resumption for local
-dev actions. Registration binds each target ID to its inputs and access grants.
+`local-dev-v1` and `ssh-v1` adapters support preparation, execution and
+resumption for their registered actions. Registration binds each target ID to its inputs and access grants.
 
 The inspection adapters enforce those grants, redact returned content and keep
 each result within the response limit. They retain oversized results as private
@@ -68,17 +68,17 @@ The result shapes below describe the management envelope's `data` field.
 | `fleet_status` | Read router status and state. | `serving/`, `runtime/` | Implemented |
 | `dev_status` | Read a dev instance's recorded status. | `dev/` | Implemented |
 | `diagnostics_collect` | Collect selected incident evidence. | `diagnostics/` | Implemented |
-| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Local dev actions implemented |
+| `plan_prepare` | Discover and freeze proposed action inputs. | Deployment preparation and site adapter | Local dev and SSH fleet actions implemented |
 | `plan_inspect` | Read a saved plan and its input references. | Plan store | Implemented |
-| `plan_execute` | Submit a saved plan for execution. | Shared executor | Local dev actions implemented |
+| `plan_execute` | Submit a saved plan for execution. | Shared executor | Local dev and SSH fleet actions implemented |
 | `operation_list` | List operations for a target. | Operation store | Implemented |
 | `operation_inspect` | Read one operation's state. | Operation store | Implemented |
 | `operation_cancel` | Record cancellation for an operation. | Shared executor | Implemented |
-| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Local dev actions implemented |
-| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Local provider implemented |
+| `operation_resume` | Submit a new attempt after reconciliation. | Shared executor | Local dev and SSH fleet actions implemented |
+| `monitoring_status` | Read scrape health and monitoring readiness. | Site adapter | Local and SSH providers implemented |
 | `metrics_query` | Run a registered Prometheus query. | Observability adapter | Implemented |
-| `host_inventory` | Collect inventory from a registered host. | Site adapter | Local provider implemented |
-| `host_logs` | Collect a selected log source. | Site adapter | Local provider implemented |
+| `host_inventory` | Collect inventory from a registered host. | Site adapter | Local and SSH providers implemented |
+| `host_logs` | Collect a selected log source. | Site adapter | Local and SSH providers implemented |
 | `artifact_read` | Read a retained redacted export. | Artifact store | Implemented |
 
 ### Targets and configuration
@@ -389,13 +389,18 @@ pass.
 
 For `engine_replace`, the site adapter supervises replacement and requests the
 documented router drain/readmission procedure and required requalification.
-V1 uses the engine's recorded launch specification and honours its configured
-restart policy. Model migrations or arbitrary launch overrides require a
-separately prepared supported deployment.
+Version 1 requires `recovery.engine_restart_policy: "individual"` and an owned
+standalone router, with `ha.standby: false` and `ha.epoch: 0`. It uses the
+engine's recorded launch specification. After full preflight, it restarts the
+owned router with updated profiles and `--resume`, verifies the retained drain
+hold, then readmits the engine. Model migrations or arbitrary launch overrides
+require a separately prepared supported deployment.
 
 `monitoring_start` invokes the existing monitoring startup procedure and checks
 its full readiness contract. `deployment_cleanup` acts on recorded resources
-from one inactive deployment operation after reconciling ownership.
+from a selected inactive execution and its bounded cleanup lineage after
+checking ownership. The store transfers only that lineage's exact reservations;
+see [cleanup admission](Operations.md#deadlines-and-cancellation).
 
 Successful preparation produces terminal operation `data: {plan_id: UUID}`.
 Every execution action produces `data: {summary_artifact_id: UUID}`.
@@ -609,8 +614,7 @@ fallback.
 
 ## Example submission
 
-The following example shows the planned exchange after a plan has been
-prepared. IDs are illustrative.
+The following example shows the exchange after a plan has been prepared. IDs are illustrative.
 
 ```json
 {

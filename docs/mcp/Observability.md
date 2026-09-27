@@ -3,11 +3,12 @@
 The unreleased MCP server provides `monitoring_status`, `metrics_query`,
 `host_inventory` and `host_logs` for registered targets. Each call requires the
 `inspect` capability. These tools read evidence and retain redacted artifacts;
-`monitoring_start` is a separate planned fleet action.
+`monitoring_start` is a separate fleet mutation action.
 
-The installed provider reads local dev inputs and the `local` host. Fleet host
-access requires the SSH site provider. Registered Prometheus queries use the
-configured HTTP endpoint for either target kind.
+The installed providers read local dev inputs or registered SSH fleet hosts.
+Registered Prometheus queries use the configured HTTP endpoint for either
+target kind. The SSH provider does not create tunnels or change monitoring.
+Keep an existing verified access path available to each registered endpoint.
 
 ## Register monitoring inputs
 
@@ -55,6 +56,10 @@ paths or host destinations. Restart the server after editing its registry.
 Call `monitoring_status` with the registered `target_id`. For a dev target, the
 provider reads the instance's saved `fleet.json` to obtain engine IDs and scrape
 addresses. It compares those addresses with Prometheus's active targets.
+For a fleet target, the SSH provider reads the retained deployment binding and
+checks recorded supervisors and containers before supplying the expected
+scrape identities. HTTP queries still use the target's registered endpoint
+variables from the management workstation.
 
 The tool checks:
 
@@ -109,11 +114,23 @@ infer the absent hardware information. Inventory source content has an aggregate
 1,048,576-byte limit. The returned `snapshot_artifact_id` identifies a manifest
 that links each source's artifact and records its collection status.
 
+For a fleet target, select an alias from the registered SSH host inventory.
+The provider returns the fixed remote inventory: host and boot identity,
+network namespace, physical GPUs and observed device users, interfaces,
+listening TCP ports, container ownership labels, utility paths and Python/runtime
+identity. SSH exchanges share the call's absolute deadline; cancellation
+terminates and reaps the local SSH process. An unreachable host produces an
+unavailable source.
+
 Call `host_logs` with a registered `log_id` and optional `max_bytes` in
 `1..65536`, default `65536`. The provider captures that many trailing bytes from
 a regular UTF-8 file, adjusting the start to a character boundary. It rejects
 symlinks, unsafe ownership or writable permissions, credential files and binary
 content. If the source shortens during capture, the result is incomplete.
+For SSH logs, the source must be an absolute file path on its registered host.
+The provider drops a partial first line when reading a tail. Registered request
+journals and completion files require `allow_request_content` to permit source
+access; `host_logs` still removes request content from the returned export.
 
 Both tools redact credentials and request content before exporting files.
 `host_logs` has no request-content opt-in. Read an export through `artifact_read`

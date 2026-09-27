@@ -27,6 +27,8 @@ MANAGEMENT_OPERATION = "management_operation"
 DEPLOYMENT_PLAN = "deployment_plan"
 MANAGEMENT_SNAPSHOT = "management_snapshot"
 LOCAL_DEV_SETTINGS = "local_dev_settings"
+SSH_SETTINGS = "ssh_settings"
+SSH_RECIPE = "ssh_recipe"
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ CONTRACTS: dict[str, Contract] = {
     DEPLOYMENT_PLAN: Contract("narwhal.deployment-plan"),
     MANAGEMENT_SNAPSHOT: Contract("narwhal.management-snapshot"),
     LOCAL_DEV_SETTINGS: Contract("narwhal.local-dev-settings"),
+    SSH_SETTINGS: Contract("narwhal.ssh-settings"),
+    SSH_RECIPE: Contract("narwhal.ssh-recipe"),
 }
 
 

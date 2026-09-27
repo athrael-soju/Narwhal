@@ -455,6 +455,67 @@ class ManagementExecutorTests(unittest.TestCase):
                 self.assertNotIn(b"private-output-marker", path.read_bytes(), path.name)
         self.assertIsNotNone(result["result"]["data"]["summary_artifact_id"])
 
+    def test_repeated_helper_slot_keeps_one_receipt_and_complete_terminal_history(self):
+        operation_id = self.admit(timeout=10_000)
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                for _ in range(4):
+                    context.run_command([sys.executable, "-c", "pass"], helper_slot="ssh-one")
+                return StageOutcome()
+
+        result = run_operation(
+            self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+        )
+        self.assertEqual(result["state"], "succeeded")
+        effects = result["stages"][0]["effects"]
+        self.assertEqual(len(effects), 1)
+        receipt = effects[0]
+        self.assertEqual(receipt["effect"], "absent")
+        self.assertEqual(receipt["history"]["retired"], 3)
+        root = self.root / "artifacts" / f"operation-{operation_id}"
+        self.assertEqual(len(list(root.glob("helper-*.receipt.json"))), 3)
+        for remaining in (3, 2, 1):
+            history = receipt["history"]
+            self.assertEqual(history["retired"], remaining)
+            raw = (root / history["last_receipt"]).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), history["last_sha256"])
+            receipt = json.loads(raw)
+            self.assertEqual(receipt["effect"], "absent")
+            self.assertTrue((root / receipt["identity"]["evidence_name"]).is_file())
+            self.assertIn("cleanup", receipt["identity"])
+
+    def test_unknown_helper_slot_is_preserved_and_blocks_another_spawn(self):
+        operation_id = self.admit()
+
+        class Adapter:
+            def execute_stage(adapter, context, stage, plan):
+                context.record_intent(
+                    {
+                        "resource_id": "helper-slot:cpu:ssh-one",
+                        "kind": "measurement_helper",
+                        "host_id": "management",
+                        "owner": {
+                            "operation_id": operation_id,
+                            "stage_id": "cpu",
+                            "launch_token": str(uuid4()),
+                        },
+                        "identity": None,
+                        "effect": "unknown",
+                        "observed_at": utc_now(),
+                    }
+                )
+                context.run_command([sys.executable, "-c", "pass"], helper_slot="ssh-one")
+                return StageOutcome()
+
+        with patch.object(stages, "run") as run:
+            result = run_operation(
+                self.registry, "cpu", operation_id, adapter=Adapter(), plan=self.plan
+            )
+        run.assert_not_called()
+        self.assertEqual(result["state"], "recovery_required")
+        self.assertEqual(result["stages"][0]["effects"][0]["effect"], "unknown")
+
     def test_cancellation_before_claim_does_not_invoke_adapter_or_start_clock(self):
         operation_id = self.admit()
         self.store.request_cancel("cpu", operation_id)

@@ -270,6 +270,8 @@ class OperationStore:
             "TEXT NOT NULL, tool TEXT NOT NULL, parent_id TEXT, operation_id TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS reservations (resource_id TEXT PRIMARY KEY, "
             "operation_id TEXT NOT NULL, fence INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS cleanup_obligations (operation_id TEXT PRIMARY KEY, "
+            "document BLOB NOT NULL)",
             "CREATE TABLE IF NOT EXISTS tombstones (operation_id TEXT PRIMARY KEY, target_id "
             "TEXT NOT NULL, removed_at TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pages (cursor TEXT PRIMARY KEY, target_id TEXT NOT "
@@ -317,7 +319,43 @@ class OperationStore:
         return record
 
     @staticmethod
+    def _verified_absent(effect: dict[str, Any]) -> bool:
+        return effect["effect"] == "absent" and isinstance(effect["identity"], dict)
+
+    @staticmethod
+    def _cleanup_complete(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        if record["action"] != "deployment_cleanup" or record["tool"] == "plan_prepare":
+            return
+        row = connection.execute(
+            "SELECT document FROM cleanup_obligations WHERE operation_id=?",
+            (record["operation_id"],),
+        ).fetchone()
+        if row is None:
+            raise OperationError("cleanup_incomplete", "Cleanup ownership obligations are missing")
+        required = _decode(row[0])["effects"]
+        absent = {
+            canonical({name: effect[name] for name in ("resource_id", "host_id", "kind", "owner")})
+            for stage in record["stages"]
+            for effect in stage["effects"]
+            if OperationStore._verified_absent(effect)
+        }
+        if any(canonical(effect) not in absent for effect in required):
+            raise OperationError(
+                "cleanup_incomplete", "Inherited cleanup effects have not been verified absent"
+            )
+
+    def check_cleanup_complete(self, record: dict[str, Any]) -> None:
+        """Require immutable inherited effects to be absent before terminal cleanup."""
+        if record["action"] != "deployment_cleanup" or record["tool"] == "plan_prepare":
+            return
+        self._target(record["target_id"], inspect=False)
+        with self.connection() as connection:
+            self._cleanup_complete(connection, record)
+
+    @staticmethod
     def _write(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        if record["state"] in TERMINAL:
+            OperationStore._cleanup_complete(connection, record)
         validate_record(record)
         connection.execute(
             "UPDATE operations SET document=?,state=?,revision=? WHERE operation_id=?",
@@ -334,16 +372,17 @@ class OperationStore:
         target_id: str,
         operation_id: str,
         resources: Sequence[str],
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         """Require a stopped execution and its exact reservations before transfer."""
         from .management_executor import worker_alive
 
         original = self._read(connection, target_id, operation_id)
         if original["state"] not in TERMINAL | {"recovery_required"}:
             raise OperationError("resource_busy", "Cleanup cannot replace an active operation")
-        self._cleanup_chain(connection, target_id, original, resources)
+        obligations = self._cleanup_chain(connection, target_id, original, resources)
         if original["state"] == "recovery_required" and worker_alive(original["worker"]):
             raise OperationError("resource_busy", "The original operation worker is still alive")
+        return obligations
 
     def _cleanup_chain(
         self,
@@ -351,9 +390,10 @@ class OperationStore:
         target_id: str,
         original: dict[str, Any],
         resources: Sequence[str],
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         """Follow immutable cleanup selections to one bounded fleet execution lineage."""
         seen: set[str] = set()
+        effects: dict[bytes, dict[str, Any]] = {}
         current = original
         for _ in range(MAX_CLEANUP_PREDECESSORS):
             operation_id = current["operation_id"]
@@ -394,8 +434,21 @@ class OperationStore:
                 and plan["payload"]["parameters"] == request["parameters"],
                 "Cleanup predecessor admission identity is inconsistent",
             )
+            for stage in reversed(current["stages"]):
+                for effect in reversed(stage["effects"]):
+                    if effect["host_id"] != "management":
+                        identity = {
+                            name: effect[name]
+                            for name in ("resource_id", "host_id", "kind", "owner")
+                        }
+                        effects.setdefault(canonical(identity), effect)
+            require(len(effects) <= MAX_RESOURCES, "Cleanup ownership obligations exceed the limit")
             if current["action"] != "deployment_cleanup":
-                return
+                return [
+                    {name: effect[name] for name in ("resource_id", "host_id", "kind", "owner")}
+                    for effect in effects.values()
+                    if not self._verified_absent(effect)
+                ]
             parameters = request["parameters"]
             predecessor = uuid_string(parameters["operation_id"])
             require(
@@ -538,8 +591,11 @@ class OperationStore:
                     raise OperationError(
                         "operation_not_resumable", "Operation cannot be resumed with this action"
                     )
-            if cleanup_of is not None:
+            cleanup_obligations = (
                 self._cleanup_original(connection, target_id, cleanup_of, resources)
+                if cleanup_of is not None
+                else None
+            )
             for resource in sorted(resources):
                 reserved = connection.execute(
                     "SELECT operation_id FROM reservations WHERE resource_id=?", (resource,)
@@ -593,6 +649,10 @@ class OperationStore:
                     (plan["plan_id"], target_id, tool, parent_operation_id, record["operation_id"]),
                 )
             if cleanup_of is not None:
+                connection.execute(
+                    "INSERT INTO cleanup_obligations VALUES (?, ?)",
+                    (record["operation_id"], encode_record({"effects": cleanup_obligations})),
+                )
                 connection.execute("DELETE FROM reservations WHERE operation_id=?", (cleanup_of,))
             connection.executemany(
                 "INSERT INTO reservations VALUES (?, ?, ?)",
@@ -761,7 +821,14 @@ class OperationStore:
                 raise OperationError("invalid_input", "Terminal operation records are immutable")
             next_state = updated.get("state")
             require(
-                next_state == current["state"] or next_state in TRANSITIONS[current["state"]],
+                next_state == current["state"]
+                or next_state in TRANSITIONS[current["state"]]
+                or (
+                    current["state"] == "queued"
+                    and next_state == "recovery_required"
+                    and current["action"] == "deployment_cleanup"
+                    and current["tool"] != "plan_prepare"
+                ),
                 "Operation state transition is invalid",
             )
             require(

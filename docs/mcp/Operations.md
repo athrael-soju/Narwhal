@@ -9,9 +9,10 @@ execution for registered adapters. MCP exposes record listing, inspection and
 cancellation requests, together with plan inspection.
 
 The installed local dev adapter supports preparation, execution and resumption
-through MCP and registry-bound dev CLI commands. The SSH fleet adapter remains
-planned. Follow [Manage a local dev instance](Local-Dev.md) for an operator
-procedure; the lifecycle below defines the shared executor contract.
+through MCP and registry-bound dev CLI commands. The installed SSH adapter
+runs fleet actions through the same executor. Follow
+[Manage a local dev instance](Local-Dev.md) or [Deploy a fleet through MCP](Fleet.md)
+for the relevant operator procedure.
 
 ## Submission and lookup
 
@@ -147,6 +148,7 @@ changing the deployment.
 | Admission | `queued` | The executor commits the request, operation and applicable reservations together, before any external effect. Preparation does not reserve deployment resources. |
 | `queued` | `running` | The worker has acquired ownership, rechecked permissions and the plan binding, and established the required resource exclusions. |
 | `queued` | `failed` | The executor rejects a permission, binding, prerequisite or deadline check before execution. |
+| `queued` | `recovery_required` | Cleanup is cancelled or fails a precondition while inherited remote effects remain unresolved. Its transferred reservations stay held. |
 | `queued` | `cancelled` | The executor records cancellation before a worker starts. |
 | `running` | `succeeded` | The executor accepts every required stage and commits the final evidence and inventory of remaining resources. |
 | `running` | `failed` | A gate, input check or action fails. The executor has stopped active helpers and established their effects. |
@@ -279,6 +281,13 @@ admission. The selected operation keeps its original record and evidence;
 later reconciliation of that record cannot release the cleanup operation's
 reservations.
 
+Cleanup admission also saves immutable ownership obligations from the selected
+predecessor lineage. The store permits a terminal cleanup result only after
+its record contains a matching absence receipt for every inherited remote
+effect. Cancellation before execution, a failed precondition or worker loss
+cannot release reservations by leaving those effects out of the new record.
+Such a cleanup remains `recovery_required`, even after its deadline expires.
+
 If cleanup itself fails, a fresh cleanup plan can select that cleanup
 operation. The store checks the retained predecessor requests and plans back
 to the original fleet execution, rejects cycles, and accepts at most 16
@@ -312,7 +321,9 @@ bounded, read-only reconciliation in a detached worker when the target's
 adapter is installed. The local dev adapter inspects recorded intentions,
 receipts, helper identities and live process state before deciding whether the
 operation can become terminal. Reading an operation never starts cleanup.
-Remote reconciliation remains part of the planned SSH fleet adapter.
+The SSH adapter compares remote supervisors, ownership receipts and surviving
+processes or containers. Failed or unavailable observations leave effects
+unknown and keep reservations in place.
 
 Before repeating an interrupted installation or launch, the coordinator must
 establish whether the original action took effect. A remote action may have
@@ -369,14 +380,13 @@ runs.
 Before accepting execution, the coordinator atomically reserves all resources
 resolved during preparation, in canonical order. If a resource is already
 reserved, it returns `resource_busy` before starting any part of the deployment.
-The error includes the owning operation's reference when the caller may
-inspect it.
+Use `operation_list` and `operation_inspect` to inspect operations allowed by
+your registration.
 
-Within one operation, the scheduler may start engines concurrently when their
-GPU allocations are disjoint. It serialises work on overlapping allocations
-and measures one directed fabric edge at a time. After fabric qualification,
-it may attest engines concurrently, as specified by the
-[deployment runbook](../Deploy.md).
+The SSH adapter currently starts and attests engines serially and measures one
+directed fabric edge at a time. Each dependent stage starts only after the
+previous stage succeeds. The [deployment runbook](../Deploy.md) defines the
+evidence each gate must produce.
 
 | Activity | Required coordination |
 | --- | --- |
@@ -396,9 +406,9 @@ observes active requests. A standby router or a nonzero HA epoch returns
 That observation does not prevent later requests, so the operator must keep
 client traffic stopped until the operation finishes.
 
-Preparation may inspect a busy fleet. The planned fleet adapter must establish
-the idle state required by each measurement and manage admission when its
-recipe calls for that control. A plan that drains traffic must describe that
+Preparation may inspect an existing busy fleet. The SSH adapter checks the
+idle state required by each measurement. Operators must keep client traffic
+stopped throughout measurement and replacement. A plan that drains traffic must describe that
 change and require the corresponding permission. A request to profile does
 not itself authorise the executor to interrupt traffic.
 

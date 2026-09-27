@@ -494,12 +494,25 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
         else ()
     )
     if operation is not None:
+        from narwhal.deployment.ssh_worker import inherited_owner
+
         invocation[1:1] = [
             "--label",
             f"io.narwhal.launch={owner}",
             "--label",
             f"io.narwhal.operation={operation}",
         ]
+        management_owner = inherited_owner()
+        if management_owner is not None:
+            for label, field in (
+                ("operation", "operation_id"),
+                ("stage", "stage_id"),
+                ("launch", "launch_token"),
+            ):
+                invocation[1:1] = [
+                    "--label",
+                    f"io.narwhal.management.{label}={management_owner[field]}",
+                ]
     try:
         result = stages.run(["docker", *invocation], stage="docker-" + command[0], log=run / log)
     except (stages.StageTimeout, stages.StageCancelled) as error:

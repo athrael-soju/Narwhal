@@ -2,9 +2,8 @@
 
 These cases specify how the version 1 management executor responds to
 successful work, failures, retries and interruptions. The unreleased server
-installs the `local-dev-v1` adapter; the fleet adapter required by these cases
-remains planned. The cases describe the fleet workflow once that adapter
-supplies the required actions. They provide inputs, expected states and retained
+installs `local-dev-v1` and `ssh-v1`. These cases describe the SSH fleet workflow
+and the shared operation store. They provide inputs, expected states and retained
 evidence for implementation checks; they contain no live fleet measurements.
 
 Use the [tool catalogue](Tools.md) for argument and result fields, the
@@ -79,7 +78,7 @@ those inputs, it submits the plan for execution:
 ```
 
 The executor returns the execution operation ID, rechecks the plan and records
-Gates A through G in order. It may start engines on disjoint GPUs concurrently.
+Gates A through G in order. The SSH adapter currently starts engines serially.
 It measures one directed fabric edge at a time and starts service only after
 the required profile and preflight evidence passes.
 
@@ -103,9 +102,11 @@ records the running engines as retained resources. It changes the operation
 from `running` to `failed` and records `result.status: "failed_gate"`. The
 underlying gate error and failed sample remain available for inspection.
 
-The operator corrects the observed routing fault. The agent requests fresh
-preparation, which records the new route fingerprint in a corrected plan. It
-then asks the executor to resume the failed operation with that plan:
+The operator first prepares and executes `deployment_cleanup` for the failed
+operation, removing its retained engines. After correcting the routing fault,
+the agent prepares a fresh `fleet_deploy` plan. Preparation requires the old
+deployment to be removed before it accepts another deployment. The agent then
+asks the executor to resume the failed operation with the new plan:
 
 ```json
 {
@@ -196,8 +197,8 @@ retains its resource reservations.
 
 The adapter's recovery workflow then calls the core's reconciliation procedure
 to inspect the recorded launch intention and live engine identity within a
-finite budget. This adapter workflow is not installed in the current build;
-startup and operation inspection only check local worker identity.
+finite budget. Startup and operation inspection schedule this read-only work
+in a detached recovery worker; the frontend checks local worker identity.
 
 `operation_inspect` returns `success`, with state `recovery_required`, null
 terminal result fields and the recovery error codes. The full snapshot
@@ -211,10 +212,11 @@ also confirms that the dead worker cannot issue further actions. It records
 the engine as retained and changes the operation from `recovery_required` to
 `failed`, with `result.status: "error"`, because later gates remain incomplete.
 
-The agent can now prepare a fresh plan and resume. If a helper remains active,
-the agent can call `operation_cancel` to request cleanup within its recorded
-budget after the executor verifies its identity. Inspection itself never
-stops a process.
+The agent can prepare cleanup for the failed deployment, then prepare a new
+deployment plan and resume. A remote helper may continue until its recorded
+deadline after its management worker disappears. `operation_cancel` can stop
+verified local helpers; explicit `deployment_cleanup` handles selected remote
+resources. Inspection itself never stops a process.
 
 The executor retains the intention recorded before launch, the process
 identity, reconciliation attempts and adapter observations. It also retains
@@ -244,7 +246,9 @@ returns the current state without starting another cleanup concurrently.
 After reconciliation establishes that the helper stopped and its effects are
 known, the operation becomes `cancelled`.
 
-The agent can prepare a new plan to resume reconciled work. To remove the
+The agent can prepare a new plan to resume reconciled work after satisfying
+that action's prerequisites. Repeating `fleet_deploy` first requires cleanup
+of its retained deployment. To remove the
 resources retained from completed stages, it must prepare a
 `deployment_cleanup` plan that identifies them. Cancellation alone leaves
 those resources in place.
@@ -262,10 +266,12 @@ If the generation changes during execution, the next precondition check fails.
 The operation reaches the same failed result after reconciliation, if any
 external work remains unresolved.
 
-The agent requests fresh preparation to record the new generation. In the
-next execution, the executor captures its live cache, obtains attestation,
-profiles that generation and runs full preflight. If the cache geometry
-changed, it recalculates the fabric budget.
+The agent inspects the ownership mismatch before preparing more work. The
+adapter does not adopt an unrecorded replacement process. The operator must
+resolve that process and clean up the affected deployment before preparing
+a new fleet deployment. A planned replacement of a still-owned engine uses
+`engine_replace`, which refreshes cache, fabric, attestation, profiles and
+preflight evidence.
 
 The current core runs the new plan's stages again. A future fleet adapter may
 reuse a directed sample only when its documented link fingerprint still
@@ -282,14 +288,14 @@ plans and profiles together with the reasons they became invalid.
 During preparation, the adapter finds that its verified asset bundle is
 missing. The recipe needs that bundle for its monitoring stage. The executor
 moves the preparation operation through `queued → running → failed` and
-records `result.status: "failed_gate"`. The `adapter_prerequisite_missing`
-error identifies the bundle and required version.
+records `result.status: "failed_gate"`. The `prerequisite_failed`
+error records the missing or invalid source prerequisite.
 
 The executor returns no executable plan. It has not installed software,
 launched services or changed monitoring.
 
-The action result retains the capability manifest, prerequisite observations
-and missing asset reference. After the operator supplies the required bundle,
+The operation retains its preparation error and any evidence collected before
+the failed prerequisite. After the operator supplies the required bundle,
 the agent can repeat preparation with a new request ID. An undeclared source
 checkout cannot satisfy the registered bundle requirement.
 
@@ -301,23 +307,24 @@ revalidation fails before it makes the first change.
 A supported CLI operation holds a GPU reservation for a local instance. The
 agent calls MCP `plan_execute` through another registered alias that resolves
 to the same physical GPU. The coordinator returns `resource_busy` before
-starting the deployment. If the caller may inspect the owning operation, the
-error includes its reference.
+starting the deployment. The caller can use `operation_list` and
+`operation_inspect` to examine operations its registration permits.
 
 The CLI operation and its evidence remain available for inspection. Selecting
 a different target name cannot bypass the reservation.
 
 After the CLI operation completes, the agent prepares a `fleet_profile` plan
 while the router is serving requests. Preparation succeeds. Before sending
-probes, the executor checks admission, resident work and transfer leases.
-It returns `fleet_busy`; if it already accepted the operation, it marks the
-operation `failed` with `result.status: "failed_gate"`. The executor retains
-the observed fleet state and sends no profiling traffic.
+probes, the SSH idle gate checks each engine's running and waiting request
+counters. Nonzero counters fail the gate before profiling starts. The accepted
+operation becomes `failed` with `result.status: "failed_gate"` and
+`command_failed`; the operation
+and gate evidence retain the failure. Operators must keep client traffic
+stopped because this observation does not prevent later requests.
 
 The agent can wait for the current owner, select resources that do not overlap,
-or prepare an authorised maintenance plan that includes admission control
-and drain. Once the engines satisfy the idle requirement, it submits a new
-request.
+or stop client traffic and wait for the engines to become idle. Once the
+engines satisfy the idle requirement, it submits a new request.
 
 During fabric qualification, the deployment scheduler measures exactly one
 directed edge at a time. A second measurement in that deployment waits for

@@ -4,8 +4,9 @@ This page specifies the version 1 deployment plan and site adapter
 interfaces for implementers of the [MCP milestone](../MCP-Contracts.md).
 The unreleased core stores immutable plans and input snapshots and exposes
 `plan_inspect`. The installed `local-dev-v1` adapter supports preparation and
-execution for the [local dev lifecycle](Local-Dev.md). The SSH fleet adapter
-remains planned; operators deploying a fleet use [Deploy a fleet](../Deploy.md).
+execution for the [local dev lifecycle](Local-Dev.md). The installed `ssh-v1`
+adapter implements [fleet deployment through MCP](Fleet.md) on existing hosts.
+Live qualification of this unreleased adapter remains pending.
 
 A plan fixes the inputs, stages and execution budgets for one registered target.
 The deployment executor checks those recorded inputs before it starts work.
@@ -29,8 +30,8 @@ and collects current inputs. The completed operation returns
 `result.data.plan_id` when preparation succeeds.
 
 During preparation, the adapter may write private local evidence and run remote
-inspection helpers within recorded deadlines. Its manifest declares each
-inspection call. Preparation must finish cleanup of those helpers before
+inspection helpers within recorded deadlines. Its implementation fixes the inspection commands; callers cannot supply
+commands or remote paths. Preparation must finish cleanup of those helpers before
 returning a usable plan. Host inventory may query devices through `nvidia-smi`
 or `rocminfo` over the registered SSH connection. An inspection helper must not
 allocate a workload, change device state or alter host configuration.
@@ -42,10 +43,10 @@ cleanup budgets. An image helper needing device exposure, host writes or a
 workload requires a separately authorised action or suitable retained
 introspection evidence; it cannot run as an inspection helper.
 
-Current discovery runs a temporary `docker run --rm --network none` container
-with a Python entry point to read image package metadata. The adapter must add
-the recorded ownership and deadlines required here before exposing that helper
-through plan preparation.
+SSH preparation reads Docker image identity and hashes the staged model tree
+without starting an image container. It checks registered source assets,
+physical GPU allocations, interfaces, listeners and required host tools. The
+launch stage rechecks model bytes and image identity before starting engines.
 
 `plan_inspect(target_id, plan_id)` returns the plan's public projection: action,
 target, input identities, stages, budgets and expected resource changes. The
@@ -157,42 +158,45 @@ Input names are `fleet_config`, `launch_config`, `host_inventory`,
 `cleanup_selection`. The action's required inputs must be present. Inapplicable
 inputs are omitted. No input contains credential values.
 
-The adapter records the following identities in the immutable input documents:
+The SSH adapter uses these immutable input documents:
 
-- `host_inventory`: stable host aliases, host boot and SSH host-key identities,
-  role placement, observed accelerator products, GPU UUID or PCI identity,
-  selected device mappings and tensor-parallel shape.
-- `model_identity`: source and immutable revision, served name, configuration
-  digest, checkpoint manifest and `model_tree_sha256`. For a non-Git model source,
-  the revision is its immutable object version and manifest digest.
-- `runtime_identity`: image content identity and registry digest when present,
-  runtime package versions, model arguments, environment policy and current
-  engine generation identities when the action requires running engines.
-- `network`: fabric interfaces, addresses, routes, transport, transfer devices,
-  HCA/port/GID selections where applicable, planned listeners and access path.
-- `service_policy`: exact SLOs, first-token and request deadlines, profile error
-  policy, and qualification acceptance criteria.
-- `measurement_recipe` and `load_recipe`: fixed workload, sequence/concurrency
-  points, rate points, request counts, sample limits and finite stage budgets.
-- `resource_ownership`: recorded deployment/instance ownership for existing
-  processes, containers, services and remote paths affected by the action.
-- `cleanup_selection`: exact resources eligible for cleanup and their owning
-  operation; required only for `deployment_cleanup`.
+- `host_inventory` records host aliases, machine and boot identities, network
+  namespaces, role placement, SSH destination digests and selected Python paths.
+  The snapshot also retains the observed hardware and utility inventory.
+- `model_identity` records each engine's checkpoint file manifest and complete
+  `model_tree_sha256`, including configuration, weights and tokenizer files.
+- `runtime_identity` records image content IDs, repository digests, registered
+  settings, launch specifications and nonsecret role environment values. It
+  retains prior deployment state for actions on existing services.
+- `network` maps engine roles to host aliases, canonical physical GPU identities
+  and reserved listener ports. The snapshot binds selected interfaces,
+  addresses, transport settings and resolved endpoints. Gate D separately
+  captures and validates live routes and applicable HCA/port/GID selections.
+- `service_policy` records verified source assets. The fleet document supplies
+  SLOs and serving policy; the recipes supply measurement acceptance settings.
+- `measurement_recipe` and `load_recipe` record fixed profiling and load inputs.
+  The retained runtime recipe also includes fabric settings. Stage records
+  carry the execution and cleanup budgets.
+- `resource_ownership` records the previous deployment's owned processes,
+  containers, services and paths.
+- `cleanup_selection` records the selected execution and any retained cleanup
+  predecessors. It is present only for `deployment_cleanup`.
 
 `fleet_config`, `launch_config` and `credential_refs` preserve the resolved
 nonsecret documents and environment variable references used by the adapter.
 Image tags, a branch name and a mutable model alias do not satisfy identity
 requirements. An installed distribution's version alone does not establish its
 source commit: preparation requires matching artifact provenance. The MCP
-milestone must supply and verify that provenance before enabling the action.
+executor verifies that provenance before enabling the action.
 
 The preparation snapshot has schema `narwhal.management-snapshot`, version `1`,
 with `snapshot_id`, `observed_at`, `identity` and `observations`. `identity`
 contains stable host/boot/SSH trust identities, selected GPU identities and
 allocations, model/runtime identities, bound configuration digests, network
 configuration and applicable engine generations, as enumerated above.
-`observations` records readiness, free memory, counters, resident work and
-per-source timestamps. The adapter version fixes the projection fields and
+`observations` contains the adapter's host inventory and other volatile
+preparation findings. Measurement stages separately collect idle and readiness
+evidence within their budgets. The adapter version fixes the projection fields and
 their normalisation; missing required identity fields fail preparation.
 
 The executor checks `snapshot_sha256` and input byte digests to verify the
@@ -372,9 +376,10 @@ lists the accepted fields, defaults and budgets. The package ships
 For `ssh-v1`, the recipe supplies the nonsecret
 [deployment environment inputs](../configuration/04-Deployment-Inputs.md) and
 references the existing host, launch and fleet documents. Its settings schema
-declares source location, SSH trust, supervision method, fixed measurement/load
-recipes and stage budgets. The settings schema must enumerate those accepted fields,
-their defaults and validators; unsupported settings fail before preparation.
+declares the source checkout, host and launch documents, SSH trust, supervision
+method and stage budgets. The recipe carries fixed profiling, fabric and load
+settings. Both schemas enumerate accepted fields, defaults and validators;
+unsupported fields fail before preparation.
 Environment files containing secrets remain outside the immutable input store.
 During preparation, the adapter captures their nonsecret values and credential
 references separately.
@@ -399,8 +404,7 @@ The executor retains invoked CLI results under the
 the export boundary. Reconciliation inspects effects without starting or
 stopping resources.
 
-The planned SSH adapter needs the following site operations inside those
-methods. These names describe the work and evidence each operation must supply;
+The SSH adapter performs the following site operations inside those methods. These names describe the work and evidence each operation must supply;
 they are not additional methods on `ManagementAdapter`.
 
 | Site operation | Inputs beyond context | Required output |
@@ -475,10 +479,8 @@ recovery on that runtime.
 
 An installed MCP wheel must not assume a repository `tools/` directory exists.
 The first `ssh-v1` implementation uses an explicitly registered, verified source
-checkout or extracted approved source bundle for the existing deployment,
-measurement and observability helpers. Preparation checks its full commit and
-all required assets before any remote installation. Missing assets disable the
-affected action with their names in the error.
+checkout for the existing deployment, measurement and observability helpers. Preparation checks its full commit and
+all required assets before any remote installation. Missing or changed assets fail preparation before installation.
 
 The asset manifest must include deployment/discovery/access helpers and their
 package dependencies; the engine launcher and cache capture hook; fabric budget

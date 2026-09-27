@@ -9,8 +9,8 @@ The unreleased [server command](../cli/MCP.md) validates this document at
 startup. Inspection tools check the target's `inspect` grant before accessing
 inputs, endpoints or retained plans and operations. Cancellation also checks
 the original action's grants, except when cancelling preparation. The operation
-core and installed local dev adapter enforce these permissions. The SSH fleet
-and observability adapters remain planned in the [MCP contract](../MCP-Contracts.md).
+core, execution adapters and observability providers enforce these permissions.
+See the [MCP contract](../MCP-Contracts.md) for availability and validation.
 
 ## Registry document
 
@@ -120,8 +120,8 @@ only when its parent already exists.
 At call time, the executor resolves each endpoint variable to an HTTP(S) URL.
 It rejects embedded URL credentials. `fleet_status` also rejects URL query
 strings and fragments, ignores proxy settings from the environment and follows
-no redirects. A redirect produces an unavailable observation. Planned adapters
-must reject redirects to unregistered origins.
+no redirects. A redirect produces an unavailable observation. The monitoring
+and SSH observation providers also reject redirects.
 Tools may access only registered origins and engine endpoints resolved from
 the target's fleet. Environment names match `[A-Za-z_][A-Za-z0-9_]*`.
 

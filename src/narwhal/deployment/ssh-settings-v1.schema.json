@@ -1,0 +1,219 @@
+{
+  "$defs": {
+    "Budgets": {
+      "additionalProperties": false,
+      "properties": {
+        "discovery": {
+          "$ref": "#/$defs/StageBudget"
+        },
+        "installation": {
+          "$ref": "#/$defs/InstallationBudget"
+        },
+        "engines": {
+          "$ref": "#/$defs/InstallationBudget"
+        },
+        "fabric": {
+          "$ref": "#/$defs/MeasurementBudget"
+        },
+        "attestation": {
+          "$ref": "#/$defs/StageBudget"
+        },
+        "profiling": {
+          "$ref": "#/$defs/MeasurementBudget"
+        },
+        "preflight": {
+          "$ref": "#/$defs/StageBudget"
+        },
+        "serving": {
+          "$ref": "#/$defs/StageBudget"
+        },
+        "workload": {
+          "$ref": "#/$defs/MeasurementBudget"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/StageBudget"
+        }
+      },
+      "title": "Budgets",
+      "type": "object"
+    },
+    "InstallationBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 3600000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "InstallationBudget",
+      "type": "object"
+    },
+    "MeasurementBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 3600000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "MeasurementBudget",
+      "type": "object"
+    },
+    "StageBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 300000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "term_grace_ms": {
+          "default": 10000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Term Grace Ms",
+          "type": "integer"
+        },
+        "kill_grace_ms": {
+          "default": 5000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Kill Grace Ms",
+          "type": "integer"
+        },
+        "reconcile_ms": {
+          "default": 30000,
+          "maximum": 86400000,
+          "minimum": 1,
+          "title": "Reconcile Ms",
+          "type": "integer"
+        }
+      },
+      "title": "StageBudget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "narwhal.ssh-settings",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "source_root": {
+      "title": "Source Root",
+      "type": "string"
+    },
+    "source_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Source Commit",
+      "type": "string"
+    },
+    "hosts_path": {
+      "title": "Hosts Path",
+      "type": "string"
+    },
+    "launch_path": {
+      "title": "Launch Path",
+      "type": "string"
+    },
+    "known_hosts_path": {
+      "title": "Known Hosts Path",
+      "type": "string"
+    },
+    "remote_root": {
+      "title": "Remote Root",
+      "type": "string"
+    },
+    "supervision": {
+      "const": "process",
+      "default": "process",
+      "title": "Supervision",
+      "type": "string"
+    },
+    "connect_timeout_s": {
+      "default": 10,
+      "maximum": 60,
+      "minimum": 1,
+      "title": "Connect Timeout S",
+      "type": "integer"
+    },
+    "command_timeout_s": {
+      "default": 300,
+      "maximum": 86400,
+      "minimum": 1,
+      "title": "Command Timeout S",
+      "type": "integer"
+    },
+    "budgets": {
+      "$ref": "#/$defs/Budgets"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "source_root",
+    "source_commit",
+    "hosts_path",
+    "launch_path",
+    "known_hosts_path",
+    "remote_root"
+  ],
+  "title": "SSHSettings",
+  "type": "object"
+}
