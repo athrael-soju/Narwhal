@@ -30,6 +30,10 @@ class EngineDialect(ABC):
         """Read a token count, or return None when the response has none."""
 
     @abstractmethod
+    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
+        """Read the prompt token IDs, or return None when the response has none."""
+
+    @abstractmethod
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Return fields that force a probe to emit exactly `tokens`."""
 
@@ -69,6 +73,9 @@ class VllmDialect(EngineDialect):
                     payload[field_name] = body[field_name]
         else:
             payload["prompt"] = body.get("prompt", "")
+            # The completion's own setting decides whether vLLM adds BOS and similar tokens.
+            if "add_special_tokens" in body:
+                payload["add_special_tokens"] = body["add_special_tokens"]
         return payload
 
     def tokenize_response(self, payload: dict[str, Any]) -> int | None:
@@ -77,6 +84,17 @@ class VllmDialect(EngineDialect):
             return int(payload["count"])
         except (KeyError, TypeError, ValueError):
             return None
+
+    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
+        """Read vLLM's prompt token IDs when they agree with its count."""
+        tokens = payload.get("tokens")
+        if (
+            not isinstance(tokens, list)
+            or any(type(token) is not int or token < 0 for token in tokens)
+            or self.tokenize_response(payload) != len(tokens)
+        ):
+            return None
+        return tokens
 
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Force a decode probe to emit exactly `tokens` tokens."""

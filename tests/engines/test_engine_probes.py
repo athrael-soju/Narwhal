@@ -97,6 +97,23 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await self.client.token_count("http://engine", {}, 1))
             self.assertEqual(len(self.calls), before)
 
+    async def test_tokenization_retains_prompt_ids_and_forwards_special_token_setting(self):
+        """Completion counts use the request's own special-token setting and keep exact IDs."""
+        self.responses["tokenize"] = httpx.Response(
+            200, json={"count": 3, "max_model_len": 64, "tokens": [1, 7, 9]}
+        )
+        body = {"model": "stub", "prompt": "x", "add_special_tokens": False}
+        result = await self.client.tokenize("http://engine", body, 1)
+        self.assertEqual((result.count, result.token_ids), (3, (1, 7, 9)))
+        sent = self.calls[-1][1]
+        self.assertEqual(sent, {"model": "stub", "prompt": "x", "add_special_tokens": False})
+        self.assertEqual(await self.client.token_count("http://engine", body, 1), 3)
+        for tokens in ([1, 7], [1, -7, 9], None):
+            self.responses["tokenize"] = httpx.Response(200, json={"count": 3, "tokens": tokens})
+            result = await self.client.tokenize("http://engine", {"prompt": "x"}, 1)
+            self.assertEqual((result.count, result.token_ids), (3, None))
+            self.assertNotIn("add_special_tokens", self.calls[-1][1])
+
     async def test_phase_calls_preserve_connection_and_pool_limits(self):
         seen = {}
 
