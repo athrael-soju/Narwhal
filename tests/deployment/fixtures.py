@@ -11,11 +11,68 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 from tools.deployment.engine_launch import selected_launch
 from tools.deployment.launch_engine import digest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def cache_settings_line(plan, *, prefix_caching=True):
+    """Report the cache settings a runtime check resolves for `plan`."""
+    events = plan.get("kv_events")
+    return "NARWHAL_CACHE_SETTINGS=" + json.dumps(
+        {
+            "prefix_caching": prefix_caching,
+            "kv_events": None
+            if events is None
+            else {key: events[key] for key in ("endpoint", "replay_endpoint")},
+        }
+    )
+
+
+def engine_config_modules():
+    """Stand in for vLLM argument resolution of prefix caching and cache events."""
+
+    class FlexibleArgumentParser:
+        def parse_args(self, arguments):
+            return list(arguments)
+
+    class EngineArgs:
+        def __init__(self, arguments):
+            self.arguments = arguments
+
+        @staticmethod
+        def add_cli_args(parser):
+            return parser
+
+        @classmethod
+        def from_cli_args(cls, arguments):
+            return cls(arguments)
+
+        def create_engine_config(self):
+            events = None
+            if "--kv-events-config" in self.arguments:
+                values = json.loads(self.arguments[self.arguments.index("--kv-events-config") + 1])
+                enabled = values.get("enable_kv_cache_events", False)
+                events = SimpleNamespace(
+                    enable_kv_cache_events=enabled,
+                    publisher=values.get("publisher", "zmq" if enabled else "null"),
+                    endpoint=values.get("endpoint", "tcp://*:5557"),
+                    replay_endpoint=values.get("replay_endpoint"),
+                )
+            caching = "--no-enable-prefix-caching" not in self.arguments
+            return SimpleNamespace(
+                cache_config=SimpleNamespace(enable_prefix_caching=caching),
+                kv_events_config=events,
+            )
+
+    arg_utils = ModuleType("vllm.engine.arg_utils")
+    arg_utils.EngineArgs = EngineArgs
+    argparse_utils = ModuleType("vllm.utils.argparse_utils")
+    argparse_utils.FlexibleArgumentParser = FlexibleArgumentParser
+    return {module.__name__: module for module in (arg_utils, argparse_utils)}
 
 
 @contextlib.contextmanager

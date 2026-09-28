@@ -19,7 +19,13 @@ from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.runtime.listeners import check_engine_bind, check_http_bind
 
 from . import stages
-from .launch_engine import digest, gpu_memory, validate_shared_runs, write_private
+from .launch_engine import (
+    digest,
+    gpu_memory,
+    kv_events_directory,
+    validate_shared_runs,
+    write_private,
+)
 
 
 def process_identity(pid: int) -> dict[str, int | str]:
@@ -260,6 +266,7 @@ def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
                     raise ValueError(f"free GPU memory is below the {budget} MiB allocation")
                 if (run / "native-process.json").exists():
                     raise ValueError("native launch already has a process record")
+                kv_events_directory(plan)
                 log_fd = os.open(run / "startup.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(log_fd, "w") as log:
                     process = subprocess.Popen(

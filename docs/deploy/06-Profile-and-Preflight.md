@@ -14,7 +14,7 @@ Reserve the real engines and keep them otherwise idle. From the router:
 
 Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`. The profiler bounds decode concurrency to that limit and adds it as a sweep point when needed. It reads `max_model_len` from each live `/tokenize` response, chooses lengths that leave one prefill output token or 64 decode output tokens, and checks actual tokenised length before each completion.
 
-Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model and keep prefix caching disabled.
+Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model. Profiling salts each probe request, so the engines can keep prefix caching on.
 
 Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic. Keep the `.samples.json` sidecar written alongside the profile store configured by `profiles.path`.
 
@@ -57,7 +57,7 @@ From the router, keep the engines otherwise idle and run:
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
-The `consume` gate uses a fixed prompt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
+The `consume` gate uses a fixed prompt, a fresh cache salt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
 
 Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. Each consume attempt's prefill and decode must complete within `serving.request_timeout_s`. The consume gate reports first-token time for a passing transfer. A deadline expiry means that the transfer remains unconfirmed; check the calibration artifact and configured deadline. Retain the failing pair, error, and engine logs for other transfer failures.
 

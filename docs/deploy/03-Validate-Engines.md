@@ -144,7 +144,7 @@ python3 -m json.tool "$ENGINE_RUN/launch.json"
 
 Inspect `launch.json` for the immutable image, complete serving command, mounts, device mappings, endpoint, application revision, and source hashes. Keep `container.env` private because it can contain the engine API key.
 
-The generated connector policy uses `NixlConnector`, `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`. The launcher derives advertised side-channel address and port from the role environment, configures TCP or RDMA via `UCX_TLS`, and disables prefix caching for profiling.
+The generated connector policy uses `NixlConnector`, `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`. The launcher derives advertised side-channel address and port from the role environment and configures TCP or RDMA via `UCX_TLS`. It keeps vLLM's prefix caching on unless `runtime.extra_args` turns it off. While caching stays on, vLLM publishes cache events over private IPC sockets under `/tmp/narwhal-<uid>/`. See [prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) for the opt-out settings.
 
 Changing image, model, dtype, cache policy, TP allocation, or model arguments requires regrouping and a new serving-layout capture. Changing workload assumptions requires a recalculated fabric budget.
 

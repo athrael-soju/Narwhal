@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -31,6 +32,10 @@ class EngineDialect(ABC):
     @abstractmethod
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Return fields that force a probe to emit exactly `tokens`."""
+
+    @abstractmethod
+    def cold_probe_extras(self) -> dict[str, Any]:
+        """Return fields that keep one probe from reusing any earlier cached prefix."""
 
 
 class VllmDialect(EngineDialect):
@@ -76,6 +81,11 @@ class VllmDialect(EngineDialect):
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Force a decode probe to emit exactly `tokens` tokens."""
         return {"min_tokens": tokens, "ignore_eos": True}
+
+    def cold_probe_extras(self) -> dict[str, Any]:
+        """Salt the probe's first cache block with a fresh random value."""
+        # vLLM hashes cache_salt into the first block; later block hashes chain from it.
+        return {"cache_salt": secrets.token_urlsafe(32)}
 
 
 # Register a dialect only after the fleet checks pass against that build.

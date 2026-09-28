@@ -133,14 +133,14 @@ Discovery reads:
 
 Preparation transfers both the launch record and a launcher snapshot to the engine host.
 
-| Runtime field       | Operator input                                                                                                                                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `expected_packages` | Exact installed versions for `vllm` and `nixl` or `nixl-rocm`; add any image packages whose identity must be checked.                                                                                                    |
-| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                 |
-| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                     |
-| `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                  |
-| `environment`       | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                             |
-| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. |
+| Runtime field       | Operator input                                                                                                                                                                                                                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expected_packages` | Exact installed versions for `vllm` and `nixl` or `nixl-rocm`; add any image packages whose identity must be checked.                                                                                                                                                                                                                                |
+| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                                                                                                                                             |
+| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                                                                 |
+| `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                                                                                                                                              |
+| `environment`       | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                                                                         |
+| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. They can also turn prefix caching or cache-event publication off; see [section 16.1](#161-prefix-caching-and-cache-events). |
 
 The launcher takes these values from the role environment:
 
@@ -181,9 +181,19 @@ Before model startup, the image check:
 3. checks exact distribution versions,
 4. validates connector configuration and import,
 5. constructs the checkpoint tokenizer,
-6. checks the pinned image's convolutional-state layout for SSM models.
+6. checks the pinned image's convolutional-state layout for SSM models,
+7. resolves the serving arguments into vLLM's engine configuration.
 
 The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID.
+
+It also records the cache settings that vLLM resolves for the model, as described in [prefix caching and cache events](#161-prefix-caching-and-cache-events):
+
+| Field            | Value                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `prefix_caching` | `true` when the resolved engine configuration keeps prefix caching on                        |
+| `kv_events`      | The resolved event and replay endpoints, or `null` when the engine publishes no cache events |
+
+The check fails when the resolved endpoints differ from `launch.json`. When vLLM resolves prefix caching off for the model, the engine caches no prefix blocks and publishes no block events. vLLM can also turn prefix caching off later, during model load, for some attention configurations.
 
 The HTTP probe compares `/version` with that captured value.
 
@@ -192,3 +202,24 @@ Use an image whose NIXL connector implements the fleet's required `kv_both` beha
 Keep launch directories, environment files, and runtime captures under ignored `runs/`.
 
 Record the application revision, launcher digest, and container ID with the deployment.
+
+### 16.1 Prefix caching and cache events
+
+The launcher leaves vLLM's prefix-caching default in place. To turn prefix caching off, add vLLM's `--no-enable-prefix-caching` to `extra_args`.
+
+While prefix caching stays on, the launcher configures vLLM to publish KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. The short path keeps each socket within the 107-byte Unix socket path limit, which a launch directory can exceed:
+
+| Socket        | Use                                                       |
+| ------------- | --------------------------------------------------------- |
+| `events.sock` | Published event batches, each with a sequence number      |
+| `replay.sock` | Replay requests for batches still in vLLM's replay buffer |
+
+Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`, and they stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds.
+
+To keep prefix caching on without publishing events, add vLLM's own event setting to `extra_args`:
+
+```json
+["--kv-events-config", "{\"enable_kv_cache_events\": false}"]
+```
+
+The launcher rejects any other `--kv-events-config` value because it selects the event endpoints. Either opt-out leaves `kv_events` as `null`.
