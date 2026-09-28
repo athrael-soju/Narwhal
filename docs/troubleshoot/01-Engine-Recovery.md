@@ -32,6 +32,28 @@ The router clears the ejection after every recovery gate passes.
 
 For `whole_wave`, use the complete-wave procedure below for drain and readmission.
 
+### An opted-in stream stopped after output
+
+Find the request's [journal row](../telemetry/01-Journal.md#continuation-recovery)
+and read `continuation.terminal_reason`. The `continuation.failures` counts
+include errors the router recovered from, so they do not identify the final
+outcome on their own. The [HTTP failure reference](../http-api/03-Backend-and-Failures.md#continuation-failures)
+explains the corresponding stream errors.
+
+For `shared_budget`, check `serving.continuation_credits` in
+`/narwhal/state`. For `attempt_limit`, compare the journal's
+`continuation.attempts` with the configured `continuation.max_attempts`.
+These limits apply separately from ordinary retries.
+
+For `qualification`, check whether an engine process, its attestation or its
+profiles changed. A replacement process needs a new continuation capture.
+Keep it out of service while you prepare that capture, update the
+qualification file and set `continuation.qualification_sha256` to the new
+file's SHA-256. Start the replacement's sidecar with
+[`--continuation-document`](../cli/Attest.md#continuation-capture) pointing to
+the new capture, then follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+to load the new profiles and qualification in the router before readmission.
+
 ### Planned restart of one engine
 
 Follow the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine).

@@ -76,6 +76,7 @@ runs a direct completion.
 | Whole-wave restart        | Readiness is withdrawn before stop. One failed member holds the whole wave; all members return together after validation. |
 | Unplanned whole-wave hold | The detected failure excludes the fleet. Drain records current identities before every member is replaced and readmitted. |
 | Router failover           | The load balancer selects one lease owner. Roles and cumulative counters survive takeover, and the previous primary remains fenced. |
+| Stream continuation, when enabled | The stream resumes after a decode worker fails, preserves committed output and finishes once. Requests that exhaust a recovery limit end with an error. |
 
 ### Individual restart drill
 
@@ -212,7 +213,95 @@ the successful drain retry.
 The temporary process must also be replaced after the drain. Record the
 tested trigger and branch with the results.
 
+### Qualify stream continuation
+
+Use this drill to check recovery after a decode worker fails. Run it before
+enabling continuation for client traffic and after changes to the
+[backend or tokenizer](../concepts/04-Stream-Continuation.md#capability-identity).
+The implementation is unreleased. The
+[live results](../concepts/04-Stream-Continuation.md#live-router-results)
+describe the tested scope; qualify each deployment against its own engine
+processes, tokenizer and settings.
+
+Close external admission and let existing requests finish. Use the smallest
+fleet that retains an eligible prefill engine and decode engine after the
+failure. Check that role pins, minimum engine counts and the supervisor's
+restart policy allow those engines to continue serving requests.
+
+This drill requires a reviewed qualification record and a matching capture
+for each participating engine. Start each sidecar with
+[`--continuation-document`](../cli/Attest.md#continuation-capture) set to its
+capture file. Check that
+`GET /v1/attestation/continuation` returns the expected capture.
+
+Set the [continuation limits](../configuration/02-Serving-and-Role-Control.md#44-opt-in-continuation-state)
+and the qualification file's path and SHA-256 in the fleet configuration.
+For the concurrent-request control, set
+[`recovery.failure_quarantine_s`](../configuration/03-Recovery-and-Validation.md#81-breaker-and-drift-settings)
+to cover the measured delay between an upstream failure and health-based
+ejection. Its default of `0` allows new requests to select the failed engine
+during that interval. Check that quarantine leaves surviving capacity and
+that liveness checks remain enabled.
+
+Choose requests whose prompts, generated output and recovery prompts fit
+the qualified limits and measured profiles. Run
+[preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) before starting
+the router.
+
+Plan separate cases for recovery-limit exhaustion and a transport cut after a
+finish frame but before the complete `[DONE]` delimiter. Cover non-ASCII
+output and qualified token stops. Test the model's native EOS without a
+request-level stop override. Label transport cuts separately from worker
+terminations in the results.
+
+Measure output pauses at the client. The journal's interruption timer starts
+after the router closes the failed upstream response, so it omits part of the
+client's wait. Compare timestamps from the same clock; when that is
+impossible, report the timing uncertainty.
+
+1. Record healthy responses with `continuation.enabled: false`. Set it to
+   `true`, restart the router, then repeat with `narwhal_continuation: true`
+   in each request. Keep all generation settings unchanged, including the
+   output limit.
+2. Set the test's pass/fail limits before causing a failure: maximum output
+   pause and completion time, plus first-output and completion times for a
+   concurrent request. Record the client, proxy and router timeouts and the
+   number of requests and faults the test will allow.
+3. Include an opted-in stream and an ordinary stream on the selected decode
+   worker. After both clients receive their recorded prefixes, terminate
+   that worker. Keep the router and client connections open. Confirm that
+   the selected process was still running both requests when it stopped.
+4. Send one of the baseline requests while the interrupted request is
+   recovering. Compare its first-output and completion times with the
+   healthy result for that same request.
+5. Check each client response. Recovery must preserve the committed prefix
+   and response ID, append the new suffix once and produce one terminal
+   result. For recovery-limit and eligibility failures, keep the client
+   connection writable and verify one terminal SSE error. Verify that
+   recovery retains the original request deadline. The ordinary stream on
+   the terminated worker must end with one error and no recovery.
+6. Match each request to its [journal row](../telemetry/01-Journal.md#continuation-recovery).
+   Check delivered tokens against the client capture, and recovery attempts
+   and replay tokens against the engine requests. Compare the run totals
+   with [metrics](../telemetry/03-Metrics-and-Control.md#continuation-recovery).
+   Include failed and refused requests when reporting the success rate.
+7. Check `/narwhal/state` after the responses close. Inflight and waiting
+   requests, engine reservations and `serving.continuation_history_bytes`
+   must return to zero. Confirm that the corresponding engine requests
+   finished or aborted.
+
+Keep configuration, raw streams and engine identities in the private test
+record. Report each case against the limits set before the test, including
+failures and untested cases. [Restore service](#restore-service-after-the-drill)
+before reopening external admission.
+
 ### Restore service after the drill
+
+Resume requires the same engine set. Complete any held readmission on the
+drill's subset before restoring the full fleet. For a router replacement
+with the same fleet, use
+[profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles)
+to preserve an outstanding hold.
 
 Keep external admission closed until these steps complete:
 
@@ -220,16 +309,16 @@ Keep external admission closed until these steps complete:
    generations. Reuse the measurements already activated for successful
    readmission and retain the unchanged engines' evidence. A further process
    replacement requires fresh measurements and another activation.
-2. If the drill used an isolated subset, assemble the complete serving
+2. If continuation is enabled, update each replaced engine's capture and the
+   router's qualification file. Set `continuation.qualification_sha256` to
+   the new file's SHA-256. Restart each affected sidecar with its new capture.
+3. If the drill used an isolated subset, assemble the complete serving
    fleet's store and run all [preflight gates](../deploy/06-Profile-and-Preflight.md#run-preflight)
-   against the original fleet configuration with that store. Stop the
-   temporary routers before starting the serving router.
-3. Confirm the intended router owns the complete fleet and `/ready` returns
+   against the original fleet configuration with that store.
+4. Stop any temporary routers. Start or restart the serving router with the
+   final configuration to load the updated files.
+5. Confirm the intended router owns the complete fleet and `/ready` returns
    HTTP 200. Send a routed request and match its client result to the journal
    and counters, then restore external admission.
 
-Resume requires the same engine set. Complete the subset's held readmission
-first. For a router replacement with the same fleet, use
-[profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles)
-to preserve an outstanding hold. Preserve the original and drill journals
-and state snapshots.
+Preserve the original and drill journals and state snapshots.

@@ -1,29 +1,32 @@
 # Stream continuation contract
 
-The unreleased [stream continuation](https://github.com/athrael-soju/Narwhal/issues/175)
-implementation recovers eligible upstream failures for
-[opted-in requests](../http-api/01-Requests.md#continuation-opt-in). The original
-router and client connection stay alive while a qualified survivor recomputes
-the prompt and committed generated prefix. Worker-failure recovery still
-requires live qualification in
-[#195](https://github.com/athrael-soju/Narwhal/issues/195).
+Stream continuation lets the router resume an
+[opted-in request](../http-api/01-Requests.md#continuation-opt-in) on surviving
+engines after an upstream failure. The router sends the original prompt and
+committed output IDs through a new prefill and decode attempt. The original
+router and client connection must stay alive throughout recovery.
 
-Recovery preserves the output already accepted by the server. A survivor
-can generate a different suffix from the one the failed worker would have
-produced. Client reconnections and router failure are outside this contract.
+The [implementation](https://github.com/athrael-soju/Narwhal/issues/175) is
+unreleased. The [live qualification](#live-router-results) covers one pinned
+backend and tokenizer with the request settings and limits below.
+
+Recovery preserves the output already accepted by the server. The surviving
+engine can generate a different suffix from the one the failed worker would
+have produced. Continuation cannot restore a disconnected client stream or
+recover from router failure.
 
 ## Request boundary
 
-The initial implementation scope is a streaming `/v1/completions` request with one
+Continuation accepts streaming `/v1/completions` requests with one
 nonempty, flat array of nonnegative integer prompt IDs, one choice and an
 explicit positive `max_tokens`. Boolean values are not token IDs. Text
-prompts, batches, nested token arrays and chat messages are outside this
-scope. Continuation retains the original IDs without decoding and
-retokenising them. Each attempt must return prompt IDs equal to the submitted
-array before any output becomes eligible for commitment.
+prompts, batches, nested token arrays and chat messages are unsupported.
+The router retains the original IDs without decoding and retokenising them.
+Before the router can send output, each attempt must return prompt IDs equal
+to the submitted array.
 
-Qualification fixes the effective generation settings, including defaults
-loaded by the engine. The supported profile uses these request values:
+The qualification record specifies the generation settings, including
+defaults loaded by the engine. Continuation uses these request values:
 
 | Setting | Request value |
 | --- | --- |
@@ -42,13 +45,13 @@ loaded by the engine. The supported profile uses these request values:
 
 String stops can withhold text across a replay boundary. Minimum-output
 constraints and stateful penalties also change when generated IDs become
-prompt IDs. These controls require separate qualification. The initial
-scope also excludes prompt truncation, logprobs, beam search, structured
-output, tools, multimodal content and custom generation processors. The
-continuation request allowlist rejects unrecognised fields.
+prompt IDs. Supporting these controls would require separate qualification.
+Continuation also rejects prompt truncation, logprobs, beam search, structured
+output, tools, multimodal content, custom generation processors and
+unrecognised request fields.
 
-An explicit continuation request outside the qualified subset receives
-HTTP 400 before dispatch. Ordinary requests retain their existing behaviour.
+An unsupported continuation request receives HTTP 400 before dispatch.
+Ordinary requests retain their existing behaviour.
 The [deployment policy](../configuration/02-Serving-and-Role-Control.md#44-opt-in-continuation-state)
 defaults to disabled and requires explicit opt-in for each request.
 
@@ -63,39 +66,43 @@ The continuation reader parses complete upstream SSE events, including
 their blank-line terminators. The ordinary streaming reader exposes data
 lines before that delimiter.
 
-The reader validates each completion event before retention: one choice at
-index `0`, string text and valid generated token IDs. It checks final usage
-separately and rejects malformed events, tool or reasoning output, and
-tokens arriving after a non-null finish reason.
+Before buffering a completion event, the reader checks that it contains one
+choice at index `0`, string text and valid generated token IDs. It checks
+final usage separately and rejects malformed events, tool or reasoning
+output, and tokens arriving after a non-null finish reason.
 
-Exact token IDs alone do not establish a replay boundary. A token can contain
-part of a UTF-8 character; moving that token into a fresh prompt can reset the
-detokenizer past its unfinished bytes. A frame with visible text can still
-end with such a token because the backend can combine multiple token events.
+### Byte boundaries
 
-For a decoder whose qualified contract supports it, a nonterminal completion
-frame with exactly one generated ID and nonempty text identifies a boundary
-where no generated bytes remain pending in the decoder. This property must
-be established for the actual tokenizer and decoder. It is not implied by
-the backend's name or its support for `return_token_ids`.
+A token can contain part of a UTF-8 character. If recovery moves that token
+into the prompt, the detokenizer can skip its unfinished bytes. A frame with
+visible text can still end with a partial character when the backend combines
+multiple token events. Before using generated IDs in a replay prompt, the
+router must know that the decoder has no unfinished generated bytes.
 
-The router holds every frame since the last committed boundary until a
-qualified boundary arrives. Frames with multiple IDs remain pending even
-when their text is nonempty. It sends the entire pending group in one ASGI
-body message, then advances the committed frontier synchronously after the
-send returns successfully. Recovery preserves that byte prefix and appends
-output without repeating committed text or protocol metadata.
+For the qualified decoder, a nonterminal completion frame with exactly one
+generated ID and nonempty text marks a boundary with no pending generated
+bytes. Qualification must establish this property for the actual tokenizer
+and decoder; support for `return_token_ids` alone does not establish it.
+
+The router buffers frames until one reaches that boundary. Frames with
+multiple IDs remain pending even when their text is nonempty. It sends the
+entire pending group in one ASGI body message, then marks the group committed
+synchronously after the send returns successfully. Recovery preserves that
+byte prefix and appends output without repeating committed text or protocol
+metadata.
 
 If a client send fails or is cancelled, the router terminates the request.
 The transport may have accepted part of the message, so retrying that write
 cannot preserve an exact byte boundary. An upstream failure before a pending
 group is sent leaves that group's IDs uncommitted.
 
+### Stream completion
+
 The first frame with a non-null `finish_reason` and any subsequent usage
 metadata remain pending until a complete `[DONE]` event arrives. The router
 sends that terminal group once. On a recoverable upstream failure before
 `[DONE]`, it discards the group and resumes from the preceding committed
-frontier if the remaining budgets allow. Once the terminal group commits,
+boundary if the remaining budgets allow. Once the terminal group commits,
 subsequent cleanup cannot change the completed outcome or emit another
 terminal event.
 
@@ -104,14 +111,15 @@ terminal event.
 Let `P` be the original prompt IDs, `G` the committed generated IDs and `M`
 the original output limit. A recovery attempt receives exactly `P + G`, with
 `max_tokens = M - len(G)`. The router discards observed IDs that never reached
-the committed frontier. They consume computation but do not consume the
-client's delivered-token budget.
+the committed boundary. The failed engine spent computation on those IDs,
+but they do not count towards the output delivered by the router.
 
 Each attempt keeps `ignore_eos: false`, `min_tokens: 0` and the same qualified
-EOS, default and requested token stops. A terminal stop ID counts toward the
-output allowance even when its text is empty. It stays in the pending
-terminal group until `[DONE]`, so an interrupted stop event does not put
-that ID into the replay prompt. The reader accepts `finish_reason: "length"`
+end-of-sequence (EOS) tokens, default stops and requested token stops. A
+terminal stop ID counts toward the output allowance even when its text is
+empty. It stays in the pending terminal group until `[DONE]`, so an interrupted
+stop event does not put that ID into the replay prompt. The reader accepts
+`finish_reason: "length"`
 only after the attempt produces its full remaining token allowance.
 
 The router reserves history capacity before dispatch. The
@@ -122,11 +130,11 @@ the router then terminates it with an explicit error. The qualified context
 limit must accommodate `len(P) + M`, and recovery requires a positive
 remaining output budget.
 
-Every recovery attempt uses the original request deadline and keeps the
-original outward response identity, first-output timing and delivered-token
-counts. Backend request IDs and KV ownership are fresh. Usage counts
-the original prompt once and committed generated IDs once; recomputation is
-accounted for separately.
+Every recovery attempt uses the original deadline and response identity.
+Recovery does not reset first-output timing or delivered-token counts.
+Each attempt uses new backend request IDs.
+Usage counts the original prompt once and committed generated IDs once;
+the router records replay work separately.
 
 ## Survivor recovery
 
@@ -135,22 +143,34 @@ error or EOF before a complete `[DONE]` can start recovery. The supported
 engine statuses are `408`, `429`, `500`, `502`, `503` and `504`. Invalid token
 IDs, malformed SSE framing or invalid JSON in a complete event terminate
 the request. A transport-truncated event at EOF remains uncommitted and can
-be discarded during recovery. Qualification failures, local HTTP-pool
-starvation, history limits, deadline expiry and cancellation also prevent recovery.
+be discarded during recovery. Recovery also stops if qualification fails,
+the request times out waiting for a local HTTP connection, retained history
+exceeds its limit, the original deadline expires, or the client cancels.
+
+### Select surviving engines
 
 The router closes the failed upstream stream and releases its reservations
-before selecting replacement work. Each recovery attempt obtains a fresh
-prefill and KV handoff for `P + G`; it never reuses the failed attempt's
-descriptor. Transient recovery-prefill failures, missing handoffs and expired
-handoffs can consume another recovery attempt and credit. Handoff expiry
-alone does not identify a failed engine.
+before selecting replacement engines. Each recovery attempt runs prefill
+for `P + G` and creates a new KV handoff. Transient prefill failures, missing
+handoffs and expired handoffs can consume another recovery attempt and
+credit. Handoff expiry alone does not identify a failed engine.
 
-Failed engines remain excluded from later recovery placement, including
-placement that waits in a phase queue. Survivors must match the qualification's
-process identity and loaded profile generations. Placement also applies
-current health, roles, drains, quarantine, restart holds and capacity limits.
-The router rechecks process qualification before dispatch and after opening
-decode. Router lease fencing and lifecycle holds prevent new recovery work.
+The router excludes failed engines from later recovery attempts, including
+attempts waiting in a phase queue. Surviving engines must match the process
+identities in the qualification record, and their loaded profiles must
+describe those same processes. They must also pass the current health, role
+and capacity checks and be free of drains, quarantine and restart holds.
+The router rechecks qualification before dispatch and after opening the
+decode stream. A fenced router or a lifecycle
+hold prevents new recovery work.
+
+The failed-engine exclusion applies only to the recovering request. Other requests
+use the configured breaker and quarantine policy. With
+[`recovery.failure_quarantine_s`](../configuration/03-Recovery-and-Validation.md#81-breaker-and-drift-settings)
+at its default of `0`, a failed engine can receive new requests until a
+breaker or health check excludes it.
+
+### Limit recovery work
 
 `continuation.max_attempts` limits recovery attempts after output commitment.
 Each admitted attempt also consumes one router-wide recovery credit; retries
@@ -159,15 +179,15 @@ ordinary retry credits. Attempts cancelled before dispatch still consume
 their credit. Recovery keeps the original admission seat and deadline through
 placement, prefill, handoff, decode and client writes.
 
-Predictive admission prices the augmented prompt's prefill against the time
-left on that deadline. The estimate must be finite and strictly smaller
-than the remaining time. It covers prefill admission only; later transfer,
-decode and client writes share the original deadline. Open admission skips
-this predictive gate. Recovery does not restart TTFT accounting.
+Predictive admission estimates prefill time for `P + G`. The estimate must
+be finite and strictly smaller than the time left on the original deadline.
+Transfer, decode and client writes must also finish within that deadline,
+although this estimate covers only prefill. Open admission skips the
+estimate check. Recovery does not reset time to first token (TTFT).
 
-Capacity accounting uses the augmented prompt and remaining requested output
-for recovery work. The demand model records one arrival and learns output
-length from the original completed request. The
+The router reserves capacity for the augmented prompt and remaining output.
+The demand model records one arrival and learns output length from the
+original completed request. The
 [journal](../telemetry/01-Journal.md#continuation-recovery) and
 [metrics](../telemetry/03-Metrics-and-Control.md#continuation-recovery)
 separately record committed output, observed tokens, submitted replay tokens,
@@ -180,22 +200,29 @@ use fixed messages without prompt text, generated text or token arrays.
 
 ## Capability identity
 
-Qualification binds the replay contract to the immutable checkpoint and
-adapter artifacts, tokenizer vocabulary and code, special-token settings,
-backend build, effective generation defaults, rendering settings, context
-and output limits, and current engine process. It must account for server
-extensions and speculative decoding. An engine restart or any change to
-these inputs invalidates its continuation capability until requalification.
-Private execution records retain the selected inputs and their digests.
+Qualification applies to a specific model, tokenizer, backend and running
+process. The record identifies:
+
+- the immutable checkpoint and adapter artifacts;
+- the tokenizer vocabulary, code and special-token settings;
+- the backend build, generation defaults and text-rendering settings;
+- the context and output limits;
+- the current engine process.
+
+Qualification must also account for server extensions and speculative
+decoding. Restarting the engine or changing any of these inputs requires
+requalification. Keep the selected inputs and their digests in private
+execution records.
 
 Resolve effective limits before admission. A server override must not
 silently change the original output budget or its remainder on recovery.
 Pin the effective EOS and token-stop set as well: an empty request-level
 `stop_token_ids` array does not necessarily clear server defaults.
 
-The existing engine attestation does not establish the token-to-byte replay
-contract. Continuation needs its own verified capability; health checks and
-matching token counts cannot supply it.
+The ordinary engine attestation identifies the engine process. Continuation
+also requires a reviewed decoder contract and measurements showing that
+replay preserves emitted bytes. Health checks and matching token counts do
+not establish that behaviour.
 
 ## Qualification evidence
 
@@ -213,15 +240,15 @@ qualification is limited to the checked running process.
 | Token-stop replay after 13 committed IDs | The remaining three IDs, emitted bytes and stop metadata matched the 16-token baseline. The terminal stop ID had empty text. |
 
 Six generation requests ran serially; five response records were retained.
-One recorder failure discarded a completed response after treating an
-asynchronously updated activity gauge as a drain acknowledgement. The failed
-probe record is retained separately from the replacement stop comparison.
+The recorder discarded one completed response because it used an
+asynchronously updated activity gauge to check whether the engine had
+drained. The private record retains that failure and the replacement stop
+comparison.
 
-The probes exercised an explicit token stop. Native EOS handling was checked
-against the installed decoder and effective stop configuration; no live
-request generated EOS. These measurements establish raw-token replay at the
-selected boundaries. They do not qualify worker-failure recovery or another
-tokenizer's decoding behaviour.
+The #192 probes exercised an explicit token stop. Native EOS handling was
+checked against the installed decoder and effective stop configuration;
+none of those live requests generated EOS. The measurements establish
+raw-token replay at the selected boundaries for this tokenizer.
 
 The measured decoder converts concatenated token bytes to UTF-8 without text
 cleanup. CPU checks with the installed tokenizer covered partial characters,
@@ -229,13 +256,85 @@ invalid bytes and skipped special tokens. All 13 qualifying cuts across four
 adversarial sequences preserved the remaining text; the 14 unqualified cuts
 failed.
 
-The grouped-frame counterexample combines two recorded live events according
-to the backend's output collection code. The live probes did not observe a
-grouped frame.
+To test grouped frames, the feasibility check combined two recorded live
+events as the backend's output collection code would. The live probes did
+not observe a grouped frame.
 
 Synthetic serving tests cover grouped frames, failed or blocked ASGI sends,
 terminal metadata before `[DONE]`, retention limits, cancellation and survivor
-recovery. These tests establish router behaviour. Worker-failure recovery,
-cleanup and impact on concurrent requests require the separate fleet
-qualification in [#195](https://github.com/athrael-soju/Narwhal/issues/195),
-including live EOS and terminal-boundary coverage.
+recovery. These tests establish router behaviour within their synthetic inputs.
+
+### Live router results
+
+The [#195 qualification](https://github.com/athrael-soju/Narwhal/issues/195)
+compared an opted-in stream and an ordinary stream on the same decode worker
+when that worker was terminated. The opted-in stream recovered.
+The router replayed a 564-token prompt plus 11 committed IDs and requested
+the remaining 13 output tokens. The complete response matched the healthy
+baseline's 24 IDs and UTF-8 bytes, preserved its response identity and ended
+with one finish and one `[DONE]`.
+
+Client completion took 10.29 seconds; the longest content gap was 3.24 seconds.
+The surviving decoder completed a native KV transfer. Immediately after the
+test, router reservations, retained history and surviving engine requests
+were zero.
+
+The ordinary stream on the terminated worker emitted one ID before the
+fault, then one terminal error without replay or `[DONE]`. An opted-in stream
+on the surviving worker completed without recovery and matched the healthy
+baseline's output. A new ordinary request started after recovery spent its
+credit and overlapped the replacement decode request. Its first content arrived in 2.07 seconds
+and it completed in 3.84 seconds. Recovery and the concurrent control met
+the limits declared before testing. This run explicitly set
+`recovery.failure_quarantine_s` to `30`.
+
+An earlier worker-failure run recovered its opted-in stream in 9.41 seconds
+with a longest content gap of 2.97 seconds. Its concurrent ordinary request
+failed: quarantine was disabled, so the router selected the terminated
+decoder before health checks ejected it. That failed control remains in
+the reported outcomes.
+
+Separate cases observed the model's native EOS without a request-level stop
+override and recovered after a transport cut between a finish frame and the
+complete `[DONE]` delimiter. The EOS came from the engine's generation
+configuration; the tokenizer's different primary EOS was not generated.
+
+A separate transport-cut run set `recovery.failure_quarantine_s` to `30`.
+The interrupted stream completed in 8.24 seconds with a longest content gap
+of 1.77 seconds. Its 11 committed IDs and 13 replayed IDs matched the
+uninterrupted baseline in IDs and UTF-8 bytes. An ordinary request overlapped
+the replacement decode request on the surviving engine; its first content arrived
+in 2.12 seconds and it completed in 3.85 seconds. Both requests met the
+limits declared before testing.
+
+After the transport-cut recovery spent the router's sole credit, another cut
+produced one `continuation_shared_budget` error. The router retained the
+11 committed IDs, sent no replacement request and closed the response
+without a finish frame or `[DONE]`. The request ended in 4.27 seconds,
+within its original deadline. Native transfer counters, client captures,
+journals and router counters reconciled all three requests; backend work,
+reservations and retained history returned to zero.
+
+After the final worker-failure run, health checks also ejected the surviving
+producer twice, with a successful readmission between those events. A later
+direct health check returned HTTP 200 from the same engine process.
+
+The fault harness forwarded all engines through one HTTP origin. An offline
+reproduction at the same probe cadence showed that an unhandled connection
+error for the dead engine could close a connection reused by a healthy
+engine's next probe. All four reproduction cycles lost that probe before it
+reached the engine. Handling the proxy error removed the failure in four
+further cycles. This matches the live access-log pattern, but the live probe
+exceptions were not captured. The cause of the live ejections therefore
+remains an inference; the original fault record is unchanged.
+
+Across the 18 original client requests, nine completed, two ordinary requests
+failed, one received the expected credit refusal and six were cancelled by
+the harness in two earlier failed runs. Profiling, preflight, direct backend
+qualification and automatic readmission requests are recorded separately.
+
+Seven of the nine completed requests exceeded the configured router target
+of 0.3 seconds per output token (TPOT). All nine met the 10-second router TTFT
+target. Router TTFT ends at prefill completion; router TPOT includes the
+subsequent transfer, queueing and recovery time. The drill's client
+interruption and completion limits use separate timing definitions.

@@ -20,8 +20,10 @@ Narwhal closes each original completion request with one terminal row, attaching
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`, `rid`, `client_rid`                   | Router process, Narwhal request ID, and optional caller request ID.                                                                                                   |
 | `arrived`                                    | Arrival time on the process monotonic clock. Compare this value only within one `run`.                                                                                |
-| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. For a cancellation, `output_len` records delivered tokens when they can be measured.                     |
-| `ttft_s`, `tpot_s`, `first_byte_s`           | Router-side prefill, decode, and first-visible-output timing.                                                                                                         |
+| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. Cancellation retains measured partial output; continuation uses the ASGI counting rule below. |
+| `ttft_s` | Seconds from request arrival to prefill completion; null if prefill did not complete. |
+| `tpot_s` | Seconds from prefill completion to the last observed output token, divided by `output_len - 1`. Null if timing or exact token counts are unavailable, or `output_len` is less than two. |
+| `first_byte_s` | Seconds from request arrival to the first observed output; null if none was observed. |
 | `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
 | `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
 | `token_accounting`                           | Decode-output accounting mode. `token_ids` provides exact per-token identity; every other dialect reports `unavailable`.                                              |
@@ -35,22 +37,25 @@ Narwhal closes each original completion request with one terminal row, attaching
 | `decode_tpot_s`                              | Time from first to last observed output token divided by `output_len - 1`. Null when `output_len` is less than two or exact token accounting is unavailable. |
 | `decode_tokens_observed`, `upstream_seconds` | Tokens observed across every attempt and summed HTTP-leg duration, including failed work, transfer time, and waiting.                                                 |
 | `error`                                      | Failure or refusal detail. Successful and cancelled requests use null.                                                                                                |
-| `continuation`                               | Recovery attempts, submitted replay tokens, prefill time, interruption time, failures and terminal reason. Present only for opted-in requests. |
+| `continuation`                               | Recovery accounting for validated opt-in requests. See [Continuation recovery](#continuation-recovery). |
 
 For [opted-in continuation](../http-api/01-Requests.md#continuation-opt-in),
-`output_len` counts generated IDs only after their ASGI body send returns
-successfully. Pending IDs are excluded, including after a failed or cancelled
-write. This boundary acknowledges server acceptance, not client receipt.
-`decode_tokens_observed` includes IDs read from upstream even when their
-output never commits.
+Narwhal adds generated IDs to `output_len` after the ASGI send containing them
+returns successfully. A failed or cancelled send adds no IDs. A successful
+send confirms server acceptance only; it does not confirm client receipt.
+`decode_tokens_observed` counts every ID read from an engine, including IDs
+whose buffered output is later discarded.
 
-Continuation keeps `first_byte_s` and the first/last token timestamps at the
-upstream observation boundary. An empty-text token or a pending group can
-therefore start this timing before ASGI accepts any output. `decode_tpot_s`
-uses those observation timestamps and the committed `output_len` denominator;
-it does not measure the client's delivery interval. Continuation diagnostics
-exclude prompt text, generated text and token arrays from `error` and
-`attempt_failures`.
+Narwhal records `first_byte_s` and the first and last token times when IDs
+arrive from the engine. Tokens with empty text can start these timings while
+their output remains buffered. Recovery preserves the original prefill
+completion time, so `tpot_s` includes time spent transferring KV, queueing
+and recovering. `decode_tpot_s` starts at the first observed output token.
+Both fields divide by `output_len - 1`, combining engine observation times
+with the number of IDs accepted by ASGI. Measure delivery timing at the client.
+
+For continuation requests, `error` and `attempt_failures` exclude prompt text,
+generated text and token arrays.
 
 Each `attempt_failures` entry can record:
 
@@ -73,16 +78,23 @@ to its terminal row:
 
 | Field | Meaning |
 | --- | --- |
-| `attempts` | Recovery attempts admitted after output commitment, including attempts cancelled before dispatch |
-| `replay_input_tokens` | Sum of the original prompt and committed output lengths submitted by recovery prefills |
+| `attempts` | Recovery attempts admitted after ASGI accepts output, including attempts cancelled before an engine dispatch |
+| `replay_input_tokens` | Total tokens submitted in recovery prompts, including repeated submissions |
 | `prefill_seconds` | Recovery prefill HTTP duration, including failed and cancelled calls |
-| `interruption_seconds` | Nonoverlapping time from recovery handling after upstream cleanup to the next successful ASGI output commit or terminal outcome |
+| `interruption_seconds` | Total recovery interruption time, using the interval defined below |
 | `failures` | Observed failures grouped by the fixed reasons below |
 | `terminal_reason` | Completion, cancellation or the condition that stopped recovery |
 
-`replay_input_tokens` counts submitted tokens, including repeated submissions
-after a failed prefill. It does not measure cache misses or GPU computation.
-`prefill_seconds` is also included in `upstream_seconds.prefill`.
+Each recovery prompt contains the original prompt and the generated IDs
+already accepted by ASGI. `replay_input_tokens` counts that prompt each time
+it is submitted, including after a failed prefill. It does not measure cache
+misses or GPU computation. `prefill_seconds` is also included in
+`upstream_seconds.prefill`.
+
+An interruption starts when the router enters recovery after closing the
+failed upstream stream. It ends when the next ASGI output send succeeds or
+the request ends. Further failures before output resumes extend the same
+interval.
 
 The failure reasons are `connection`, `timeout`, `upstream_status`,
 `stream_interrupted`, `handoff`, `invalid_stream`, `qualification`,
@@ -94,19 +106,17 @@ Budget denials do not add failure counts.
 `output_limit`, `history_limit`, `fenced`, `non_transient`, `local_pool`,
 `prediction`, `cancelled` and `before_commit`.
 
-Each opted-in terminal row increments
-`narwhal_continuation_outcomes_total{reason="<terminal_reason>"}` once.
-Group these rows by `run` and `continuation.terminal_reason` to reconcile them
-with the router's process-local outcome counters. Failed recovery gates and
-cancelled requests contribute an outcome even when no replacement dispatch
-occurred; observed failure counts remain separate.
+Each validated opt-in request counts once in
+`narwhal_continuation_outcomes_total{reason="<terminal_reason>"}` when it ends.
+The metric's `reason` matches `continuation.terminal_reason`. To compare the
+metric with the journal, count terminal rows with the same `run` and reason.
+Requests cancelled or stopped before a replacement dispatch still count.
+The separate `failures` field counts failures the router evaluates for recovery.
 
-The original `attempts` and `decode_attempts` fields count every physical
-dispatch, including recovery. Recovery does not create another offered
-request or change `input_len` and `wanted_len`. The generated IDs in a replay
-prompt remain part of the original output count; they are not counted again
-when the survivor reads that prompt. Existing latency fields retain the
-observation boundaries described above.
+Top-level `attempts` and `decode_attempts` count actual prefill and decode
+dispatches, including recovery. Recovery retains one offered request and its
+original `input_len` and `wanted_len`. Replaying generated IDs as prompt input
+does not add them to `output_len` again.
 
 ### Attainment accounting
 

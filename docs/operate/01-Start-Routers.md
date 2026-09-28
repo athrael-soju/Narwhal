@@ -21,9 +21,15 @@ A router pair must run one coherent deployment set under one release identifier:
 - the fleet configuration;
 - the profile store;
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set;
+- the pinned private qualification record, when `continuation.enabled` is `true`;
 - the corresponding [deployment evidence set](../measure/03-Load-Trial.md#7-run-the-synthetic-deployment-trial).
 
 Install that set on both router hosts. The configured calibration path must be readable from each router's working directory. A missing artifact or an engine-generation mismatch stops startup; after replacing an engine, [recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and distribute the new artifact and fleet configuration before restarting the routers.
+
+When continuation is enabled, install the same qualification file on both
+router hosts at `continuation.qualification_path`. Each router checks the
+file against `continuation.qualification_sha256` at startup. Request history
+stays in the router's memory, and a router failure ends its active streams.
 
 Before replacing or upgrading either router, inspect the installed build's handoff contracts:
 
