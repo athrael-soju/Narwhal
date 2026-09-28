@@ -120,7 +120,8 @@ Receiving `[DONE]` before the first generated token returns HTTP `502` with:
 stream ended with [DONE] before any token arrived
 ```
 
-An error object carried inside an upstream HTTP `200` stream propagates with the error object's own status.
+For ordinary requests, an error object carried inside an upstream HTTP `200`
+stream propagates with the error object's own status.
 
 ### Decode timeouts
 
@@ -147,7 +148,8 @@ Before visible output, Narwhal may start a fresh attempt for a transient fault w
 
 When `recovery.failure_quarantine_s > 0`, the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
 
-A decode failure after HTTP `200` has already been committed emits a terminal SSE event:
+If retries or opted-in continuation cannot recover a decode failure,
+Narwhal emits a terminal SSE event after HTTP `200`:
 
 ```text
 data: {"error": ...}
@@ -156,8 +158,12 @@ data: {"error": ...}
 ### Continuation failures
 
 The unreleased [continuation opt-in](01-Requests.md#continuation-opt-in)
-retains committed output state. Recovery dispatch is not yet implemented.
-Ordinary retries still stop after the first committed output group.
+can recover eligible failures after the first committed output group. It
+replays the original prompt and committed generated IDs on qualified surviving
+engines, using fresh prefill and KV ownership. Recovery uses separate
+attempt limits and credits within the original deadline. Live worker-failure
+qualification remains pending in
+[#195](https://github.com/athrael-soju/Narwhal/issues/195).
 
 The router verifies a selected engine's qualification before each prefill or
 decode dispatch, then rechecks the decode process after opening its stream.
@@ -166,11 +172,31 @@ or a terminal SSE error after headers. This local eligibility failure does
 not add engine-breaker evidence.
 
 Continuation reads complete SSE events and verifies the echoed prompt IDs,
-generated IDs, finish metadata and final terminator. A malformed stream
-fails with a content-free error. Exceeding the retained-history or original
-output limit emits an explicit stream error and closes the response. Pending
-output stays uncommitted. A valid completion at exactly `max_tokens` finishes
-normally with `finish_reason: "length"`.
+generated IDs, finish metadata and final terminator. EOF before a complete
+`[DONE]` can trigger recovery from the preceding committed prefix. Malformed
+events fail with a content-free error and do not trigger recovery. Exceeding
+the retained-history or original output limit emits an explicit stream error
+and closes the response. Pending output stays uncommitted. A valid completion
+at exactly `max_tokens` finishes normally with `finish_reason: "length"`.
+
+Recovery admission errors use `type: "continuation_error"` and one of these
+fixed codes and messages:
+
+| Code | Message |
+| --- | --- |
+| `continuation_attempt_limit` | `Continuation recovery attempt limit reached` |
+| `continuation_shared_budget` | `Continuation recovery credits are exhausted` |
+| `continuation_no_survivor` | `No qualified continuation survivor is available` |
+| `continuation_qualification` | `Qualified continuation capacity is unavailable` |
+| `continuation_original_deadline` | `Original request deadline expired during continuation` |
+| `continuation_output_limit` | `No output tokens remain for continuation` |
+| `continuation_fenced` | `Router control does not permit continuation` |
+| `continuation_prediction` | `Continuation prefill estimate exceeds the remaining deadline` |
+
+Other failures retain their existing error type and code, including `expired`
+when the request deadline interrupts an active operation. A committed
+terminal group completes the request; later upstream cleanup cannot emit
+another completion or error.
 
 A failed or cancelled client write terminates the original request because
 the server may have accepted part of that write. Continuation buffers remain

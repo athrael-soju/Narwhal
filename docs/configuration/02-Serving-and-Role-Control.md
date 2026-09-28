@@ -58,7 +58,7 @@ Before any visible output, Narwhal may retry:
 
 Every retry begins with fresh prefill ownership. Recovery from an expired handoff does the same.
 
-A permanent error, local HTTP-pool starvation, cancellation, or any failure after visible output terminates the request.
+A permanent error, local HTTP-pool starvation or cancellation terminates the request. Ordinary retries stop after visible output. Supported requests can enable [continuation recovery](#44-opt-in-continuation-state) for eligible failures after output commitment.
 
 For non-streaming output, partial response bodies from failed attempts are discarded before retry.
 
@@ -80,11 +80,13 @@ Queueing, concurrency limits, handoff expiry, retries, and byte limits change de
 
 Prefill failures and non-streaming decode failures return HTTP errors.
 
-Streaming responses commit HTTP 200 before decode starts. A later decode failure is therefore reported as a terminal stream error event, including a failure that occurs before the first generated token.
+Streaming responses commit HTTP 200 before decode starts. If retries or opted-in continuation cannot recover a later decode failure, Narwhal reports a terminal stream error event. This also applies when decode fails before the first generated token.
 
-When the overall request deadline expires, Narwhal emits `code: expired` and closes the stream.
-
-Client backpressure closes the connection immediately.
+When the overall request deadline interrupts an active operation, Narwhal
+emits `code: expired` and closes the stream. If continuation admission finds
+the deadline already exhausted, it emits `code: continuation_original_deadline`.
+If client backpressure prevents the deadline error from being written,
+Narwhal closes the connection without waiting for that write.
 
 A client should treat either condition as a failed response:
 
@@ -95,23 +97,22 @@ Any client-side retry must fit inside the caller's remaining deadline.
 
 ### 4.4 Opt-in continuation state
 
-The top-level `continuation` section controls retained state for the
+The top-level `continuation` section controls recovery and retained state for the
 [stream continuation contract](../concepts/04-Stream-Continuation.md).
 Continuation requires both `continuation.enabled: true` and an explicit
 `narwhal_continuation: true` in a supported completion request. Omitting the
 request field or setting it to `false` keeps ordinary serving behaviour.
 
-This unreleased implementation retains output state and validates commitment.
-Recovery dispatch remains pending in
-[#194](https://github.com/athrael-soju/Narwhal/issues/194), so the recovery
-attempt and credit settings do not yet schedule replacement work. Enabling
-the policy already requires positive `max_attempts` and `recovery_budget`.
+The unreleased implementation can recover eligible upstream failures after
+output commitment. Synthetic tests cover router behaviour; live worker-failure
+qualification remains pending in
+[#195](https://github.com/athrael-soju/Narwhal/issues/195).
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `continuation.enabled` | `false` | Allows explicit request opt-in after qualification and capacity checks. |
-| `continuation.max_attempts` | `0` | Reserved for recovery dispatch: maximum recovery attempts per original request, excluding its initial attempt. |
-| `continuation.recovery_budget` | `0` | Initial and maximum router-wide recovery credits, reserved for recovery dispatch at one credit per attempt. |
+| `continuation.max_attempts` | `0` | Maximum recovery attempts per original request, excluding the initial attempt and retries before output commitment. |
+| `continuation.recovery_budget` | `0` | Initial and maximum router-wide recovery credits. Each admitted recovery attempt consumes one credit. |
 | `continuation.recovery_replenish` | `0.0` | Credits added after each successful opted-in original request, capped by `recovery_budget`. Range zero to one. |
 | `continuation.max_context_tokens` | `0` | Maximum original prompt length plus requested `max_tokens`, in tokens. |
 | `continuation.max_history_bytes` | `0` | Per-request byte reservation for retained token IDs, pending frames and output buffers. |
@@ -128,6 +129,25 @@ opening the record; successful config validation does not qualify a backend.
 
 Router startup also requires a dialect that advertises exact token IDs.
 The pinned qualification record must name the fleet's configured model.
+
+Recovery attempts use their own limit and credits. They do not consume
+`serving.retry_budget`. Each attempt starts with a fresh prefill and KV
+handoff. Retrying a failed recovery prefill or expired handoff consumes
+another attempt and credit. Cancellation after admission does not refund
+the credit.
+
+The router excludes failed engines throughout subsequent recovery placement,
+including queued placement. Survivors must pass current health, process,
+loaded profile generation, role and capacity checks. Router lease fencing,
+restart holds and lifecycle drains also apply. An expired handoff alone
+does not mark either engine as failed.
+
+With `serving.admission: "predictive"`, the augmented replay prompt's prefill
+estimate must be finite and less than the time left on the original request
+deadline. This estimate covers prefill admission only; transfer, decode and
+client writes still have to finish within that deadline. Recovery does not
+reset the original TTFT or first-output timestamps. `"open"` skips this
+predictive gate.
 
 Choose the context limit within the qualified backend's capacity. Each
 request must leave enough history space for its prompt, requested output and

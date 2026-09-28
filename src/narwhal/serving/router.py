@@ -203,6 +203,12 @@ class NarwhalRouter:
         self.prefill_attempts = 0
         self.decode_attempts = 0
         self.retry_attempts = 0
+        self.continuation_attempts = 0
+        self.continuation_replay_input_tokens = 0
+        self.continuation_prefill_seconds = 0.0
+        self.continuation_interruption_seconds = 0.0
+        self.continuation_failures: dict[str, int] = {}
+        self.continuation_outcomes: dict[str, int] = {}
         self.decode_tokens_observed = 0
         self.upstream_seconds = {"prefill": 0.0, "decode": 0.0}
         self.ttft = Histogram(buckets_for(cfg.slo.ttft_s))
@@ -588,6 +594,17 @@ class NarwhalRouter:
                 "retry_credits": self.retry_budget.available,
                 "retry_credits_spent": self.retry_budget.spent,
                 "retry_denied": self.retry_budget.denied,
+                "continuation_attempts": self.continuation_attempts,
+                "continuation_replay_input_tokens": self.continuation_replay_input_tokens,
+                "continuation_prefill_seconds": self.continuation_prefill_seconds,
+                "continuation_interruption_seconds": self.continuation_interruption_seconds,
+                "continuation_failures": self.continuation_failures.copy(),
+                "continuation_outcomes": self.continuation_outcomes.copy(),
+                "continuation_credits": self.continuation_budget.available,
+                "continuation_credits_spent": self.continuation_budget.spent,
+                "continuation_denied": self.continuation_budget.denied,
+                "continuation_history_bytes": self.continuation_memory.used,
+                "continuation_history_limit_bytes": self.continuation_memory.limit,
                 "decode_tokens_observed": self.decode_tokens_observed,
                 "upstream_seconds": self.upstream_seconds.copy(),
             },

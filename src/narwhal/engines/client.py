@@ -26,6 +26,7 @@ from .replay import (
     ReplayError,
     ReplayEvent,
     ReplayEventReader,
+    ReplayInterrupted,
     ReplayQualification,
     ReplayUnavailable,
 )
@@ -593,6 +594,8 @@ class EngineClient:
                 except StopAsyncIteration:
                     try:
                         reader.finish()
+                    except ReplayInterrupted as exc:
+                        raise EngineError("decode", url, 502, STREAM_UNTERMINATED_DETAIL) from exc
                     except ReplayError as exc:
                         raise EngineError("decode", url, 502, STREAM_CONTINUATION_DETAIL) from exc
                     return

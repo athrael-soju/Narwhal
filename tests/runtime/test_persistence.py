@@ -11,7 +11,7 @@ from narwhal.observability.journal import RunJournal
 from narwhal.runtime import state
 from narwhal.runtime.lifecycle import LifecycleError
 from narwhal.serving.app import create_app
-from narwhal.types import Role
+from narwhal.types import Request, Role
 from tests.fixtures import fleet
 
 
@@ -42,6 +42,26 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             state.write(self.path, {**self.doc, "run": "next"})
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.root.glob(".*.tmp")), [])
+
+    def test_recovery_work_stays_local_and_does_not_change_handoff_schema(self):
+        with patch("narwhal.runtime.state.time.time", return_value=1000.0):
+            before = state.snapshot(self.router)
+            self.router.monitor.waiting["queued"] = Request(
+                "queued", 120, wanted_len=8, recovery_deadline=200.0
+            )
+            self.router.monitor.dispatched(
+                "e0", Request("active", 150, wanted_len=5, recovery_deadline=200.0)
+            )
+            after = state.snapshot(self.router)
+        self.assertEqual(after, before)
+        state.write(self.path, after)
+        fresh = create_app(self.cfg).state.router
+        self.addAsyncCleanup(fresh.engines.aclose)
+        self.assertTrue(state.apply(fresh, state.load(self.path)).applied)
+        self.assertFalse(fresh.monitor.waiting)
+        for instance in fresh.monitor.instances.values():
+            self.assertFalse(instance.prefill)
+            self.assertFalse(instance.decode)
 
     def test_missing_and_torn_files_return_an_absent_handoff(self):
         """Read recovery treats missing, truncated and invalid-UTF8 files as absent."""

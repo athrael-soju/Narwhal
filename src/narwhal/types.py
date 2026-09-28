@@ -54,6 +54,8 @@ class Request:
     wanted_len: int = 0
     # Monotonic ingress time for end-to-end TTFT projections.
     arrived_at: float | None = None
+    # Replay work uses the original deadline, not a new TTFT target.
+    recovery_deadline: float | None = None
 
     @property
     def length(self) -> int:

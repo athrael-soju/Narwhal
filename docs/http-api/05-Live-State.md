@@ -111,12 +111,36 @@ The `serving` object exposes:
 | `http_retained_high_water` | Peak retained-request occupancy                              |
 | `prefill_attempts`         | Cumulative prefill dispatches                                |
 | `decode_attempts`          | Cumulative decode dispatches                                 |
-| `retry_attempts`           | Additional prefill attempts                                  |
+| `retry_attempts`           | Additional prefill attempts before output commitment, excluding continuation recovery |
 | `retry_credits`            | Shared retry credit currently available                      |
 | `retry_credits_spent`      | Shared retry credit consumed                                 |
 | `retry_denied`             | Retries refused by budget                                    |
 | `decode_tokens_observed`   | Observed decode tokens                                       |
 | `upstream_seconds`         | Cumulative HTTP leg time by phase, including failed attempts |
+
+Continuation adds these process-local fields to `serving`:
+
+| Field | Meaning |
+| --- | --- |
+| `continuation_attempts` | Recovery attempts admitted after output commitment, including attempts cancelled before dispatch |
+| `continuation_replay_input_tokens` | Sum of the original prompt and committed output lengths submitted by recovery prefills |
+| `continuation_prefill_seconds` | Cumulative recovery prefill HTTP duration, including failed and cancelled calls |
+| `continuation_interruption_seconds` | Cumulative nonoverlapping intervals from recovery handling after upstream cleanup to the next successful ASGI output commit or terminal outcome |
+| `continuation_failures` | Observed failure counts grouped by the bounded [journal reason vocabulary](../telemetry/01-Journal.md#continuation-recovery) |
+| `continuation_outcomes` | Original opted-in requests settled once, grouped by the journal's `continuation.terminal_reason` |
+| `continuation_credits` | Shared recovery credit currently available |
+| `continuation_credits_spent` | Recovery credit consumed, including attempts cancelled before dispatch |
+| `continuation_denied` | Recovery attempts refused by the shared recovery budget |
+| `continuation_history_bytes` | Bytes reserved for retained continuation history |
+| `continuation_history_limit_bytes` | Maximum bytes the router can reserve for continuation history |
+
+Replay input counts describe submitted work. Prefix-cache reuse can reduce
+the computation an engine performs; these counts do not measure GPU work.
+Recovery prefill time also appears in `upstream_seconds.prefill`.
+Interruption time is added when output resumes or the request terminates.
+The outcome counts reconcile with opted-in terminal journal rows in the same
+router process. They start empty and do not survive router replacement.
+The history reservation covers replay storage, not all HTTP or parser memory.
 
 ---
 

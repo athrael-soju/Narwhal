@@ -19,6 +19,7 @@ from narwhal.engines.client import (
     FIRST_OUTPUT_DETAIL,
     STREAM_CONTINUATION_DETAIL,
     STREAM_SILENCE_DETAIL,
+    STREAM_UNTERMINATED_DETAIL,
     EngineClient,
     EngineError,
     leg_failure_class,
@@ -29,6 +30,7 @@ from narwhal.engines.replay import (
     ReplayContract,
     ReplayError,
     ReplayEventReader,
+    ReplayInterrupted,
     ReplayQualification,
     ReplayUnavailable,
 )
@@ -128,7 +130,7 @@ class ReplayReaderTests(unittest.TestCase):
         events = list(reader.feed(data[-1:]))
         self.assertEqual(events[0].generated_ids, (7,))
         self.assertEqual(list(reader.feed(b"data: [DONE]\n")), [])
-        with self.assertRaisesRegex(ReplayError, "complete terminator"):
+        with self.assertRaisesRegex(ReplayInterrupted, "complete terminator"):
             reader.finish()
         self.assertEqual(next(reader.feed(b"\n")).kind, "done")
         reader.finish()
@@ -482,8 +484,22 @@ class ReplayHTTPTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_client_requires_complete_done_and_classifies_protocol_failure(self):
         self.assertEqual([e.kind for e in await self.consume()], ["completion", "done"])
-        self.stream = ByteStream([(0, wire(envelope(finish="stop")) + b"data: [DONE]\n")])
-        with self.assertRaisesRegex(EngineError, STREAM_CONTINUATION_DETAIL) as caught:
-            await self.consume()
-        self.assertEqual(leg_failure_class(caught.exception), LEG_STREAM)
-        self.assertTrue(self.stream.closed)
+        for suffix in (b"", b"data: [DONE]", b"data: [DONE]\n", b'data: {"choices":'):
+            with self.subTest(suffix=suffix):
+                self.stream = ByteStream([(0, wire(envelope(finish="stop")) + suffix)])
+                with self.assertRaises(EngineError) as caught:
+                    await self.consume()
+                self.assertEqual(caught.exception.detail, STREAM_UNTERMINATED_DETAIL)
+                self.assertEqual(leg_failure_class(caught.exception), LEG_STREAM)
+                self.assertTrue(self.stream.closed)
+        for invalid in (
+            wire(envelope(ids=(True,))),
+            b"event: unsupported\n\n",
+            b"data: invalid-json\n\n",
+        ):
+            with self.subTest(invalid=invalid):
+                self.stream = ByteStream([(0, invalid)])
+                with self.assertRaisesRegex(EngineError, STREAM_CONTINUATION_DETAIL) as caught:
+                    await self.consume()
+                self.assertEqual(leg_failure_class(caught.exception), LEG_STREAM)
+                self.assertTrue(self.stream.closed)

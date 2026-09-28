@@ -55,6 +55,10 @@ class ReplayUnavailable(ReplayError):
     """Qualification is absent, stale or unreadable; this is not inference failure."""
 
 
+class ReplayInterrupted(ReplayError):
+    """The transport ended before a complete stream terminator arrived."""
+
+
 def _keys(value: Any, required: set[str], optional: set[str] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ReplayError("continuation record must be an object")
@@ -470,8 +474,10 @@ class ReplayEventReader:
 
     def finish(self) -> None:
         """Require a complete terminator when the HTTP response reaches EOF."""
-        if not self._done or self._line or self._data:
-            raise ReplayError("continuation stream ended before a complete terminator")
+        if not self._done:
+            raise ReplayInterrupted("continuation stream ended before a complete terminator")
+        if self._line or self._data:
+            raise ReplayError("continuation stream contains data after its terminator")
 
     def _event(self, payload: bytes) -> ReplayEvent:
         if self._done:

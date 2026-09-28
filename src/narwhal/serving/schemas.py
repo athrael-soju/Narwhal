@@ -62,6 +62,17 @@ class ServingOut(BaseModel):
     retry_credits: float = 0.0
     retry_credits_spent: int = 0
     retry_denied: int = 0
+    continuation_attempts: int = 0
+    continuation_replay_input_tokens: int = 0
+    continuation_prefill_seconds: float = 0.0
+    continuation_interruption_seconds: float = 0.0
+    continuation_failures: dict[str, int] = Field(default_factory=dict)
+    continuation_outcomes: dict[str, int] = Field(default_factory=dict)
+    continuation_credits: float = 0.0
+    continuation_credits_spent: int = 0
+    continuation_denied: int = 0
+    continuation_history_bytes: int = 0
+    continuation_history_limit_bytes: int = 0
     decode_tokens_observed: int = 0
     upstream_seconds: dict[str, float] = Field(default_factory=dict)
 

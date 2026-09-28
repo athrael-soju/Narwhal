@@ -88,10 +88,22 @@ def _render_admission(state: dict) -> list[str]:
     for field_name, help_text in (
         ("prefill_attempts", "Prefill HTTP attempts including retries"),
         ("decode_attempts", "Decode HTTP attempts including retries"),
-        ("retry_attempts", "Additional prefill attempts after an original attempt failed"),
+        ("retry_attempts", "Additional prefill attempts before output commitment"),
         ("retry_credits_spent", "Retry credits consumed, including cancelled backoffs"),
         ("retry_denied", "Retries denied by the shared retry quota"),
         ("decode_tokens_observed", "Exact decode tokens read across all attempts when supported"),
+        ("continuation_attempts", "Recovery attempts admitted after output commitment"),
+        (
+            "continuation_replay_input_tokens",
+            "Logical prompt tokens submitted by recovery prefills, including committed output",
+        ),
+        ("continuation_prefill_seconds", "Summed recovery prefill HTTP duration"),
+        (
+            "continuation_interruption_seconds",
+            "Summed intervals from recovery failure to next committed output or termination",
+        ),
+        ("continuation_credits_spent", "Recovery credits consumed including cancelled attempts"),
+        ("continuation_denied", "Recoveries denied by the shared recovery quota"),
     ):
         out += _lines(
             f"narwhal_{field_name}_total", help_text, "counter", [({}, serving.get(field_name, 0))]
@@ -101,10 +113,31 @@ def _render_admission(state: dict) -> list[str]:
         ("http_retained_limit", "Maximum retained completion HTTP requests"),
         ("http_retained_high_water", "Largest number of retained completion HTTP requests"),
         ("retry_credits", "Retry credits currently available"),
+        ("continuation_credits", "Recovery credits currently available"),
+        ("continuation_history_bytes", "Reserved continuation history bytes"),
+        ("continuation_history_limit_bytes", "Maximum reserved continuation history bytes"),
     ):
         out += _lines(
             f"narwhal_{field_name}", help_text, "gauge", [({}, serving.get(field_name, 0))]
         )
+    out += _lines(
+        "narwhal_continuation_failures_total",
+        "Observed continuation failures by bounded reason",
+        "counter",
+        [
+            ({"reason": reason}, count)
+            for reason, count in sorted(serving.get("continuation_failures", {}).items())
+        ],
+    )
+    out += _lines(
+        "narwhal_continuation_outcomes_total",
+        "Original opted-in requests settled by bounded terminal reason",
+        "counter",
+        [
+            ({"reason": reason}, count)
+            for reason, count in sorted(serving.get("continuation_outcomes", {}).items())
+        ],
+    )
     admission = state.get("admission") or {}
     for field_name in (
         "queued",

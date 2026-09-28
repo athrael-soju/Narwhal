@@ -18,6 +18,7 @@ A replacement router process initializes these counters and measurements afresh:
 - offered, unsized, and expired counters;
 - attempt counters;
 - retry quota;
+- continuation recovery counters, credits and history reservations;
 - histograms;
 - controller decision counters;
 - role-change counters;
@@ -35,6 +36,7 @@ Use journal `run` as the process boundary when reconciling restored outcome coun
 | Monitoring          | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`                                                                                                                                                                                                                        |
 | Request outcomes    | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total`                                                                                                                                                                                                                                               |
 | Attempts and quota  | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total`                                                                                                                                                                                                                                                   |
+| Continuation | `narwhal_continuation_attempts_total`, `narwhal_continuation_replay_input_tokens_total`, `narwhal_continuation_prefill_seconds_total`, `narwhal_continuation_interruption_seconds_total`, `narwhal_continuation_failures_total`, `narwhal_continuation_outcomes_total`, `narwhal_continuation_credits`, `narwhal_continuation_credits_spent_total`, `narwhal_continuation_denied_total`, `narwhal_continuation_history_bytes`, `narwhal_continuation_history_limit_bytes` |
 | Queueing            | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds`                                                                                                                                                                                                                                                                                                                                                                 |
 | HTTP retention      | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Pools               | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -45,6 +47,35 @@ Use journal `run` as the process boundary when reconciling restored outcome coun
 | Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total`                                                                                                                                                                                                                                                                                                                                                  |
 | Latency             | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds`                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Lifecycle           | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+### Continuation recovery
+
+Continuation series expose the corresponding fields in
+[`serving` state](../http-api/05-Live-State.md#admission-and-serving-state).
+`narwhal_continuation_credits` and both history byte series are gauges; the
+remaining series are counters. `narwhal_continuation_failures_total` has one `reason` label from
+the fixed [journal failure vocabulary](01-Journal.md#continuation-recovery).
+It counts observed failures, including failures followed by a successful
+recovery. Budget denials have their own counter.
+
+`narwhal_continuation_outcomes_total{reason="<terminal_reason>"}` counts each
+opted-in original request once when it settles. The fixed reason labels match
+`continuation.terminal_reason` in the journal, including completion,
+cancellation and failed recovery gates. This process-local counter starts
+with no reason samples and reconciles with opted-in terminal rows for the
+same journal `run`. Ordinary requests do not increment it.
+
+`narwhal_continuation_replay_input_tokens_total` counts prompt tokens
+submitted by recovery prefills, not GPU computation. Those prefills also
+increment `narwhal_prefill_attempts_total` and contribute to
+`narwhal_upstream_seconds_total{phase="prefill"}`. They do not increment
+`narwhal_retry_attempts_total`, which counts retries before output commitment.
+
+Interruption time starts when serving enters recovery handling after the
+failed upstream has closed. It ends at the next ASGI output commit or the
+terminal outcome. Repeated recovery failures before output resumes share one
+interval. Existing latency histograms keep their
+original definitions.
 
 ## Inspect scheduling and role control
 

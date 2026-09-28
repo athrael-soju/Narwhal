@@ -50,6 +50,16 @@ class RequestLifecycle:
         self.continuation_response_owned = False
         self.continuation_created: int | None = None
         self.continuation_prompt_pending = False
+        self.attempt_request: Request | None = None
+        self.recovering = False
+        self.recovery_attempts = 0
+        self.recovery_excluded: set[str] = set()
+        self.replay_input_tokens = 0
+        self.recovery_prefill_seconds = 0.0
+        self.recovery_interruption_seconds = 0.0
+        self.recovery_started_at: float | None = None
+        self.recovery_failures: dict[str, int] = {}
+        self.recovery_terminal_reason: str | None = None
         self.phase = "admission"
         self.queue_wait_s = 0.0
         self.owned: set[str] = set()
@@ -113,8 +123,13 @@ class RequestLifecycle:
 
     def reserve(self, instance: Instance) -> None:
         """Own one router reservation until this attempt releases it."""
-        self.router.monitor.dispatched(instance.iid, self.request)
+        self.router.monitor.dispatched(instance.iid, self.work_request)
         self.owned.add(instance.iid)
+
+    @property
+    def work_request(self) -> Request:
+        """Return the current computation shape without changing the original offer."""
+        return self.attempt_request if self.attempt_request is not None else self.request
 
     def release(self) -> None:
         """Release owned engine reservations and unassigned demand once."""
@@ -127,8 +142,11 @@ class RequestLifecycle:
         """Count an actual prefill dispatch, keeping retries out of arrivals."""
         self.attempts += 1
         self.router.prefill_attempts += 1
-        if self.attempts > 1:
+        if self.attempts > 1 and not self.recovering:
             self.router.retry_attempts += 1
+        if self.recovering:
+            self.replay_input_tokens += self.work_request.input_len
+            self.router.continuation_replay_input_tokens += self.work_request.input_len
         if self.continuation is None:
             self.tokens = 0
             self.first_at = self.last_at = self.prefilled_at = None
@@ -137,6 +155,8 @@ class RequestLifecycle:
             self.continuation_prompt_pending = self.continuation.committed_count > 0
         self.prefill_iid = self.decode_iid = None
         self.request.output_len = self.tokens
+        if self.attempt_request is not None:
+            self.attempt_request.output_len = 0
 
     def engine_headers(self, headers: dict[str, str], phase: str) -> dict[str, str]:
         """Give each engine leg a fresh ID while retaining client correlation locally."""
@@ -148,6 +168,23 @@ class RequestLifecycle:
         elapsed = max(0.0, self.router._clock() - began)
         self.upstream_seconds[phase] += elapsed
         self.router.upstream_seconds[phase] += elapsed
+        if self.recovering and phase == "prefill":
+            self.recovery_prefill_seconds += elapsed
+            self.router.continuation_prefill_seconds += elapsed
+
+    def recovery_failed(self, reason: str) -> None:
+        """Count a classified continuation failure without retaining its content."""
+        self.recovery_failures[reason] = self.recovery_failures.get(reason, 0) + 1
+        totals = self.router.continuation_failures
+        totals[reason] = totals.get(reason, 0) + 1
+
+    def end_interruption(self, at: float) -> None:
+        """Close one failure-to-commit interval, or its terminal unresumed interval."""
+        if self.recovery_started_at is not None:
+            elapsed = max(0.0, at - self.recovery_started_at)
+            self.recovery_interruption_seconds += elapsed
+            self.router.continuation_interruption_seconds += elapsed
+            self.recovery_started_at = None
 
     async def retry(self, exc: BaseException) -> bool:
         """Spend shared quota for a classified failure before visible output."""
@@ -207,11 +244,25 @@ class RequestLifecycle:
         """Settle terminal counters, reservations and one journal row."""
         if self.terminal is not None:
             return
-        if terminal == "cancelled" and self.router._clock() >= self.deadline:
+        if self.continuation is not None and self.continuation.terminal_committed:
+            terminal, error, status = "completed", None, 200
+        elif terminal == "cancelled" and self.router._clock() >= self.deadline:
             terminal, error, status = "expired", "original request deadline expired", 504
         self.terminal = terminal
         router = self.router
         req = self.request
+        if self.continuation_requested:
+            self.end_interruption(router._clock())
+            if terminal == "completed":
+                self.recovery_terminal_reason = "completed"
+            elif terminal == "cancelled":
+                self.recovery_terminal_reason = "cancelled"
+            elif terminal == "expired":
+                self.recovery_terminal_reason = "original_deadline"
+            elif self.recovery_terminal_reason is None:
+                self.recovery_terminal_reason = "before_commit"
+            reason = self.recovery_terminal_reason
+            router.continuation_outcomes[reason] = router.continuation_outcomes.get(reason, 0) + 1
         if not self.sized:
             router.unsized_offered += 1
         # Invalid bodies carry no workload shape. Other unread bodies remain
@@ -306,4 +357,13 @@ class RequestLifecycle:
             row[terminal] = True
         if extra:
             row.update(extra)
+        if self.continuation_requested:
+            row["continuation"] = {
+                "attempts": self.recovery_attempts,
+                "replay_input_tokens": self.replay_input_tokens,
+                "prefill_seconds": self.recovery_prefill_seconds,
+                "interruption_seconds": self.recovery_interruption_seconds,
+                "failures": self.recovery_failures.copy(),
+                "terminal_reason": self.recovery_terminal_reason,
+            }
         router.journal.write(row)

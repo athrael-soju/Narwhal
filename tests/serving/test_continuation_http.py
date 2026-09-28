@@ -13,6 +13,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.config import ContinuationPolicy
+from narwhal.profiling.store import ProfileStore
 from narwhal.serving.app import create_app
 from narwhal.serving.continuation import HistoryReservation
 from narwhal.serving.router import NarwhalRouter
@@ -578,13 +579,26 @@ class ContinuationHttpTests(unittest.IsolatedAsyncioTestCase):
         usage["choices"] = []
         usage["usage"] = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
         self.chunks = [*self.chunks[:-1], wire(usage), b"data: [DONE]\n"]
-        response = await self.post(self.client(), return_token_ids=True)
+        profiles = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            profiles.put(
+                replace(
+                    profiles.get(spec.iid),
+                    generation_digest=self.attestation["attestation_digest"],
+                )
+            )
+        client = self.client()
+        self.assertTrue(self.router.continuation_budget.acquire())
+        response = await self.post(client, return_token_ids=True)
         self.assertEqual(response.status_code, 200)
         events = self.events(response)
         self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["choices"][0]["text"], "x")
         self.assertIsNone(events[0]["choices"][0]["finish_reason"])
-        self.assertEqual(events[-1]["error"]["message"], "Upstream request failed")
+        self.assertEqual(
+            events[-1]["error"]["message"], "Continuation recovery credits are exhausted"
+        )
+        self.assertEqual(events[-1]["error"]["code"], "continuation_shared_budget")
         self.assertNotIn("[DONE]", response.text)
         self.assertNotIn('"usage"', response.text)
         row = self.terminal_rows()[0]
@@ -592,6 +606,7 @@ class ContinuationHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["output_len"], 1)
         self.assertEqual(row["decode_tokens_observed"], 2)
         self.assertEqual(row["attempts"], 1)
-        self.assertEqual(row["attempt_failures"][0]["retry_reason"], "output_started")
+        self.assertEqual(row["continuation"]["attempts"], 0)
+        self.assertEqual(row["continuation"]["terminal_reason"], "shared_budget")
         self.assertTrue(self.streams[0].closed)
         self.assert_released()
