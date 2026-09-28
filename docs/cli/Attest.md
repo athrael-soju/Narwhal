@@ -31,9 +31,10 @@ differs from the running engine. Restarting the sidecar with an old capture does
 not qualify a replacement engine. Omit this option when the engine has no
 approved replay capture; the continuation route then returns HTTP 404.
 
-Fleet qualification produces and reviews the capture together with the private
-qualification artifact pinned by the router. The sidecar verifies the supplied
-binding and checks the live process on each request. Source review and replay
-measurements establish the decoder property described in the
+Prepare and review the capture with the qualification file pinned by the
+router. The sidecar checks the capture against the engine's identity and
+ordinary attestation, then checks the live process on each request. Source
+review and replay measurements must establish where the decoder can resume
+without losing or repeating bytes; see the
 [continuation capability contract](../concepts/04-Stream-Continuation.md#capability-identity).
-Keep the captures and their source evidence under ignored deployment paths.
+Keep captures and their source evidence under ignored deployment paths.

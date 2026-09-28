@@ -122,25 +122,29 @@ Continuation adds these process-local fields to `serving`:
 
 | Field | Meaning |
 | --- | --- |
-| `continuation_attempts` | Recovery attempts admitted after output commitment, including attempts cancelled before dispatch |
-| `continuation_replay_input_tokens` | Sum of the original prompt and committed output lengths submitted by recovery prefills |
+| `continuation_attempts` | Recovery attempts admitted after ASGI accepts output, including attempts cancelled before an engine dispatch |
+| `continuation_replay_input_tokens` | Total tokens submitted in recovery prompts, including repeated submissions |
 | `continuation_prefill_seconds` | Cumulative recovery prefill HTTP duration, including failed and cancelled calls |
-| `continuation_interruption_seconds` | Cumulative nonoverlapping intervals from recovery handling after upstream cleanup to the next successful ASGI output commit or terminal outcome |
-| `continuation_failures` | Observed failure counts grouped by the bounded [journal reason vocabulary](../telemetry/01-Journal.md#continuation-recovery) |
-| `continuation_outcomes` | Original opted-in requests settled once, grouped by the journal's `continuation.terminal_reason` |
+| `continuation_interruption_seconds` | Accumulated recovery interruption seconds; see the [journal interval definition](../telemetry/01-Journal.md#continuation-recovery) |
+| `continuation_failures` | Failure counts grouped by the fixed [journal failure reasons](../telemetry/01-Journal.md#continuation-recovery) |
+| `continuation_outcomes` | Validated opt-in requests counted once when they end, grouped by `continuation.terminal_reason` |
 | `continuation_credits` | Shared recovery credit currently available |
 | `continuation_credits_spent` | Recovery credit consumed, including attempts cancelled before dispatch |
 | `continuation_denied` | Recovery attempts refused by the shared recovery budget |
 | `continuation_history_bytes` | Bytes reserved for retained continuation history |
 | `continuation_history_limit_bytes` | Maximum bytes the router can reserve for continuation history |
 
-Replay input counts describe submitted work. Prefix-cache reuse can reduce
-the computation an engine performs; these counts do not measure GPU work.
-Recovery prefill time also appears in `upstream_seconds.prefill`.
-Interruption time is added when output resumes or the request terminates.
-The outcome counts reconcile with opted-in terminal journal rows in the same
-router process. They start empty and do not survive router replacement.
-The history reservation covers replay storage, not all HTTP or parser memory.
+Replay input counts include every submitted recovery prompt. Prefix-cache
+reuse can reduce the engine computation associated with those tokens.
+Recovery prefill time also contributes to `upstream_seconds.prefill`.
+
+Interruption time is added when output resumes or the request ends. Compare
+`continuation_outcomes` with opted-in terminal journal rows sharing this
+state's `journal_run`. Outcome counts start empty and reset when the router
+process is replaced.
+
+History bytes measure reserved replay storage. HTTP and parser allocations
+can use memory beyond this reservation.
 
 ---
 

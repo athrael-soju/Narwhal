@@ -97,16 +97,11 @@ Any client-side retry must fit inside the caller's remaining deadline.
 
 ### 4.4 Opt-in continuation state
 
-The top-level `continuation` section controls recovery and retained state for the
-[stream continuation contract](../concepts/04-Stream-Continuation.md).
+The top-level `continuation` section configures the unreleased
+[stream continuation feature](../concepts/04-Stream-Continuation.md).
 Continuation requires both `continuation.enabled: true` and an explicit
 `narwhal_continuation: true` in a supported completion request. Omitting the
 request field or setting it to `false` keeps ordinary serving behaviour.
-
-The unreleased implementation can recover eligible upstream failures after
-output commitment. Synthetic tests cover router behaviour; live worker-failure
-qualification remains pending in
-[#195](https://github.com/athrael-soju/Narwhal/issues/195).
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -136,18 +131,18 @@ handoff. Retrying a failed recovery prefill or expired handoff consumes
 another attempt and credit. Cancellation after admission does not refund
 the credit.
 
-The router excludes failed engines throughout subsequent recovery placement,
-including queued placement. Survivors must pass current health, process,
-loaded profile generation, role and capacity checks. Router lease fencing,
-restart holds and lifecycle drains also apply. An expired handoff alone
-does not mark either engine as failed.
+The router excludes failed engines from later recovery attempts, including
+attempts waiting in a queue. Surviving engines must pass the
+[recovery checks](../concepts/04-Stream-Continuation.md#survivor-recovery)
+before the router dispatches work to them. An expired handoff alone does not
+mark either engine as failed.
 
-With `serving.admission: "predictive"`, the augmented replay prompt's prefill
-estimate must be finite and less than the time left on the original request
-deadline. This estimate covers prefill admission only; transfer, decode and
-client writes still have to finish within that deadline. Recovery does not
-reset the original TTFT or first-output timestamps. `"open"` skips this
-predictive gate.
+With `serving.admission: "predictive"`, the estimated prefill time for the
+replay prompt must be finite and less than the time left on the original
+deadline. Transfer, decode and client writes must also finish within that
+deadline, although this estimate covers only prefill. `"open"` skips the
+estimate check. Recovery does not reset the original TTFT or first-output
+timestamps.
 
 Choose the context limit within the qualified backend's capacity. Each
 request must leave enough history space for its prompt, requested output and
@@ -156,16 +151,23 @@ retains that reservation until the request's continuation buffers are
 released. These reservations are separate from the HTTP body and ordinary
 response limits in `serving`.
 
-The quota covers retained continuation history and its serialisation buffers,
-including a replay prompt copy. Incoming request, transport and parsed-event
-objects are outside this quota, so it does not bound total request memory or
-process RSS. Continuation rejects compressed responses and raw transport
-chunks larger than 64 KiB. Each complete SSE event is also bounded by the
-smaller of the history's pending-frame capacity and `serving.max_response_bytes`.
+The reservation covers token history, buffered output, serialisation buffers
+and the replay-prompt copy. Request bodies, transport buffers and parsed
+events use additional memory, so `max_history_bytes` does not limit total
+request memory or process RSS.
+
+Continuation rejects compressed responses and raw transport chunks larger
+than 64 KiB. Each complete SSE event must fit both the history's pending-frame
+capacity and `serving.max_response_bytes`.
 
 Keep qualification records in an ignored location such as `runs/`. A pinned
 file records the reviewed contract; its presence does not establish that the
 running engine still matches the qualified process and tokenizer.
+
+The router loads the qualification file at startup. After changing the file
+or its SHA-256, restart the router to load the update. Follow
+[Qualify stream continuation](../operate/04-Upgrade-and-Validate.md#qualify-stream-continuation)
+to prepare and test the deployment.
 
 ---
 

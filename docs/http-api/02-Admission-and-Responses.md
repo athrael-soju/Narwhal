@@ -42,18 +42,24 @@ Global accounting classifies terminal conditions as follows:
 For ordinary requests, Narwhal forwards streaming delta fields in the engine's
 response shape, applying its token-ID exposure rules.
 
-For [opted-in continuation](01-Requests.md#continuation-opt-in), Narwhal emits
-one response identity throughout the stream: `id` is `cmpl-` followed by the
-router request ID, `created` is the original request's history-allocation
-time in Unix seconds, `model` is the configured model, and `object` is
-`text_completion`. Each completion has one choice at index `0`.
+For [opted-in continuation](01-Requests.md#continuation-opt-in), completion
+and usage events keep the same response fields across recovery attempts:
 
-Continuation buffers events until they reach a
+| Field | Value |
+| --- | --- |
+| `id` | `cmpl-` followed by the router request ID |
+| `created` | Time when the router allocated the original request's history, in Unix seconds |
+| `model` | Configured model |
+| `object` | `text_completion` |
+
+Each completion has one choice at index `0`.
+
+The router buffers continuation events until they reach a
 [qualified byte boundary](../concepts/04-Stream-Continuation.md#output-commitment).
 It sends each pending group in one ASGI body message and counts its token IDs
-as committed only after that send returns. A successful send acknowledges
-server acceptance of the bytes; it does not prove client receipt. Empty-text
-and grouped-token events may therefore delay delivery. Finish and usage
+as committed only after that send succeeds. This confirms that the server
+accepted the bytes; it does not confirm client receipt. Events with empty
+text or multiple token IDs may therefore delay delivery. Finish and usage
 events remain pending until a complete `[DONE]` event arrives.
 
 If `return_token_ids` is `true`, each continuation completion includes its

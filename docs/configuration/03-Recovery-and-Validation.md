@@ -10,6 +10,7 @@
 | `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines. At least 1.                                                                                                |
 | `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks. `0` disables idle sweeps and is invalid with `whole_wave`. |
 | `recovery.liveness_misses`            | `2`     | Consecutive failed liveness probes before ejection. At least 1.                                                                                                 |
+| `recovery.failure_quarantine_s`       | `0.0`   | Seconds to exclude a failed engine from new placement while health checks catch up. Nonnegative; `0` disables this hold. |
 | `recovery.health.window_s`            | `30.0`  | Residual-scoring window length. At least 1 second.                                                                                                              |
 | `recovery.health.drift_band`          | `2.0`   | Multiple of an engine's trailing healthy residual used as the drift threshold. Greater than 1.0.                                                                |
 | `recovery.health.relative_band`       | `1.5`   | Peer-relative multiple that can override the fleet-surge veto. `0` disables the veto. Nonnegative.                                                              |
@@ -22,6 +23,12 @@
 The probation penalty enters prefill placement cost in seconds. Compare it with the fleet's TTFT target and measured healthy placement cost before changing it.
 
 Connection failures count immediately toward `recovery.eject_after`.
+
+A positive `recovery.failure_quarantine_s` applies a temporary hold after a
+failed engine request. Quarantine preserves at least one eligible engine for
+aggregate execution. A successful health or inference verification can lift
+the hold before it expires. With the default of `0`, another request can
+select the failed engine before the breaker or health checks exclude it.
 
 Transport timeouts trigger a health probe first.
 
@@ -68,8 +75,6 @@ Confirmed ejection clears the affected engine's drift history.
 - `recovery.liveness_every > 0`
 
 Under `whole_wave`, an ejection or identity failure holds the fleet until an operator completes the [engine-wave procedure](../operate/03-Restart-Engines.md#8-restart-an-engine-wave).
-
-`recovery.failure_quarantine_s` keeps failed engines out of placement while health state converges.
 
 ---
 

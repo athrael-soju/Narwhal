@@ -157,24 +157,20 @@ data: {"error": ...}
 
 ### Continuation failures
 
-The unreleased [continuation opt-in](01-Requests.md#continuation-opt-in)
-can recover eligible failures after the first committed output group. It
-replays the original prompt and committed generated IDs on qualified surviving
-engines, using fresh prefill and KV ownership. Recovery uses separate
-attempt limits and credits within the original deadline. Live worker-failure
-qualification remains pending in
-[#195](https://github.com/athrael-soju/Narwhal/issues/195).
+The unreleased [continuation feature](01-Requests.md#continuation-opt-in)
+can recover eligible failures after output commits. Recovery uses the original
+deadline and separate attempt limits and credits.
 
 The router verifies a selected engine's qualification before each prefill or
 decode dispatch, then rechecks the decode process after opening its stream.
-A missing or stale capability returns HTTP `503` before response headers,
-or a terminal SSE error after headers. This local eligibility failure does
-not add engine-breaker evidence.
+A missing or stale qualification returns HTTP `503` before response headers,
+or a terminal SSE error after headers. This failure does not count against
+the engine's circuit breaker.
 
 Continuation reads complete SSE events and verifies the echoed prompt IDs,
 generated IDs, finish metadata and final terminator. EOF before a complete
 `[DONE]` can trigger recovery from the preceding committed prefix. Malformed
-events fail with a content-free error and do not trigger recovery. Exceeding
+events end the request with a fixed error message. Exceeding
 the retained-history or original output limit emits an explicit stream error
 and closes the response. Pending output stays uncommitted. A valid completion
 at exactly `max_tokens` finishes normally with `finish_reason: "length"`.
@@ -200,6 +196,6 @@ another completion or error.
 
 A failed or cancelled client write terminates the original request because
 the server may have accepted part of that write. Continuation buffers remain
-reserved until the response unwinds, including while a client write is
-blocked. Prompt text, generated text and token arrays are excluded from
+reserved until the router finishes closing the response, including while a
+client write is blocked. Prompt text, generated text and token arrays are excluded from
 continuation diagnostics and journal error details.

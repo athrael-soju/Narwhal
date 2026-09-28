@@ -50,20 +50,22 @@ Use journal `run` as the process boundary when reconciling restored outcome coun
 
 ### Continuation recovery
 
-Continuation series expose the corresponding fields in
+The `narwhal_continuation_*` metrics report the continuation fields in
 [`serving` state](../http-api/05-Live-State.md#admission-and-serving-state).
-`narwhal_continuation_credits` and both history byte series are gauges; the
-remaining series are counters. `narwhal_continuation_failures_total` has one `reason` label from
-the fixed [journal failure vocabulary](01-Journal.md#continuation-recovery).
-It counts observed failures, including failures followed by a successful
-recovery. Budget denials have their own counter.
+Available credits, reserved history bytes and the history byte limit are
+gauges. The other continuation metrics are counters.
+
+`narwhal_continuation_failures_total{reason="<failure_reason>"}` counts failures
+the router evaluates for recovery, including those followed by success. Its labels use the
+[journal failure reasons](01-Journal.md#continuation-recovery).
+Shared-budget refusals increment `narwhal_continuation_denied_total`.
 
 `narwhal_continuation_outcomes_total{reason="<terminal_reason>"}` counts each
-opted-in original request once when it settles. The fixed reason labels match
-`continuation.terminal_reason` in the journal, including completion,
-cancellation and failed recovery gates. This process-local counter starts
-with no reason samples and reconciles with opted-in terminal rows for the
-same journal `run`. Ordinary requests do not increment it.
+validated opt-in request once when it ends. The label matches the journal's
+`continuation.terminal_reason`, including completion, cancellation and
+conditions that prevent a replacement dispatch. A reason appears after the
+first request ends with that value. Compare each count with terminal journal
+rows from the same `run` and reason.
 
 `narwhal_continuation_replay_input_tokens_total` counts prompt tokens
 submitted by recovery prefills, not GPU computation. Those prefills also
@@ -71,11 +73,10 @@ increment `narwhal_prefill_attempts_total` and contribute to
 `narwhal_upstream_seconds_total{phase="prefill"}`. They do not increment
 `narwhal_retry_attempts_total`, which counts retries before output commitment.
 
-Interruption time starts when serving enters recovery handling after the
-failed upstream has closed. It ends at the next ASGI output commit or the
-terminal outcome. Repeated recovery failures before output resumes share one
-interval. Existing latency histograms keep their
-original definitions.
+`narwhal_continuation_interruption_seconds_total` accumulates the recovery
+intervals defined in the [journal reference](01-Journal.md#continuation-recovery).
+The journal also explains how continuation uses
+[engine observation times and ASGI token counts](01-Journal.md#terminal-request-records).
 
 ## Inspect scheduling and role control
 
