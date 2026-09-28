@@ -277,7 +277,12 @@ class SplitScorer:
         translates its FIFO order into the earliest profiled completion on the
         current prefill pool. A supplied request joins the projection during
         the interval before router publication in `monitor.waiting`.
+
+        Replay work contributes queued cost but cannot trigger a TTFT breach;
+        serving prices its prefill against the original remaining deadline.
         """
+        if request is not None and request.recovery_deadline is not None:
+            return None
         pool = [*self.scheduler.live_instances(Role.PREFILL), *additional_prefill]
         if not pool:
             return None
@@ -293,9 +298,10 @@ class SplitScorer:
             waiting.append(request)
         if not waiting:
             return None
-        # Stable sorting preserves queue publication order when several offers
-        # share one clock tick.
-        waiting.sort(key=lambda row: row.arrived_at if row.arrived_at is not None else now)
+        # Replay keeps its original arrival but rejoins the FIFO queue at the
+        # tail. Its current publication order determines which work precedes it.
+        if not any(row.recovery_deadline is not None for row in waiting):
+            waiting.sort(key=lambda row: row.arrived_at if row.arrived_at is not None else now)
 
         loads: dict[str, float] = {}
         resident_prefill = 0.0
@@ -323,9 +329,13 @@ class SplitScorer:
             completion, iid, work = min(choices)
             loads[iid] = completion
             queued_prefill += work
+            if row.recovery_deadline is not None:
+                continue
             elapsed = max(0.0, now - (row.arrived_at if row.arrived_at is not None else now))
             projected.append((elapsed + completion, row))
 
+        if not projected:
+            return None
         if focus is not None:
             selected = next((entry for entry in projected if entry[1].rid == focus), None)
             if selected is None:

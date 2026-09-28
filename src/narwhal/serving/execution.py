@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -30,6 +31,7 @@ from .continuation import (
     HistoryLimitExceeded,
 )
 from .continuation_output import encode_event
+from .continuation_recovery import ContinuationStopped, begin_recovery, profile_matches
 from .continuation_request import (
     ContinuationOverloaded,
     ContinuationRequestError,
@@ -96,6 +98,14 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
 
 
 def _status_of(exc: BaseException) -> int:
+    if isinstance(exc, ContinuationStopped):
+        return (
+            504
+            if exc.reason == "original_deadline"
+            else 502
+            if exc.reason == "output_limit"
+            else 503
+        )
     if isinstance(exc, ContinuationRequestError | HistoryCapacityError):
         return 400
     if isinstance(exc, ContinuationOverloaded):
@@ -115,7 +125,12 @@ def _status_of(exc: BaseException) -> int:
 
 def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool) -> None:
     if isinstance(
-        exc, RequestExpired | ResponseLimitExceeded | HistoryLimitExceeded | ReplayUnavailable
+        exc,
+        RequestExpired
+        | ResponseLimitExceeded
+        | HistoryLimitExceeded
+        | ReplayUnavailable
+        | ContinuationStopped,
     ):
         return
     router = state.router
@@ -132,7 +147,8 @@ def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, deco
 async def _place(
     state: RequestLifecycle, *, prefill: bool, handoff_deadline: float | None = None
 ) -> Instance:
-    router, req = state.router, state.request
+    router, req = state.router, state.work_request
+    _check_recovery_control(state)
     if prefill and not control_ready(router):
         raise NoEngine("router control is fenced")
     req.phase = Phase.PREFILL if prefill else Phase.DECODE
@@ -145,7 +161,10 @@ async def _place(
                 if handoff_deadline is not None
                 else state.deadline
             )
-            inst = await state.wait(lambda: router.dispatcher.place(req, deadline=deadline))
+            options = {"excluded": frozenset(state.recovery_excluded)} if state.recovering else {}
+            inst = await state.wait(
+                lambda: router.dispatcher.place(req, deadline=deadline, **options)
+            )
             return inst
         except QueueExpired as exc:
             if (
@@ -161,8 +180,12 @@ async def _place(
     if router.lifecycle_blocked:
         raise NoEngine(router.lifecycle_blocked)
     try:
+        if state.recovering:
+            return router.scheduler.schedule(req, exclude=state.recovery_excluded)
         return router.scheduler.schedule(req)
     except RuntimeError as exc:
+        if state.recovering:
+            raise ContinuationStopped("no_survivor") from exc
         raise NoEngine(
             "no schedulable engines" + (" after prefill" if not prefill else "")
         ) from exc
@@ -174,21 +197,34 @@ async def _prepare_once(
     body: dict[str, Any],
     headers: dict[str, str],
 ) -> PreparedAttempt:
-    router, req = state.router, state.request
+    router, req = state.router, state.work_request
     req.prefill_instance = None
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
         cost = router.scheduler.cost(req, prefill)
         priced = router.scheduler.prefill_admission_price(req, prefill)
-        priced += max(0.0, router._clock() - state.arrived)
-        if not router.scheduler.meets_slo(
-            req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
-        ):
-            raise PlacementRefused(priced)
+        if state.recovering:
+            if not math.isfinite(priced) or priced >= state.deadline - router._clock():
+                raise ContinuationStopped("prediction")
+        else:
+            priced += max(0.0, router._clock() - state.arrived)
+            if not router.scheduler.meets_slo(
+                req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
+            ):
+                raise PlacementRefused(priced)
     state.phase = "prefill"
     state.reserve(prefill)
     if state.continuation is not None:
         await _verify_continuation(state, prefill)
+    _check_recovery_control(state)
+    if (
+        state.recovering
+        and router.cfg.admission == "predictive"
+        and priced >= state.deadline - router._clock()
+    ):
+        # Keep the estimate from before our own reservation; qualification
+        # consumes the same deadline as the replay prefill it authorises.
+        raise ContinuationStopped("prediction")
     state.begin_attempt()
     state.prefill_iid = prefill.iid
     began = router._clock()
@@ -221,9 +257,20 @@ async def _prepare_once(
     state.reserve(decode)
     if state.continuation is not None:
         await _verify_continuation(state, decode)
+    _check_recovery_control(state)
     state.decode_iid = decode.iid
     state.phase = "decode"
     return PreparedAttempt(prefill, decode, kv, expires_at)
+
+
+def _check_recovery_control(state: RequestLifecycle) -> None:
+    if state.recovering and (
+        not control_ready(state.router)
+        or state.router.lifecycle_blocked
+        or state.router.failover_blocked
+        or not state.router.lifecycle.identities_ready
+    ):
+        raise ContinuationStopped("fenced")
 
 
 async def _verify_continuation(state: RequestLifecycle, instance: Instance) -> None:
@@ -237,6 +284,8 @@ async def _verify_continuation(state: RequestLifecycle, instance: Instance) -> N
             qualification, instance.iid, instance.url, spec.attestation_url
         )
     )
+    if state.recovering and not profile_matches(state, instance.iid):
+        raise ReplayUnavailable("continuation profile generation changed or is unqualified")
 
 
 async def prepare_attempt(
@@ -255,16 +304,51 @@ async def prepare_attempt(
                 raise
 
 
+async def recover_attempt(
+    state: RequestLifecycle,
+    endpoint: str,
+    original_body: dict[str, Any],
+    headers: dict[str, str],
+    failure: Exception,
+) -> tuple[PreparedAttempt, dict[str, Any]]:
+    """Rebuild fresh ownership within separate credits and the original deadline."""
+    while True:
+        # Visible output makes this a diagnostic-only call. It cannot spend
+        # ordinary retry credit or schedule an ordinary attempt.
+        await state.retry(failure)
+        # Closed upstream frames can retain the previous materialised P+G.
+        # Diagnostics above keep only scalar fields. Release those frames
+        # before the next history copy is allocated.
+        failure.__traceback__ = None
+        failure.__cause__ = None
+        failure.__context__ = None
+        body = begin_recovery(state, original_body, failure)
+        try:
+            return await _prepare_once(state, endpoint, body, headers), body
+        except Exception as exc:
+            state.release()
+            failure = exc
+            del body
+
+
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     if isinstance(exc, PlacementRefused):
         return refuse_request(state, exc.predicted_s)
     status = _status_of(exc)
-    expired = isinstance(exc, RequestExpired | QueueExpired)
+    expired = isinstance(exc, RequestExpired | QueueExpired) or (
+        isinstance(exc, ContinuationStopped) and exc.reason == "original_deadline"
+    )
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
     kind = "expired" if expired else state.phase
     if isinstance(exc, NoEngine):
         kind = "backend_unavailable" if state.attempts else "no_schedulable_engines"
-    if isinstance(exc, ContinuationRequestError | HistoryCapacityError):
+    if isinstance(exc, ContinuationStopped):
+        state.recovery_terminal_reason = exc.reason
+        kind = "continuation_error"
+        public_detail = str(exc)
+        state.outcome["public_code"] = "continuation_" + exc.reason
+        state.outcome["public_type"] = kind
+    elif isinstance(exc, ContinuationRequestError | HistoryCapacityError):
         kind = "invalid_request_error"
         public_detail = str(exc)
     elif isinstance(exc, ContinuationOverloaded):
@@ -365,6 +449,8 @@ async def serve_request(
             )
             state.continuation_created = int(time.time())
         req.input_len = await state.wait(lambda: router.input_length(body))
+        if state.continuation is not None:
+            state.attempt_request = replace(req)
         if state.demand_observation is not None:
             router.controller.demand.resize_arrival(
                 state.demand_observation, req.input_len, req.wanted_len, at=arrived
@@ -423,6 +509,7 @@ async def _decode_attempt(
     headers: dict[str, str],
 ) -> AsyncGenerator[str | CommitGroup, None]:
     router = state.router
+    _check_recovery_control(state)
     # A lost router lease fences new prefills. An already dispatched original
     # may drain its decode leg, preserving the warm-standby serving contract.
     if router.cfg.engine_restart_policy == "whole_wave" and router.lifecycle_blocked:
@@ -586,6 +673,7 @@ async def run_decode(
     streaming: bool = False,
 ) -> AsyncGenerator[str | CommitGroup, None]:
     """Retry complete attempts until output commits; settle the original once."""
+    original_body = body
     try:
         while True:
             chunks: list[str] = []
@@ -608,7 +696,19 @@ async def run_decode(
                             )
                         chunks.append(frame)
             except Exception as exc:
+                await attempt.aclose()
                 state.release()
+                if state.continuation is not None and state.continuation.terminal_committed:
+                    # The client already received one complete terminal group.
+                    # A subsequent close error cannot change that outcome.
+                    state.finish("completed")
+                    return
+                if state.continuation is not None and state.output_started:
+                    body = original_body
+                    prepared, body = await recover_attempt(
+                        state, endpoint, original_body, headers, exc
+                    )
+                    continue
                 if not await state.retry(exc):
                     raise
                 prepared = await prepare_attempt(state, endpoint, body, headers)
@@ -634,8 +734,8 @@ async def run_decode(
                     {
                         "error": {
                             "message": state.outcome["public_error"],
-                            "type": state.phase,
-                            "code": state.terminal,
+                            "type": state.outcome.get("public_type", state.phase),
+                            "code": state.outcome.get("public_code", state.terminal),
                         }
                     }
                 )

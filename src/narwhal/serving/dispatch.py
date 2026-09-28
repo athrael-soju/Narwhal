@@ -29,7 +29,13 @@ class Dispatcher:
         for queue in self.queues.values():
             queue.notify()
 
-    async def place(self, request: Request, *, deadline: float) -> Instance:
+    async def place(
+        self,
+        request: Request,
+        *,
+        deadline: float,
+        excluded: frozenset[str] = frozenset(),
+    ) -> Instance:
         """Select after waiting; the caller must reserve before its next await."""
         router = self.router
         policy = router.cfg.serving
@@ -40,9 +46,11 @@ class Dispatcher:
         def reserve() -> Instance | None:
             if router.lifecycle_blocked or router.monitoring_degraded:
                 return None
-            if phase is Phase.PREFILL and (router.failover_blocked or not control_ready(router)):
+            if (phase is Phase.PREFILL or request.recovery_deadline is not None) and (
+                router.failover_blocked or not control_ready(router)
+            ):
                 return None
-            live = router.scheduler.live_instances()
+            live = router.scheduler.live_instances(exclude=excluded)
             pool = [inst for inst in live if inst.role is role] or live
             candidates = {
                 inst.iid
@@ -51,8 +59,8 @@ class Dispatcher:
             }
             if not candidates:
                 return None
-            excluded = set(router.monitor.instances) - candidates
-            return router.scheduler.schedule(request, exclude=excluded)
+            unavailable = set(router.monitor.instances) - candidates
+            return router.scheduler.schedule(request, exclude=unavailable | excluded)
 
         router.monitor.waiting[request.rid] = request
         try:

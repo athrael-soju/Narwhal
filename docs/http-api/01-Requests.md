@@ -74,10 +74,11 @@ Model and engine configuration determine actual support for input formats, reaso
 
 ### Continuation opt-in
 
-The unreleased continuation implementation validates and retains a replayable
-output prefix. Recovery dispatch after a worker failure remains pending in
-[#194](https://github.com/athrael-soju/Narwhal/issues/194); enabling this policy
-does not yet resume a failed stream.
+The unreleased continuation implementation can recover an eligible upstream
+failure on the same router and client connection. It sends the exact original
+prompt IDs and committed output IDs through a fresh prefill and decode
+attempt. Live worker-failure qualification remains pending in
+[#195](https://github.com/athrael-soju/Narwhal/issues/195).
 
 Continuation requires both `continuation.enabled: true` in the fleet
 configuration and `narwhal_continuation: true` in the request. An omitted or
@@ -107,6 +108,21 @@ additional fields are accepted:
 Text prompts, chat, batches, nested token arrays, additional sampling
 controls and unrecognised fields return HTTP `400` before engine I/O.
 In particular, token stops require qualification; string stops are unsupported.
+
+After committing output, Narwhal may recover transport failures, supported
+transient engine errors or a stream that ends before a complete `[DONE]`
+event. It discards uncommitted output and requests only the remaining token
+allowance. The outward response ID, creation time, model and original usage
+accounting remain stable across attempts. Failed or cancelled client writes
+terminate the request.
+
+Recovery requires a qualified survivor, an unexpired original deadline,
+remaining output tokens and separate recovery attempts and credits. Invalid
+token IDs or event framing, stale qualification, history-limit exhaustion
+and local HTTP-pool starvation terminate the request. Recovery gate failures
+use fixed SSE errors with `type: "continuation_error"` and a
+`continuation_<reason>` code; see
+[continuation failures](03-Backend-and-Failures.md#continuation-failures).
 
 Before dispatch, the router reserves the full per-request history quota.
 Insufficient space for the requested prompt and output returns HTTP `400`.

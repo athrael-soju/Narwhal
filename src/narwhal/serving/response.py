@@ -110,7 +110,9 @@ class RequestStreamResponse(StreamingResponse):
                         raise RuntimeError("ASGI body differs from its continuation group")
                     history.commit(group, self.lifecycle.router._clock())
                     self.lifecycle.tokens = history.committed_count
+                    self.lifecycle.request.output_len = history.committed_count
                     self.lifecycle.output_started = True
+                    self.lifecycle.end_interruption(self.lifecycle.router._clock())
                     self._pending_group = None
                 finished = not message.get("more_body", False)
                 if message.get("body") and self.lifecycle.terminal == "expired":
@@ -131,7 +133,11 @@ class RequestStreamResponse(StreamingResponse):
             if finished:
                 return
             self.lifecycle.finish("expired", error="original request deadline expired", status=504)
-            if not started or self.lifecycle.terminal != "expired":
+            committed = (
+                self.lifecycle.continuation is not None
+                and self.lifecycle.continuation.terminal_committed
+            )
+            if not started or (self.lifecycle.terminal != "expired" and not committed):
                 raise
             await self.aclose()
             error = {
@@ -148,7 +154,7 @@ class RequestStreamResponse(StreamingResponse):
                     {
                         "type": "http.response.body",
                         "body": b""
-                        if error_sent
+                        if error_sent or committed
                         else ("data: " + json.dumps(error) + "\n\n").encode(),
                         "more_body": False,
                     }

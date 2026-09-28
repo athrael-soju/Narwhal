@@ -327,7 +327,7 @@ class GlobalScheduler:
         Aggregate fallback requires an idle decode engine because the profile
         covers isolated prefill and decode. Open admission uses normal placement.
         """
-        if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
+        if inst.role is Role.DECODE and inst.decode:
             return float("inf")
         return self.cost(request, inst)[1]
 

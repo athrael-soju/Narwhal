@@ -4,6 +4,7 @@ import json
 import re
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,11 @@ from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.app import create_app
+from narwhal.serving.continuation import HistoryBudget
+from narwhal.serving.continuation_recovery import ContinuationStopped
+from narwhal.serving.execution import _terminal_failure
+from narwhal.serving.lifecycle import RequestLifecycle
+from narwhal.serving.retry import RetryBudget
 from narwhal.serving.router import NarwhalRouter
 from narwhal.types import Instance, Request, Role
 
@@ -99,6 +105,113 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitoring["event_loop_lag_high_water_s"], 0.03)
         self.assertIn("narwhal_event_loop_lag_seconds 0.01", metrics_response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.03", metrics_response.text)
+
+    async def test_state_and_metrics_expose_recovery_cost_quota_and_history(self):
+        self.router.continuation_attempts = 2
+        self.router.continuation_replay_input_tokens = 17
+        self.router.continuation_prefill_seconds = 0.75
+        self.router.continuation_interruption_seconds = 1.25
+        self.router.continuation_failures = {"stream_interrupted": 2, "timeout": 1}
+        self.router.continuation_budget = RetryBudget(2, 0.5)
+        self.assertTrue(self.router.continuation_budget.acquire())
+        self.assertTrue(self.router.continuation_budget.acquire())
+        self.assertFalse(self.router.continuation_budget.acquire())
+        self.router.continuation_budget.succeeded()
+        self.router.continuation_memory = HistoryBudget(32)
+        reservation = self.router.continuation_memory.reserve(12)
+        self.addCleanup(reservation.close)
+
+        state_response = await self.client.get("/narwhal/state")
+        metrics_response = await self.client.get("/metrics")
+        serving = state_response.json()["serving"]
+        expected = {
+            "continuation_attempts": 2,
+            "continuation_replay_input_tokens": 17,
+            "continuation_prefill_seconds": 0.75,
+            "continuation_interruption_seconds": 1.25,
+            "continuation_credits_spent": 2,
+            "continuation_denied": 1,
+            "continuation_credits": 0.5,
+            "continuation_history_bytes": 12,
+            "continuation_history_limit_bytes": 32,
+        }
+        counters = {
+            "continuation_attempts",
+            "continuation_replay_input_tokens",
+            "continuation_prefill_seconds",
+            "continuation_interruption_seconds",
+            "continuation_credits_spent",
+            "continuation_denied",
+        }
+        for name, value in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(serving[name], value)
+                metric = "narwhal_" + name + ("_total" if name in counters else "")
+                kind = "counter" if name in counters else "gauge"
+                self.assertIn(f"# TYPE {metric} {kind}\n", metrics_response.text)
+                self.assertIn(f"{metric} {value}\n", metrics_response.text)
+        self.assertEqual(serving["continuation_failures"], self.router.continuation_failures)
+        for reason, count in self.router.continuation_failures.items():
+            self.assertIn(
+                f'narwhal_continuation_failures_total{{reason="{reason}"}} {count}\n',
+                metrics_response.text,
+            )
+        self.assertEqual(serving["retry_attempts"], 0)
+        self.assertEqual(serving["retry_credits_spent"], 0)
+        snapshot = self.router.state()["serving"]
+        self.router.continuation_failures["timeout"] += 1
+        self.assertEqual(snapshot["continuation_failures"]["timeout"], 1)
+
+    async def test_continuation_outcomes_reconcile_with_terminal_journals_once(self):
+        self.router.journal.open()
+        self.addCleanup(self.router.journal.close)
+        initial = (await self.client.get("/narwhal/state")).json()["serving"]
+        self.assertEqual(initial["continuation_outcomes"], {})
+        expected = Counter()
+        for terminal, reason in (
+            ("completed", "completed"),
+            ("completed", "completed"),
+            ("failed", "shared_budget"),
+            ("failed", "no_survivor"),
+            ("cancelled", "cancelled"),
+        ):
+            state = RequestLifecycle.offered(self.router, {})
+            state.continuation_requested = True
+            state.sized = True
+            state.request.input_len = 5
+            state.request.wanted_len = 3
+            if terminal == "failed":
+                state.recovery_failed("stream_interrupted")
+                _terminal_failure(state, ContinuationStopped(reason))
+            else:
+                state.finish(terminal)
+            state.finish("cancelled")
+            expected[reason] += 1
+        ordinary = RequestLifecycle.offered(self.router, {})
+        ordinary.finish("cancelled")
+
+        rows = [json.loads(line) for line in self.router.journal.path.read_text().splitlines()]
+        observed = Counter(
+            row["continuation"]["terminal_reason"] for row in rows if "continuation" in row
+        )
+        self.assertEqual(observed, expected)
+        serving = (await self.client.get("/narwhal/state")).json()["serving"]
+        self.assertEqual(serving["continuation_outcomes"], expected)
+        self.assertEqual(serving["continuation_failures"], {"stream_interrupted": 2})
+        self.assertEqual(initial["continuation_outcomes"], {})
+        metrics = (await self.client.get("/metrics")).text
+        self.assertIn("# TYPE narwhal_continuation_outcomes_total counter\n", metrics)
+        for reason, count in expected.items():
+            self.assertIn(
+                f'narwhal_continuation_outcomes_total{{reason="{reason}"}} {count}\n', metrics
+            )
+        exposed = re.findall(
+            r'^narwhal_continuation_outcomes_total\{reason="([^"]+)"\}', metrics, re.M
+        )
+        self.assertEqual(set(exposed), set(expected))
+        self.assertIn(
+            'narwhal_continuation_failures_total{reason="stream_interrupted"} 2\n', metrics
+        )
 
     async def test_state_retains_documented_controller_decision_fields(self):
         details = {
