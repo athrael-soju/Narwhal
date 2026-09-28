@@ -14,20 +14,20 @@ The first row identifies the journal contract and the build that produced it:
 
 ### Terminal request records
 
-Narwhal closes each original completion request with one terminal row, attaching retries and the final invalid, rejected, expired, failed, cancelled, refused, or completed outcome to that request.
+Narwhal closes each original completion request with one terminal row. The row attaches retries and the final outcome to that request: invalid, rejected, expired, failed, cancelled, refused, or completed.
 
 | Field                                        | Meaning                                                                                                                                                               |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`, `rid`, `client_rid`                   | Router process, Narwhal request ID, and optional caller request ID.                                                                                                   |
 | `arrived`                                    | Arrival time on the process monotonic clock. Compare this value only within one `run`.                                                                                |
-| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. Cancellation retains measured partial output; continuation uses the ASGI counting rule below. |
+| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. Cancellation retains measured partial output; continuation counts committed output as described below. |
 | `ttft_s` | Seconds from request arrival to prefill completion; null if prefill did not complete. |
 | `tpot_s` | Seconds from prefill completion to the last observed output token, divided by `output_len - 1`. Null if timing or exact token counts are unavailable, or `output_len` is less than two. |
 | `first_byte_s` | Seconds from request arrival to the first observed output; null if none was observed. |
 | `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
 | `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
 | `token_accounting`                           | Decode-output accounting mode. `token_ids` provides exact per-token identity; every other dialect reports `unavailable`.                                              |
-| `refused`, `refused_cause`                   | Predictive refusal flag and reason: `prompt` (prompt alone exceeds the TTFT budget), `queue` (total predicted TTFT exceeds the budget although the prompt alone fits), or `aggregate_unpriced` (no calibrated aggregate prefill price). See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
+| `refused`, `refused_cause`                   | Predictive refusal flag and reason. `prompt`: the prompt alone exceeds the TTFT budget. `queue`: total predicted TTFT exceeds the budget although the prompt alone fits. `aggregate_unpriced`: no calibrated aggregate prefill price exists. See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
 | `cancelled`, `cancelled_phase`               | Client disconnect and the phase in which it occurred: `admission`, `queue`, `backoff`, `prefill`, or `decode`.                                                        |
 | `terminal`                                   | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.                                                              |
 | `input_sized`                                | Whether local input sizing completed. When false, the body terminated before sizing and `input_len: 0` records that early exit.                                       |
@@ -40,9 +40,10 @@ Narwhal closes each original completion request with one terminal row, attaching
 | `continuation`                               | Recovery accounting for validated opt-in requests. See [Continuation recovery](#continuation-recovery). |
 
 For [opted-in continuation](../http-api/01-Requests.md#continuation-opt-in),
-Narwhal adds generated IDs to `output_len` after the ASGI send containing them
-returns successfully. A failed or cancelled send adds no IDs. A successful
-send confirms server acceptance only; it does not confirm client receipt.
+Narwhal adds generated IDs to `output_len` when they
+[commit](../concepts/04-Stream-Continuation.md#output-commitment): the router's
+HTTP server (ASGI) has accepted the send containing them. A failed or
+cancelled send adds no IDs. Acceptance does not confirm client receipt.
 `decode_tokens_observed` counts every ID read from an engine, including IDs
 whose buffered output is later discarded.
 
@@ -52,7 +53,7 @@ their output remains buffered. Recovery preserves the original prefill
 completion time, so `tpot_s` includes time spent transferring KV, queueing
 and recovering. `decode_tpot_s` starts at the first observed output token.
 Both fields divide by `output_len - 1`, combining engine observation times
-with the number of IDs accepted by ASGI. Measure delivery timing at the client.
+with the number of committed IDs. Measure delivery timing at the client.
 
 For continuation requests, `error` and `attempt_failures` exclude prompt text,
 generated text and token arrays.
@@ -78,22 +79,21 @@ to its terminal row:
 
 | Field | Meaning |
 | --- | --- |
-| `attempts` | Recovery attempts admitted after ASGI accepts output, including attempts cancelled before an engine dispatch |
+| `attempts` | Recovery attempts admitted after output commits, including attempts cancelled before an engine dispatch |
 | `replay_input_tokens` | Total tokens submitted in recovery prompts, including repeated submissions |
 | `prefill_seconds` | Recovery prefill HTTP duration, including failed and cancelled calls |
 | `interruption_seconds` | Total recovery interruption time, using the interval defined below |
 | `failures` | Observed failures grouped by the fixed reasons below |
 | `terminal_reason` | Completion, cancellation or the condition that stopped recovery |
 
-Each recovery prompt contains the original prompt and the generated IDs
-already accepted by ASGI. `replay_input_tokens` counts that prompt each time
+Each recovery prompt contains the original prompt and the committed
+generated IDs. `replay_input_tokens` counts that prompt each time
 it is submitted, including after a failed prefill. It does not measure cache
 misses or GPU computation. `prefill_seconds` is also included in
 `upstream_seconds.prefill`.
 
 An interruption starts when the router enters recovery after closing the
-failed upstream stream. It ends when the next ASGI output send succeeds or
-the request ends. Further failures before output resumes extend the same
+failed upstream stream. It ends when the next output commits or the request ends. Further failures before output resumes extend the same
 interval.
 
 The failure reasons are `connection`, `timeout`, `upstream_status`,
@@ -104,7 +104,10 @@ Budget denials do not add failure counts.
 `terminal_reason` is `completed` on success. Other values are `attempt_limit`,
 `shared_budget`, `no_survivor`, `qualification`, `original_deadline`,
 `output_limit`, `history_limit`, `fenced`, `non_transient`, `local_pool`,
-`prediction`, `cancelled` and `before_commit`.
+`prediction`, `cancelled` and `before_commit`. `non_transient` means a failure
+after output committed that continuation does not recover, such as an invalid
+stream or a permanent engine status. `before_commit` means the request failed
+before recovery could start, for example before any output committed.
 
 Each validated opt-in request counts once in
 `narwhal_continuation_outcomes_total{reason="<terminal_reason>"}` when it ends.

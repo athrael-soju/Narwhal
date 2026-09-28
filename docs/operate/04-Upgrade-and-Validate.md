@@ -218,8 +218,7 @@ tested trigger and branch with the results.
 Use this drill to check recovery after a decode worker fails. Run it before
 enabling continuation for client traffic and after changes to the
 [backend or tokenizer](../concepts/04-Stream-Continuation.md#capability-identity).
-The implementation is unreleased. The
-[live results](../concepts/04-Stream-Continuation.md#live-router-results)
+The [qualification results](../measure/08-Continuation-Qualification.md)
 describe the tested scope; qualify each deployment against its own engine
 processes, tokenizer and settings.
 
@@ -231,8 +230,15 @@ restart policy allow those engines to continue serving requests.
 This drill requires a reviewed qualification record and a matching capture
 for each participating engine. Start each sidecar with
 [`--continuation-document`](../cli/Attest.md#continuation-capture) set to its
-capture file. Check that
-`GET /v1/attestation/continuation` returns the expected capture.
+capture file. From the router host, check each sidecar:
+
+```bash
+curl --fail --silent --show-error http://SIDECAR_HOST:8010/v1/attestation/continuation
+```
+
+Replace `SIDECAR_HOST` with the sidecar's address, and `8010` if the sidecar
+uses another `--port`. A ready sidecar returns HTTP 200 with a
+`contract_sha256` equal to the SHA-256 of the approved replay contract.
 
 Set the [continuation limits](../configuration/02-Serving-and-Role-Control.md#44-opt-in-continuation-state)
 and the qualification file's path and SHA-256 in the fleet configuration.
@@ -259,36 +265,36 @@ after the router closes the failed upstream response, so it omits part of the
 client's wait. Compare timestamps from the same clock; when that is
 impossible, report the timing uncertainty.
 
-1. Record healthy responses with `continuation.enabled: false`. Set it to
-   `true`, restart the router, then repeat with `narwhal_continuation: true`
-   in each request. Keep all generation settings unchanged, including the
-   output limit.
-2. Set the test's pass/fail limits before causing a failure: maximum output
-   pause and completion time, plus first-output and completion times for a
-   concurrent request. Record the client, proxy and router timeouts and the
-   number of requests and faults the test will allow.
-3. Include an opted-in stream and an ordinary stream on the selected decode
+1. With `continuation.enabled: false`, send each test request and record
+   the healthy responses.
+2. Set `continuation.enabled: true` and restart the router.
+3. Repeat each request with `narwhal_continuation: true`. Keep every other
+   field unchanged, including the output limit.
+4. Record the pass/fail limits before causing a failure: maximum output pause
+   and completion time, plus first-output and completion times for a
+   concurrent request. Also record the client, proxy and router timeouts and
+   the number of requests and faults the test allows.
+5. Start an opted-in stream and an ordinary stream on the selected decode
    worker. After both clients receive their recorded prefixes, terminate
-   that worker. Keep the router and client connections open. Confirm that
-   the selected process was still running both requests when it stopped.
-4. Send one of the baseline requests while the interrupted request is
-   recovering. Compare its first-output and completion times with the
-   healthy result for that same request.
-5. Check each client response. Recovery must preserve the committed prefix
-   and response ID, append the new suffix once and produce one terminal
-   result. For recovery-limit and eligibility failures, keep the client
-   connection writable and verify one terminal SSE error. Verify that
-   recovery retains the original request deadline. The ordinary stream on
-   the terminated worker must end with one error and no recovery.
-6. Match each request to its [journal row](../telemetry/01-Journal.md#continuation-recovery).
+   that worker, keeping the router and client connections open. Confirm that
+   the process was still running both requests when it stopped.
+6. While the interrupted request recovers, send one of the baseline requests.
+   Compare its first-output and completion times with its healthy result.
+7. Check each client response. A recovered response keeps the committed
+   prefix and response ID, appends the new suffix once and ends with one
+   terminal result. A recovery-limit or eligibility failure ends with one
+   terminal SSE error on a writable connection. The ordinary stream on the
+   terminated worker ends with one error and no recovery. Recovery keeps the
+   original request deadline.
+8. Match each request to its [journal row](../telemetry/01-Journal.md#continuation-recovery).
    Check delivered tokens against the client capture, and recovery attempts
    and replay tokens against the engine requests. Compare the run totals
    with [metrics](../telemetry/03-Metrics-and-Control.md#continuation-recovery).
    Include failed and refused requests when reporting the success rate.
-7. Check `/narwhal/state` after the responses close. Inflight and waiting
+9. After the responses close, check `/narwhal/state`. Inflight and waiting
    requests, engine reservations and `serving.continuation_history_bytes`
-   must return to zero. Confirm that the corresponding engine requests
-   finished or aborted.
+   must be zero. Confirm that the corresponding engine requests finished or
+   aborted.
 
 Keep configuration, raw streams and engine identities in the private test
 record. Report each case against the limits set before the test, including
@@ -313,8 +319,8 @@ Keep external admission closed until these steps complete:
    router's qualification file. Set `continuation.qualification_sha256` to
    the new file's SHA-256. Restart each affected sidecar with its new capture.
 3. If the drill used an isolated subset, assemble the complete serving
-   fleet's store and run all [preflight gates](../deploy/06-Profile-and-Preflight.md#run-preflight)
-   against the original fleet configuration with that store.
+   fleet's store. Run all [preflight gates](../deploy/06-Profile-and-Preflight.md#run-preflight)
+   with that store against the original fleet configuration.
 4. Stop any temporary routers. Start or restart the serving router with the
    final configuration to load the updated files.
 5. Confirm the intended router owns the complete fleet and `/ready` returns

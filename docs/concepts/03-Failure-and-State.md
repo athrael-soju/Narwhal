@@ -135,14 +135,13 @@ The default serving policy reports saturation after one prefill/decode attempt.
 
 Each retry acquires fresh KV ownership.
 
-For supported requests, the unreleased
-[continuation implementation](04-Stream-Continuation.md) can recover eligible
-upstream failures after output commitment. It rebuilds the original prompt
-and committed generated prefix with fresh KV ownership and separate recovery
-credits. The original router and client connection must remain alive;
-standby takeover does not recover an interrupted client stream. Live
-worker-failure qualification remains pending in
-[#195](https://github.com/athrael-soju/Narwhal/issues/195).
+For opted-in requests, [stream continuation](04-Stream-Continuation.md) can
+recover eligible upstream failures after output commits. It rebuilds the
+original prompt and committed generated prefix with fresh KV ownership and
+separate recovery credits. The original router and client connection must
+remain alive; standby takeover does not recover an interrupted client stream.
+The [qualification results](../measure/08-Continuation-Qualification.md)
+describe the tested scope.
 
 ## Durable control-plane state
 

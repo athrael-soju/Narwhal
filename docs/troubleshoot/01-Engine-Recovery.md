@@ -46,13 +46,21 @@ For `shared_budget`, check `serving.continuation_credits` in
 These limits apply separately from ordinary retries.
 
 For `qualification`, check whether an engine process, its attestation or its
-profiles changed. A replacement process needs a new continuation capture.
-Keep it out of service while you prepare that capture, update the
-qualification file and set `continuation.qualification_sha256` to the new
-file's SHA-256. Start the replacement's sidecar with
-[`--continuation-document`](../cli/Attest.md#continuation-capture) pointing to
-the new capture, then follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
-to load the new profiles and qualification in the router before readmission.
+profiles changed. A replacement process needs a new continuation capture:
+
+1. Keep the replacement out of service.
+2. Prepare its continuation capture and add it to the qualification file.
+3. Set `continuation.qualification_sha256` to the updated file's SHA-256.
+4. Restart the replacement's sidecar with
+   [`--continuation-document`](../cli/Attest.md#continuation-capture) set to
+   the new capture.
+5. Follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles)
+   to load the new profiles and qualification in the router before
+   readmission.
+
+Before readmission, check that `GET /v1/attestation/continuation` on the
+sidecar returns HTTP 200 with the new capture. Then
+[request readmission](../operate/03-Restart-Engines.md#73-request-readmission).
 
 ### Planned restart of one engine
 

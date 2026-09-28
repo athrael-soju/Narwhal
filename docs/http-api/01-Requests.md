@@ -74,13 +74,13 @@ Model and engine configuration determine actual support for input formats, reaso
 
 ### Continuation opt-in
 
-Continuation can resume a stream on surviving engines after a recoverable
+Continuation can continue a stream on surviving engines after a recoverable
 upstream failure. The router sends the original prompt IDs and
 [committed output IDs](../concepts/04-Stream-Continuation.md#output-commitment)
 through a new prefill and decode attempt while keeping the client connection
 open. The feature is unreleased. See the
-[live results](../concepts/04-Stream-Continuation.md#live-router-results) for
-the tested scope and limitations.
+[qualification results](../measure/08-Continuation-Qualification.md) for the
+tested scope and limitations.
 
 Continuation requires both `continuation.enabled: true` in the fleet
 configuration and `narwhal_continuation: true` in the request. An omitted or
@@ -114,9 +114,8 @@ Text prompts, chat, batches, nested token arrays, additional sampling
 controls and unrecognised fields return HTTP `400` before engine I/O.
 Token stops require qualification; string stops are unsupported.
 
-After committing output, Narwhal may recover transport failures, supported
-transient engine errors or a stream that ends before a complete `[DONE]`
-event. It discards uncommitted output and requests only the remaining token
+After committing output, Narwhal can recover transport failures, transient
+engine errors or a stream that ends before a complete `[DONE]` event. It discards uncommitted output and requests only the remaining token
 allowance. The response keeps its ID, creation time and model across attempts.
 Usage counts the original prompt and committed output once. A failed or
 cancelled client write ends the request.
@@ -148,7 +147,7 @@ for byte limits and qualification inputs.
 
 ## Request identity and authentication
 
-Narwhal assigns a router request ID at ingress, returns it as `x-request-id`, and derives a backend ID for each engine attempt and execution phase to track KV ownership. The request journal stores the forwarded client request ID as `client_rid` for correlation.
+Narwhal assigns a router request ID at ingress and returns it as `x-request-id`. It derives a backend ID for each engine attempt and execution phase to track KV ownership. The request journal stores the forwarded client request ID as `client_rid` for correlation.
 
 Ingress authenticates clients, strips client credentials and client-supplied internal IDs, then installs trusted values that Narwhal uses for client identity. Set `engine.engine_api_key_env` to attach the deployment's engine credential to serving and control requests.
 

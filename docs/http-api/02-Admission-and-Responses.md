@@ -8,7 +8,7 @@
 | Requested model differs from the configured model                            | `404` | `model_not_found`                                                |
 | `n > 1` or `best_of > 1`                                                     | `400` | Invalid sampling width                                           |
 | Unsupported non-streaming audio, modality, or tool request                   | `400` | `invalid_request_error` naming the option in `param`             |
-| Explicit continuation is disabled, unsupported, or cannot fit per-request bounds | `400` | Invalid continuation request |
+| The deployment disables continuation, or an opted-in request uses unsupported options or exceeds per-request bounds | `400` | `invalid_request_error`; the rejected field appears in `param` |
 | Other requests occupy the continuation history ceiling | `429` | `Retry-After: 1` |
 | A selected engine lacks a current continuation qualification before response headers | `503` | `continuation_unavailable` |
 | Request exceeds `serving.max_request_bytes`                                  | `413` | `request_too_large`                                              |
@@ -56,10 +56,10 @@ Each completion has one choice at index `0`.
 
 The router buffers continuation events until they reach a
 [qualified byte boundary](../concepts/04-Stream-Continuation.md#output-commitment).
-It sends each pending group in one ASGI body message and counts its token IDs
-as committed only after that send succeeds. This confirms that the server
-accepted the bytes; it does not confirm client receipt. Events with empty
-text or multiple token IDs may therefore delay delivery. Finish and usage
+It sends each pending group in one HTTP body message and counts its token
+IDs as committed once the router's HTTP server accepts them. Acceptance does
+not confirm client receipt. Events with empty text or multiple token IDs can
+therefore delay delivery. Finish and usage
 events remain pending until a complete `[DONE]` event arrives.
 
 If `return_token_ids` is `true`, each continuation completion includes its
@@ -90,7 +90,7 @@ Every tool call must contain:
 
 Tool arguments remain engine-generated strings for the client to interpret.
 
-The non-streaming assembler returns HTTP `502` for unsupported choice or chat-delta fields that carry a value, including audio, annotations, and custom tool output, and for malformed supported fields.
+The non-streaming assembler returns HTTP `502` for malformed supported fields. It also returns `502` for unsupported choice or chat-delta fields that carry a value, including audio, annotations, and custom tool output.
 
 ### Metadata and usage
 

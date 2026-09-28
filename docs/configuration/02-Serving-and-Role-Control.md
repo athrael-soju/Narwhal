@@ -17,7 +17,7 @@ Predictive admission returns HTTP 429 when the least expensive prefill path exce
 
 Backlog-driven refusals include `Retry-After` with the projected wait.
 
-For a prompt whose projected TTFT exceeds the target at zero backlog, Narwhal returns an error envelope directing the caller to shorten the prompt or increase the TTFT target.
+If a prompt's projected TTFT exceeds the target at zero backlog, Narwhal returns an error envelope. The envelope directs the caller to shorten the prompt or increase the TTFT target.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
@@ -58,7 +58,7 @@ Before any visible output, Narwhal may retry:
 
 Every retry begins with fresh prefill ownership. Recovery from an expired handoff does the same.
 
-A permanent error, local HTTP-pool starvation or cancellation terminates the request. Ordinary retries stop after visible output. Supported requests can enable [continuation recovery](#44-opt-in-continuation-state) for eligible failures after output commitment.
+A permanent error, local HTTP-pool starvation or cancellation terminates the request. Ordinary retries stop after visible output. If the deployment enables [continuation](#44-opt-in-continuation-state), an opted-in request can recover eligible failures after output commits.
 
 For non-streaming output, partial response bodies from failed attempts are discarded before retry.
 
@@ -97,8 +97,8 @@ Any client-side retry must fit inside the caller's remaining deadline.
 
 ### 4.4 Opt-in continuation state
 
-The top-level `continuation` section configures the unreleased
-[stream continuation feature](../concepts/04-Stream-Continuation.md).
+The top-level `continuation` section configures
+[stream continuation](../concepts/04-Stream-Continuation.md).
 Continuation requires both `continuation.enabled: true` and an explicit
 `narwhal_continuation: true` in a supported completion request. Omitting the
 request field or setting it to `false` keeps ordinary serving behaviour.
@@ -108,7 +108,7 @@ request field or setting it to `false` keeps ordinary serving behaviour.
 | `continuation.enabled` | `false` | Allows explicit request opt-in after qualification and capacity checks. |
 | `continuation.max_attempts` | `0` | Maximum recovery attempts per original request, excluding the initial attempt and retries before output commitment. |
 | `continuation.recovery_budget` | `0` | Initial and maximum router-wide recovery credits. Each admitted recovery attempt consumes one credit. |
-| `continuation.recovery_replenish` | `0.0` | Credits added after each successful opted-in original request, capped by `recovery_budget`. Range zero to one. |
+| `continuation.recovery_replenish` | `0.0` | Credits added after each successful opted-in original request, capped by `recovery_budget`. A finite number from `0` to `1` inclusive. |
 | `continuation.max_context_tokens` | `0` | Maximum original prompt length plus requested `max_tokens`, in tokens. |
 | `continuation.max_history_bytes` | `0` | Per-request byte reservation for retained token IDs, pending frames and output buffers. |
 | `continuation.max_retained_bytes` | `0` | Router-wide ceiling on continuation byte reservations. |
@@ -122,7 +122,7 @@ must be at least two, and `max_retained_bytes` must be at least
 path and its digest. The configuration loader validates these values without
 opening the record; successful config validation does not qualify a backend.
 
-Router startup also requires a dialect that advertises exact token IDs.
+Router startup also requires an [`engine.dialect`](03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) whose streamed decode returns exact token IDs; the `vllm` dialect does.
 The pinned qualification record must name the fleet's configured model.
 
 Recovery attempts use their own limit and credits. They do not consume
@@ -131,11 +131,10 @@ handoff. Retrying a failed recovery prefill or expired handoff consumes
 another attempt and credit. Cancellation after admission does not refund
 the credit.
 
-The router excludes failed engines from later recovery attempts, including
-attempts waiting in a queue. Surviving engines must pass the
-[recovery checks](../concepts/04-Stream-Continuation.md#survivor-recovery)
-before the router dispatches work to them. An expired handoff alone does not
-mark either engine as failed.
+The router excludes failed engines from the request's later recovery
+attempts. Surviving engines must pass the
+[recovery checks](../concepts/04-Stream-Continuation.md#select-surviving-engines)
+before the router dispatches work to them.
 
 With `serving.admission: "predictive"`, the estimated prefill time for the
 replay prompt must be finite and less than the time left on the original
@@ -341,7 +340,7 @@ Ordinary consolidation requires both:
 - projected source pressure at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-When measured prefill pressure reaches `controller.thresholds.expand`, and every engine has a profile, the mixed-pressure rule may move one decode engine to prefill even if projected decode pressure remains above `shrink`.
+The mixed-pressure rule applies when measured prefill pressure reaches `controller.thresholds.expand` and every engine has a profile. It can move one decode engine to prefill even if projected decode pressure remains above `shrink`.
 
 That move still must improve the worst projected SLO ratio by at least the configured movement margin. If the margin is zero, the improvement must remain strictly positive.
 

@@ -122,7 +122,7 @@ Continuation adds these process-local fields to `serving`:
 
 | Field | Meaning |
 | --- | --- |
-| `continuation_attempts` | Recovery attempts admitted after ASGI accepts output, including attempts cancelled before an engine dispatch |
+| `continuation_attempts` | Recovery attempts admitted after output commits, including attempts cancelled before an engine dispatch |
 | `continuation_replay_input_tokens` | Total tokens submitted in recovery prompts, including repeated submissions |
 | `continuation_prefill_seconds` | Cumulative recovery prefill HTTP duration, including failed and cancelled calls |
 | `continuation_interruption_seconds` | Accumulated recovery interruption seconds; see the [journal interval definition](../telemetry/01-Journal.md#continuation-recovery) |

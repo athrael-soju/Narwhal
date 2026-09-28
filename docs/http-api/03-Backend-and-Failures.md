@@ -157,8 +157,8 @@ data: {"error": ...}
 
 ### Continuation failures
 
-The unreleased [continuation feature](01-Requests.md#continuation-opt-in)
-can recover eligible failures after output commits. Recovery uses the original
+[Continuation](01-Requests.md#continuation-opt-in) can recover eligible
+failures after output commits. Recovery uses the original
 deadline and separate attempt limits and credits.
 
 The router verifies a selected engine's qualification before each prefill or
@@ -169,10 +169,12 @@ the engine's circuit breaker.
 
 Continuation reads complete SSE events and verifies the echoed prompt IDs,
 generated IDs, finish metadata and final terminator. EOF before a complete
-`[DONE]` can trigger recovery from the preceding committed prefix. Malformed
-events end the request with a fixed error message. Exceeding
-the retained-history or original output limit emits an explicit stream error
-and closes the response. Pending output stays uncommitted. A valid completion
+`[DONE]` can trigger recovery from the preceding committed prefix. An error event
+inside the stream counts as the engine status it carries, or `500` when it has
+none. Malformed events end the request with a fixed error message. Exceeding
+the retained-history or original output limit emits a stream error with
+`type: "continuation_limit"` and the message
+`Continuation history or output limit exceeded`, then closes the response. Pending output stays uncommitted. A valid completion
 at exactly `max_tokens` finishes normally with `finish_reason: "length"`.
 
 Recovery admission errors use `type: "continuation_error"` and one of these

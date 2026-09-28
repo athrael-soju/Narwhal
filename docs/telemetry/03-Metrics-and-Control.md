@@ -76,7 +76,7 @@ increment `narwhal_prefill_attempts_total` and contribute to
 `narwhal_continuation_interruption_seconds_total` accumulates the recovery
 intervals defined in the [journal reference](01-Journal.md#continuation-recovery).
 The journal also explains how continuation uses
-[engine observation times and ASGI token counts](01-Journal.md#terminal-request-records).
+[engine observation times and committed token counts](01-Journal.md#terminal-request-records).
 
 ## Inspect scheduling and role control
 
