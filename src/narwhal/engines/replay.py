@@ -59,6 +59,22 @@ class ReplayInterrupted(ReplayError):
     """The transport ended before a complete stream terminator arrived."""
 
 
+class ReplayUpstreamError(ReplayError):
+    """The engine reported an error event inside the HTTP 200 stream."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__("engine reported an error inside the continuation stream")
+        self.status = status
+
+
+def _error_status(error: Any) -> int:
+    """Return the in-band error status, defaulting to 500."""
+    code = error.get("code") if isinstance(error, dict) else None
+    if type(code) is int and 400 <= code <= 599:
+        return code
+    return 500
+
+
 def _keys(value: Any, required: set[str], optional: set[str] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ReplayError("continuation record must be an object")
@@ -365,13 +381,13 @@ class ReplayQualification:
             )
             version.raise_for_status()
             version_value = _json(version.content).get("version")
-            if not isinstance(version_value, str) or not version_value:
+            if not isinstance(version_value, str) or not version_value.strip():
                 raise ReplayError("continuation engine version is missing")
             metrics = await client.get(
                 engine_url.rstrip("/") + "/metrics", headers=headers, timeout=timeout_s
             )
             metrics.raise_for_status()
-            live = EngineIdentity(version_value, parse_process_start(metrics.text))
+            live = EngineIdentity(version_value.strip(), parse_process_start(metrics.text))
             base = await client.get(attestation_url, timeout=timeout_s)
             base.raise_for_status()
             standard = _json(base.content)
@@ -487,8 +503,11 @@ class ReplayEventReader:
                 raise ReplayError("continuation terminator arrived before completion")
             self._done = True
             return ReplayEvent("done", {})
+        obj = _json(payload)
+        if obj.get("error") is not None:
+            raise ReplayUpstreamError(_error_status(obj["error"]))
         obj = _keys(
-            _json(payload),
+            obj,
             {"id", "object", "created", "model", "choices"},
             {"usage", "system_fingerprint"},
         )

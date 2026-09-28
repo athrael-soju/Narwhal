@@ -298,10 +298,18 @@ class SplitScorer:
             waiting.append(request)
         if not waiting:
             return None
-        # Replay keeps its original arrival but rejoins the FIFO queue at the
-        # tail. Its current publication order determines which work precedes it.
-        if not any(row.recovery_deadline is not None for row in waiting):
-            waiting.sort(key=lambda row: row.arrived_at if row.arrived_at is not None else now)
+        # Ordinary rows sort by arrival; replay sorts after rows published before it.
+        keys: list[float] = []
+        published = -math.inf
+        for row in waiting:
+            if row.recovery_deadline is None:
+                key = row.arrived_at if row.arrived_at is not None else now
+                published = max(published, key)
+            else:
+                key = published
+            keys.append(key)
+        order = sorted(range(len(waiting)), key=keys.__getitem__)
+        waiting = [waiting[index] for index in order]
 
         loads: dict[str, float] = {}
         resident_prefill = 0.0

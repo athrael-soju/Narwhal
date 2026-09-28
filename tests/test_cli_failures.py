@@ -85,6 +85,15 @@ class CliFailureTests(unittest.TestCase):
         self.assertIn("load document missing.json", stderr.getvalue())
         with (
             patch.object(attestation.AttestationDocument, "load"),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            self.assertEqual(
+                attestation.main([*args, "--continuation-document", "capture.json"]), 2
+            )
+        self.assertIn("load document capture.json", stderr.getvalue())
+        self.assertNotIn("missing.json", stderr.getvalue())
+        with (
+            patch.object(attestation.AttestationDocument, "load"),
             patch.object(
                 attestation,
                 "fetch_engine_identity",

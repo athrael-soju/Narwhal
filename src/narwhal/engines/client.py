@@ -29,6 +29,7 @@ from .replay import (
     ReplayInterrupted,
     ReplayQualification,
     ReplayUnavailable,
+    ReplayUpstreamError,
 )
 from .stream import sse_error, sse_token_bearing
 
@@ -621,6 +622,8 @@ class EngineClient:
                         yield event
                         if event.kind == "done":
                             return
+                except ReplayUpstreamError as exc:
+                    raise EngineError("decode", url, exc.status, str(exc)) from exc
                 except ReplayError as exc:
                     raise EngineError("decode", url, 502, STREAM_CONTINUATION_DETAIL) from exc
 

@@ -147,10 +147,11 @@ class RequestLifecycle:
         if self.recovering:
             self.replay_input_tokens += self.work_request.input_len
             self.router.continuation_replay_input_tokens += self.work_request.input_len
-        if self.continuation is None:
+        # Timing resets until output commits.
+        if self.continuation is None or self.continuation.committed_count == 0:
             self.tokens = 0
             self.first_at = self.last_at = self.prefilled_at = None
-        else:
+        if self.continuation is not None:
             self.continuation.discard_pending()
             self.continuation_prompt_pending = self.continuation.committed_count > 0
         self.prefill_iid = self.decode_iid = None

@@ -73,6 +73,7 @@ class ContinuationHttpTests(unittest.IsolatedAsyncioTestCase):
         self.error_body = "SYNTHETIC_PRIVATE_BACKEND_CONTENT"
         self.prefill_hold = None
         self.prefill_started = asyncio.Event()
+        self.prefill_clock = []
         self.streams = []
         self.stream_chunks = []
         self.hold_stream = False
@@ -102,6 +103,7 @@ class ContinuationHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.url.path, "/v1/completions")
         if body.get("kv_transfer_params", {}).get("do_remote_decode"):
             self.prefill_started.set()
+            self.prefill_clock.append(self.router._clock())
             if self.prefill_hold is not None:
                 await self.prefill_hold.wait()
             if self.prefill_status != 200:
@@ -326,6 +328,9 @@ class ContinuationHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["decode_attempts"], 2)
         self.assertTrue(row["attempt_failures"][0]["retry_scheduled"])
         self.assertFalse(row["attempt_failures"][0]["output_started"])
+        retried_at = self.prefill_clock[1] - row["arrived"]
+        self.assertGreaterEqual(row["ttft_s"], retried_at)
+        self.assertGreaterEqual(row["first_byte_s"], retried_at)
         self.assertEqual(self.router.offered, 1)
         self.assertEqual(self.router.served, 1)
         self.assertEqual(self.router.retry_budget.spent, 1)

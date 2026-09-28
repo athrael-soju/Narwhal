@@ -33,6 +33,7 @@ from narwhal.engines.replay import (
     ReplayInterrupted,
     ReplayQualification,
     ReplayUnavailable,
+    ReplayUpstreamError,
 )
 from narwhal.serving.retry import transient
 from narwhal.types import LEG_STREAM
@@ -191,6 +192,22 @@ class ReplayReaderTests(unittest.TestCase):
         self.assertEqual(events[1].generated_ids, (8, 9))
         self.assertNotIn("generated_ids", repr(events[1]))
 
+    def test_in_band_error_keeps_its_status_without_content(self):
+        cases = [
+            ({"code": 503, "message": "sensitive text"}, 503),
+            ({"code": 429}, 429),
+            ({"code": True, "message": "sensitive text"}, 500),
+            ({"code": 200}, 500),
+            ("sensitive text", 500),
+        ]
+        for error, status in cases:
+            reader = self.reader()
+            list(reader.feed(wire(envelope())))
+            with self.subTest(error=error), self.assertRaises(ReplayUpstreamError) as caught:
+                list(reader.feed(wire({"error": error})))
+            self.assertEqual(caught.exception.status, status)
+            self.assertNotIn("sensitive text", str(caught.exception))
+
     def test_order_output_cap_and_usage_are_validated(self):
         for extra in [wire(envelope(prompt=None)), b"data: [DONE]\n\n"]:
             reader = self.reader()
@@ -274,6 +291,7 @@ class ReplayHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.capture = self.qualification.engines["e0"]
         self.start = 100
         self.encoding = None
+        self.version = "test-version"
         self.requests = []
         self.stream = ByteStream([(0, wire(envelope(finish="stop")) + b"data: [DONE]\n\n")])
         self.transport = httpx.MockTransport(self.handle)
@@ -281,7 +299,7 @@ class ReplayHTTPTests(unittest.IsolatedAsyncioTestCase):
     def handle(self, request):
         self.requests.append(request)
         if request.url.path == "/version":
-            return httpx.Response(200, json={"version": "test-version"})
+            return httpx.Response(200, json={"version": self.version})
         if request.url.path == "/metrics":
             return httpx.Response(200, text=f"process_start_time_seconds {self.start}\n")
         if request.url.path == "/v1/attestation":
@@ -303,6 +321,14 @@ class ReplayHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(actual, self.capture)
             for request in self.requests:
                 self.assertEqual("authorization" in request.headers, request.url.host == "engine")
+            self.version = " test-version\n"
+            self.assertEqual(
+                await self.qualification.verify(
+                    "e0", "http://engine", "http://sidecar/v1/attestation", client=client
+                ),
+                self.capture,
+            )
+            self.version = "test-version"
             self.start = 101
             with self.assertRaises(ReplayUnavailable):
                 await self.qualification.verify(
@@ -492,6 +518,12 @@ class ReplayHTTPTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(caught.exception.detail, STREAM_UNTERMINATED_DETAIL)
                 self.assertEqual(leg_failure_class(caught.exception), LEG_STREAM)
                 self.assertTrue(self.stream.closed)
+        self.stream = ByteStream([(0, wire(envelope()) + wire({"error": {"code": 503}}))])
+        with self.assertRaises(EngineError) as caught:
+            await self.consume()
+        self.assertEqual(caught.exception.status, 503)
+        self.assertTrue(transient(caught.exception))
+        self.assertTrue(self.stream.closed)
         for invalid in (
             wire(envelope(ids=(True,))),
             b"event: unsupported\n\n",

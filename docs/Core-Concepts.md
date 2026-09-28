@@ -7,6 +7,7 @@ Narwhal assigns prefill and decode roles across dual-capability engines serving 
 - [Request flow and fleet topology](concepts/01-Request-and-Topology.md)
 - [Role control and capacity floors](concepts/02-Role-Control.md)
 - [Failure, readmission, and state](concepts/03-Failure-and-State.md)
+- [Stream continuation](concepts/04-Stream-Continuation.md)
 
 ## Related reference material
 

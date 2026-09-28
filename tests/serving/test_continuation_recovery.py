@@ -353,6 +353,22 @@ class ContinuationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.row()["output_len"], 5)
         self.assert_released()
 
+    async def test_in_band_engine_error_recovers_as_upstream_status(self):
+        error = {"error": {"code": 503, "message": "SYNTHETIC_PRIVATE_ENGINE_DETAIL"}}
+        self.plans["e3"] = [([wire(envelope((7,), "A")), wire(error), b"data: [DONE]\n\n"], False)]
+        response = await self.post(self.client())
+        events = self.events(response)
+        self.assertFalse(any("error" in event for event in events), response.text)
+        choices = [choice for event in events for choice in event["choices"]]
+        self.assertEqual("".join(choice["text"] for choice in choices), "A🦄BC")
+        self.assertEqual([iid for iid, _, _ in self.decodes], ["e3", "e4"])
+        self.assertEqual(self.decodes[1][1]["prompt"], [3, 7])
+        continuation = self.row()["continuation"]
+        self.assertEqual(continuation["failures"], {"upstream_status": 1})
+        self.assertEqual(continuation["terminal_reason"], "completed")
+        self.assertEqual(self.router.continuation_failures, {"upstream_status": 1})
+        self.assert_released()
+
     async def test_invalid_generated_identity_is_terminal_without_recovery_credit(self):
         self.plans["e3"] = [
             (

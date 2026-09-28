@@ -375,13 +375,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         document = AttestationDocument.load(args.document)
-        from .replay import ReplayCapture
+    except (OSError, ValueError) as exc:
+        return failure("narwhal-attest", f"load document {args.document}", exc, 2)
+    from .replay import ReplayCapture
 
+    try:
         continuation = (
             ReplayCapture.load(args.continuation_document) if args.continuation_document else None
         )
     except (OSError, ValueError) as exc:
-        return failure("narwhal-attest", f"load document {args.document}", exc, 2)
+        return failure("narwhal-attest", f"load document {args.continuation_document}", exc, 2)
     try:
         identity = asyncio.run(fetch_engine_identity(args.engine_base, timeout_s=args.timeout_s))
         if identity.vllm_version != document.contract.vllm_version:

@@ -1,6 +1,6 @@
 # Production Fleet Measurement and Acceptance
 
-Bind each production result to a deployment identifier that records the model, engine build, hardware shape, topology, workload, cache policy, and TTFT/TPOT targets used in the run.
+Bind each production result to a deployment identifier. The identifier records the model, engine build, hardware shape, topology, workload, cache policy, and TTFT/TPOT targets used in the run.
 
 ## Measurement sequence
 
@@ -11,3 +11,4 @@ Bind each production result to a deployment identifier that records the model, e
 5. [Ordered benchmark points](measure/05-Benchmark-Runner.md)
 6. [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md)
 7. [GPU benchmark qualification](measure/07-GPU-Qualification.md)
+8. [Stream continuation qualification](measure/08-Continuation-Qualification.md)

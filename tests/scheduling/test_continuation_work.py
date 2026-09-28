@@ -94,6 +94,28 @@ class ContinuationWorkTests(unittest.TestCase):
         self.assertAlmostEqual(projection.queued_prefill_s, 1.12)
         self.assertEqual(list(self.monitor.waiting), [newer.rid, older.rid])
 
+    def test_waiting_replay_keeps_ingress_order_for_ordinary_requests(self):
+        self.monitor.waiting[self.replay.rid] = self.replay
+        newer = Request("newer", 100, wanted_len=10, arrived_at=99.8)
+        retried = Request("retried", 1000, wanted_len=10, arrived_at=99.5)
+        self.monitor.waiting[newer.rid] = newer
+        self.monitor.waiting[retried.rid] = retried
+        projection = self.scorer.project_prefill(self.now, newer)
+        self.assertEqual(projection.rid, newer.rid)
+        self.assertAlmostEqual(projection.projected_ttft_s, 2.33)
+        self.assertAlmostEqual(projection.queued_prefill_s, 2.13)
+        self.assertEqual(projection.waiting_prefill, 3)
+
+    def test_replay_follows_ordinary_work_published_before_it(self):
+        earlier = Request("earlier", 1000, wanted_len=10, arrived_at=99.5)
+        self.monitor.waiting[earlier.rid] = earlier
+        self.monitor.waiting[self.replay.rid] = self.replay
+        later = Request("later", 100, wanted_len=10, arrived_at=99.8)
+        self.monitor.waiting[later.rid] = later
+        projection = self.scorer.project_prefill(self.now, earlier)
+        self.assertEqual(projection.rid, earlier.rid)
+        self.assertAlmostEqual(projection.projected_ttft_s, 1.51)
+
     def test_replay_retains_prefill_and_remaining_decode_load_in_split_projection(self):
         self.monitor.waiting[self.replay.rid] = self.replay
         queued = self.capture()
