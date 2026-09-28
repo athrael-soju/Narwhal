@@ -20,9 +20,9 @@
 
 ## About
 
-Narwhal is a disaggregated LLM inference framework, which reallocates prefill and decode roles as demand changes while model weights stay loaded.
+Narwhal is an adaptive disaggregated inference framework that reallocates prefill and decode roles as demand changes, while model weights stay loaded.
 
-Narwhal provides:
+Capabilities (as of v0.1.0):
 
 - Hot-swap prefill/decode role assignment across a fixed GPU fleet.
 - Separate prefill and decode routing with NIXL KV transfer.
