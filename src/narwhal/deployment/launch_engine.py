@@ -129,7 +129,11 @@ def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> 
 
 def requires_ds_conv_state_layout(model_dir: Path) -> bool:
     """Detect checkpoint metadata that uses convolutional SSM transfer state."""
-    model = json.loads((model_dir / "config.json").read_text())
+    return ds_conv_state_layout_required(json.loads((model_dir / "config.json").read_text()))
+
+
+def ds_conv_state_layout_required(model: dict) -> bool:
+    """Detect convolutional SSM transfer state in parsed checkpoint configuration."""
     text_model = model.get("text_config", model)
     linear = text_model.get("linear_attn_config", {})
     if (
