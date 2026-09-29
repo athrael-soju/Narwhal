@@ -76,7 +76,7 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * decode intervals;
 * cell medians;
 * fitted profiles;
-* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the engine exports no hit counter;
+* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the hit counter is absent;
 * the verified attestation response or process identity that binds each fit to its engine generation.
 
 The sample sidecar retains raw prefill measurements and the fit error when a TTFT fit fails, and keeps completed engine data if a later engine fails. `--overwrite` creates a new output pair for the selected engines.

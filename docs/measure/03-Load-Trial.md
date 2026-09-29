@@ -4,7 +4,7 @@
 
 Through the [private tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) from the management workstation, send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s. After a passing run and router drain, test 1 request/s. A rate meets the candidate 95% target when at least 190 requests complete with TTFT at or below 2.0 s and TPOT at or below 0.0333 s.
 
-Before the trial, check that the workload fits the accepted profile domain and engine context limit. Reserve the router for trial traffic so that you can reconcile each client record with the journal. This trial measures cold prefill, and both rate tests replay the same workload, so launch every engine with `--no-enable-prefix-caching` in `runtime.extra_args`. Retain the `checked.json` records that show `"prefix_caching": false`.
+Before the trial, check that the workload fits the accepted profile domain and engine context limit. Reserve the router for trial traffic. This trial measures cold prefill. Launch every engine with `--no-enable-prefix-caching` in `runtime.extra_args` and retain the `checked.json` records that show `"prefix_caching": false`.
 
 ### Create the trial directory and workload
 

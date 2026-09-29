@@ -191,9 +191,9 @@ It also records the cache settings that vLLM resolves for the model, as describe
 | Field            | Value                                                                                        |
 | ---------------- | -------------------------------------------------------------------------------------------- |
 | `prefix_caching` | `true` when the resolved engine configuration keeps prefix caching on                        |
-| `kv_events`      | The resolved event and replay endpoints, or `null` when the engine publishes no cache events |
+| `kv_events`      | The resolved event and replay endpoints, or `null` when cache-event publication is off       |
 
-The check fails when the resolved endpoints differ from `launch.json`. When vLLM resolves prefix caching off for the model, the engine caches no prefix blocks and publishes no block events. vLLM can also turn prefix caching off later, during model load, for some attention configurations.
+The check fails when the resolved endpoints differ from `launch.json`. When vLLM resolves prefix caching off for the model, `prefix_caching` is `false` and the event stream stays empty. vLLM can also turn prefix caching off later, during model load, for some attention configurations.
 
 The HTTP probe compares `/version` with that captured value.
 
@@ -214,12 +214,12 @@ While prefix caching stays on, the launcher configures vLLM to publish KV cache 
 | `events.sock` | Published event batches, each with a sequence number      |
 | `replay.sock` | Replay requests for batches still in vLLM's replay buffer |
 
-The short path keeps each socket within the 107-byte Unix socket path limit, which a launch directory path can exceed. Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
+Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
 
-To keep prefix caching on without publishing events, add vLLM's own event setting to `extra_args`:
+To keep prefix caching on and turn event publication off, add vLLM's event setting to `extra_args`:
 
 ```json
 ["--kv-events-config", "{\"enable_kv_cache_events\": false}"]
 ```
 
-The launcher rejects any other `--kv-events-config` value because it selects the event endpoints. Either opt-out leaves `kv_events` as `null`.
+The launcher selects the event endpoints and rejects any other `--kv-events-config` value. Either opt-out leaves `kv_events` as `null`.

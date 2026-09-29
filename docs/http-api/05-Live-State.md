@@ -86,7 +86,7 @@ The record also identifies engines with a health or inference probe currently in
 
 #### `residency`
 
-Each monitoring pass refreshes one record per engine from its attestation sidecar. The router takes a snapshot first, then applies the sidecar's ordered changes. It takes a new snapshot when the changes are gone, the sidecar epoch changes, or a refresh fails.
+Each monitoring pass refreshes one record per engine from its attestation sidecar's ordered changes. The router resynchronises from a snapshot at start, after a sidecar epoch change, after HTTP 410 from the change route, and after a failed refresh.
 
 | Field | Meaning |
 | --- | --- |
@@ -98,7 +98,7 @@ Each monitoring pass refreshes one record per engine from its attestation sideca
 | `resident_blocks` | Named resident blocks per KV cache group |
 | `resyncs` | Snapshots taken since router start |
 
-An engine without a sidecar, or whose sidecar serves no residency, reports `known: false`. Routing does not use residency yet.
+An engine reports `known: false` when its sidecar is absent or answers the residency routes with HTTP 404.
 
 ---
 
