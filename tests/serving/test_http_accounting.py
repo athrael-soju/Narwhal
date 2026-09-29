@@ -10,10 +10,13 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.router import NarwhalRouter
+from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, invalid_token_choices
+from tests.scheduling.test_cache_evidence import warm
 
 
 class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
@@ -89,6 +92,57 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.inflight, 0)
         self.assertEqual(self.router.ingress_inflight, 0)
         self.assertFalse(self.router.monitor.waiting)
+
+    async def test_token_id_prompt_carries_cache_evidence_to_demand_and_journal(self):
+        client = self.client()
+        scheduler = self.router.scheduler
+        prefill = next(i for i in scheduler.monitor.instances.values() if i.role is Role.PREFILL)
+        digest = scheduler.profiles.get(prefill.iid).generation_digest
+        scheduler.profiles.put(warm(prefill.iid, generation_digest=digest))
+        prompt = list(range(40))
+        namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
+        view = self.router.residency.view(prefill.iid)
+        view.known, view.block_size, view.sequence = True, 4, 3
+        view.groups = {"0": ("full_attention", None, set(block_identities(namespace, prompt, 4)))}
+        response = await client.post(
+            "/v1/completions",
+            json={"model": self.cfg.model, "prompt": prompt, "max_tokens": 1, "stream": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        row = self.terminal_rows()[-1]
+        self.assertEqual(row["cached_tokens"], {prefill.iid: 36})
+        placement = row["cache_placement"]
+        self.assertEqual(
+            (placement["placed_iid"], placement["placed_cached_tokens"]), (prefill.iid, 36)
+        )
+        self.assertEqual(placement["evidence_sequence"], 3)
+        self.assertLess(placement["predicted_prefill_s"], placement["cold_prefill_s"])
+        arrivals = [cohort.value.cached for cohort in self.router.controller.demand.arrivals.rows()]
+        self.assertIn(((prefill.iid, 36),), arrivals)
+        self.assert_released()
+
+    async def test_an_unplaceable_decode_role_fails_before_prefill(self):
+        self.cfg.engines = [replace(spec, pin=True) for spec in self.cfg.engines]
+        for queue in (0, 4):
+            with self.subTest(queue=queue):
+                self.calls.clear()
+                self.cfg.serving = (
+                    ServingPolicy(
+                        queue_capacity=queue,
+                        queue_timeout_s=5.0,
+                        prefill_concurrency=4,
+                        decode_concurrency=4,
+                        handoff_timeout_s=5.0,
+                    )
+                    if queue
+                    else ServingPolicy()
+                )
+                client = self.client()
+                self.router.scheduler.eject("e3")
+                response = await self.post(client)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(self.calls, [])
+                self.assert_released()
 
     async def test_readiness_blocks_traffic_until_identity_capture(self):
         """Declared engines require captured process identities before admission."""
@@ -206,6 +260,40 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         for instance in self.router.monitor.instances.values():
             self.assertFalse(instance.prefill)
             self.assertFalse(instance.decode)
+
+    async def test_predictive_admission_refuses_when_decode_is_full(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        decode = next(i for i in self.router.monitor.instances.values() if i.role is Role.DECODE)
+        limit = self.router.scheduler.profiles.get(decode.iid).decode_max_requests
+        for index in range(limit):
+            self.router.monitor.dispatched(decode.iid, Request(f"d{index}", 10, phase=Phase.DECODE))
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(self.terminal_rows()[-1]["refused_cause"], "decode")
+        self.assertEqual(self.calls, [])
+        for index in range(limit):
+            self.router.monitor.finished(decode.iid, f"d{index}")
+        self.assertEqual((await self.post(client)).status_code, 200)
+
+    async def test_predictive_admission_projects_decode_from_prefill_completion(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        scheduler = self.router.scheduler
+        prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
+        self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
+        with (
+            patch.object(scheduler, "decode_admits", wraps=scheduler.decode_admits) as gate,
+            patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
+        ):
+            self.assertEqual((await self.post(client)).status_code, 200)
+            request = replace(gate.call_args.args[0], phase=Phase.PREFILL)
+            ready = scheduler.prefill_ready_s(request, prefill)
+            self.assertLess(ready, scheduler.prefill_admission_price(request, prefill))
+        self.assertGreater(ready, 1.0)
+        self.assertEqual(gate.call_args.kwargs["ready_s"], ready)
+        self.assertEqual(gate.call_args.kwargs["expected_output"](request), 1)
 
     async def test_invalid_output_identity_fails_the_original_request(self):
         """Serving rejects unidentified output before committing a successful response."""

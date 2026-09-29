@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -14,9 +14,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..config import FleetConfig
 from ..contracts import STATE, versioned
-from ..engines.client import EngineClient, EngineError, InferenceProbe, leg_failure_class
+from ..engines.client import (
+    FIRST_OUTPUT_DETAIL,
+    EngineClient,
+    EngineError,
+    InferenceProbe,
+    leg_failure_class,
+)
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
+from ..engines.prefix import CacheNamespace, block_identities
 from ..observability.journal import RunJournal
 from ..observability.metrics import Histogram, buckets_for
 from ..profiling.store import ProfileStore
@@ -28,8 +35,9 @@ from ..scheduling.controller import ReactiveController
 from ..scheduling.health import DriftTracker
 from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
-from ..types import Instance, Phase, Role
+from ..types import LEG_OVERLOAD, LEG_STREAM, Instance, Phase, Request, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
+from .completion import output_cap
 from .dispatch import Dispatcher
 from .execution import request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
@@ -39,6 +47,33 @@ if TYPE_CHECKING:
     from ..runtime.lease import FileLease
 
 log = logging.getLogger("narwhal.server")
+
+
+# Prompts at least this long hash their block identities in a worker thread.
+HASH_THREAD_TOKENS = 8192
+
+
+def _hash_prompt(
+    namespace: CacheNamespace | None, reusable: Sequence[int], sizes: set[int]
+) -> dict[int, list[bytes]]:
+    """Return the prompt's block identities per block size; empty for invalid token IDs."""
+    if namespace is None:
+        return {}
+    try:
+        return {size: block_identities(namespace, reusable, size) for size in sizes}
+    except ValueError:
+        return {}
+
+
+def _multimodal(body: dict[str, Any]) -> bool:
+    """Return whether a chat request carries non-text content parts."""
+    for message in body.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list) and any(
+            not isinstance(part, dict) or part.get("type") != "text" for part in content
+        ):
+            return True
+    return False
 
 
 class NarwhalRouter:
@@ -136,6 +171,7 @@ class NarwhalRouter:
                 relative_band=cfg.health_relative_band,
             ),
         )
+        self.scheduler.recheck_cache_evidence = self.recheck_cache_evidence
         self.lifecycle = LifecycleManager(self)
         if cfg.engine_restart_policy == "whole_wave":
             self.scheduler.on_eject = lambda iid: self.lifecycle.require_restart_wave(
@@ -232,12 +268,18 @@ class NarwhalRouter:
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
 
     async def input_length(self, body: dict[str, Any]) -> int:
-        """Return the exact or estimated input token count.
+        """Return the exact or estimated input token count."""
+        return (await self.size(body))[0]
+
+    async def size(
+        self, body: dict[str, Any]
+    ) -> tuple[int, dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return the input token count and the prefix-cache evidence for the prompt.
 
         Already-tokenized prompts supply their exact count locally. Other
         requests query one engine. A failed exact-count call fails the request
         and rotates the preferred engine for the next request. Disabled or
-        unavailable token counting uses the local estimate.
+        unavailable token counting uses the local estimate and no cache evidence.
         """
         prompt = body.get("prompt")
         if (
@@ -246,13 +288,13 @@ class NarwhalRouter:
             and prompt
             and all(type(token) is int and token >= 0 for token in prompt)
         ):
-            return len(prompt)
+            return len(prompt), *(await self._cache_evidence(body, prompt))
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
                 k = next((j for j, i in enumerate(live) if i.iid == self._tokenizer), 0)
                 try:
-                    got = await self.engines.token_count(
+                    got = await self.engines.tokenize(
                         live[k].url, body, self.cfg.tokenize_timeout_s, strict=True
                     )
                 except EngineError:
@@ -260,9 +302,81 @@ class NarwhalRouter:
                     raise
                 if got is not None:
                     self._tokenizer = live[k].iid
-                    return got
+                    ids = got.token_ids
+                    if ids is None:
+                        return got.count, {}, {}, {}
+                    return got.count, *(await self._cache_evidence(body, ids))
                 self._tokenizer = live[(k + 1) % len(live)].iid
-        return self.estimate_length(body)
+        return self.estimate_length(body), {}, {}, {}
+
+    def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
+        """Return the prompt tokens each engine can serve from its prefix cache."""
+        return self.prefix_cache_evidence(body, token_ids)[0]
+
+    def prefix_cache_evidence(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return cached tokens and residency sequence per engine, and the matched block identities.
+
+        Identities cover the prompt minus its final token. Multimodal requests, fleets
+        without an engine contract and out-of-range token IDs return empty evidence.
+        """
+        return self._match_evidence(_hash_prompt(*self._evidence_inputs(body, token_ids)))
+
+    async def _cache_evidence(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """`prefix_cache_evidence`, hashing a long prompt in a worker thread."""
+        inputs = self._evidence_inputs(body, token_ids)
+        if len(inputs[1]) >= HASH_THREAD_TOKENS:
+            return self._match_evidence(await asyncio.to_thread(_hash_prompt, *inputs))
+        return self._match_evidence(_hash_prompt(*inputs))
+
+    def _evidence_inputs(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[CacheNamespace | None, Sequence[int], set[int]]:
+        contract = self.cfg.engine_contract
+        if contract is None or len(token_ids) < 2 or _multimodal(body):
+            return None, (), set()
+        salt = body.get("cache_salt")
+        namespace = CacheNamespace(
+            self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
+        )
+        sizes = {v.block_size for v in self.residency.views.values() if v.known and v.block_size}
+        return namespace, token_ids[:-1], sizes
+
+    def _match_evidence(
+        self, by_size: dict[int, list[bytes]]
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        matched: dict[int, int] = {}
+        cached: dict[str, int] = {}
+        sequences: dict[str, int] = {}
+        for iid, view in self.residency.views.items():
+            size = view.block_size
+            if not view.known or not size or size not in by_size:
+                continue
+            blocks = view.cached_prefix_blocks(by_size[size])
+            if blocks > 0:
+                cached[iid] = blocks * size
+                matched[size] = max(matched.get(size, 0), blocks)
+                if view.sequence is not None:
+                    sequences[iid] = view.sequence
+        return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
+
+    def recheck_cache_evidence(self, request: Request) -> None:
+        """Refresh the request's cache evidence from current residency."""
+        for iid in list(request.cached_tokens):
+            view = self.residency.views.get(iid)
+            if view is not None and view.block_size:
+                identities = request.cache_identities.get(view.block_size, [])
+                blocks = view.cached_prefix_blocks(identities)
+                if blocks:
+                    request.cached_tokens[iid] = blocks * view.block_size
+                    if view.sequence is not None:
+                        request.cache_sequences[iid] = view.sequence
+                    continue
+            del request.cached_tokens[iid]
+            request.cache_sequences.pop(iid, None)
 
     def estimate_length(self, body: dict[str, Any]) -> int:
         """Estimate offered input length locally."""
@@ -287,7 +401,7 @@ class NarwhalRouter:
         rid, arrived = state.rid, state.arrived
         req = state.request
         req.input_len = self.estimate_length(body)
-        req.wanted_len = int(body.get("max_tokens") or 0)
+        req.wanted_len = output_cap(body)
         state.sized = True
         state.resolve_demand()
         invalid = request_error(self, body)
@@ -368,6 +482,7 @@ class NarwhalRouter:
         *,
         prefill_iid: str | None = None,
         decode_leg: bool = False,
+        progressed: bool = False,
     ) -> None:
         """Classify a failed leg and update breaker state.
 
@@ -395,6 +510,14 @@ class NarwhalRouter:
         if klass is None:
             # PoolTimeout and caller-side 4xx legs are handled above.
             return
+        if (
+            klass == LEG_STREAM
+            and progressed
+            and isinstance(exc, EngineError)
+            and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
+        ):
+            # A first-token timeout while the engine produced other output is overload.
+            klass = LEG_OVERLOAD
         if klass == "stream":
             self._inference_sources.setdefault(iid, set()).add(prefill_iid or "")
         verdict = self.scheduler.record_failure(iid, klass)
@@ -409,8 +532,13 @@ class NarwhalRouter:
         elif verdict in ("verify_health", "verify_inference"):
             if verdict == "verify_inference":
                 self.scheduler.inference_suspects.add(iid)
-                self.scheduler.quarantined[iid] = math.inf
-                self.scheduler.refresh_floor_state()
+                if self.scheduler.availability.role_covered_without(iid):
+                    self.scheduler.quarantined[iid] = math.inf
+                    self.scheduler.refresh_floor_state()
+                else:
+                    log.warning(
+                        "%s stays live during inference verification: it alone serves its role", iid
+                    )
             # One pending probe per engine and verdict kind; extra failures
             # while it runs only grow the streak it will resolve.
             key = (iid, verdict)
@@ -454,6 +582,9 @@ class NarwhalRouter:
             self.scheduler.record_answer(iid, "health")
             log.info("suspect %s passed health verification; health failure classes cleared", iid)
             return
+        if not self.scheduler.availability.role_covered_without(iid):
+            log.warning("%s stays live after a failed /health probe: it alone serves its role", iid)
+            return
         if self.scheduler.eject(iid):
             log.warning("ejected %s: timeout-shaped failures and /health did not answer", iid)
 
@@ -469,7 +600,7 @@ class NarwhalRouter:
             probe = await self.engines.probe_inference(
                 url,
                 prefill_url=producer.url if producer is not None else None,
-                deadline_s=self.cfg.first_token_timeout_s,
+                deadline_s=max(self.cfg.first_token_timeout_s or 0.0, self.cfg.health_timeout_s),
             )
             if not self._resolve_inference_probe(iid, probe):
                 return
@@ -490,17 +621,32 @@ class NarwhalRouter:
             return False
         legs = {"prefill": probe.prefill, "decode": probe.decode}
         if any(leg.inconclusive for leg in legs.values()):
-            # Control-pool starvation: the probe says nothing about the
-            # engine, and the streak keeps its verdict pending.
-            log.info(
-                "suspect %s inference probe waited out the control pool; verdict deferred",
-                iid,
-            )
+            if probe.decode.inconclusive and probe.prefill.failed is not None:
+                log.info(
+                    "suspect %s inference probe inconclusive: producer leg failed %s, "
+                    "decode leg untested; verdict deferred",
+                    iid,
+                    probe.prefill.failed,
+                )
+            else:
+                log.info(
+                    "suspect %s inference probe waited out the control pool; verdict deferred",
+                    iid,
+                )
             return False
         failed = {name: leg.failed for name, leg in legs.items() if leg.failed is not None}
         if not failed:
             return True
         detail = ", ".join(f"{name} leg failed {klass}" for name, klass in sorted(failed.items()))
+        if not self.scheduler.availability.role_covered_without(iid):
+            self.scheduler.quarantined.pop(iid, None)
+            self.scheduler.refresh_floor_state()
+            log.warning(
+                "%s stays live after a failed inference probe (%s): it alone serves its role",
+                iid,
+                detail,
+            )
+            return False
         if self.scheduler.eject(iid):
             log.warning("ejected %s: inference probe failed (%s)", iid, detail)
         else:

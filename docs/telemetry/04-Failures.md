@@ -56,7 +56,15 @@ verify_health
 verify_inference
 ```
 
-When a probe completes, Narwhal either clears the relevant failure streaks or ejects the engine. Engine ejection is exported through `narwhal_ejected`.
+A completed probe acts on the engine:
+
+| Probe | Engine | Action |
+| --- | --- | --- |
+| Passes | Any | Clears the relevant failure streaks |
+| Fails | Another live engine serves its role or accepts role changes | Ejects the engine |
+| Fails | Its removal leaves its role unserved | Keeps the engine in placement and lifts its hold |
+
+`narwhal_ejected` exports engine ejection.
 
 `make observe` stages `tools/observability/prometheus-alerts.yml` for Prometheus rule evaluation and `tools/observability/grafana-narwhal.json` for Grafana dashboard provisioning.
 

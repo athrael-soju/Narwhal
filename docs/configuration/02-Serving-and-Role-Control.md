@@ -8,16 +8,45 @@ By default, Narwhal dispatches admitted requests directly with one prefill and d
 
 | Field                        | Default        | Meaning                                                                                                                                                                                      |
 | ---------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serving.admission`          | `"predictive"` | `predictive` prices every prefill path against the TTFT target and constrains aggregate placement to the single-phase region covered by measurements. `open` disables both admission checks. |
+| `serving.admission`          | `"predictive"` | `predictive` prices every prefill path against the TTFT target and constrains aggregate placement to the single-phase region covered by measurements. `open` skips every predictive admission check. |
 | `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget to reduce boundary churn. Nonnegative.                                                                                                           |
 | `serving.max_connections`    | `512`          | Global admitted-request limit and HTTP data-pool size. At least 1.                                                                                                                           |
 | `engine.control_connections` | `0`            | HTTP connections reserved for health and recovery. `0` derives two per engine, with a minimum of four. Nonnegative.                                                                          |
 
-Predictive admission returns HTTP 429 when the least expensive prefill path exceeds the TTFT budget.
+Predictive admission returns HTTP 429 with one of these causes:
 
-Backlog-driven refusals include `Retry-After` with the projected wait.
+| Cause | Condition | `Retry-After` |
+| --- | --- | --- |
+| `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
+| `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
+| `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
+| `decode` | Peak projected decode work over the request's decode window exceeds live decode capacity, or decode load pushes the request past `slo.tpot_s` | `1` |
 
-For a prompt whose projected TTFT exceeds the target at zero backlog, Narwhal returns an error envelope directing the caller to shorten the prompt or increase the TTFT target.
+For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
+
+The `decode` check projects decode work over the request's decode window, from its predicted prefill completion to its projected last token. Each request holds decode over this span:
+
+| Request | Holds decode |
+| --- | --- |
+| The request | From its predicted prefill completion |
+| Waiting for a decode slot | From now, through the window |
+| Resident in decode | From now until its projected last token |
+| In prefill | From its predicted prefill completion until its projected last token |
+
+Remaining output is the expected output, and the output cap once a request passes that estimate. A request with an unknown remainder holds decode indefinitely. When the checked request's output is unknown, its window is the instant of its predicted prefill completion.
+
+Residents generate at their decode engine's token interval, and other requests at the fleet mean. Each engine's interval is its profiled interval for a full batch at the current mean context, within the decode KV token bound. The live decode correction scales it.
+
+Peak projected work over the window must fit live decode capacity:
+
+| Budget | Per request | Fleet capacity |
+| --- | --- | --- |
+| Slots | 1 | Sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive |
+| KV tokens | Prompt plus delivered and remaining output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
+
+The TPOT check passes when any live decode engine meets `slo.tpot_s` with the request and its residents generating at the request's prefill completion. A request that misses `slo.tpot_s` on every idle decode engine also passes.
+
+The output cap is `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset. Expected output is the output cap times the median delivered fraction for the request's bucket: its power-of-two prompt and output-cap sizes. A bucket's fraction applies once three of its requests finish. An uncapped request uses the median delivered output for its prompt bucket, or the fleet-wide median delivered output. A shape overflow in the completion history suspends the fractions and medians until the overflow ages out.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
@@ -108,7 +137,20 @@ Narwhal then selects the lowest-cost eligible engine. Equal-cost candidates are 
 
 If every candidate violates its projected SLO, Narwhal records an unserved placement and selects the least-cost fallback.
 
-Engine-side prefix caching is independent of router placement.
+### Prefix-cache pricing
+
+For a request sized with exact token IDs, the router records each engine's cached leading prompt blocks from its [residency view](../http-api/05-Live-State.md#residency). The record stops at the block before the final prompt token. Each prefill placement rechecks those blocks against the current views. An engine that holds a cached prefix prices the request's prefill with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). Placement, predictive admission, resident work, pool load, offered demand and role-split scoring use that price.
+
+The router prices a request on the cold curve of its full input when:
+
+- the router used its local length estimate;
+- the request carries multimodal content;
+- the fleet config omits `engine_contract`;
+- the engine's residency is unknown;
+- the engine's current view drops the prefix before placement;
+- the engine's profile holds a cold fit only, or the case lies outside the warm fit's measured domain.
+
+The prefill estimate decides which engines meet the TTFT budget, their order, and whether predictive admission accepts the request. Role pins, health holds, drains, ejection and capacity limits apply to every placement. The request journal records each placement priced with cache evidence in `cache_placement`.
 
 A live role change affects new placement immediately. Resident requests keep their current engine and reservation until completion or cancellation.
 
@@ -127,7 +169,7 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `serving.prefill_timeout_s`     | `120.0`                | Elapsed prefill-leg deadline. Positive and at most `serving.request_timeout_s`.                                                         |
 | `recovery.failure_quarantine_s` | `0.0`                  | Time a failed engine remains excluded from placement. `0` disables quarantine.                                                          |
 | `engine.decode_read_timeout_s`  | `60.0`                 | Maximum silent interval between decode chunks. `0` disables the gap limit.                                                              |
-| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token and for each functional-verification leg. Positive and at most `serving.request_timeout_s`.         |
+| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token. Positive and at most `serving.request_timeout_s`.                                                   |
 | `engine.first_token_calibration_path` | `""` | Path to a completed first-token calibration artifact under `runs/`. An empty value leaves calibration evidence unconfigured. |
 | `engine.tokenize`               | `true`                 | Requests exact text/chat input length from the dialect tokenisation endpoint. Token-ID prompts are counted locally.                     |
 | `engine.tokenize_timeout_s`     | `2.0`                  | Elapsed exact-token-count deadline. Positive. Errors from an available tokenizer route fail the request before placement.             |
@@ -164,7 +206,7 @@ Set `engine.decode_read_timeout_s` to `0` to use the overall request deadline as
 }
 ```
 
-Breaker verification applies `engine.first_token_timeout_s` independently to each complete prefill and decode verification leg.
+Each breaker verification leg has a budget of the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s`.
 
 `engine.chars_per_token` feeds the quadratic prefill estimate during character-based fallback. Profile this ratio for every dialect that uses that fallback.
 

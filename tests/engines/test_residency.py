@@ -1,5 +1,6 @@
 """Check residency tracking against vLLM-shaped cache events and ZeroMQ sockets."""
 
+import random
 import tempfile
 import threading
 import time
@@ -16,7 +17,7 @@ from narwhal.engines.kv_events import (
     decode_batch,
 )
 from narwhal.engines.prefix import CacheNamespace, block_identities
-from narwhal.engines.residency import ResidencyIndex
+from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
 from narwhal.engines.residency_feed import ResidencyFeed
 
 MODEL, TOKENIZER = "model", "contract"
@@ -288,6 +289,28 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(windowless, 0, stored([1], prompt[:4], kind="sliding_window"))
         self.assertEqual(windowless.cached_prefix_blocks(names), 0)
 
+    def test_duplicate_and_out_of_order_batches_change_nothing(self):
+        """A replayed or late batch whose sequence was already applied is ignored."""
+        prompt = tuple(range(8))
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
+        # Replayed batch 0 and a late batch 1.
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [1], "group_idx": 0})
+        self.assertTrue(index.known)
+        self.assertEqual(index.sequence, 1)
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
+        # A duplicate store inside one batch leaves one resident block.
+        self.apply(
+            index,
+            2,
+            stored([3], tuple(range(4, 8)), parent=1),
+            stored([3], tuple(range(4, 8)), parent=1),
+        )
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 2)
+        self.assertEqual(len(index.snapshot()["groups"][0]["identities"]), 2)
+
     def test_bound_offload_tiers_and_unnamed_blocks(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_blocks=2)
         prompt = tuple(range(12))
@@ -433,3 +456,35 @@ class ResidencyFeedTests(unittest.TestCase):
         self.run_feed(silent, blind)
         self.assertTrue(wait_for(lambda: "replay is unavailable" in blind.reason))
         self.assertFalse(blind.known)
+
+
+class CachedPrefixBlockWindowTests(unittest.TestCase):
+    def test_window_groups_match_a_full_rescan(self):
+        rng = random.Random(7)
+        ids = [bytes([n]) * 32 for n in range(24)]
+
+        def rescan(full, window, needed, boundary):
+            best = 0
+            for count, identity in enumerate(ids, start=1):
+                if identity not in full:
+                    break
+                if identity in boundary and all(
+                    i in window for i in ids[max(0, count - needed) : count]
+                ):
+                    best = count
+            return best
+
+        for _ in range(400):
+            full = set(ids[: rng.randint(0, 24)])
+            window = {i for i in ids if rng.random() < 0.8}
+            boundary = {i for i in ids if rng.random() < 0.5}
+            window_tokens = rng.randint(2, 40)
+            needed = -(-(window_tokens - 1) // 4)
+            groups = [
+                ("full_attention", None, full),
+                ("sliding_window", window_tokens, window),
+                ("mamba", None, boundary),
+            ]
+            self.assertEqual(
+                cached_prefix_blocks(groups, ids, 4), rescan(full, window, needed, boundary)
+            )

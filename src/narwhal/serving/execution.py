@@ -18,9 +18,9 @@ from ..engines.client import (
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
-from ..types import Instance, Phase, Request
+from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
-from .completion import reassemble
+from .completion import output_cap, reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
 from .response import RequestStreamResponse
@@ -90,12 +90,18 @@ def _status_of(exc: BaseException) -> int:
     return 502
 
 
-def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool) -> None:
+def _failed_leg(
+    state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool, started: float
+) -> None:
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
     router._leg_failed(
-        inst.iid, exc, prefill_iid=state.prefill_iid if decode else None, decode_leg=decode
+        inst.iid,
+        exc,
+        prefill_iid=state.prefill_iid if decode else None,
+        decode_leg=decode,
+        progressed=router.monitor.output_since(inst.iid, started),
     )
     reason = leg_failure_reason(exc)
     if decode and isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
@@ -151,6 +157,9 @@ async def _prepare_once(
 ) -> PreparedAttempt:
     router, req = state.router, state.request
     req.prefill_instance = None
+    for role in (Role.PREFILL, Role.DECODE):
+        if not router.scheduler.role_placeable(role):
+            raise NoEngine(f"no schedulable engines for the {role.value} role")
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
         cost = router.scheduler.cost(req, prefill)
@@ -160,6 +169,13 @@ async def _prepare_once(
             req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
+        if not router.scheduler.decode_admits(
+            req,
+            ready_s=router.scheduler.prefill_ready_s(req, prefill),
+            concurrency=router.cfg.serving.decode_concurrency,
+            expected_output=router.controller.demand.output_estimator(),
+        ):
+            raise PlacementRefused(priced, decode=True)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
@@ -172,7 +188,7 @@ async def _prepare_once(
             )
         )
     except Exception as exc:
-        _failed_leg(state, prefill, exc, decode=False)
+        _failed_leg(state, prefill, exc, decode=False, started=began)
         raise
     finally:
         state.record_upstream_time("prefill", began)
@@ -210,7 +226,7 @@ async def prepare_attempt(
 
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     if isinstance(exc, PlacementRefused):
-        return refuse_request(state, exc.predicted_s)
+        return refuse_request(state, exc.predicted_s, decode=exc.decode)
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
@@ -255,7 +271,7 @@ async def serve_request(
     req = Request(
         rid=rid,
         input_len=router.estimate_length(body),
-        wanted_len=int(body.get("max_tokens") or 0),
+        wanted_len=output_cap(body),
     )
     state = lifecycle or RequestLifecycle(
         router, req, arrived, client_rid=headers.get("x-request-id")
@@ -264,10 +280,19 @@ async def serve_request(
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
-        req.input_len = await state.wait(lambda: router.input_length(body))
+        (
+            req.input_len,
+            req.cached_tokens,
+            req.cache_sequences,
+            req.cache_identities,
+        ) = await state.wait(lambda: router.size(body))
         if state.demand_observation is not None:
             router.controller.demand.resize_arrival(
-                state.demand_observation, req.input_len, req.wanted_len, at=arrived
+                state.demand_observation,
+                req.input_len,
+                req.wanted_len,
+                at=arrived,
+                cached_tokens=req.cached_tokens,
             )
             state.demand_observation = None
         if not offered:
@@ -391,7 +416,7 @@ async def _decode_attempt(
             yield frame
         router.scheduler.record_answer(prepared.decode.iid, "decode")
     except Exception as exc:
-        _failed_leg(state, prepared.decode, exc, decode=True)
+        _failed_leg(state, prepared.decode, exc, decode=True, started=began)
         raise
     finally:
         try:
@@ -419,6 +444,7 @@ async def run_decode(
                 async for frame in attempt:
                     if streaming:
                         state.output_started = True
+                        state.request.cache_identities = {}
                         yield frame
                     else:
                         size += len(frame.encode())

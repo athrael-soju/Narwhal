@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 # Each engine leg failure increments one per-engine streak. Liveness counts
 # failed sweeps. These names are also state keys and metric label values.
@@ -54,6 +55,14 @@ class Request:
     wanted_len: int = 0
     # Monotonic ingress time for end-to-end TTFT projections.
     arrived_at: float | None = None
+    # Cached prompt tokens per engine, rechecked at each prefill placement.
+    cached_tokens: dict[str, int] = field(default_factory=dict)
+    # Residency sequence behind each engine's evidence.
+    cache_sequences: dict[str, int] = field(default_factory=dict)
+    # Matched prompt block identities by block size, for the placement recheck.
+    cache_identities: dict[int, list[bytes]] = field(default_factory=dict)
+    # Journal record of the cache-priced placement.
+    cache_placement: dict[str, Any] | None = None
 
     @property
     def length(self) -> int:

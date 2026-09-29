@@ -43,7 +43,9 @@ class Dispatcher:
             if phase is Phase.PREFILL and (router.failover_blocked or not control_ready(router)):
                 return None
             live = router.scheduler.live_instances()
-            pool = [inst for inst in live if inst.role is role] or live
+            pool = [inst for inst in live if inst.role is role] or [
+                inst for inst in live if inst.iid not in router.scheduler.pinned
+            ]
             candidates = {
                 inst.iid
                 for inst in pool

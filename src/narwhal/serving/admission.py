@@ -19,9 +19,14 @@ class QueueFull(Exception):
 class PlacementRefused(Exception):
     """The cheapest placement exceeds the predictive admission budget."""
 
-    def __init__(self, predicted_s: float) -> None:
-        super().__init__(f"cheapest placement prices TTFT at {predicted_s:.2f}s")
+    def __init__(self, predicted_s: float, *, decode: bool = False) -> None:
+        super().__init__(
+            "every live decode engine is at its decode capacity"
+            if decode
+            else f"cheapest placement prices TTFT at {predicted_s:.2f}s"
+        )
         self.predicted_s = predicted_s
+        self.decode = decode
 
 
 class QueueExpired(Exception):

@@ -11,6 +11,7 @@ import httpx
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.profiling.model import Profile
 from narwhal.serving.app import create_app
+from narwhal.serving.completion import completion_body_error, output_cap
 from narwhal.serving.router import NarwhalRouter
 from narwhal.types import Role
 
@@ -389,3 +390,16 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("non-streaming", response.json()["error"]["message"])
         self.assertEqual(self.router.served, 0)
         self.assertEqual(self.router.failed, 4)
+
+
+class OutputCapTests(unittest.TestCase):
+    def test_the_output_cap_reads_either_token_limit_field(self):
+        self.assertEqual(output_cap({"max_completion_tokens": 32}), 32)
+        self.assertEqual(output_cap({"max_tokens": 16, "max_completion_tokens": 32}), 32)
+        self.assertEqual(output_cap({"max_tokens": 16}), 16)
+        self.assertEqual(output_cap({"max_tokens": True}), 0)
+        self.assertEqual(output_cap({}), 0)
+        self.assertEqual(
+            completion_body_error({"max_completion_tokens": "8"}),
+            ("max_completion_tokens must be an integer", "max_completion_tokens"),
+        )

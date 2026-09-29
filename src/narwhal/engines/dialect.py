@@ -48,7 +48,7 @@ class VllmDialect(EngineDialect):
     name = "vllm"
     # vLLM exposes this route only with VLLM_SERVER_DEV_MODE=1.
     cache_reset_path = "/reset_prefix_cache"
-    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of")
+    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
     # vLLM answers return_token_ids with per-chunk token ids and honors
     # stream_interval=1, so streamed output is exactly countable.
     token_ids = True

@@ -29,6 +29,7 @@ Non-null values must use the following types:
 | `n`          | Integer; booleans are invalid |
 | `best_of`    | Integer; booleans are invalid |
 | `max_tokens` | Integer; booleans are invalid |
+| `max_completion_tokens` | Integer; booleans are invalid |
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 

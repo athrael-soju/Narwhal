@@ -90,16 +90,24 @@ Prefill finishes before client streaming begins, so prefill failures can be retu
 
 When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
 
-After `recovery.eject_after` consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
+The breaker classifies each failed decode leg:
 
-The failure streak includes:
+| Failure | Engine | Class | Verification at `recovery.eject_after` consecutive failures |
+| --- | --- | --- | --- |
+| First-token timeout | Emitted other output during the wait | `overload` | Health probe |
+| First-token timeout | Silent during the wait | `stream` | Inference probe |
+| Mid-stream silence | Any | `stream` | Inference probe |
 
-- first-token timeout
-- mid-stream silence
+An inference-probe suspect leaves placement until the probe succeeds:
+
+| Suspect | Placement during verification |
+| --- | --- |
+| Another live engine serves its role or accepts role changes | Held out |
+| Its removal leaves its role unserved | Kept |
 
 After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
 
-Each probe leg uses `engine.first_token_timeout_s`.
+Each probe leg has a budget of the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s`.
 
 Inconclusive probes return to the normal readmission cadence.
 
@@ -145,7 +153,12 @@ Before visible output, Narwhal may start a fresh attempt for a transient fault w
 - the original request deadline still permits it
 - retry budget remains
 
-When `recovery.failure_quarantine_s > 0`, the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
+With `recovery.failure_quarantine_s` above zero, a failed engine's placement follows its role coverage:
+
+| Engine | Placement after the failure |
+| --- | --- |
+| Another live engine covers its role | Held out for `recovery.failure_quarantine_s` seconds |
+| Its removal leaves its role unserved | Kept |
 
 A decode failure after HTTP `200` has already been committed emits a terminal SSE event:
 

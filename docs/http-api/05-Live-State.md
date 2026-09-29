@@ -98,7 +98,7 @@ Each monitoring pass refreshes one record per engine from its attestation sideca
 | `resident_blocks` | Named resident blocks per KV cache group |
 | `resyncs` | Snapshots taken since router start |
 
-An engine reports `known: false` when its sidecar is absent or answers the residency routes with HTTP 404.
+An engine reports `known: false` when its sidecar is absent or answers the residency routes with HTTP 404, and the router prices its prefill cold.
 
 ---
 

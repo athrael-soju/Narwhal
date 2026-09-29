@@ -361,13 +361,16 @@ def cached_prefix_blocks(
         if kind in WINDOW_KINDS and window and block_size
     ]
     boundary = [blocks for kind, _, blocks in groups if kind in BOUNDARY_KINDS]
+    # Consecutive resident blocks ending at the current block, per window group.
+    runs = [0] * len(windows)
     best = 0
     for count, identity in enumerate(identities, start=1):
         if any(identity not in blocks for blocks in full):
             break
+        for index, (blocks, _) in enumerate(windows):
+            runs[index] = runs[index] + 1 if identity in blocks else 0
         if all(identity in blocks for blocks in boundary) and all(
-            all(i in blocks for i in identities[max(0, count - needed) : count])
-            for blocks, needed in windows
+            run >= min(count, needed) for run, (_, needed) in zip(runs, windows, strict=True)
         ):
             best = count
     return best
