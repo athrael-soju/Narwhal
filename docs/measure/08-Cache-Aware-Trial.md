@@ -1,6 +1,6 @@
 # Cache-aware placement trial
 
-The trial compares SLO-qualified throughput between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices an engine that holds a request's prefix with that engine's warm fit. Both arms run with the backend's prefix caching on. For measurements with prefix caching off, use the [cold synthetic trial](03-Load-Trial.md).
+The trial compares SLO-qualified throughput between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices an engine that holds a request's prefix with that engine's warm fit. Both arms run with the backend's prefix caching on.
 
 ## Freeze the comparison
 
@@ -19,7 +19,7 @@ Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusa
 
 Every request in a workload has `L` input tokens. The engine caches blocks of `B` tokens, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
 
-An engine with boundary-state groups, such as Mamba state, keeps that state at the last full block before the prompt's end. A prompt of `L = k*B + s` tokens with `0 < s < B` keeps it at `k*B`. A prompt with `s = 0` keeps zero boundary blocks. For a repeated-prefix workload on such an engine:
+An engine with boundary-state groups, such as Mamba state, keeps that state at the last full block before the prompt's end. A prompt of `L = k*B + s` tokens with `0 < s < B` keeps it at `k*B`. For a repeated-prefix workload on such an engine:
 
 - set `--input-tokens` to `k*B + s` with `0 < s < B`;
 - set `--prefix-tokens` to at least `k*B`;
@@ -27,7 +27,12 @@ An engine with boundary-state groups, such as Mamba state, keeps that state at t
 
 On an engine with full-attention groups only, the cached prefix is the largest multiple of `B` within both the shared prefix and `L - 1` tokens.
 
-Each engine prices a cached prefix with its warm fit inside the measured warm domain: `cached_min_prefix_tokens` to `cached_max_prefix_tokens` and `cached_min_suffix_tokens` to `cached_max_suffix_tokens` in the [profile fields](../telemetry/02-Profiles.md#profile-fields). Outside that domain the engine prices cold.
+An engine prices a cached prefix with its warm fit when both lengths lie inside its measured warm domain in the [profile fields](../telemetry/02-Profiles.md#profile-fields):
+
+| Length | Range |
+| --- | --- |
+| Cached prefix | `cached_min_prefix_tokens` to `cached_max_prefix_tokens` |
+| Uncached suffix | `cached_min_suffix_tokens` to `cached_max_suffix_tokens` |
 
 Profile both arms with these [profiler options](../cli/Profile.md):
 
@@ -88,7 +93,10 @@ Replace each `<...>` value with the recorded choice. Give the second pass's repe
 
 In the cache-aware arm, run one short, unscored point with a repeated-prefix workload. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Join client offers to the router journal](04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal).
 
-Start the measured runs when the rows after each family's first request carry a [`cache_placement`](../telemetry/01-Journal.md#terminal-request-records) record with `predicted_prefill_s` below `cold_prefill_s`. Otherwise revisit the workload shape and the warm prefill lengths.
+Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#terminal-request-records) record of each row after each family's first request:
+
+- below on every row: start the measured runs;
+- at or above on any row: revisit the workload shape and the warm prefill lengths.
 
 ## Run each point
 
@@ -112,14 +120,14 @@ Run one point:
 
 Set `--requests` to 60 seconds of offers at the point's rate. Give each point a distinct `--run-seed`, and use the same seed for that point in both arms.
 
-Each run writes `summary.json` at either exit status, with:
+A run that exits with status 0 or 2 writes `summary.json` with:
 
 | Field | Meaning |
 | --- | --- |
 | `attainment` | Completed requests within the TTFT and TPOT limits, over all offers |
 | `qualified_rps_including_drain` | Completed requests within the limits per second of the measurement window |
 | `ttft_s`, `tpot_s` | p50, p95 and p99 over completed requests |
-| `outcomes` | Offers by outcome, including refusals |
+| `outcomes` | Offers by client outcome; router refusals count in `http_error` |
 
 `run` exits with status 2 when attainment falls below `--attainment` or the client misses its schedule (`client_schedule_valid: false`).
 
@@ -129,7 +137,7 @@ Drain the router between runs and reconcile each run with the journal as in [Rec
 
 Run one separate, unscored cache-aware point after the measured runs.
 
-The reactive controller moves a prefill engine to decode when both [adjacent-split conditions](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) hold:
+A reactive prefill-to-decode move requires both [adjacent-split conditions](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions):
 
 - projected prefill load stays at or below `controller.thresholds.shrink`;
 - the move reduces the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
@@ -137,8 +145,9 @@ The reactive controller moves a prefill engine to decode when both [adjacent-spl
 1. Prepare a decode-heavy workload with the repeated-prefix workload's `--seed`, `--input-tokens`, `--prefix-tokens` and `--families` and a larger `--output-tokens`.
 2. Run it at a rate that raises decode load until `flips` in `/narwhal/state` records the move with `"by": "reactive"`.
 3. Confirm that `pools.prefill` lists the remaining prefill engines and new prefill placements go to them.
-4. Confirm that journal rows placed on the moved engine before the change complete with that engine as `prefill_iid`, and that its `flips` record gains `drained_s`.
-5. Confirm that the moved engine's `residency` record keeps `"known": true` and the same `epoch` across the change.
+4. Confirm that journal rows placed on the moved engine before the change complete with that engine as `prefill_iid`.
+5. Confirm that the move's `flips` record reports a numeric `drained_s`.
+6. Confirm that the moved engine's `residency` record keeps `"known": true` and the same `epoch` across the change.
 
 ## Report the result
 
@@ -151,7 +160,7 @@ For each arm and point, report:
 
 In the cache-aware arm, also report these per rate, over journal rows with a `cache_placement` record and `attempts` equal to 1:
 
-- the estimation error, comparing `cache_placement.predicted_prefill_s` with `upstream_seconds.prefill`, the prefill HTTP leg's duration including engine queueing;
+- the estimation error of `cache_placement.predicted_prefill_s` against `upstream_seconds.prefill`;
 - the share of rows where `cache_placement.cold_choice_iid` differs from `cache_placement.placed_iid`.
 
 Report residency resynchronisations as the change in each engine's `residency` `resyncs` between the run's `state-before.json` and `state-after.json`. Report sidecar and router CPU and memory from host process accounting.
@@ -161,6 +170,6 @@ Compare the arms on the mean of the two passes at each point. The trial passes w
 - the benefit threshold on the repeated-prefix workload;
 - the regression threshold on the control.
 
-## Capability limits
+## Residency and prefix reuse
 
-A sidecar that starts after vLLM's replay buffer drops the engine's early event batches reports residency unknown until the engine restarts ([residency limits](../cli/Attest.md#residency-limits)). With a hybrid attention and Mamba model, the prefill engine that computed a prompt is the one engine that can reuse its prefix.
+A sidecar can start after vLLM's replay buffer drops the engine's early event batches. That sidecar reports [residency unknown](../cli/Attest.md#residency-limits) until a prefix-cache reset or an engine restart. With a hybrid attention and Mamba model, the prefill engine that computed a prompt is the one engine that can reuse its prefix.
