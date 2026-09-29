@@ -28,6 +28,7 @@ from tools.deployment.attestation_contract import (
     generate,
     live_native,
     read_json,
+    residency_arguments,
     serve,
 )
 
@@ -148,6 +149,30 @@ class AttestationContractTests(unittest.TestCase):
                     output.write("GET /metrics HTTP/1.1 200 OK\n")
                 self.assertEqual(serve(run), 0)
                 sidecar.assert_called_once()
+
+    def test_sidecar_serves_residency_only_for_checked_event_publication(self):
+        plan = {
+            "args": ["-m", "vllm", "--served-model-name", "served"],
+            "kv_events": {"socket_dir": "/tmp/narwhal-0/plan"},
+        }
+        events = {"endpoint": "ipc:///narwhal-kv-events/events.sock"}
+        self.assertEqual(
+            residency_arguments(plan, {"prefix_caching": True, "kv_events": events}),
+            ["--kv-events", "/tmp/narwhal-0/plan", "--model", "served"],
+        )
+        for checked in (
+            {"prefix_caching": False, "kv_events": events},
+            {"prefix_caching": True, "kv_events": None},
+            {},
+        ):
+            with self.subTest(checked=checked):
+                self.assertEqual(residency_arguments(plan, checked), [])
+        self.assertEqual(
+            residency_arguments(
+                {**plan, "kv_events": None}, {"prefix_caching": True, "kv_events": events}
+            ),
+            [],
+        )
 
     def engine_evidence(self, root: Path) -> tuple[Path, Path]:
         run = root / "run"

@@ -10,3 +10,37 @@ Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serv
 | `--host HOST`         | `127.0.0.1` | Sidecar bind address                                    |
 | `--port PORT`         | `8010`      | Sidecar port                                            |
 | `--timeout-s SECONDS` | `5.0`       | Time budget for reading engine identity                 |
+| `--kv-events DIR`     | omitted     | Directory holding the engine's cache-event sockets; serves the residency routes |
+| `--model NAME`        | omitted     | Served model name for block identities; required with `--kv-events` |
+
+`tools/deployment/attestation_contract.py serve` passes `--kv-events` and `--model` when the checked launch keeps prefix caching on and publishes cache events.
+
+## Residency routes
+
+With `--kv-events`, the sidecar subscribes to the engine's cache events. It keeps a bounded index of the prefix blocks that the engine process holds on its GPU. Without it, both routes answer HTTP 404, and the router prices the engine cold.
+
+| Route | Response |
+| --- | --- |
+| `GET /v1/residency` | Snapshot: `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds`, and each KV cache group's `kind` and named block `identities` |
+| `GET /v1/residency/events?after=N` | Ordered changes after sequence `N`, with the sidecar `epoch`; HTTP 410 when the sidecar no longer holds them |
+
+Both routes answer HTTP 503 after the engine process changes.
+
+The sidecar knows the engine's residency only after it has applied every event batch since a known state. It reaches a known state in three ways:
+
+- replaying the engine's history from sequence 0;
+- observing that the engine has published no batch;
+- applying a cache reset.
+
+Residency is unknown in these cases, and a snapshot then lists no blocks:
+
+- a sequence gap that replay cannot fill;
+- a subscription that starts after vLLM's replay buffer dropped earlier batches;
+- an unreadable batch;
+- an index larger than 1,000,000 blocks.
+
+Unknown residency lasts until the engine resets its prefix cache.
+
+A block identity chains the block's token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace. The namespace holds the served model name, the engine contract fingerprint, the LoRA adapter name, and the request's cache salt. Some groups keep only boundary state, such as Mamba state in vLLM's `align` mode. They take each block identity from a group that reported every block in the same run. Blocks carrying multimodal or prompt-embedding hash keys have no identity.
+
+Container engines run as root, so their event sockets belong to root. Run the sidecar as the same user as the engine.

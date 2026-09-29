@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import (
@@ -31,6 +33,7 @@ MONITOR_STAGES = (
     "rollover",
     "readmission",
     "liveness",
+    "residency",
     "handoff",
     # Floor-state refresh and loop logging can fail independently of the
     # controller. Account for those failures without stopping the monitor loop.
@@ -404,6 +407,13 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             router.monitoring.fail("liveness", exc)
         else:
             router.monitoring.ok("liveness")
+    try:
+        async with httpx.AsyncClient(timeout=router.cfg.health_timeout_s) as client:
+            await router.residency.refresh(client)
+    except Exception as exc:
+        router.monitoring.fail("residency", exc)
+    else:
+        router.monitoring.ok("residency")
     try:
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)

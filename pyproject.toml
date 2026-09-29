@@ -34,7 +34,9 @@ license-files = ["LICENSE", "NOTICE"]
 dependencies = [
   "fastapi>=0.141.1",
   "httpx>=0.28.1",
+  "msgpack>=1.2.2",
   "pydantic>=2.13.5",
+  "pyzmq>=27.2.0",
   "uvicorn>=0.52.4",
 ]
 

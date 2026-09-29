@@ -599,6 +599,15 @@ def generate(run: Path, startup_log: Path) -> Path:
     return destination
 
 
+def residency_arguments(plan: dict, checked: dict) -> list[str]:
+    """Select residency serving when the checked runtime keeps caching and publishes events."""
+    events = plan.get("kv_events")
+    if events is None or not checked.get("prefix_caching") or not checked.get("kv_events"):
+        return []
+    model = plan["args"][plan["args"].index("--served-model-name") + 1]
+    return ["--kv-events", events["socket_dir"], "--model", model]
+
+
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
     if plan.get("backend") == "native":
@@ -620,18 +629,17 @@ def serve(run: Path) -> int:
     url = urlsplit(expected)
     if url.scheme != "http" or url.path != "/v1/attestation" or not url.hostname or not url.port:
         raise ValueError(f"NARWHAL_NODE_{node}_ATTESTATION_URL must name the sidecar route")
-    return attest_main(
-        [
-            "--document",
-            str(destination),
-            "--engine-base",
-            plan["endpoint"],
-            "--host",
-            url.hostname,
-            "--port",
-            str(url.port),
-        ]
-    )
+    arguments = [
+        "--document",
+        str(destination),
+        "--engine-base",
+        plan["endpoint"],
+        "--host",
+        url.hostname,
+        "--port",
+        str(url.port),
+    ]
+    return attest_main(arguments + residency_arguments(plan, checked))
 
 
 def finalize_fleet(path: Path) -> EngineContract:
