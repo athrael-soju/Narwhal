@@ -44,7 +44,7 @@ Peak projected work over the window must fit live decode capacity:
 | Slots | 1 | Sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive |
 | KV tokens | Prompt plus delivered and remaining output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
 
-The TPOT check passes when any live decode engine meets `slo.tpot_s` with the request and its residents generating at the request's prefill completion.
+The TPOT check passes when any live decode engine meets `slo.tpot_s` with the request and its residents generating at the request's prefill completion. A request that misses `slo.tpot_s` on every idle decode engine also passes.
 
 The output cap is `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset. Expected output is the output cap times the median delivered fraction for the request's bucket: its power-of-two prompt and output-cap sizes. A bucket's fraction applies once three of its requests finish. An uncapped request uses the median delivered output for its prompt bucket, or the fleet-wide median delivered output. A shape overflow in the completion history suspends the fractions and medians until the overflow ages out.
 
