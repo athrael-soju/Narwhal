@@ -204,6 +204,37 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(merged.profiles_for_split(["e0"], 2, 1)[0].colocated_group, "gpu-0")
             self.assertEqual(len(merged.all_profiles()), 2)
 
+    async def test_merge_accepts_evidence_saved_before_optional_profile_fields(self):
+        newer = ("ttft_block_tokens", "ttft_split", *probe.CACHED_PROFILE_FIELDS)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = [root / "one.json", root / "two.json"]
+            rows = []
+            for path, mix in zip(sources, ((1, 2), (2, 1)), strict=True):
+                row = replace(
+                    profile("e0"),
+                    colocated_group="gpu-0",
+                    colocated_target_role="prefill",
+                    colocated_prefill_engines=mix[0],
+                    colocated_decode_engines=mix[1],
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+                rows.append(row)
+                ProfileStore(path, load=False).put(row)
+                saved = {k: v for k, v in asdict(row).items() if k not in newer}
+                path.with_suffix(".samples.json").write_text(
+                    json.dumps({"engines": {"e0": {"profile": saved}}})
+                )
+            self.assertEqual(probe.merge_profiles(sources, root / "merged.json", {"e0"}), 0)
+            # Evidence from another measurement stops the merge.
+            stale = {**asdict(rows[0]), "ttft_c": rows[0].ttft_c + 1.0}
+            sources[0].with_suffix(".samples.json").write_text(
+                json.dumps({"engines": {"e0": {"profile": stale}}})
+            )
+            with self.assertRaisesRegex(ValueError, "lacks matching measurement evidence"):
+                probe.merge_profiles(sources, root / "again.json", {"e0"})
+
     async def test_prompt_uses_the_engine_count_after_resizing(self):
         """Prompt resizing records the measured count used as the fit axis."""
         counts = iter((20, 9))
@@ -345,13 +376,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         max_model_len=limit,
                     )
                 self.assertEqual(len(samples), len(sweep.prefill_lens))
-                self.assertEqual(max(sent), 12288)
+                self.assertEqual(max(sent), 16300)
                 with self.assertRaisesRegex(ValueError, "exceeds.*max_model_len"):
                     await probe.probe_prefill(
                         client, "http://e", "stub", lens=(16384,), repeats=1, max_model_len=limit
                     )
-                self.assertEqual(max(sent), 12288)
-        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4096)
+                self.assertEqual(max(sent), 16300)
+        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4300)
 
     async def test_tokenizer_must_report_live_context_limit(self):
         async with httpx.AsyncClient(
@@ -495,7 +526,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
             patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
             patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+            patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
             patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7, 7])),
+            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
             redirect_stdout(io.StringIO()),
         ):
             row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
@@ -527,7 +560,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
                 patch.object(probe, "probe_decode", decode_sweep),
                 patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+                patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
                 patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=counters)),
+                patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
                 redirect_stdout(io.StringIO()),
             ):
                 if message:
@@ -653,7 +688,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
-            self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 12288)
+            self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 16300)
 
     async def test_run_rejects_decode_fit_outside_policy(self):
         """An unstable colocated fit leaves raw evidence but no usable profile."""

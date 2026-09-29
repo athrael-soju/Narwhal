@@ -14,7 +14,7 @@ Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and 
 | `--format` | `text` | Select `json` for [versioned command results](../Command-Results.md). |
 | `--fleet PATH`         | required    | Fleet config JSON; defines engine membership for all three modes. |
 | `--only IID`           | all engines | Repeatable engine selector for live sweeps. |
-| `--refit-samples PATH` | omitted     | Refit TTFT from saved generation-bound samples while retaining decode fits. Requires `--out` and samples covering every fleet engine; exclusive with `--only` and `--merge`. |
+| `--refit-samples PATH` | omitted     | Refit cold and warm prefill from saved generation-bound samples while retaining decode fits. Requires `--out` and samples covering every fleet engine; exclusive with `--only` and `--merge`. |
 | `--merge PATH`         | omitted     | Repeat at least twice to combine measured profile stores and their matching sidecars. Requires `--out`; exclusive with `--refit-samples`, `--only` and `--overwrite`. |
 | `--out PATH`           | omitted     | Fresh profile destination required for `--refit-samples` and `--merge`, with a matching `.samples.json` sidecar. Live sweeps use `profiles.path`. |
 | `--limits PATH`        | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
@@ -37,10 +37,12 @@ If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-
 
 | Option                      | Default                                   | Contract                                                                                                                                                                                                     |
 | --------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--prefill-lens LIST`       | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated candidate lengths. The profiler keeps points within each engine's live `max_model_len` and requires at least three distinct usable values.                                                   |
+| `--prefill-lens LIST`       | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate lengths. The profiler keeps points within each engine's live `max_model_len` and requires at least three distinct usable values.                                                   |
 | `--decode-input-lens LIST`  | `512,4096,8192`                           | Comma-separated prompt lengths for the decode sweep. Requires at least two distinct values.                                                                                                                  |
 | `--decode-concurrency LIST` | `1,4,16,48`                               | Candidate stream counts. With `--limits`, the profiler keeps points within each engine's limit and adds that limit as a point when a candidate exceeds it. At least two distinct usable values are required. |
 | `--decode-tokens N`         | `64`                                      | Tokens per decode stream. Minimum 3. Larger cohorts may require more tokens to overlap.                                                                                                                      |
+| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. Requires at least two distinct values and, with `--cached-suffix-lens`, at least five cases. |
+| `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. Requires at least two distinct values. |
 | `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length. The fit uses each length's median and retains every raw timing. Minimum 3.                                                                                                   |
 | `--decode-repeats N`        | `1` | Repetitions per decode input-length/concurrency point. Minimum 1. |
 

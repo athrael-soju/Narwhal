@@ -12,6 +12,7 @@ import re
 import statistics
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -29,22 +30,35 @@ from ..engines.stream import event_choices, event_object, token_ids
 from ..provenance import stamp
 from ..types import Role
 from .fitting import (
+    CACHED_FIT_MIN_CASES,
+    cached_fit_possible,
     decode_cross_validation_mape,
     decode_mape,
+    fit_cached_prefill,
     fit_decode_plane,
     fit_prefill_samples,
 )
 from .generation import read_generation
-from .model import Profile, decode_evidence_problems
+from .model import CACHED_PROFILE_FIELDS, Profile, decode_evidence_problems
 from .store import ProfileStore
 
 # Candidate lengths are bounded by each live engine's reported context limit.
-PREFILL_LENS = (256, 512, 1024, 2048, 4096, 8192, 12288, 16384)
+# 256, 1024 and 4096 end on a 16- and 512-token block boundary; the rest end between boundaries.
+PREFILL_LENS = (256, 700, 1024, 1300, 2300, 4096, 4300, 8300, 12300, 16300)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
 PREFILL_REPEATS = 3
+# Warm sweep grid.
+CACHED_PREFIX_LENS = (2048, 4096, 8192)
+CACHED_SUFFIX_LENS = (700, 1300, 2600)
+CACHED_REPEATS = 3
+# Words a primer may add to end past its prefix's last full block.
+PRIMER_PAD_WORDS = 8
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
+_BLOCK_TOKENS = re.compile(r'^vllm:cache_config_info\{[^}]*\bblock_size="([0-9]+)"', re.MULTILINE)
+# Held-out error above this keeps an engine cold.
+MAX_CACHED_CV_MAPE = 0.20
 # vLLM counts prompt tokens served from its prefix cache for new requests only.
 _PREFIX_CACHE_HITS = re.compile(
     r"^vllm:prefix_cache_hits_total(?:\{[^}]*\})?\s+([0-9.eE+-]+)", re.MULTILINE
@@ -65,6 +79,24 @@ async def kv_capacity(client: httpx.AsyncClient, url: str, timeout_s: float = 30
     except httpx.HTTPError:
         return None
     return parse_kv_capacity(response.text)
+
+
+def parse_cache_block_tokens(metrics: str) -> int | None:
+    """Read vLLM's cache block size from its info metric."""
+    values = {int(match) for match in _BLOCK_TOKENS.findall(metrics)}
+    return values.pop() if len(values) == 1 and min(values) > 0 else None
+
+
+async def cache_block_tokens(
+    client: httpx.AsyncClient, url: str, timeout_s: float = 30.0
+) -> int | None:
+    """Read the engine's cache block size when it exports one."""
+    try:
+        response = await client.get(f"{url}/metrics", timeout=timeout_s)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return parse_cache_block_tokens(response.text)
 
 
 def parse_prefix_cache_hits(metrics: str) -> int | None:
@@ -470,6 +502,233 @@ async def probe_decode(
     return samples
 
 
+async def _complete(
+    client: httpx.AsyncClient,
+    url: str,
+    body: dict[str, Any],
+    timeout_s: float | None,
+) -> tuple[int, float]:
+    """Send one forced one-token completion and return its prompt tokens and latency."""
+    start = time.monotonic()
+    r = await client.post(f"{url}/v1/completions", json=body, timeout=timeout_s or 300.0)
+    elapsed = time.monotonic() - start
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"cached prefill probe failed on {url} ({r.status_code}): {r.text[:200]}"
+        )
+    try:
+        response = r.json()
+    except ValueError as exc:
+        raise RuntimeError(f"cached prefill probe returned no JSON on {url}") from exc
+    if (
+        not isinstance(response, dict)
+        or response.get("error") is not None
+        or not isinstance(response.get("choices"), list)
+        or not response["choices"]
+        or not isinstance(response.get("usage"), dict)
+    ):
+        raise RuntimeError(f"cached prefill probe returned an invalid completion on {url}")
+    usage = response["usage"]
+    if type(usage.get("prompt_tokens")) is not int or usage.get("completion_tokens") != 1:
+        raise RuntimeError("cached prefill probe lacks exact token usage")
+    return usage["prompt_tokens"], elapsed
+
+
+async def probe_cached_prefill(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    sweep: Sweep,
+    dialect: EngineDialect,
+    *,
+    observation_timeout_s: float | None = None,
+    max_model_len: int | None = None,
+    block_tokens: int | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Measure warm prefill and a cold control for each (prefix, suffix) case.
+
+    Returns the samples and the reason the sweep stopped early, or None.
+    """
+    timeout = observation_timeout_s or 30.0
+
+    def body(prompt: str, extras: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": 1,
+            "temperature": 0.0,
+            "stream": False,
+            **dialect.decode_probe_extras(1),
+            **extras,
+        }
+
+    exact = dialect.tokenize_path is not None
+    samples: list[dict[str, Any]] = []
+    for prefix_target in sweep.cached_prefix_lens:
+        prefix, _ = await make_prompt(client, url, model, prefix_target, dialect, timeout_s=timeout)
+        # Boundary state exists only for a prompt that runs past a block boundary.
+        primer = prefix + " context"
+        if exact and block_tokens is not None:
+            boundary = prefix_target // block_tokens * block_tokens
+            for _ in range(PRIMER_PAD_WORDS):
+                count = await _tokenize(client, url, model, primer, dialect, timeout)
+                if count > boundary and count % block_tokens:
+                    break
+                primer += " context"
+            else:
+                return samples, (
+                    f"the primer for prefix~{prefix_target} ends on a {block_tokens}-token "
+                    f"block boundary after {PRIMER_PAD_WORDS} padding words"
+                )
+        for suffix_target in sweep.cached_suffix_lens:
+            full = prefix + " " + "context " * suffix_target
+            if max_model_len is not None and exact:
+                length = await _tokenize(client, url, model, full, dialect, timeout)
+                if length + 1 > max_model_len:
+                    print(
+                        f"    cached  prefix~{prefix_target:<6} suffix~{suffix_target:<6} "
+                        f"skipped: {length} tokens exceed max_model_len {max_model_len}"
+                    )
+                    continue
+            for repeat in range(sweep.cached_repeats):
+                salt = dialect.cold_probe_extras()
+                await _complete(client, url, body(primer, salt), observation_timeout_s)
+                before = await prefix_cache_hits(client, url, timeout)
+                tokens, elapsed = await _complete(
+                    client, url, body(full, salt), observation_timeout_s
+                )
+                after = await prefix_cache_hits(client, url, timeout)
+                if before is None or after is None:
+                    return samples, "the prefix-cache hit counter became unreadable"
+                cold_before = after
+                cold_tokens, cold_elapsed = await _complete(
+                    client, url, body(full, dialect.cold_probe_extras()), observation_timeout_s
+                )
+                cold_after = await prefix_cache_hits(client, url, timeout)
+                cached = after - before
+                if cached <= 0:
+                    return (
+                        samples,
+                        f"case prefix~{prefix_target} suffix~{suffix_target} "
+                        "reused no cached prefix",
+                    )
+                if cold_after is None:
+                    return samples, "the prefix-cache hit counter became unreadable"
+                if cold_after != cold_before:
+                    raise RuntimeError("a cold control reused a cached prefix; reserve the engine")
+                case = {"target_prefix": prefix_target, "target_suffix": suffix_target}
+                samples.append(
+                    {
+                        **case,
+                        "repeat": repeat,
+                        "state": "warm",
+                        "cache_evidence": "prefix_cache_hits",
+                        "prefix_tokens": cached,
+                        "suffix_tokens": tokens - cached,
+                        "seconds": elapsed,
+                    }
+                )
+                samples.append(
+                    {
+                        **case,
+                        "repeat": repeat,
+                        "state": "cold",
+                        "cache_evidence": "prefix_cache_hits",
+                        "prefix_tokens": 0,
+                        "suffix_tokens": cold_tokens,
+                        "seconds": cold_elapsed,
+                    }
+                )
+            warm = [s["seconds"] for s in samples[-2 * sweep.cached_repeats :: 2]]
+            print(
+                f"    cached  prefix~{prefix_target:<6} suffix~{suffix_target:<6} "
+                f"-> {statistics.median(warm) * 1000:7.1f} ms median"
+            )
+    return samples, None if samples else "every warm case exceeds the engine context"
+
+
+def _valid_cached_samples(samples: Any) -> bool:
+    """Return whether saved warm samples have the shape the profiler writes."""
+    return isinstance(samples, list) and all(
+        isinstance(sample, dict)
+        and sample.get("state") in ("warm", "cold")
+        and all(
+            type(sample.get(key)) in (int, float)
+            for key in ("prefix_tokens", "suffix_tokens", "seconds")
+        )
+        for sample in samples
+    )
+
+
+def apply_cached_fit(
+    profile: Profile, samples: list[dict[str, Any]]
+) -> tuple[Profile, dict[str, Any]]:
+    """Fit warm prefill from retained samples; raise ValueError above `MAX_CACHED_CV_MAPE`."""
+    cases: dict[tuple[Any, Any], dict[str, list[float]]] = {}
+    for sample in samples:
+        case = cases.setdefault(
+            (sample["target_prefix"], sample["target_suffix"]),
+            {"prefix": [], "suffix": [], "warm": [], "cold": [], "cold_tokens": []},
+        )
+        if sample["state"] == "warm":
+            case["prefix"].append(float(sample["prefix_tokens"]))
+            case["suffix"].append(float(sample["suffix_tokens"]))
+            case["warm"].append(float(sample["seconds"]))
+        elif sample["state"] == "cold":
+            case["cold"].append(float(sample["seconds"]))
+            case["cold_tokens"].append(float(sample["suffix_tokens"]))
+        else:
+            raise ValueError(f"cached prefill sample state {sample['state']!r} is unknown")
+    warm = [
+        (
+            statistics.median(c["prefix"]),
+            statistics.median(c["suffix"]),
+            statistics.median(c["warm"]),
+        )
+        for c in cases.values()
+        if c["warm"]
+    ]
+    (a, b, c, d), groups, cv_mape = fit_cached_prefill(
+        warm, profile.ttft_split, profile.ttft_block_tokens
+    )
+    if cv_mape > MAX_CACHED_CV_MAPE:
+        raise ValueError(
+            f"warm prefill held-out error {cv_mape:.1%} exceeds {MAX_CACHED_CV_MAPE:.0%}"
+        )
+    fitted = replace(
+        profile,
+        cached_ttft_a=a,
+        cached_ttft_b=b,
+        cached_ttft_c=c,
+        cached_ttft_d=d,
+        cached_cv_mape=cv_mape,
+        cached_min_prefix_tokens=math.floor(min(p for p, _, _ in warm)),
+        cached_max_prefix_tokens=math.ceil(max(p for p, _, _ in warm)),
+        cached_min_suffix_tokens=math.floor(min(s for _, s, _ in warm)),
+        cached_max_suffix_tokens=math.ceil(max(s for _, s, _ in warm)),
+    )
+
+    def error(predict: Callable[[float, float], float]) -> float:
+        return statistics.mean(abs(predict(p, s) - y) / max(y, 1e-9) for p, s, y in groups)
+
+    controls = [
+        (statistics.median(c["cold_tokens"]), statistics.median(c["cold"]))
+        for c in cases.values()
+        if c["cold"]
+    ]
+    return fitted, {
+        "fit_points": groups,
+        "cv_mape": cv_mape,
+        "suffix_on_cold_curve_mape": error(lambda p, s: profile.prefill_time(int(s))),
+        "full_prompt_cold_mape": error(lambda p, s: profile.prefill_time(int(p + s))),
+        "cold_control_curve_mape": statistics.mean(
+            abs(profile.prefill_time(int(n)) - y) / max(y, 1e-9) for n, y in controls
+        )
+        if controls
+        else None,
+    }
+
+
 async def _require_cold(
     client: httpx.AsyncClient,
     iid: str,
@@ -512,6 +771,7 @@ async def profile_instance(
     dialect = dialect or VllmDialect()
     print(f"  {iid}")
     hits_before = await prefix_cache_hits(client, url, observation_timeout_s or 30.0)
+    block_tokens = await cache_block_tokens(client, url, observation_timeout_s or 30.0)
     prefill = await probe_prefill(
         client,
         url,
@@ -527,12 +787,16 @@ async def profile_instance(
         evidence["prefill"] = prefill
     # Check before the decode sweep so cached prefill fails early.
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
-    (a, b, c), representatives, prefill_fit_mape = fit_prefill_samples(prefill)
-    print(f"    prefill median fit MAPE {prefill_fit_mape:.1%}")
+    (a, b, c, split), representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
+    print(
+        f"    prefill median fit MAPE {prefill_fit_mape:.1%}"
+        + (f"; split step {split * 1000:.1f} ms past {block_tokens}" if split is not None else "")
+    )
     if evidence is not None:
         evidence.update(
             prefill_fit_points=representatives,
             prefill_fit_mape=prefill_fit_mape,
+            prefill_block_tokens=block_tokens,
         )
     decode_intervals: list[dict[str, object]] = []
     decode = await probe_decode(
@@ -552,14 +816,37 @@ async def profile_instance(
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
+    cached: list[dict[str, Any]] = []
+    reason: str | None
+    cases = warm_cases(s, max_model_len)
+    if hits_before is None:
+        reason = "engine exports no prefix-cache hit counter"
+    elif not cached_fit_possible(cases):
+        reason = (
+            f"the warm sweep has {len(cases)} cases within the engine context; a warm fit needs "
+            f"two prefix lengths, two suffix lengths and {CACHED_FIT_MIN_CASES} cases"
+        )
+    else:
+        cached, reason = await probe_cached_prefill(
+            client,
+            url,
+            model,
+            s,
+            dialect,
+            observation_timeout_s=observation_timeout_s,
+            max_model_len=max_model_len,
+            block_tokens=block_tokens,
+        )
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
     capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)
-    return Profile(
+    profile = Profile(
         iid=iid,
         ttft_a=a,
         ttft_b=b,
         ttft_c=c,
+        ttft_block_tokens=None if split is None else block_tokens,
+        ttft_split=split,
         tpot_slope=slope,
         tpot_intercept=intercept,
         kv_capacity_tokens=capacity,
@@ -575,6 +862,22 @@ async def profile_instance(
         decode_min_output_tokens=1,
         decode_max_output_tokens=s.decode_tokens,
     )
+    try:
+        if reason is not None:
+            raise ValueError(reason)
+        profile, fit = apply_cached_fit(profile, cached)
+    except ValueError as exc:
+        print(f"    cached prefill kept cold: {exc}")
+        if evidence is not None:
+            evidence["cached_prefill"] = {"samples": cached, "reason": str(exc)}
+        return profile
+    if evidence is not None:
+        evidence["cached_prefill"] = {"samples": cached, **fit}
+    print(
+        f"    cached prefill held-out MAPE {fit['cv_mape']:.1%}; "
+        f"suffix-on-cold-curve MAPE {fit['suffix_on_cold_curve_mape']:.1%}"
+    )
+    return profile
 
 
 @dataclass(frozen=True)
@@ -587,6 +890,9 @@ class Sweep:
     prefill_repeats: int = PREFILL_REPEATS
     decode_input_lens: tuple[int, ...] = DECODE_INPUT_LENS
     decode_repeats: int = 1
+    cached_prefix_lens: tuple[int, ...] = CACHED_PREFIX_LENS
+    cached_suffix_lens: tuple[int, ...] = CACHED_SUFFIX_LENS
+    cached_repeats: int = CACHED_REPEATS
 
 
 @dataclass(frozen=True)
@@ -751,6 +1057,16 @@ class NeighbourLoad:
         return self.evidence()
 
 
+def warm_cases(sweep: Sweep, max_model_len: int | None = None) -> list[tuple[int, int]]:
+    """Return the warm (prefix, suffix) cases whose prompt and output token fit the context."""
+    return [
+        (p, q)
+        for p in sweep.cached_prefix_lens
+        for q in sweep.cached_suffix_lens
+        if max_model_len is None or p + q + 1 < max_model_len
+    ]
+
+
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
     """Keep candidate lengths and cohorts within the serving engine's limits."""
     prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
@@ -770,8 +1086,18 @@ def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = N
                 f"max_num_seqs {max_num_seqs} leaves fewer than two decode concurrency "
                 "points; adjust the engine launch policy before profiling"
             )
+    # Prefix, suffix and one output token fit the context.
+    shortest_suffix = min(sweep.cached_suffix_lens, default=0)
+    shortest_prefix = min(sweep.cached_prefix_lens, default=0)
+    prefixes = tuple(p for p in sweep.cached_prefix_lens if p + shortest_suffix + 1 < max_model_len)
+    suffixes = tuple(s for s in sweep.cached_suffix_lens if shortest_prefix + s + 1 < max_model_len)
     return replace(
-        sweep, prefill_lens=prefill, decode_input_lens=decode, decode_concurrency=concurrency
+        sweep,
+        prefill_lens=prefill,
+        decode_input_lens=decode,
+        decode_concurrency=concurrency,
+        cached_prefix_lens=prefixes,
+        cached_suffix_lens=suffixes,
     )
 
 
@@ -828,8 +1154,40 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             raise ValueError(f"{iid}: saved profile identity differs from the fleet")
         if old.generation_digest is None or not isinstance(row.get("generation_evidence"), dict):
             raise ValueError(f"{iid}: saved samples lack generation evidence; reprofile the engine")
-        (a, b, c), representatives, error = fit_prefill_samples(samples)
-        updated = replace(old, ttft_a=a, ttft_b=b, ttft_c=c)
+        block_tokens = row.get("prefill_block_tokens")
+        if block_tokens is not None and (type(block_tokens) is not int or block_tokens < 1):
+            raise ValueError(f"{iid}: saved prefill block size is invalid")
+        (a, b, c, split), representatives, error = fit_prefill_samples(samples, block_tokens)
+        updated = Profile(
+            **{
+                **asdict(old),
+                "ttft_a": a,
+                "ttft_b": b,
+                "ttft_c": c,
+                "ttft_block_tokens": None if split is None else block_tokens,
+                "ttft_split": split,
+                **dict.fromkeys(CACHED_PROFILE_FIELDS),
+            }
+        )
+        cached = row.get("cached_prefill") or {}
+        if cached.get("reason") is not None and cached.get("cv_mape") is None:
+            # A stopped live sweep stays cold.
+            row["cached_prefill"] = {
+                "samples": cached.get("samples", []),
+                "reason": cached["reason"],
+            }
+        elif cached.get("samples"):
+            if not _valid_cached_samples(cached["samples"]):
+                raise ValueError(f"{iid}: saved cached prefill samples are invalid")
+            try:
+                refit, fit = apply_cached_fit(updated, cached["samples"])
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"{iid}: saved cached prefill samples are invalid") from exc
+            except ValueError as exc:
+                row["cached_prefill"] = {"samples": cached["samples"], "reason": str(exc)}
+            else:
+                updated = refit
+                row["cached_prefill"] = {"samples": cached["samples"], **fit}
         row.update(
             prefill_fit_points=representatives,
             prefill_fit_mape=error,
@@ -847,6 +1205,16 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             output.write(json.dumps(document, indent=2) + "\n")
     print(f"refitted {len(profiles)} profile(s) to {output_path}")
     return 0
+
+
+def _evidence_matches(saved: object, row: Profile) -> bool:
+    """Return whether saved profile evidence describes `row`; absent optional fields are unset."""
+    if not isinstance(saved, dict):
+        return False
+    try:
+        return Profile(**saved) == row
+    except (TypeError, ValueError):
+        return False
 
 
 def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str]) -> int:
@@ -874,7 +1242,9 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
             if row.iid not in engine_ids:
                 raise ValueError(f"{source}: profile {row.iid} is outside the fleet")
             evidence = record["engines"].get(row.iid)
-            if not isinstance(evidence, dict) or evidence.get("profile") != asdict(row):
+            if not isinstance(evidence, dict) or not _evidence_matches(
+                evidence.get("profile"), row
+            ):
                 raise ValueError(
                     f"{samples}: profile {row.iid} lacks matching measurement evidence"
                 )
@@ -1210,6 +1580,19 @@ def _main(argv: list[str]) -> int:
         "points with room for --decode-tokens (default: %(default)s)",
     )
     ap.add_argument(
+        "--cached-prefix-lens",
+        default=",".join(str(n) for n in CACHED_PREFIX_LENS),
+        help="comma-separated cached prefix lengths for the warm prefill sweep, which runs "
+        "when the engine reuses a cached prefix; at least two, and at least five cases "
+        "with --cached-suffix-lens (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--cached-suffix-lens",
+        default=",".join(str(n) for n in CACHED_SUFFIX_LENS),
+        help="comma-separated uncached suffix lengths for the warm prefill sweep; "
+        "at least two (default: %(default)s)",
+    )
+    ap.add_argument(
         "--decode-tokens",
         type=int,
         default=DECODE_TOKENS,
@@ -1304,12 +1687,26 @@ def _main(argv: list[str]) -> int:
             decode_tokens=args.decode_tokens,
             decode_repeats=args.decode_repeats,
             prefill_repeats=args.prefill_repeats,
+            cached_prefix_lens=tuple(
+                int(x) for x in args.cached_prefix_lens.split(",") if x.strip()
+            ),
+            cached_suffix_lens=tuple(
+                int(x) for x in args.cached_suffix_lens.split(",") if x.strip()
+            ),
         )
     except ValueError:
         ap.error(
-            "--prefill-lens, --decode-input-lens, and --decode-concurrency "
-            "take comma-separated integers"
+            "--prefill-lens, --decode-input-lens, --decode-concurrency, --cached-prefix-lens "
+            "and --cached-suffix-lens take comma-separated integers"
         )
+    prefixes, suffixes = set(sweep.cached_prefix_lens), set(sweep.cached_suffix_lens)
+    if len(prefixes) < 2 or len(suffixes) < 2 or len(prefixes) * len(suffixes) < 5:
+        ap.error(
+            "the warm prefill fit needs two distinct prefix lengths, two distinct suffix "
+            "lengths and at least five prefix and suffix cases"
+        )
+    if any(value <= 0 for value in (*sweep.cached_prefix_lens, *sweep.cached_suffix_lens)):
+        ap.error("cached prefix and suffix lengths must be positive")
     if len(set(sweep.prefill_lens)) < 3:
         ap.error("the sweep needs at least three distinct prefill lengths")
     if len(set(sweep.decode_input_lens)) < 2 or len(set(sweep.decode_concurrency)) < 2:
