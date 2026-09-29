@@ -247,7 +247,7 @@ class NarwhalRouter:
         """Return the exact or estimated input token count."""
         return (await self.size(body))[0]
 
-    async def size(self, body: dict[str, Any]) -> tuple[int, dict[str, int]]:
+    async def size(self, body: dict[str, Any]) -> tuple[int, dict[str, int], dict[str, int]]:
         """Return the input token count and the prompt tokens each engine holds cached.
 
         Already-tokenized prompts supply their exact count locally. Other
@@ -262,7 +262,7 @@ class NarwhalRouter:
             and prompt
             and all(type(token) is int and token >= 0 for token in prompt)
         ):
-            return len(prompt), self.prefix_cache_tokens(body, prompt)
+            return len(prompt), *self.prefix_cache_evidence(body, prompt)
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
@@ -277,13 +277,20 @@ class NarwhalRouter:
                 if got is not None:
                     self._tokenizer = live[k].iid
                     ids = got.token_ids
-                    cached = {} if ids is None else self.prefix_cache_tokens(body, ids)
-                    return got.count, cached
+                    if ids is None:
+                        return got.count, {}, {}
+                    return got.count, *self.prefix_cache_evidence(body, ids)
                 self._tokenizer = live[(k + 1) % len(live)].iid
-        return self.estimate_length(body), {}
+        return self.estimate_length(body), {}, {}
 
     def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
-        """Return the prompt tokens each engine can serve from its prefix cache.
+        """Return the prompt tokens each engine can serve from its prefix cache."""
+        return self.prefix_cache_evidence(body, token_ids)[0]
+
+    def prefix_cache_evidence(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """Return cached prompt tokens per engine and the residency sequence behind each.
 
         Only token counts leave this method; the prompt's identities are not
         retained. Multimodal requests and fleets without an engine contract
@@ -291,13 +298,14 @@ class NarwhalRouter:
         """
         contract = self.cfg.engine_contract
         if contract is None or not token_ids or _multimodal(body):
-            return {}
+            return {}, {}
         salt = body.get("cache_salt")
         namespace = CacheNamespace(
             self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
         )
         by_size: dict[int, list[bytes]] = {}
         cached: dict[str, int] = {}
+        sequences: dict[str, int] = {}
         for iid, view in self.residency.views.items():
             size = view.block_size
             if not view.known or not size:
@@ -309,7 +317,9 @@ class NarwhalRouter:
             tokens = min(view.cached_prefix_blocks(by_size[size]) * size, usable)
             if tokens > 0:
                 cached[iid] = tokens
-        return cached
+                if view.sequence is not None:
+                    sequences[iid] = view.sequence
+        return cached, sequences
 
     def estimate_length(self, body: dict[str, Any]) -> int:
         """Estimate offered input length locally."""

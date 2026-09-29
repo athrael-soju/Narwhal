@@ -633,6 +633,8 @@ class GlobalScheduler:
         return {
             "placed_iid": chosen.iid,
             "placed_cached_tokens": request.cached_tokens.get(chosen.iid, 0),
+            # The sidecar residency sequence the placed engine's evidence came from.
+            "evidence_sequence": request.cache_sequences.get(chosen.iid),
             "predicted_prefill_s": costs.prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
             # The engine cold pricing would have chosen among the same candidates.

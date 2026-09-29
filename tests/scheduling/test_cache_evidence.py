@@ -8,7 +8,7 @@ from pathlib import Path
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.costs import prefill_seconds
 from narwhal.serving.app import create_app
-from narwhal.types import Request
+from narwhal.types import Request, Role
 from tests.fixtures import fleet, profile
 
 BLOCK = 4
@@ -53,8 +53,10 @@ class CacheEvidenceTests(unittest.TestCase):
         prompt = list(range(22))
         self.hold(self.first, prompt[:16])
         self.hold(self.second, prompt[:8])
-        cached = self.router.prefix_cache_tokens({"prompt": prompt}, prompt)
+        self.router.residency.view(self.first).sequence = 41
+        cached, sequences = self.router.prefix_cache_evidence({"prompt": prompt}, prompt)
         self.assertEqual(cached, {self.first: 16, self.second: 8})
+        self.assertEqual(sequences, {self.first: 41})
         # vLLM computes the final prompt token, so a fully cached prompt reuses one block less.
         self.assertEqual(
             self.router.prefix_cache_tokens({"prompt": prompt[:16]}, prompt[:16])[self.first], 12
@@ -108,6 +110,10 @@ class CacheEvidenceTests(unittest.TestCase):
         record = evidence.cache_placement
         self.assertEqual((record["placed_iid"], record["cold_choice_iid"]), (other, placed.iid))
         self.assertEqual(record["placed_cached_tokens"], 32)
+        self.assertIsNone(record["evidence_sequence"])
+        sequenced = Request("seq", 40, cached_tokens={other: 32}, cache_sequences={other: 7})
+        scheduler.schedule(sequenced)
+        self.assertEqual(sequenced.cache_placement["evidence_sequence"], 7)
         self.assertLess(record["predicted_prefill_s"], record["cold_prefill_s"])
         # Cache evidence cannot place work on an engine the scheduler excludes.
         scheduler.eject(other)
@@ -172,3 +178,25 @@ class SharedCostContractTests(unittest.TestCase):
             prefill_seconds(profiles[0], Request("r", 40, cached_tokens={profiles[0].iid: 32}))
             / (sum(p.prefill_time(40) for p in profiles) / len(profiles)),
         )
+
+    def test_role_change_keeps_resident_evidence_and_retries_use_their_engine(self):
+        """Resident work keeps its price across a role change; a retry uses the new engine."""
+        scheduler = self.scheduler
+        other = next(spec.iid for spec in self.cfg.engines if spec.iid != self.iid)
+        request = Request("r", 40, cached_tokens={self.iid: 32, other: 16})
+        placed = scheduler.schedule(request)
+        self.assertEqual(placed.iid, self.iid)
+        scheduler.monitor.dispatched(self.iid, request)
+        price = scheduler.monitor._prices[self.iid].current
+        # A role change moves new placement away without dropping resident work or its price.
+        scheduler.monitor.instances[self.iid].role = Role.DECODE
+        scheduler.monitor._reprice(self.iid)
+        self.assertIn("r", scheduler.monitor.instances[self.iid].prefill)
+        self.assertAlmostEqual(scheduler.monitor._prices[self.iid].current, price)
+        later = Request("later", 40, cached_tokens={self.iid: 32})
+        self.assertEqual(scheduler.schedule(later).iid, other)
+        self.assertEqual(later.cache_placement["placed_cached_tokens"], 0)
+        # A retry excluding the failed engine is priced with its new engine's evidence.
+        retry = scheduler.schedule(request, exclude={self.iid})
+        self.assertEqual(retry.iid, other)
+        self.assertEqual(request.cache_placement["placed_cached_tokens"], 16)
