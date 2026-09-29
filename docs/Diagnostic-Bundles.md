@@ -1,6 +1,8 @@
-# Collect diagnostic bundles
+# `narwhal diagnostics`
 
-`narwhal diagnostics collect` reads a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle` and `/metrics` through GET requests, then records each response and selected local artifact in a fresh private directory. Collection reads sources in place; site tooling owns router and engine supervision.
+`narwhal diagnostics collect` sends GET requests to a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics`. It writes each response and selected local artifact to a fresh private directory.
+
+Collect one router's bundle:
 
 ```bash
 mkdir -p runs/diagnostics
@@ -16,7 +18,23 @@ Create the parent directory first and choose a fresh `--out` path for each route
 
 ## Source selection
 
-| Option | Collection scope |
+| Option | Default | Description |
+| --- | --- | --- |
+| `--router URL` | required | HTTP or HTTPS base URL of the router, with a host, port, and optional path. |
+| `--out PATH` | required | Fresh bundle directory inside an existing parent. |
+| `--fleet PATH` | optional | Fleet file to include. |
+| `--instance PATH` | optional | Dev instance directory to include, with its current run. |
+| `--run PATH` | optional | Existing run directory to include. |
+| `--artifact PATH` | optional | Additional regular file to include; repeatable. |
+| `--source-timeout SECONDS` | `5` | Deadline for each source. |
+| `--timeout SECONDS` | `30` | Time budget for the whole collection. |
+| `--max-source-bytes BYTES` | `8388608` (8 MiB) | Maximum input bytes retained per source. |
+| `--include-request-content` | `false` | Include journal and completion artifacts and request fields. |
+| `--format text\|json` | `text` | Output format, either a `text` summary or `json` for the [command result contract](Command-Results.md). |
+
+Pass at most one of `--run` and `--instance`.
+
+| Selection | Included files |
 | --- | --- |
 | `--router URL` | Required HTTP or HTTPS base URL; accepts a host, port and optional path. |
 | `--out PATH` | Required fresh directory inside an existing parent. |
