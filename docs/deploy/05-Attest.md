@@ -156,6 +156,8 @@ Start the sidecar:
 
 Discovery has already placed the role's attestation URL in the router fleet. Verify `/health` and `/v1/attestation` from the router over the trusted control network.
 
+When `checked.json` records prefix caching on and cache events published, the sidecar also subscribes to the engine's cache events and serves [residency routes](../cli/Attest.md#residency-routes). Run the sidecar as the engine's user; container engines run as root. `GET /v1/residency` reports `"known": true` once the sidecar has applied the engine's complete event history.
+
 In a second shell for the same role, verify sidecar and process together:
 
 ```bash
