@@ -1,11 +1,16 @@
-# Install the Narwhal dev CUDA runtime
+# Install the CUDA runtime and model
 
-Run these commands in an Ubuntu shell, either on native Ubuntu or Ubuntu under
-WSL2. The installed template uses Qwen3.5-0.8B GGUF and pins the Python
-runtime and GGUF loader. The wheel below targets Linux x86-64; the selected
-NVIDIA GPU and driver must support that CUDA runtime.
+The installed template pins vLLM, Torch, NIXL, Transformers, the GGUF loader,
+the Qwen3.5-0.8B GGUF model and its tokenizer.
 
-From a Narwhal checkout on the Linux filesystem:
+| Requirement    | Value                                             |
+| -------------- | ------------------------------------------------- |
+| Host           | Linux x86-64, native Ubuntu or Ubuntu under WSL2  |
+| Shell          | Ubuntu shell in a Narwhal checkout on the Linux filesystem |
+| Python         | 3.12                                              |
+| GPU and driver | NVIDIA, with support for the pinned CUDA runtime  |
+
+## Install the Python runtime
 
 ```bash
 python3.12 -m venv .venv-dev
@@ -17,8 +22,7 @@ python -m pip install \
   'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
 ```
 
-Apply the pinned GGUF loader sources over the wheel's Python files while
-keeping its CUDA extension:
+## Apply the pinned GGUF loader sources
 
 ```bash
 mkdir -p runs
@@ -39,10 +43,10 @@ PY
 ```
 
 `narwhal dev init` checks the installed versions and plugin hashes against
-the selected template. Reapply the pinned sources after reinstalling the
-plugin wheel.
+the selected template. Reapply the pinned sources after each plugin wheel
+reinstall.
 
-Download the model and tokenizer into the Hugging Face cache:
+## Download the model and tokenizer
 
 ```bash
 hf download unsloth/Qwen3.5-0.8B-GGUF \
@@ -53,6 +57,7 @@ hf download Qwen/Qwen3.5-0.8B \
   --include '*.json' '*.txt' '*.jinja'
 ```
 
-The template resolves those revisions in the default cache. For another
-cache location, pass the GGUF file with `--model` and the tokenizer directory
-with `--model-dir` when initializing the instance.
+| Cache location             | `narwhal dev init` flags                                        |
+| -------------------------- | --------------------------------------------------------------- |
+| Default Hugging Face cache |                                                                 |
+| Another directory          | `--model` for the GGUF file, `--model-dir` for the tokenizer directory |
