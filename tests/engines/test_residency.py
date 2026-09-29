@@ -288,6 +288,28 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(windowless, 0, stored([1], prompt[:4], kind="sliding_window"))
         self.assertEqual(windowless.cached_prefix_blocks(names), 0)
 
+    def test_duplicate_and_out_of_order_batches_change_nothing(self):
+        """A replayed or late batch whose sequence was already applied is ignored."""
+        prompt = tuple(range(8))
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
+        # Replays of batch 0 and a late copy of batch 1 arrive after batch 1 applied.
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [1], "group_idx": 0})
+        self.assertTrue(index.known)
+        self.assertEqual(index.sequence, 1)
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
+        # A duplicate store inside one batch leaves one resident block.
+        self.apply(
+            index,
+            2,
+            stored([3], tuple(range(4, 8)), parent=1),
+            stored([3], tuple(range(4, 8)), parent=1),
+        )
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 2)
+        self.assertEqual(len(index.snapshot()["groups"][0]["identities"]), 2)
+
     def test_bound_offload_tiers_and_unnamed_blocks(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_blocks=2)
         prompt = tuple(range(12))
