@@ -45,7 +45,7 @@ Each group requires at least 100 completed attempts. Any failed attempt, generat
 
 `--observation-timeout-s` bounds the wait for first output; `serving.request_timeout_s` bounds the complete attempt.
 
-Calibration requests, and forces, up to four output tokens per handoff, reducing the count to fit the smaller live context limit of the producer and consumer. A target of `max_model_len - 1` requests one output token. Every successful sample must produce a generated token and finish a valid stream. Saved evidence must contain distinct attempt numbers covering the configured sample count in every group, stable engine generations, and successful final generation checks.
+Calibration requests up to four output tokens per handoff and forces the engine to generate them. It reduces the count to fit the smaller live context limit of the producer and consumer. A target of `max_model_len - 1` requests one output token. Every successful sample must produce a generated token and finish a valid stream. Saved evidence must contain distinct attempt numbers covering the configured sample count in every group, stable engine generations, and successful final generation checks.
 
 In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
 

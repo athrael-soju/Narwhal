@@ -3,8 +3,8 @@
 The router reads a sidecar snapshot, then applies the sidecar's ordered
 changes. It resynchronises from a fresh snapshot when it starts, when the
 sidecar reports that the requested changes are gone, when the sidecar epoch
-or the engine process changes, and after any failed refresh. An engine
-without a sidecar, or whose sidecar serves no residency, is priced cold.
+or the engine process changes, and after any failed refresh. The router
+prices an engine cold when it has no sidecar or its sidecar serves no residency.
 """
 
 from __future__ import annotations

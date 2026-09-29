@@ -140,7 +140,7 @@ Preparation transfers both the launch record and a launcher snapshot to the engi
 | `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                                                                 |
 | `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                                                                                                                                              |
 | `environment`       | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                                                                         |
-| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. They can also turn prefix caching or cache-event publication off; see [section 16.1](#161-prefix-caching-and-cache-events). |
+| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. They can also turn prefix caching or cache-event publication off; see [prefix caching and cache events](#161-prefix-caching-and-cache-events). |
 
 The launcher takes these values from the role environment:
 
@@ -207,14 +207,14 @@ Record the application revision, launcher digest, and container ID with the depl
 
 The launcher leaves vLLM's prefix-caching default in place. To turn prefix caching off, add vLLM's `--no-enable-prefix-caching` to `extra_args`.
 
-While prefix caching stays on, the launcher configures vLLM to publish KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. The short path keeps each socket within the 107-byte Unix socket path limit, which a launch directory can exceed:
+While prefix caching stays on, the launcher configures vLLM to publish KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`:
 
 | Socket        | Use                                                       |
 | ------------- | --------------------------------------------------------- |
 | `events.sock` | Published event batches, each with a sequence number      |
 | `replay.sock` | Replay requests for batches still in vLLM's replay buffer |
 
-Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
+The short path keeps each socket within the 107-byte Unix socket path limit, which a launch directory path can exceed. Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
 
 To keep prefix caching on without publishing events, add vLLM's own event setting to `extra_args`:
 

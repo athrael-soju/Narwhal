@@ -539,7 +539,7 @@ class EngineClient:
             "prompt": prompt,
             "max_tokens": 1,
             "stream": True,
-            # A model may end this prompt at once; the probe needs output, not the model's choice.
+            # A model may end this prompt at once, so the probe forces the output it measures.
             **self.dialect.decode_probe_extras(1),
         }
         body = self.kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)

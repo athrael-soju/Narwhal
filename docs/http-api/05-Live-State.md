@@ -91,7 +91,7 @@ Each monitoring pass refreshes one record per engine from its attestation sideca
 | Field | Meaning |
 | --- | --- |
 | `known` | `true` when the router holds the engine's complete residency |
-| `reason` | Why residency is known or unknown |
+| `reason` | Cause of the current `known` value |
 | `epoch` | Sidecar instance the record follows |
 | `sequence` | Last engine event batch applied |
 | `block_size` | Tokens per cache block |
