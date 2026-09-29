@@ -9,8 +9,8 @@ _INTEGER_FIELDS = ("n", "best_of", "max_tokens", "max_completion_tokens")
 
 
 def output_cap(body: dict[str, Any]) -> int:
-    """Return the requested output cap from `max_tokens` or `max_completion_tokens`, 0 if unset."""
-    for name in ("max_tokens", "max_completion_tokens"):
+    """Return the requested output cap from `max_completion_tokens` or `max_tokens`, 0 if unset."""
+    for name in ("max_completion_tokens", "max_tokens"):
         value = body.get(name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value

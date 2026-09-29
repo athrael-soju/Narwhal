@@ -207,7 +207,26 @@ class DecodeAdmissionTests(unittest.TestCase):
         short = Request("short", 10, wanted_len=1)
         self.assertTrue(self.scheduler.decode_admits(short, ready_s=0.0))
 
-    def test_the_tpot_check_prices_the_engine_with_the_fewest_residents_at_ready_time(self):
+    def test_the_tpot_check_admits_on_any_engine_with_room(self):
+        self.scheduler.monitor.instances["e0"].role = Role.DECODE
+        for iid in ("e0", "e3"):
+            self.scheduler.profiles.put(
+                replace(
+                    self.scheduler.profiles.get(iid),
+                    kv_capacity_tokens=2_000_000,
+                    decode_max_kv_tokens=2_000_000,
+                )
+            )
+        self.scheduler.monitor.dispatched(
+            "e0", Request("long", 480_000, phase=Phase.DECODE, wanted_len=2_000)
+        )
+        for index in range(2):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"s{index}", 12_000, phase=Phase.DECODE, wanted_len=2_000)
+            )
+        self.assertTrue(self.scheduler.decode_admits(Request("new", 20_000, wanted_len=8)))
+
+    def test_the_tpot_check_counts_residents_generating_at_ready_time(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE
         for iid in ("e0", "e3"):
             self.scheduler.profiles.put(

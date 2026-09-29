@@ -395,7 +395,8 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
 class OutputCapTests(unittest.TestCase):
     def test_the_output_cap_reads_either_token_limit_field(self):
         self.assertEqual(output_cap({"max_completion_tokens": 32}), 32)
-        self.assertEqual(output_cap({"max_tokens": 16, "max_completion_tokens": 32}), 16)
+        self.assertEqual(output_cap({"max_tokens": 16, "max_completion_tokens": 32}), 32)
+        self.assertEqual(output_cap({"max_tokens": 16}), 16)
         self.assertEqual(output_cap({"max_tokens": True}), 0)
         self.assertEqual(output_cap({}), 0)
         self.assertEqual(

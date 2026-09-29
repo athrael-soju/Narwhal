@@ -370,10 +370,10 @@ class GlobalScheduler:
         context, within the decode token bound, times the live correction. Peak slots and KV
         tokens (prompt plus projected final output) over the window must fit the fleet: slots
         sum `decode_max_requests`, capped by `concurrency` when positive, and tokens sum
-        `decode_token_limit`. The TPOT check prices the engine with the fewest residents
-        generating at `ready_s`. A fleet without live decode engines, or with an engine
-        lacking a measured decode bound, admits. A request that misses the TPOT budget on an
-        idle engine admits; placement decides it.
+        `decode_token_limit`. The TPOT check admits when any engine meets the budget with its
+        residents generating at `ready_s`. A fleet without live decode engines, or with an
+        engine lacking a measured decode bound, admits. A request that misses the TPOT budget
+        on every idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
@@ -447,11 +447,15 @@ class GlobalScheduler:
         if peak > 1 and (peak > slots or peak_kv > tokens):
             return False
         decode = replace(request, phase=Phase.DECODE)
-        least = min(engines, key=lambda inst: (len(generating[inst.iid]), inst.iid))
-        if self.meets_slo(decode, self.cost(decode, replace(least, decode=generating[least.iid]))):
+        if any(
+            self.meets_slo(decode, self.cost(decode, replace(inst, decode=generating[inst.iid])))
+            for inst in engines
+        ):
             return True
-        idle = replace(least, prefill={}, decode={})
-        return not self.meets_slo(decode, self.cost(decode, idle))
+        return not any(
+            self.meets_slo(decode, self.cost(decode, replace(inst, prefill={}, decode={})))
+            for inst in engines
+        )
 
     def cheapest_own_prefill(self, request: Request) -> float | None:
         """Return the request's cheapest isolated prefill cost.

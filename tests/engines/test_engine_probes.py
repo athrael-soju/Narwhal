@@ -266,6 +266,13 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             await anext(self.client.decode("http://engine", "/v1/completions", {}, {}, None))
         self.assertEqual((caught.exception.status, caught.exception.detail), (503, "unavailable"))
 
+    def test_the_prefill_leg_generates_one_token(self):
+        leg = self.client._prefill_leg(
+            {"model": "stub", "messages": [], "max_tokens": 64, "max_completion_tokens": 2048}
+        )
+        self.assertEqual(leg["max_tokens"], 1)
+        self.assertNotIn("max_completion_tokens", leg)
+
     def test_explicit_auth_headers_take_precedence_case_insensitively(self):
         """An explicit authorization header takes precedence over the engine credential."""
         headers = {"Authorization": "Bearer forwarded", "x-request-id": "r"}
