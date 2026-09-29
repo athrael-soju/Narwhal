@@ -636,6 +636,7 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
     from narwhal.deployment import stages
 
     if plan.get("backend") != "native":
+        kv_events_directory(plan)
         return docker(
             [
                 "run",
@@ -974,6 +975,7 @@ def model_dimensions(run: Path, plan: dict) -> None:
     destination = run / "model-dimensions.json"
     if destination.exists():
         raise ValueError("model dimensions exist; retain the capture and use a fresh plan")
+    kv_events_directory(plan)
     output = docker(
         [
             "run",
@@ -1206,6 +1208,7 @@ def measure_cache(run: Path, plan: dict) -> None:
         (run / name).exists() for name in ("container.id", "cache-probe.id", "cache-layout.json")
     ):
         raise ValueError("launch directory has a container or sizing record; use a fresh plan")
+    kv_events_directory(plan)
     cid = docker(
         [
             "create",

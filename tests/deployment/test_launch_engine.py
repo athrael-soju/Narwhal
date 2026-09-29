@@ -211,6 +211,13 @@ class EngineLauncherTests(unittest.TestCase):
                 socket_dir.rmdir()
                 launcher.kv_events_directory(plan)
                 self.assertTrue(socket_dir.is_dir())
+                if backend == "container":
+                    # Runtime scripts mount the directory before the engine starts.
+                    socket_dir.rmdir()
+                    with patch.object(launcher, "docker", return_value="") as docker:
+                        launcher.run_runtime_script(run, plan, "pass", [], "script.log")
+                    docker.assert_called_once()
+                    self.assertTrue(socket_dir.is_dir())
                 socket_dir.chmod(0o755)
                 with self.assertRaisesRegex(ValueError, "private to the launching user"):
                     launcher.kv_events_directory(plan)
