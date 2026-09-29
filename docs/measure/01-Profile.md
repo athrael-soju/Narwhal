@@ -53,7 +53,7 @@ For each engine, the profiler:
 
 Compare the retained sweep with the serving plan before accepting the result.
 
-The prefill fit is `a*n*n + b*n + c` for `n` prompt tokens. When the engine exports its cache block size in `vllm:cache_config_info`, the fit adds `ttft_split` for a prompt that ends inside a cache block past the first. An engine that prefills such a prompt in two steps measures a positive `ttft_split`. The profile keeps `ttft_split` when the sweep has two lengths that end within the first block or on a block boundary, two lengths that end between later block boundaries, and the step halves the plain curve's fit error; otherwise the profile keeps the plain curve. The defaults 256 and 4096 end on a block boundary for 16- and 512-token blocks.
+The prefill fit is `a*n*n + b*n + c` for `n` prompt tokens. When the engine exports its cache block size in `vllm:cache_config_info`, the fit adds `ttft_split` for a prompt that ends inside a cache block past the first. An engine that prefills such a prompt in two steps measures a positive `ttft_split`. One group holds lengths that end within the first block or on a block boundary. The other holds lengths that end between later block boundaries. The profile keeps `ttft_split` when each group has two lengths and the step halves the plain curve's fit error. Otherwise the profile keeps the plain curve. The defaults 256 and 4096 belong to the first group for 16- and 512-token blocks.
 
 ### Decode sweep
 
@@ -61,7 +61,7 @@ Give the decode sweep at least two input lengths and two concurrency values. For
 
 The profiler keeps decode inputs whose input and requested output fit the live context limit. Extend the sweep for long-context deployments; when that limit leaves too few usable cells to fit the profile, select shorter inputs.
 
-Each cold probe request sets a unique vLLM `cache_salt` to prevent prefix cache reuse. The profile measures cold prefill regardless of the engine's prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each cold sweep. If any prompt tokens were served from the prefix cache, the sweep fails and must be rerun.
+Each cold probe request sets a unique vLLM `cache_salt`, which keeps the request's prefix cache hits at zero. The profile measures cold prefill under any prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each cold sweep. A cold sweep fails when the engine serves any prompt tokens from its prefix cache; rerun it.
 
 Each decode probe requests one identified token per SSE event. The profiler validates token identity as events arrive, then checks stream completion and output token counts. It retains the intervals only after all streams pass these checks and enough intervals have been collected.
 
@@ -75,7 +75,7 @@ For each `--cached-prefix-lens` and `--cached-suffix-lens` pair within the engin
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. A cached prefix ends on a cache block boundary, so a suffix that ends inside a block past its first adds the cold fit's `ttft_split`, and the warm terms fit the remaining time. Each case contributes the medians of its repeats. The fit needs two prefix lengths, two suffix lengths and five cases within the engine context; the profiler checks the grid before the warm sweep and keeps cold pricing for a smaller grid. The profiler reports four errors:
+The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. A suffix that ends inside a cache block past its first adds the cold fit's `ttft_split`, and the warm terms fit the remaining time. Each case contributes the medians of its repeats. The fit needs two prefix lengths, two suffix lengths and five cases within the engine context. A smaller grid keeps cold pricing, and the profiler skips its warm sweep. The profiler reports four errors:
 
 * the fit's leave-one-case-out error;
 * pricing only the suffix on the cold curve;
@@ -84,7 +84,7 @@ The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` 
 
 Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit or its held-out error exceeds 20%. The profiler prints the reason.
 
-Establish the warm fit on one engine first. Select it with `--only <iid>`, compare its held-out error with the recorded threshold, then profile every engine with `--overwrite`.
+Measure the warm fit on one engine with `--only <iid>` and compare its held-out error with the recorded threshold. Profile every engine with `--overwrite` when that fit passes.
 
 ## 3. Retain profile samples and fits
 
@@ -99,7 +99,7 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * decode intervals;
 * cell medians;
 * fitted profiles;
-* `prefill_block_tokens`, the engine's cache block size, or `null` when the engine exports none;
+* `prefill_block_tokens`, the cache block size the engine exports, otherwise `null`;
 * `cached_prefill`: warm samples and cold controls with their prefix and suffix tokens, plus the fit points, `cv_mape`, `suffix_on_cold_curve_mape`, `full_prompt_cold_mape` and `cold_control_curve_mape`;
 * `cached_prefill.reason` for an engine that keeps cold pricing;
 * `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's cold sweeps, or `null` when the hit counter is absent;
