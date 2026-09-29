@@ -495,8 +495,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
             patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
             patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+            patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
             patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7, 7])),
-            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=None)),
+            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
             redirect_stdout(io.StringIO()),
         ):
             row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
@@ -528,8 +529,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
                 patch.object(probe, "probe_decode", decode_sweep),
                 patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+                patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
                 patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=counters)),
-                patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=None)),
+                patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
                 redirect_stdout(io.StringIO()),
             ):
                 if message:

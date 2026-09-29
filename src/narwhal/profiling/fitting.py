@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Sequence
 
 MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
@@ -69,10 +70,22 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
     return a / scale / scale, b / scale, c
 
 
+def splits_prefill(length: float, block_tokens: int | None) -> bool:
+    """Return whether a prompt of `length` tokens ends inside a cache block past the first."""
+    return block_tokens is not None and length > block_tokens and length % block_tokens != 0
+
+
 def fit_prefill_samples(
     samples: list[tuple[float, float]],
-) -> tuple[tuple[float, float, float], list[tuple[float, float]], float]:
-    """Fit one median per exact input length and reject poor representative fits."""
+    block_tokens: int | None = None,
+) -> tuple[tuple[float, float, float, float], list[tuple[float, float]], float]:
+    """Fit one median per exact input length and reject poor representative fits.
+
+    Returns `(a, b, c, split)` for `a*n*n + b*n + c`, plus `split` for a prompt that
+    ends inside a cache block past the first. An engine that splits such a prompt
+    into two prefill steps measures a positive `split`. Without a block size, or
+    without lengths on both sides of that rule, `split` is 0.
+    """
     if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
         raise ValueError("prefill samples must be finite and nonnegative")
     groups: dict[float, list[float]] = {}
@@ -81,11 +94,18 @@ def fit_prefill_samples(
     representatives = [
         (length, statistics.median(times)) for length, times in sorted(groups.items())
     ]
-    coefficients = fit_quadratic(representatives)
-    a, b, c = coefficients
+    flags = [splits_prefill(length, block_tokens) for length, _ in representatives]
+    if len(representatives) > 3 and len(set(flags)) == 2:
+        split_rows = [
+            (x * x, x, 1.0, float(flag))
+            for (x, _), flag in zip(representatives, flags, strict=True)
+        ]
+        a, b, c, split = _nonnegative_fit(split_rows, [y for _, y in representatives])
+    else:
+        (a, b, c), split = fit_quadratic(representatives), 0.0
     errors = [
-        abs(a * length * length + b * length + c - elapsed) / max(elapsed, 1e-9)
-        for length, elapsed in representatives
+        abs(a * length * length + b * length + c + split * flag - elapsed) / max(elapsed, 1e-9)
+        for (length, elapsed), flag in zip(representatives, flags, strict=True)
     ]
     mape = statistics.mean(errors)
     if mape > MAX_PREFILL_FIT_MAPE or max(errors) > MAX_PREFILL_POINT_ERROR:
@@ -93,7 +113,7 @@ def fit_prefill_samples(
             f"prefill median fit error {mape:.1%}, worst point {max(errors):.1%}; "
             "inspect the retained per-length measurements before using this profile"
         )
-    return coefficients, representatives, mape
+    return (a, b, c, split), representatives, mape
 
 
 def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, float, float]:
@@ -159,7 +179,7 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
     return sum(errors) / len(errors)
 
 
-def _nonnegative_fit(rows: list[tuple[float, ...]], ys: list[float]) -> list[float]:
+def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> list[float]:
     """Fit `y = sum(w_i f_i)` with nonnegative weights by checking every face."""
     n = len(rows[0])
     scales = [max(abs(row[i]) for row in rows) or 1.0 for i in range(n)]

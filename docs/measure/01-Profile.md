@@ -53,13 +53,15 @@ For each engine, the profiler:
 
 Compare the retained sweep with the serving plan before accepting the result.
 
+The prefill fit is `a*n*n + b*n + c` for `n` prompt tokens. When the engine exports its cache block size in `vllm:cache_config_info`, the fit adds `ttft_split` for a prompt that ends inside a cache block past the first. An engine that prefills such a prompt in two steps measures a positive `ttft_split`. Include lengths within the first block and lengths between later block boundaries, such as the defaults.
+
 ### Decode sweep
 
 Give the decode sweep at least two input lengths and two concurrency values. For production calibration, use at least three concurrency points, including one stream and the intended operating range.
 
 The profiler keeps decode inputs whose input and requested output fit the live context limit. Extend the sweep for long-context deployments; when that limit leaves too few usable cells to fit the profile, select shorter inputs.
 
-Each probe request sets a unique vLLM `cache_salt` to prevent prefix cache reuse. The profile measures cold prefill regardless of the engine's prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each sweep. If any prompt tokens were served from the prefix cache, the sweep fails and must be rerun.
+Each cold probe request sets a unique vLLM `cache_salt` to prevent prefix cache reuse. The profile measures cold prefill regardless of the engine's prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each cold sweep. If any prompt tokens were served from the prefix cache, the sweep fails and must be rerun.
 
 Each decode probe requests one identified token per SSE event. The profiler validates token identity as events arrive, then checks stream completion and output token counts. It retains the intervals only after all streams pass these checks and enough intervals have been collected.
 
@@ -67,13 +69,20 @@ Each decode probe requests one identified token per SSE event. The profiler vali
 
 After the cold sweeps, the profiler measures prefill when part of the prompt comes from the engine's prefix cache. It runs only when the engine exports `vllm:prefix_cache_hits_total` and reuses a cached prefix; otherwise the profile keeps cold pricing only.
 
-For each `--cached-prefix-lens` and `--cached-suffix-lens` pair, the profiler repeats three requests:
+For each `--cached-prefix-lens` and `--cached-suffix-lens` pair within the engine's `max_model_len`, the profiler repeats three requests three times:
 
 1. It sends the prefix and the suffix's first word under a fresh cache salt. A hybrid attention and Mamba engine keeps boundary state for a prompt's last full block when the prompt extends past that block.
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. The fit needs at least five prefix and suffix cases. The profiler reports the fit's leave-one-case-out error and the error of pricing only the suffix on the cold curve. Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit.
+The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. Each case contributes the medians of its repeats, and the fit needs at least five cases. The profiler reports four errors:
+
+* the fit's leave-one-case-out error;
+* pricing only the suffix on the cold curve;
+* pricing the full prompt on the cold curve;
+* the cold curve against the measured cold controls.
+
+Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit or its held-out error exceeds 20%. The profiler prints the reason.
 
 ## 3. Retain profile samples and fits
 
@@ -88,9 +97,10 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * decode intervals;
 * cell medians;
 * fitted profiles;
-* `cached_prefill`: warm samples and cold controls with their prefix and suffix tokens, plus the fit points and held-out error;
+* `prefill_block_tokens`, the engine's cache block size, or `null` when the engine exports none;
+* `cached_prefill`: warm samples and cold controls with their prefix and suffix tokens, plus the fit points, `cv_mape`, `suffix_on_cold_curve_mape`, `full_prompt_cold_mape` and `cold_control_curve_mape`;
 * `cached_prefill.reason` for an engine that keeps cold pricing;
-* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the hit counter is absent;
+* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's cold sweeps, or `null` when the hit counter is absent;
 * the verified attestation response or process identity that binds each fit to its engine generation.
 
 The sample sidecar retains raw prefill measurements and the fit error when a TTFT fit fails, and keeps completed engine data if a later engine fails. `--overwrite` creates a new output pair for the selected engines.
@@ -121,7 +131,7 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted prefill curves and copied measured decode coefficients, preserving the original pair. Earlier sample files require a fresh sweep against the current engine processes.
+The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted cold and warm prefill curves and copied measured decode coefficients, preserving the original pair. Earlier sample files require a fresh sweep against the current engine processes.
 
 After refitting:
 

@@ -1,4 +1,4 @@
-"""Check warm prefill measurement, fitting and its cold fallback."""
+"""Check warm prefill measurement, fitting, the cold split step and their cold fallback."""
 
 import io
 import json
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.profiling import probe
-from narwhal.profiling.fitting import fit_cached_prefill
+from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples
 from tests.fixtures import profile
 
 A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
@@ -23,7 +23,9 @@ def warm_time(prefix, suffix):
     return A * (2 * prefix * suffix + suffix * suffix) + B * suffix + D * prefix + C
 
 
-def warm_samples(prefixes=(1024, 2048, 4096), suffixes=(256, 1024, 2048), repeats=3):
+def warm_samples(prefixes=(1024, 2048, 4096), suffixes=(256, 1024, 2048), repeats=3, noise=None):
+    """Samples shaped like the profiler's, optionally scaled by `noise(prefix, suffix)`."""
+    scale = noise or (lambda p, s: 1.0)
     return [
         {
             "target_prefix": p,
@@ -33,13 +35,17 @@ def warm_samples(prefixes=(1024, 2048, 4096), suffixes=(256, 1024, 2048), repeat
             "cache_evidence": "prefix_cache_hits",
             "prefix_tokens": p if state == "warm" else 0,
             "suffix_tokens": s if state == "warm" else p + s,
-            "seconds": warm_time(p, s) if state == "warm" else warm_time(0, p + s),
+            "seconds": warm_time(p, s) * scale(p, s) if state == "warm" else warm_time(0, p + s),
         }
         for p in prefixes
         for s in suffixes
         for r in range(repeats)
         for state in ("warm", "cold")
     ]
+
+
+def noisy(p, s):
+    return 1.0 + 0.03 * ((p // 1024 + 2 * s // 256) % 3 - 1)
 
 
 class CachedPrefillFitTests(unittest.TestCase):
@@ -52,6 +58,19 @@ class CachedPrefillFitTests(unittest.TestCase):
         self.assertAlmostEqual(c, C, places=6)
         self.assertEqual(len(groups), 9)
         self.assertLess(cv_mape, 1e-6)
+
+    def test_held_out_error_predicts_each_case_from_the_others(self):
+        points = [
+            (p, s, warm_time(p, s) * noisy(p, s)) for p in (1024, 2048, 4096) for s in (256, 2048)
+        ]
+        _, _, cv_mape = fit_cached_prefill(points)
+        errors = []
+        for index, (p, s, y) in enumerate(points):
+            (a, b, c, d), _, _ = fit_cached_prefill(points[:index] + points[index + 1 :])
+            predicted = a * (2 * p * s + s * s) + b * s + c + d * p
+            errors.append(abs(predicted - y) / y)
+        self.assertAlmostEqual(cv_mape, sum(errors) / len(errors))
+        self.assertGreater(cv_mape, 0.001)
 
     def test_fit_needs_two_prefix_and_two_suffix_lengths_and_five_cases(self):
         for points in (
@@ -72,16 +91,57 @@ class CachedPrefillFitTests(unittest.TestCase):
         self.assertIsNone(cold.cached_prefill_time(2048, 1024))
         self.assertEqual(fitted.cached_prefill_time(0, 1024), fitted.prefill_time(1024))
         self.assertLess(fit["cv_mape"], 1e-6)
-        # Pricing only the suffix on the cold curve misses attention to the cached prefix.
+        # Pricing only the suffix on the cold curve misses the cached prefix.
         self.assertGreater(fit["suffix_on_cold_curve_mape"], 0.05)
+        self.assertIsNotNone(fit["cold_control_curve_mape"])
         with self.assertRaisesRegex(ValueError, "cached prefill fit requires"):
             replace(cold, cached_ttft_a=A)
+
+    def test_repeats_group_by_target_case_and_a_poor_fit_stays_cold(self):
+        cold = profile("e0")
+        grid = warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048))
+        # Observed hit counts that differ between repeats still describe one case.
+        for index, sample in enumerate(grid):
+            if sample["state"] == "warm":
+                sample["prefix_tokens"] += 16 * (index % 2)
+        with self.assertRaisesRegex(ValueError, "five cases"):
+            probe.apply_cached_fit(cold, grid)
+        wild = warm_samples(noise=lambda p, s: 3.0 if (p, s) == (2048, 1024) else 1.0)
+        with self.assertRaisesRegex(ValueError, "held-out error"):
+            probe.apply_cached_fit(cold, wild)
+
+
+class ColdSplitStepTests(unittest.TestCase):
+    def test_fit_measures_the_extra_step_past_the_first_block(self):
+        def cold(n):
+            return 1e-9 * n * n + 2e-5 * n + 0.07 + (0.06 if n > 512 and n % 512 else 0.0)
+
+        lengths = (256, 700, 1300, 2300, 4300, 8300)
+        (a, b, c, split), _, mape = fit_prefill_samples([(n, cold(n)) for n in lengths], 512)
+        self.assertAlmostEqual(split, 0.06, places=6)
+        self.assertLess(mape, 1e-6)
+        row = replace(profile("e0"), ttft_a=a, ttft_b=b, ttft_c=c)
+        row = replace(row, ttft_block_tokens=512, ttft_split=split)
+        for n in (300, 512, 513, 1024, 1500):
+            self.assertAlmostEqual(row.prefill_time(n), cold(n), places=6)
+        # Without a block size, or with one regime only, the fit keeps the plain curve.
+        self.assertEqual(fit_prefill_samples([(n, cold(n)) for n in lengths[1:]], 512)[0][3], 0)
+        plain = fit_prefill_samples([(n, cold(n)) for n in lengths])
+        self.assertEqual(plain[0][3], 0)
+        self.assertGreater(plain[2], 0.05)
+        with self.assertRaisesRegex(ValueError, "go together"):
+            replace(profile("e0"), ttft_split=0.06)
+
+    def test_block_size_comes_from_the_engine_cache_metric(self):
+        metrics = 'vllm:cache_config_info{block_size="512",engine="0"} 1.0\n'
+        self.assertEqual(probe.parse_cache_block_tokens(metrics), 512)
+        self.assertIsNone(probe.parse_cache_block_tokens("vllm:num_requests_running 0\n"))
 
 
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
     """A fake engine caches whole 16-token blocks per salt and counts reused tokens."""
 
-    def engine(self, *, reuse=True, hybrid=False):
+    def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None):
         cache: dict[str, int] = {}
         hits = [0]
 
@@ -98,17 +158,27 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 )
             body = json.loads(request.content)
             tokens = len(body["prompt"].split())
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": tokens, "max_model_len": 1024})
+            if sent is not None:
+                sent.append(tokens)
             salt = body["cache_salt"]
             if reuse and salt in cache:
                 hits[0] += min(cache[salt], (tokens - 1) // 16 * 16)
+            elif leak and cache:
+                hits[0] += 16
             cache.setdefault(salt, cached(tokens))
             return httpx.Response(
-                200, json={"usage": {"prompt_tokens": tokens, "completion_tokens": 1}}
+                200,
+                json={
+                    "choices": [{"text": "x"}],
+                    "usage": {"prompt_tokens": tokens, "completion_tokens": 1},
+                },
             )
 
         return httpx.MockTransport(handle)
 
-    async def run_probe(self, transport, prefix_lens=(100, 400)):
+    async def run_probe(self, transport, prefix_lens=(100, 400), **kwargs):
         sweep = replace(
             probe.Sweep(),
             cached_prefix_lens=prefix_lens,
@@ -125,11 +195,12 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 redirect_stdout(io.StringIO()),
             ):
                 return await probe.probe_cached_prefill(
-                    client, "http://e", "stub", sweep, probe.VllmDialect()
+                    client, "http://e", "stub", sweep, probe.VllmDialect(), **kwargs
                 )
 
     async def test_samples_record_observed_cache_state_and_cold_controls(self):
-        samples = await self.run_probe(self.engine())
+        samples, reason = await self.run_probe(self.engine())
+        self.assertIsNone(reason)
         warm = [s for s in samples if s["state"] == "warm"]
         cold = [s for s in samples if s["state"] == "cold"]
         self.assertEqual((len(warm), len(cold)), (8, 8))
@@ -144,19 +215,82 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(s["cache_evidence"] == "prefix_cache_hits" for s in samples))
 
     async def test_a_block_aligned_prefix_stays_reusable_on_a_hybrid_engine(self):
-        samples = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))
+        samples, _ = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))
         warm = {s["prefix_tokens"] for s in samples if s["state"] == "warm"}
         self.assertEqual(warm, {96, 400})
 
     async def test_an_engine_that_reuses_nothing_keeps_cold_pricing(self):
-        self.assertIsNone(await self.run_probe(self.engine(reuse=False)))
+        samples, reason = await self.run_probe(self.engine(reuse=False))
+        self.assertEqual(samples, [])
+        self.assertIn("reused no cached prefix", reason)
+
+    async def test_a_cold_control_that_hits_the_cache_fails_the_sweep(self):
+        with self.assertRaisesRegex(RuntimeError, "cold control reused"):
+            await self.run_probe(self.engine(leak=True))
+
+    async def test_cases_longer_than_the_context_are_skipped(self):
+        sent = []
+        samples, reason = await self.run_probe(self.engine(sent=sent), max_model_len=440)
+        self.assertIsNone(reason)
+        self.assertEqual(
+            {(s["target_prefix"], s["target_suffix"]) for s in samples},
+            {(100, 20), (100, 60), (400, 20)},
+        )
+        self.assertLessEqual(max(sent), 439)
+        samples, reason = await self.run_probe(self.engine(), max_model_len=50)
+        self.assertEqual((samples, reason), ([], "every warm case exceeds the engine context"))
+
+
+class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
+    async def profile_with(self, sweep_result, *, block=None, prefill=None):
+        prefill = prefill or [(float(n), 1e-9 * n * n + 2e-5 * n + 0.08) for n in (256, 1024, 4096)]
+        decode = [
+            (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
+        ]
+        evidence = {}
+        with (
+            patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
+            patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
+            patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+            patch.object(probe, "cache_block_tokens", AsyncMock(return_value=block)),
+            patch.object(probe, "prefix_cache_hits", AsyncMock(return_value=7)),
+            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=sweep_result)),
+            redirect_stdout(io.StringIO()),
+        ):
+            row = await probe.profile_instance(None, "e0", "http://e", "stub", evidence=evidence)
+        return row, evidence
+
+    async def test_a_warm_fit_enters_the_profile_with_its_evidence(self):
+        row, evidence = await self.profile_with((warm_samples(), None))
+        self.assertAlmostEqual(row.cached_prefill_time(2048, 1024), warm_time(2048, 1024))
+        self.assertEqual(len(evidence["cached_prefill"]["samples"]), 54)
+        self.assertLess(evidence["cached_prefill"]["cv_mape"], 1e-6)
+
+    async def test_an_engine_without_a_warm_fit_keeps_cold_pricing_with_the_reason(self):
+        grid = warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048))
+        for result, reason in (
+            (([], "case prefix~2048 suffix~700 reused no cached prefix"), "reused no cached"),
+            ((grid, None), "five cases"),
+        ):
+            with self.subTest(reason=reason):
+                row, evidence = await self.profile_with(result)
+                self.assertIsNone(row.cached_ttft_a)
+                self.assertIn(reason, evidence["cached_prefill"]["reason"])
+                self.assertEqual(evidence["cached_prefill"]["samples"], result[0])
+
+    async def test_the_cold_curve_records_the_engine_block_and_split_step(self):
+        def cold(n):
+            return 1e-9 * n * n + 2e-5 * n + 0.08 + (0.06 if n > 512 and n % 512 else 0.0)
+
+        prefill = [(float(n), cold(n)) for n in (256, 700, 1300, 2300, 4300)]
+        row, evidence = await self.profile_with(([], "none"), block=512, prefill=prefill)
+        self.assertEqual(row.ttft_block_tokens, 512)
+        self.assertAlmostEqual(row.ttft_split, 0.06, places=6)
+        self.assertEqual(evidence["prefill_block_tokens"], 512)
 
 
 class CachedPrefillRefitTests(unittest.TestCase):
-    def test_saved_samples_reproduce_the_warm_fit_offline(self):
-        base = profile("e0", ttft_a=1e-9, ttft_b=2e-5, ttft_c=0.08)
-        base = replace(base, generation_digest="sha256:" + "a" * 64)
-        fitted, fit = probe.apply_cached_fit(base, warm_samples())
+    def refit(self, cached_prefill, base):
         prefill = [(float(n), 1e-9 * n * n + 2e-5 * n + 0.08) for n in (256, 1024, 4096)]
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "profiles.samples.json"
@@ -166,9 +300,9 @@ class CachedPrefillRefitTests(unittest.TestCase):
                         "engines": {
                             "e0": {
                                 "prefill": prefill,
-                                "profile": asdict(fitted),
+                                "profile": asdict(base),
                                 "generation_evidence": {},
-                                "cached_prefill": {"samples": warm_samples(), **fit},
+                                "cached_prefill": cached_prefill,
                             }
                         }
                     }
@@ -177,7 +311,17 @@ class CachedPrefillRefitTests(unittest.TestCase):
             out = Path(folder) / "refit.json"
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(probe.refit_saved_prefill(source, out, {"e0"}), 0)
-            row = json.loads(out.read_text())["profiles"][0]
+            sidecar = json.loads(out.with_suffix(".samples.json").read_text())
+            return json.loads(out.read_text())["profiles"][0], sidecar["engines"]["e0"]
+
+    def base(self):
+        row = profile("e0", ttft_a=1e-9, ttft_b=2e-5, ttft_c=0.08)
+        return replace(row, generation_digest="sha256:" + "a" * 64)
+
+    def test_saved_samples_reproduce_the_warm_fit_offline(self):
+        fitted, fit = probe.apply_cached_fit(self.base(), warm_samples())
+        # The saved profile carries no warm fit, so the refit must compute it from the samples.
+        row, evidence = self.refit({"samples": warm_samples(), **fit}, self.base())
         for name in (
             "cached_ttft_a",
             "cached_ttft_b",
@@ -186,4 +330,13 @@ class CachedPrefillRefitTests(unittest.TestCase):
             "cached_max_prefix_tokens",
         ):
             self.assertAlmostEqual(row[name], getattr(fitted, name), places=12)
+        self.assertAlmostEqual(evidence["cached_prefill"]["cv_mape"], fit["cv_mape"])
         self.assertTrue(re.fullmatch(r"sha256:a{64}", row["generation_digest"]))
+
+    def test_refit_keeps_an_engine_cold_when_its_samples_form_no_warm_fit(self):
+        grid = warm_samples(prefixes=(2048,), suffixes=(256, 1024, 2048))
+        row, evidence = self.refit({"samples": grid, "reason": "fit needs five cases"}, self.base())
+        self.assertIsNone(row["cached_ttft_a"])
+        self.assertIn("five cases", evidence["cached_prefill"]["reason"])
+        with self.assertRaisesRegex(ValueError, "cached prefill samples are invalid"):
+            self.refit({"samples": [{"state": "warm"}]}, self.base())

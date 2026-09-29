@@ -49,6 +49,7 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | `iid`                                          | string            | Nonempty.                                                                                                          |
 | `generation_digest`                            | string            | SHA-256 digest of the verified attestation, or the process identity when the fleet has no declared contract.      |
 | `ttft_a`, `ttft_b`, `ttft_c`                   | number            | Nonnegative prefill quadratic coefficients.                                                                        |
+| `ttft_block_tokens`, `ttft_split` | integer and number, optional | Engine cache block size and the added prefill time for a prompt that ends inside a block past the first. Both are set or both are `null`. |
 | `tpot_slope`                                   | number            | Strictly positive decode interval per resident KV token. A zero slope would price decode capacity as infinite.     |
 | `tpot_intercept`                               | number            | Nonnegative zero-contention decode interval.                                                                       |
 | `kv_capacity_tokens`                           | integer, optional | Positive when present. When `decode_max_kv_tokens` is also present, physical capacity must be at least that large. |
@@ -60,7 +61,7 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | `cached_cv_mape`                               | number, optional  | Nonnegative leave-one-case-out warm prefill error.                                                                 |
 | `cached_min_prefix_tokens`, `cached_max_prefix_tokens`, `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured warm domain with `min <= max`. |
 
-The `cached_` fields appear as a complete set or stay absent. When the fields are absent, a request with a cached prefix gets cold pricing for its full input. The same applies outside their measured domain.
+The `cached_` fields are all set or all `null`. When they are `null`, a request with a cached prefix gets cold pricing for its full input. The same applies outside their measured domain.
 
 Integer fields reject Boolean, string, and fractional JSON values such as:
 
