@@ -55,8 +55,14 @@ nav:
   - Install from PyPI: Install-from-PyPI.md
   - Narwhal dev:
       - Overview: Dev-Runtime.md
-      - Install the CUDA runtime: dev/CUDA-Runtime.md
-      - RTX 5090 reference: dev/RTX-5090-Reference.md
+      - Prepare Ubuntu or WSL2: dev/01-Prepare-Host.md
+      - Install the CUDA runtime: dev/02-CUDA-Runtime.md
+      - Template and allocation: dev/03-Templates.md
+      - Run and stop an instance: dev/04-Run-Instance.md
+      - Stage deadlines and recovery: dev/05-Stage-Recovery.md
+      - Controller interruption: dev/06-Controller-Interruption.md
+      - Reference GPU recovery checks: dev/07-Recovery-Qualification.md
+      - RTX 5090 reference: dev/08-RTX-5090-Reference.md
   - Deploy a fleet:
       - Overview: Deploy.md
       - A. Discover the fleet: deploy/01-Discover.md

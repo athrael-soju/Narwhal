@@ -3,7 +3,7 @@
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on
 Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a
 selected NVIDIA GPU and targets 8 GB of VRAM or less. The optional
-[RTX 5090 reference](../dev/RTX-5090-Reference.md) records a measured
+[RTX 5090 reference](../dev/08-RTX-5090-Reference.md) records a measured
 four-engine configuration. Templates select the model, runtime and memory
 budget; `gpu.product` pins a model of card when a recipe requires one.
 
@@ -93,7 +93,7 @@ The RTX 5090 reference also contains `role_cycle`, with deterministic
 workloads for 1P:3D, 2P:2D and 3P:1D. The checkout command
 `python -m tools.measurement.dev_cycle --instance runs/dev` replays these
 workloads through a verified fleet and saves transition and latency checks.
-See [Replay all three role splits](../dev/RTX-5090-Reference.md#replay-all-three-role-splits)
+See [Replay all three role splits](../dev/08-RTX-5090-Reference.md#replay-all-three-role-splits)
 for the workload order, output files and exit codes.
 
 Each `run-*` directory contains the fleet used by the router, effective

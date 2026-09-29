@@ -260,5 +260,5 @@ Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Q
 The engine wrapper bounds Docker clients, labels created containers with a
 persisted launch token and reconciles daemon resources after timeout or
 cancellation. Configure execution and cleanup periods, inspect retained partial
-output and follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery)
+output and follow the [stage recovery procedure](../dev/05-Stage-Recovery.md)
 before reusing a failed deployment.

@@ -1,9 +1,11 @@
 # RTX 5090 reference for Narwhal dev
 
 This measured recipe pins an RTX 5090, Qwen3.5-0.8B GGUF and four engines.
-Follow the host setup in [Narwhal dev](../Dev-Runtime.md) and the shared
-[CUDA runtime and model installation](CUDA-Runtime.md) on Ubuntu or Ubuntu
-under WSL2.
+
+Host setup:
+
+1. [Prepare Ubuntu or WSL2](01-Prepare-Host.md)
+2. [Install the CUDA runtime and model](02-CUDA-Runtime.md)
 
 The reference allocates four engines with a 4,096-token context limit, four
 active sequences per engine and a 0.1 vLLM memory fraction each. Launch
