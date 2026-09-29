@@ -48,7 +48,7 @@ A prefix is reusable when every KV cache group can serve it. Full-attention grou
 
 ### Residency limits
 
-vLLM provides residency history through its replay buffer, which holds the latest 10,000 event batches. A sidecar that starts or restarts after the engine publishes more than that misses the engine's early history and reports residency unknown. Residency returns after a prefix-cache reset or an engine restart. vLLM serves its cache-reset route in development mode only; a production engine needs a restart. Keep the sidecar running for the life of its engine process.
+vLLM provides residency history through its replay buffer, which holds the latest 10,000 event batches. A sidecar that starts or restarts after the engine publishes more than that misses the engine's early history and reports residency unknown. Residency returns after a prefix-cache reset or an engine restart. vLLM serves its cache-reset route in development mode only; a production engine needs a restart. Keep the sidecar running for the life of its engine process. Residency tracking requires every request to reach the engine through the Narwhal router.
 
 With a hybrid attention and Mamba model, a KV handoff over NIXL gives the receiving engine the prompt's attention blocks and zero Mamba state. The reuse rule counts zero reusable blocks for that prefix on the receiving engine.
 
