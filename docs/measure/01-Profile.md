@@ -69,11 +69,11 @@ After the cold sweeps, the profiler measures prefill when part of the prompt com
 
 For each `--cached-prefix-lens` and `--cached-suffix-lens` pair, the profiler repeats three requests:
 
-1. It sends the prefix and the suffix's first word under a fresh cache salt, so the engine caches the prefix. The extra word matters for a hybrid attention and Mamba engine, which keeps no boundary state for a prompt that ends on a block boundary.
+1. It sends the prefix and the suffix's first word under a fresh cache salt. A hybrid attention and Mamba engine keeps boundary state for a prompt's last full block when the prompt extends past that block.
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `P*S` term remains because the suffix still attends to the cached prefix. The profiler predicts each case from a fit without it and reports the error. It also reports the error of pricing only the suffix on the cold curve. Retain a threshold for the held-out error in the private execution record before profiling. When the samples cannot support a warm fit, the engine keeps cold pricing.
+The warm fit is `c + b*S + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `P*S` term covers the suffix's attention to the cached prefix. The profiler reports the fit's leave-one-case-out error and the error of pricing only the suffix on the cold curve. Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit.
 
 ## 3. Retain profile samples and fits
 
@@ -88,7 +88,8 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * decode intervals;
 * cell medians;
 * fitted profiles;
-* `cached_prefill`: warm samples and cold controls with their prefix and suffix tokens, plus the fit points and held-out error, or the reason the warm fit is absent;
+* `cached_prefill`: warm samples and cold controls with their prefix and suffix tokens, plus the fit points and held-out error;
+* `cached_prefill.reason` for an engine that keeps cold pricing;
 * `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the hit counter is absent;
 * the verified attestation response or process identity that binds each fit to its engine generation.
 
