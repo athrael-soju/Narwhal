@@ -293,14 +293,10 @@ class NarwhalRouter:
     def prefix_cache_evidence(
         self, body: dict[str, Any], token_ids: Sequence[int]
     ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
-        """Return cached prompt tokens per engine, the residency sequence behind each,
-        and the prompt's leading block identities up to its longest cached prefix.
+        """Return cached tokens and residency sequence per engine, and the matched block identities.
 
-        vLLM computes at least the final prompt token, so identities cover the
-        prompt without it. The request keeps the matched identities so placement
-        can recheck them; counts and sequences are all that reach decision
-        records. Multimodal requests, fleets without an engine contract and
-        token IDs outside the identity range have no evidence and are priced cold.
+        Identities cover the prompt minus its final token. Multimodal requests, fleets
+        without an engine contract and out-of-range token IDs return empty evidence.
         """
         contract = self.cfg.engine_contract
         if contract is None or len(token_ids) < 2 or _multimodal(body):
@@ -332,12 +328,7 @@ class NarwhalRouter:
         return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
 
     def recheck_cache_evidence(self, request: Request) -> None:
-        """Keep only the cache evidence current residency still supports.
-
-        Evidence can go stale while a request waits for placement: the engine
-        evicts the prefix, clears its cache or restarts, or its sidecar resyncs.
-        Each engine keeps the prefix its current view holds; the rest price cold.
-        """
+        """Shrink the request's cache evidence to what current residency holds."""
         for iid in list(request.cached_tokens):
             view = self.residency.views.get(iid)
             if view is not None and view.block_size:

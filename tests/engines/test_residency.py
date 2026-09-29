@@ -294,7 +294,7 @@ class ResidencyIndexTests(unittest.TestCase):
         index = ResidencyIndex(MODEL, TOKENIZER)
         self.apply(index, 0, stored([1, 2], prompt))
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
-        # Replays of batch 0 and a late copy of batch 1 arrive after batch 1 applied.
+        # Replayed batch 0 and a late batch 1.
         self.apply(index, 0, stored([1, 2], prompt))
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [1], "group_idx": 0})
         self.assertTrue(index.known)

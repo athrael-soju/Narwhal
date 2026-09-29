@@ -37,7 +37,7 @@ class CacheEvidenceTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.cfg = fleet(Path(folder.name))
         self.router = create_app(self.cfg).state.router
-        # These tests price given evidence; PlacementRecheckTests cover the placement recheck.
+        # Pricing tests use fixed evidence.
         self.router.scheduler.recheck_cache_evidence = None
         self.first, self.second = (spec.iid for spec in self.cfg.engines)
         self.namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
@@ -61,9 +61,8 @@ class CacheEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(cached, {self.first: 16, self.second: 8})
         self.assertEqual(sequences, {self.first: 41})
-        # The request keeps identities up to its longest cached prefix, not the whole prompt.
         self.assertEqual(identities, {BLOCK: block_identities(self.namespace, prompt[:16], BLOCK)})
-        # vLLM computes the final prompt token, so a fully cached prompt reuses one block less.
+        # The final prompt token is always computed.
         self.assertEqual(
             self.router.prefix_cache_tokens({"prompt": prompt[:16]}, prompt[:16])[self.first], 12
         )
@@ -144,7 +143,7 @@ class CacheEvidenceTests(unittest.TestCase):
         scheduler.schedule(sequenced)
         self.assertEqual(sequenced.cache_placement["evidence_sequence"], 7)
         self.assertLess(record["predicted_prefill_s"], record["cold_prefill_s"])
-        # Cache evidence cannot place work on an engine the scheduler excludes.
+        # Excluded engines stay excluded.
         scheduler.eject(other)
         held = Request("held", 40, cached_tokens={other: 32})
         self.assertEqual(scheduler.schedule(held).iid, placed.iid)
@@ -334,7 +333,6 @@ class SharedCostContractTests(unittest.TestCase):
         self.assertEqual(placed.iid, self.iid)
         scheduler.monitor.dispatched(self.iid, request)
         price = scheduler.monitor._prices[self.iid].current
-        # A role change moves new placement away without dropping resident work or its price.
         scheduler.monitor.instances[self.iid].role = Role.DECODE
         scheduler.monitor._reprice(self.iid)
         self.assertIn("r", scheduler.monitor.instances[self.iid].prefill)
@@ -342,7 +340,6 @@ class SharedCostContractTests(unittest.TestCase):
         later = Request("later", 40, cached_tokens={self.iid: 32})
         self.assertEqual(scheduler.schedule(later).iid, other)
         self.assertEqual(later.cache_placement["placed_cached_tokens"], 0)
-        # A retry excluding the failed engine is priced with its new engine's evidence.
         retry = scheduler.schedule(request, exclude={self.iid})
         self.assertEqual(retry.iid, other)
         self.assertEqual(request.cache_placement["placed_cached_tokens"], 16)

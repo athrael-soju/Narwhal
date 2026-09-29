@@ -56,7 +56,7 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
-        # Rechecks a request's cache evidence against current residency before prefill placement.
+        # Refreshes a request's cache evidence from current residency.
         self.recheck_cache_evidence: Callable[[Request], None] | None = None
         # Apply cooldown to the opening P-to-D change as well.
         self._last_p2d_flip = clock()
@@ -617,7 +617,6 @@ class GlobalScheduler:
             and request.cached_tokens
             and self.recheck_cache_evidence is not None
         ):
-            # Evidence from sizing can go stale while the request waits for placement.
             self.recheck_cache_evidence(request)
         costs = {i.iid: self.cost(request, i) for i in candidates}
 
@@ -644,11 +643,9 @@ class GlobalScheduler:
         return {
             "placed_iid": chosen.iid,
             "placed_cached_tokens": request.cached_tokens.get(chosen.iid, 0),
-            # The sidecar residency sequence the placed engine's evidence came from.
             "evidence_sequence": request.cache_sequences.get(chosen.iid),
             "predicted_prefill_s": costs.prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
-            # The engine cold pricing would have chosen among the same candidates.
             "cold_choice_iid": self._cold_choice(request, candidates),
         }
 

@@ -137,7 +137,7 @@ class InstanceMonitor:
             w.current = 0.0
             return
         inst = self.instances[iid]
-        # A resident request keeps its sizing evidence, so its price stays fixed until release.
+        # Resident requests keep their placement-time price.
         w.current = sum(prefill_seconds(profile, r) for r in inst.prefill.values())
 
     def dispatched(self, iid: str, request: Request) -> None:

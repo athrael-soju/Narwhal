@@ -40,7 +40,7 @@ ArrivalObservation = tuple[Cohort[Arrival] | None, Cohort[tuple[int, int]] | Non
 
 
 def _merge_arrivals(a: Arrival, b: Arrival) -> Arrival:
-    # A merged overflow cohort keeps the larger prompt and drops cache evidence, pricing cold.
+    # A merged overflow cohort prices cold.
     return Arrival(max(a.input_len, b.input_len))
 
 
@@ -229,8 +229,7 @@ class DemandModel:
         for row in self.arrivals.rows(h0):
             length = row.value.input_len
             if profiles and all(p.covers_prefill(length) for p in profiles):
-                # Cold work spreads evenly; placement sends a prompt with a warm price
-                # to its cheapest engine. Evidence without a warm price stays cold.
+                # Mean cold price across engines, or the cheapest warm price.
                 cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
                 cached = dict(row.value.cached)
                 for p in profiles:

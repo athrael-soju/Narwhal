@@ -55,15 +55,13 @@ class Request:
     wanted_len: int = 0
     # Monotonic ingress time for end-to-end TTFT projections.
     arrived_at: float | None = None
-    # Prompt tokens each engine holds in its prefix cache, from sidecar residency at sizing
-    # and rechecked at each prefill placement.
+    # Cached prompt tokens per engine, rechecked at each prefill placement.
     cached_tokens: dict[str, int] = field(default_factory=dict)
-    # The residency sequence each engine's evidence came from, for decision records.
+    # Residency sequence behind each engine's evidence.
     cache_sequences: dict[str, int] = field(default_factory=dict)
-    # The prompt's leading block identities by block size, up to its longest cached prefix,
-    # so placement can recheck evidence against current residency.
+    # Matched prompt block identities by block size, for the placement recheck.
     cache_identities: dict[int, list[bytes]] = field(default_factory=dict)
-    # Why cache evidence priced the chosen prefill engine as it did, without prompt content.
+    # Journal record of the cache-priced placement.
     cache_placement: dict[str, Any] | None = None
 
     @property

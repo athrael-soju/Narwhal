@@ -282,7 +282,6 @@ class RequestLifecycle:
             "prefill_iid": self.prefill_iid,
             "decode_iid": self.decode_iid,
             "crossed": self.decode_iid is not None and self.decode_iid != self.prefill_iid,
-            # Prefix-cache evidence at sizing and the placement cache-aware pricing proposed.
             "cached_tokens": dict(req.cached_tokens),
             "cache_placement": req.cache_placement,
             "token_accounting": router._token_accounting(),
