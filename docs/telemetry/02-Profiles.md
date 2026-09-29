@@ -56,6 +56,11 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | `decode_min_requests`, `decode_max_requests`   | integer           | Positive measured concurrency range with `min <= max`.                                                             |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer           | Positive measured resident-KV range with `min <= max`.                                                             |
 | `decode_fit_mape`, `decode_cv_mape`            | number            | Nonnegative fit error and leave-one-out cross-validation error.                                                    |
+| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c` | number, optional | Nonnegative warm prefill coefficients: `c + b*S + a*(2*P*S + S*S)` for `P` cached prefix tokens and `S` uncached suffix tokens. |
+| `cached_cv_mape`                               | number, optional  | Nonnegative warm prefill error, predicting each prefix and suffix case from a fit without it.                      |
+| `cached_min_prefix_tokens`, `cached_max_prefix_tokens`, `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured warm domain with `min <= max`. |
+
+The `cached_` fields appear together or not at all. Without them, or outside their measured domain, a request with a cached prefix is priced on the cold curve of its full input.
 
 Integer fields reject Boolean, string, and fractional JSON values such as:
 

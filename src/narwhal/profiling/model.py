@@ -19,6 +19,10 @@ _FLOAT_FIELDS = (
     "decode_cv_mape",
     "colocated_prefill_rps",
     "colocated_decode_rps",
+    "cached_ttft_a",
+    "cached_ttft_b",
+    "cached_ttft_c",
+    "cached_cv_mape",
 )
 
 
@@ -34,6 +38,10 @@ _INT_FIELDS = (
     "decode_max_output_tokens",
     "colocated_prefill_engines",
     "colocated_decode_engines",
+    "cached_min_prefix_tokens",
+    "cached_max_prefix_tokens",
+    "cached_min_suffix_tokens",
+    "cached_max_suffix_tokens",
 )
 
 
@@ -45,6 +53,22 @@ _OPTIONAL_FLOAT_FIELDS = (
     "decode_cv_mape",
     "colocated_prefill_rps",
     "colocated_decode_rps",
+    "cached_ttft_a",
+    "cached_ttft_b",
+    "cached_ttft_c",
+    "cached_cv_mape",
+)
+
+# A warm prefill fit is complete only with its coefficients, measured domain and held-out error.
+_CACHED_FIELDS = (
+    "cached_ttft_a",
+    "cached_ttft_b",
+    "cached_ttft_c",
+    "cached_cv_mape",
+    "cached_min_prefix_tokens",
+    "cached_max_prefix_tokens",
+    "cached_min_suffix_tokens",
+    "cached_max_suffix_tokens",
 )
 
 
@@ -76,6 +100,7 @@ _OPTIONAL_DEFAULTS: dict[str, Any] = {
     "colocated_decode_engines": None,
     "colocated_prefill_rps": None,
     "colocated_decode_rps": None,
+    **dict.fromkeys(_CACHED_FIELDS),
 }
 
 
@@ -134,6 +159,8 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
         ("decode_min_kv_tokens", "decode_max_kv_tokens"),
         ("prefill_min_tokens", "prefill_max_tokens"),
         ("decode_min_output_tokens", "decode_max_output_tokens"),
+        ("cached_min_prefix_tokens", "cached_max_prefix_tokens"),
+        ("cached_min_suffix_tokens", "cached_max_suffix_tokens"),
     ):
         if lo in values and hi in values and values[lo] > values[hi]:
             raise ValueError(f"{where}: {lo} must not exceed {hi}")
@@ -146,6 +173,10 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
     for name in (*_DECODE_BOUNDS, "decode_fit_mape", "decode_cv_mape"):
         if name not in values:
             raise ValueError(f"{where}: {name} is required on a current profile")
+    cached = [name for name in _CACHED_FIELDS if name in values]
+    if cached and len(cached) != len(_CACHED_FIELDS):
+        missing = sorted(set(_CACHED_FIELDS) - set(cached))
+        raise ValueError(f"{where}: a cached prefill fit requires {', '.join(missing)}")
     group = raw.get("colocated_group")
     role = raw.get("colocated_target_role")
     mix = (raw.get("colocated_prefill_engines"), raw.get("colocated_decode_engines"))
@@ -194,6 +225,16 @@ class Profile:
     colocated_decode_engines: int | None = None
     colocated_prefill_rps: float | None = None
     colocated_decode_rps: float | None = None
+    # Prefill with P tokens served from the prefix cache and S uncached suffix tokens:
+    # c + b*S + a*(2*P*S + S*S), fitted from warm samples inside the measured domain.
+    cached_ttft_a: float | None = None
+    cached_ttft_b: float | None = None
+    cached_ttft_c: float | None = None
+    cached_cv_mape: float | None = None
+    cached_min_prefix_tokens: int | None = None
+    cached_max_prefix_tokens: int | None = None
+    cached_min_suffix_tokens: int | None = None
+    cached_max_suffix_tokens: int | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -207,6 +248,33 @@ class Profile:
         """Predict prefill time for an input length."""
         x = float(input_len)
         return max(0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c)
+
+    def cached_prefill_time(self, prefix_tokens: int, suffix_tokens: int) -> float | None:
+        """Predict prefill time when `prefix_tokens` come from the prefix cache.
+
+        Returns None without a warm fit or outside its measured domain, so the
+        caller prices the request cold. The cold curve of the suffix alone is
+        not a warm estimate: the suffix still attends to the cached prefix.
+        """
+        if prefix_tokens <= 0:
+            return self.prefill_time(suffix_tokens)
+        if (
+            self.cached_ttft_a is None
+            or self.cached_ttft_b is None
+            or self.cached_ttft_c is None
+            or self.cached_min_prefix_tokens is None
+            or self.cached_max_prefix_tokens is None
+            or self.cached_min_suffix_tokens is None
+            or self.cached_max_suffix_tokens is None
+            or not self.cached_min_prefix_tokens <= prefix_tokens <= self.cached_max_prefix_tokens
+            or not self.cached_min_suffix_tokens <= suffix_tokens <= self.cached_max_suffix_tokens
+        ):
+            return None
+        p, s = float(prefix_tokens), float(suffix_tokens)
+        return max(
+            0.0,
+            self.cached_ttft_a * (2 * p * s + s * s) + self.cached_ttft_b * s + self.cached_ttft_c,
+        )
 
     def covers_prefill(self, input_len: int) -> bool:
         """Return whether a prompt length was in the measured prefill sweep."""

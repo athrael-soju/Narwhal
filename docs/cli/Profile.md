@@ -41,6 +41,8 @@ If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-
 | `--decode-input-lens LIST`  | `512,4096,8192`                           | Comma-separated prompt lengths for the decode sweep. Requires at least two distinct values.                                                                                                                  |
 | `--decode-concurrency LIST` | `1,4,16,48`                               | Candidate stream counts. With `--limits`, the profiler keeps points within each engine's limit and adds that limit as a point when a candidate exceeds it. At least two distinct usable values are required. |
 | `--decode-tokens N`         | `64`                                      | Tokens per decode stream. Minimum 3. Larger cohorts may require more tokens to overlap.                                                                                                                      |
+| `--cached-prefix-lens LIST` | `2048,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. Requires at least two distinct values. |
+| `--cached-suffix-lens LIST` | `256,2048` | Comma-separated uncached suffix lengths for the warm prefill sweep. Requires at least two distinct values. |
 | `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length. The fit uses each length's median and retains every raw timing. Minimum 3.                                                                                                   |
 | `--decode-repeats N`        | `1` | Repetitions per decode input-length/concurrency point. Minimum 1. |
 

@@ -156,3 +156,71 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
             return None
         errors.append(decode_mape([sample], coefficients))
     return sum(errors) / len(errors)
+
+
+def _nonnegative_fit3(rows: list[tuple[float, float, float]], ys: list[float]) -> list[float]:
+    """Fit `y = w0 f0 + w1 f1 + w2 f2` with nonnegative weights by checking every face."""
+    scales = [max(abs(row[i]) for row in rows) or 1.0 for i in range(3)]
+    scaled = [[row[i] / scales[i] for i in range(3)] for row in rows]
+    gram = [[sum(r[i] * r[j] for r in scaled) for j in range(3)] for i in range(3)]
+    rhs = [sum(r[i] * y for r, y in zip(scaled, ys, strict=True)) for i in range(3)]
+    best = [0.0, 0.0, 0.0]
+    best_error = sum(y * y for y in ys)
+    for mask in range(1, 8):
+        active = [bool(mask & (1 << i)) for i in range(3)]
+        matrix = [
+            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(3)]
+            for i in range(3)
+        ]
+        try:
+            weights = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
+        except ValueError:
+            continue
+        if any(value < 0 for value in weights):
+            continue
+        error = sum(
+            (sum(w * v for w, v in zip(weights, r, strict=True)) - y) ** 2
+            for r, y in zip(scaled, ys, strict=True)
+        )
+        if error < best_error:
+            best, best_error = weights, error
+    return [w / s for w, s in zip(best, scales, strict=True)]
+
+
+def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float]:
+    # The suffix attends causally to the cached prefix and to earlier suffix tokens.
+    return (2 * prefix * suffix + suffix * suffix, suffix, 1.0)
+
+
+def _fit_cached_groups(groups: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    a, b, c = _nonnegative_fit3(
+        [_cached_features(p, s) for p, s, _ in groups], [y for _, _, y in groups]
+    )
+    return a, b, c
+
+
+def fit_cached_prefill(
+    samples: list[tuple[float, float, float]],
+) -> tuple[tuple[float, float, float], list[tuple[float, float, float]], float]:
+    """Fit warm prefill `c + b*S + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
+
+    Returns the coefficients, the per-(prefix, suffix) medians they fit, and the
+    mean error when each median is predicted by a fit without it.
+    """
+    if any(not math.isfinite(v) or v < 0 for sample in samples for v in sample):
+        raise ValueError("cached prefill samples must be finite and nonnegative")
+    grouped: dict[tuple[float, float], list[float]] = {}
+    for prefix, suffix, elapsed in samples:
+        if prefix <= 0 or suffix <= 0:
+            raise ValueError("cached prefill samples need a cached prefix and an uncached suffix")
+        grouped.setdefault((prefix, suffix), []).append(elapsed)
+    groups = [(p, s, statistics.median(times)) for (p, s), times in sorted(grouped.items())]
+    if len({p for p, _, _ in groups}) < 2 or len({s for _, s, _ in groups}) < 2:
+        raise ValueError("a cached prefill fit needs two prefix and two suffix lengths")
+    coefficients = _fit_cached_groups(groups)
+    errors = []
+    for index, (prefix, suffix, observed) in enumerate(groups):
+        a, b, c = _fit_cached_groups(groups[:index] + groups[index + 1 :])
+        f0, f1, _ = _cached_features(prefix, suffix)
+        errors.append(abs(a * f0 + b * f1 + c - observed) / max(observed, 1e-9))
+    return coefficients, groups, sum(errors) / len(errors)
