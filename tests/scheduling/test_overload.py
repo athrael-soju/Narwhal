@@ -28,6 +28,14 @@ class PinnedPlacementTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             router.scheduler.schedule(Request("r", 10, phase=Phase.DECODE))
 
+    def test_drift_eviction_keeps_the_engine_that_alone_serves_a_pinned_role(self):
+        for pinned, ejected in ((True, False), (False, True)):
+            with self.subTest(pinned=pinned):
+                scheduler = self.router(pinned=pinned).scheduler
+                with patch.object(scheduler.health, "tick", return_value=[("evict", "e3")]):
+                    scheduler.health_pass()
+                self.assertEqual("e3" in scheduler.ejected, ejected)
+
     def test_unpinned_fleets_fall_back_to_the_other_role(self):
         router = self.router(pinned=False)
         router.scheduler.eject("e3")

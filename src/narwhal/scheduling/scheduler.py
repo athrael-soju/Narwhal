@@ -719,7 +719,11 @@ class GlobalScheduler:
             if observed > 0.0 and expected > 0.0:
                 self.health.note(inst.iid, observed / expected)
         for verdict, iid in self.health.tick():
-            if verdict == "evict" and self.availability._can_hold_out(iid) and self.eject(iid):
+            if (
+                verdict == "evict"
+                and self.availability.role_covered_without(iid)
+                and self.eject(iid)
+            ):
                 self.health.evicted(iid)
                 log.warning(
                     "ejected %s after sustained drift",
@@ -727,7 +731,7 @@ class GlobalScheduler:
                 )
             elif verdict == "evict":
                 log.warning(
-                    "health: %s drifts past the band but is the last instance; "
+                    "health: %s drifts past the band but alone serves its role; "
                     "probation stands, eviction refused",
                     iid,
                 )
