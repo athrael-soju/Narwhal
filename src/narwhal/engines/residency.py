@@ -40,27 +40,33 @@ BOUNDARY_KINDS = frozenset({"mamba"})
 class _Group:
     kind: str | None
     window: int | None = None
-    # Backend hash to Narwhal identity; None marks a resident block Narwhal cannot name.
-    # A hash is resident until its first eviction. vLLM also stores a hash again for a
-    # second copy or to re-announce a cache hit, and the two look alike, so a second copy
-    # leaves the index early and its engine prices cold.
-    blocks: dict[Hashable, bytes | None] = field(default_factory=dict)
-    # Resident hashes per named identity.
+    # Backend hash to its Narwhal identity and resident copies. vLLM can hold two physical
+    # copies of one hash and reports each store and eviction. The router rejects vLLM's full
+    # cache reports, so every store event is a new copy. None marks an unnamed block.
+    blocks: dict[Hashable, list[Any]] = field(default_factory=dict)
+    # Resident copies per named identity.
     names: Counter[bytes] = field(default_factory=Counter)
 
     def add(self, block_hash: Hashable, identity: bytes | None) -> None:
-        if block_hash in self.blocks and (self.blocks[block_hash] is not None or identity is None):
-            return
-        self.blocks[block_hash] = identity
-        if identity is not None:
-            self.names[identity] += 1
+        entry = self.blocks.setdefault(block_hash, [identity, 0])
+        if entry[0] is None and identity is not None:
+            entry[0] = identity
+            self.names[identity] += entry[1]
+        entry[1] += 1
+        if entry[0] is not None:
+            self.names[entry[0]] += 1
 
     def discard(self, block_hash: Hashable) -> None:
-        identity = self.blocks.pop(block_hash, None)
-        if identity is not None:
-            self.names[identity] -= 1
-            if self.names[identity] == 0:
-                del self.names[identity]
+        entry = self.blocks.get(block_hash)
+        if entry is None:
+            return
+        entry[1] -= 1
+        if entry[1] == 0:
+            del self.blocks[block_hash]
+        if entry[0] is not None:
+            self.names[entry[0]] -= 1
+            if self.names[entry[0]] == 0:
+                del self.names[entry[0]]
 
 
 class ResidencyIndex:
@@ -247,7 +253,7 @@ class ResidencyIndex:
         for block_hash in event.block_hashes:
             for key, group in groups:
                 if block_hash in group.blocks:
-                    self._touch(key, group, group.blocks[block_hash])
+                    self._touch(key, group, group.blocks[block_hash][0])
                     group.discard(block_hash)
             if all(block_hash not in g.blocks for g in self._groups.values()):
                 self._named.pop(block_hash, None)
@@ -264,7 +270,9 @@ class ResidencyIndex:
                             "kind": group.kind,
                             "sliding_window": group.window,
                             "identities": [i.hex() for i in group.names],
-                            "unnamed": sum(1 for i in group.blocks.values() if i is None),
+                            "unnamed": sum(
+                                1 for entry in group.blocks.values() if entry[0] is None
+                            ),
                         }
                     )
             if not self.current and self.known:

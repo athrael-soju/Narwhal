@@ -181,8 +181,8 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertEqual(index.cached_prefix_blocks(names), 0)
         self.assertTrue(index.changes_after(1)[1][0]["cleared"])
 
-    def test_changes_report_net_presence_per_batch(self):
-        """A batch's change lists net transitions; a stored-again hash leaves at one eviction."""
+    def test_changes_report_net_presence_per_batch_with_duplicate_copies(self):
+        """vLLM can hold one hash twice; a batch's change lists only net transitions."""
         index = ResidencyIndex(MODEL, TOKENIZER)
         prompt = tuple(range(12))
         names = identities(tuple(range(16)))
@@ -194,12 +194,13 @@ class ResidencyIndexTests(unittest.TestCase):
         )
         delta = index.changes_after(0)[1][0]["groups"]["0"]
         self.assertEqual((delta["stored"], delta["removed"]), ([], []))
-        # vLLM stores hash 3 again for a second copy or a re-announced hit.
+        # A second copy of block 3 arrives and one copy leaves.
         self.apply(index, 2, stored([3], prompt[8:], parent=2), {**removed, "block_hashes": [3]})
+        self.assertEqual(index.cached_prefix_blocks(names), 3)
+        self.assertEqual(index.changes_after(1)[1][0]["groups"]["0"]["removed"], [])
+        self.apply(index, 3, {**removed, "block_hashes": [3]})
         self.assertEqual(index.cached_prefix_blocks(names), 2)
-        self.assertEqual(index.changes_after(1)[1][0]["groups"]["0"]["removed"], [names[2].hex()])
-        self.apply(index, 3, stored([1, 2], prompt[:8]), {**removed, "block_hashes": [1, 2]})
-        self.assertEqual(index.cached_prefix_blocks(names), 0)
+        self.assertEqual(index.changes_after(2)[1][0]["groups"]["0"]["removed"], [names[2].hex()])
 
     def test_change_log_bound_and_mixed_block_sizes(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_change_blocks=3)
