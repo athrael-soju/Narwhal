@@ -539,6 +539,8 @@ class EngineClient:
             "prompt": prompt,
             "max_tokens": 1,
             "stream": True,
+            # A model may end this prompt at once; the probe needs output, not the model's choice.
+            **self.dialect.decode_probe_extras(1),
         }
         body = self.kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)
         timeouts = self._control.timeout.as_dict()

@@ -166,6 +166,8 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         producer, consumer = self.calls
         self.assertEqual(producer[1]["prompt"], consumer[1]["prompt"])
         self.assertEqual(consumer[1]["kv_transfer_params"]["remote_engine_id"], "e0")
+        # A model that ends the probe prompt at once must still emit the probed token.
+        self.assertEqual((consumer[1]["min_tokens"], consumer[1]["ignore_eos"]), (1, True))
         self.assertTrue(
             all(
                 headers["authorization"] == "Bearer synthetic-engine-key"

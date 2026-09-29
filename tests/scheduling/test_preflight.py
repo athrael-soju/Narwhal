@@ -440,6 +440,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             [body["cache_salt"] for body in decoded], [body["cache_salt"] for body in produced]
         )
         self.assertEqual(len({body["cache_salt"] for body in produced}), 3)
+        self.assertTrue(all(body["min_tokens"] == 4 and body["ignore_eos"] for body in decoded))
 
     async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
         connector = NixlConnector()

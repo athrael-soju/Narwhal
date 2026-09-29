@@ -485,8 +485,15 @@ async def gate_consume(
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
-    body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 4, "temperature": 0.0}
     dialect = lookup_dialect(cfg.dialect)
+    # Force output so a model that ends the probe prompt at once still proves the transfer.
+    body = {
+        "model": cfg.model,
+        "prompt": PROBE_PROMPT,
+        "max_tokens": 4,
+        "temperature": 0.0,
+        **dialect.decode_probe_extras(4),
+    }
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
