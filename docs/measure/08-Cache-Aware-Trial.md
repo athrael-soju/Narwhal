@@ -12,7 +12,7 @@ Before measuring, record these in the private execution record:
 - the two offered rates;
 - the order of runs.
 
-A higher prefix-cache hit rate alone does not pass the trial. Judge each arm by completed SLO-qualified requests per second and attainment over all offers, counting refusals and failures as misses.
+Judge each arm by completed SLO-qualified requests per second and attainment over all offers, counting refusals and failures as misses.
 
 Use the smallest qualified topology with two eligible prefill engines and a decode destination.
 
@@ -22,12 +22,16 @@ The two arms differ only in the backend's cache-event setting:
 
 | Arm | `runtime.extra_args` | Router pricing |
 | --- | --- | --- |
-| Baseline | `["--kv-events-config", "{\"enable_kv_cache_events\": false}"]` added | No sidecar serves residency, so every engine is priced cold |
-| Cache-aware | Launcher default | Sidecars serve residency; engines holding a prefix are priced with their warm fit |
+| Baseline | `["--kv-events-config", "{\"enable_kv_cache_events\": false}"]` added | Sidecars answer the residency routes with HTTP 404; the router prices every engine cold |
+| Cache-aware | Launcher default | Sidecars serve residency; the router prices engines holding a prefix with their warm fit |
 
-For each arm, launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md). Then attest the engines, profile them and calibrate the first-token deadline as in [Gate F](../deploy/06-Profile-and-Preflight.md). In the cache-aware arm, profiling records a [warm prefill fit](01-Profile.md#warm-prefill-with-a-cached-prefix) for each engine that reuses a cached prefix. Run a passing preflight before trial traffic.
+For each arm:
 
-In the cache-aware arm, confirm from `/narwhal/state` that every engine's `residency` record reports `"known": true` before each run.
+1. Launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md).
+2. Attest the engines, profile them and calibrate the first-token deadline as in [Gate F](../deploy/06-Profile-and-Preflight.md).
+3. Run a passing preflight before trial traffic.
+
+In the cache-aware arm, profiling records a [warm prefill fit](01-Profile.md#warm-prefill-with-a-cached-prefix) for each engine that reuses a cached prefix. Confirm from `/narwhal/state` that every engine's `residency` record reports `"known": true` before each run.
 
 ## Create the workloads
 
@@ -49,7 +53,7 @@ Replace each `<...>` value with the frozen choice. Each repeated-prefix request 
 
 ## Run each point
 
-Run each workload at both offered rates in each arm. Give each run a distinct `--run-seed`, so later runs cannot reuse the control's cached prompts:
+Run each workload at both offered rates in each arm. Give each run a distinct `--run-seed`:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -81,4 +85,4 @@ The trial passes only when the cache-aware arm meets the predeclared benefit thr
 
 ## Capability limits
 
-A sidecar can start after vLLM's replay buffer has dropped the engine's early event batches. It then reports residency unknown until the engine restarts; see [residency limits](../cli/Attest.md#residency-limits). With a hybrid attention and Mamba model, only the prefill engine that computed a prompt can reuse its prefix.
+A sidecar that starts after vLLM's replay buffer drops the engine's early event batches reports residency unknown until the engine restarts. See [residency limits](../cli/Attest.md#residency-limits). With a hybrid attention and Mamba model, only the prefill engine that computed a prompt can reuse its prefix.
