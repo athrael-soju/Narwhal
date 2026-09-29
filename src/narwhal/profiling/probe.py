@@ -686,7 +686,9 @@ def apply_cached_fit(
         for c in cases.values()
         if c["warm"]
     ]
-    (a, b, c, d), groups, cv_mape = fit_cached_prefill(warm)
+    (a, b, c, d), groups, cv_mape = fit_cached_prefill(
+        warm, profile.ttft_split, profile.ttft_block_tokens
+    )
     if cv_mape > MAX_CACHED_CV_MAPE:
         raise ValueError(
             f"warm prefill held-out error {cv_mape:.1%} exceeds {MAX_CACHED_CV_MAPE:.0%}"

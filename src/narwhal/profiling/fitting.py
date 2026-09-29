@@ -259,11 +259,15 @@ def _fit_cached_groups(
 
 def fit_cached_prefill(
     samples: list[tuple[float, float, float]],
+    split: float | None = None,
+    block_tokens: int | None = None,
 ) -> tuple[tuple[float, float, float, float], list[tuple[float, float, float]], float]:
     """Fit warm prefill `c + b*S + d*P + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
 
-    Returns the coefficients, the per-(prefix, suffix) medians they fit, and the
-    mean error when each median is predicted by a fit without it.
+    A suffix that ends inside a cache block past its first carries the cold
+    fit's measured `split`, and the warm terms fit the remaining time. Returns
+    the coefficients, the per-(prefix, suffix) medians they fit, and the mean
+    error when each median is predicted by a fit without it.
     """
     if any(not math.isfinite(v) or v < 0 for sample in samples for v in sample):
         raise ValueError("cached prefill samples must be finite and nonnegative")
@@ -277,11 +281,16 @@ def fit_cached_prefill(
         raise ValueError(
             "a cached prefill fit needs two prefix lengths, two suffix lengths and five cases"
         )
-    coefficients = _fit_cached_groups(groups)
+
+    def step(suffix: float) -> float:
+        return split if split and splits_prefill(suffix, block_tokens) else 0.0
+
+    stepless = [(p, s, y - step(s)) for p, s, y in groups]
+    coefficients = _fit_cached_groups(stepless)
     errors = []
     for index, (prefix, suffix, observed) in enumerate(groups):
-        weights = _fit_cached_groups(groups[:index] + groups[index + 1 :])
-        predicted = sum(
+        weights = _fit_cached_groups(stepless[:index] + stepless[index + 1 :])
+        predicted = step(suffix) + sum(
             w * f for w, f in zip(weights, _cached_features(prefix, suffix), strict=True)
         )
         errors.append(abs(predicted - observed) / max(observed, 1e-9))

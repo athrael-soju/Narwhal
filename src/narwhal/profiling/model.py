@@ -266,22 +266,25 @@ class Profile:
         A prompt that ends inside a cache block past the first adds `ttft_split`.
         """
         x = float(input_len)
-        split = (
-            self.ttft_split
-            if self.ttft_split is not None
-            and self.ttft_block_tokens is not None
-            and input_len > self.ttft_block_tokens
-            and input_len % self.ttft_block_tokens
-            else 0.0
+        return max(
+            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(input_len)
         )
-        return max(0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + split)
+
+    def _split_step(self, tokens: int) -> float:
+        """Return `ttft_split` when `tokens` computed tokens end inside a block past the first."""
+        block = self.ttft_block_tokens
+        if self.ttft_split is None or block is None or tokens <= block or not tokens % block:
+            return 0.0
+        return self.ttft_split
 
     def cached_prefill_time(self, prefix_tokens: int, suffix_tokens: int) -> float | None:
         """Predict prefill time when `prefix_tokens` come from the prefix cache.
 
         Returns None without a warm fit or outside its measured domain, so the
         caller prices the request cold. The cold curve of the suffix alone is
-        not a warm estimate: the suffix still attends to the cached prefix.
+        not a warm estimate: the suffix still attends to the cached prefix. A
+        cached prefix ends on a block boundary, so a suffix that ends inside a
+        block past its first adds `ttft_split`, as a cold prompt does.
         """
         if prefix_tokens <= 0:
             return self.prefill_time(suffix_tokens)
@@ -304,7 +307,8 @@ class Profile:
             self.cached_ttft_a * (2 * p * s + s * s)
             + self.cached_ttft_b * s
             + self.cached_ttft_d * p
-            + self.cached_ttft_c,
+            + self.cached_ttft_c
+            + self._split_step(suffix_tokens),
         )
 
     def covers_prefill(self, input_len: int) -> bool:

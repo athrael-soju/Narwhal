@@ -75,7 +75,7 @@ For each `--cached-prefix-lens` and `--cached-suffix-lens` pair within the engin
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. Each case contributes the medians of its repeats. The fit needs two prefix lengths, two suffix lengths and five cases within the engine context; the profiler checks the grid before the warm sweep and keeps cold pricing for a smaller grid. The profiler reports four errors:
+The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. A cached prefix ends on a cache block boundary, so a suffix that ends inside a block past its first adds the cold fit's `ttft_split`, and the warm terms fit the remaining time. Each case contributes the medians of its repeats. The fit needs two prefix lengths, two suffix lengths and five cases within the engine context; the profiler checks the grid before the warm sweep and keeps cold pricing for a smaller grid. The profiler reports four errors:
 
 * the fit's leave-one-case-out error;
 * pricing only the suffix on the cold curve;

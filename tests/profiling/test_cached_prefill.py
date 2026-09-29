@@ -97,6 +97,32 @@ class CachedPrefillFitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cached prefill fit requires"):
             replace(cold, cached_ttft_a=A)
 
+    def test_a_suffix_past_a_block_carries_the_measured_split_step(self):
+        """A suffix that splits costs the cold fit's split step; the warm terms fit the rest."""
+        split, block = 0.06, 512
+        points = [
+            (p, s, warm_time(p, s) + (split if splits_prefill(s, block) else 0.0))
+            for p in (4096, 8192, 11776)
+            for s in (128, 300, 600)
+        ]
+        (_, _, c, d), _, cv_mape = fit_cached_prefill(points, split, block)
+        self.assertLess(cv_mape, 1e-6)
+        self.assertAlmostEqual(c, C, places=6)
+        self.assertAlmostEqual(d / D, 1, places=4)
+        # Without the step, the warm terms absorb it and the held-out error grows.
+        self.assertGreater(fit_cached_prefill(points)[2], 0.05)
+        cold = profile(
+            "e0", ttft_a=1e-9, ttft_b=2e-5, ttft_c=0.08, ttft_block_tokens=block, ttft_split=split
+        )
+        samples = warm_samples(prefixes=(4096, 8192, 11776), suffixes=(128, 300, 600))
+        for sample in samples:
+            if sample["state"] == "warm" and splits_prefill(sample["suffix_tokens"], block):
+                sample["seconds"] += split
+        fitted, fit = probe.apply_cached_fit(cold, samples)
+        self.assertLess(fit["cv_mape"], 1e-6)
+        self.assertAlmostEqual(fitted.cached_prefill_time(8192, 224), warm_time(8192, 224))
+        self.assertAlmostEqual(fitted.cached_prefill_time(8192, 600), warm_time(8192, 600) + split)
+
     def test_repeats_group_by_target_case_and_a_poor_fit_stays_cold(self):
         cold = profile("e0")
         grid = warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048))
