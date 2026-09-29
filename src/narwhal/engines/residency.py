@@ -40,34 +40,27 @@ BOUNDARY_KINDS = frozenset({"mamba"})
 class _Group:
     kind: str | None
     window: int | None = None
-    # Backend hash to its Narwhal identity and resident copies; vLLM can hold one hash twice.
-    # None marks a resident block Narwhal cannot name.
-    blocks: dict[Hashable, list[Any]] = field(default_factory=dict)
-    # Resident copies per named identity.
+    # Backend hash to Narwhal identity; None marks a resident block Narwhal cannot name.
+    # A hash is resident until its first eviction. vLLM also stores a hash again for a
+    # second copy or to re-announce a cache hit, and the two look alike, so a second copy
+    # leaves the index early and its engine prices cold.
+    blocks: dict[Hashable, bytes | None] = field(default_factory=dict)
+    # Resident hashes per named identity.
     names: Counter[bytes] = field(default_factory=Counter)
 
     def add(self, block_hash: Hashable, identity: bytes | None) -> None:
-        entry = self.blocks.setdefault(block_hash, [identity, 0])
-        if entry[0] is None and identity is not None:
-            entry[0] = identity
-            self.names[identity] += entry[1]
-        entry[1] += 1
-        if entry[0] is not None:
-            self.names[entry[0]] += 1
+        if block_hash in self.blocks and (self.blocks[block_hash] is not None or identity is None):
+            return
+        self.blocks[block_hash] = identity
+        if identity is not None:
+            self.names[identity] += 1
 
-    def discard(self, block_hash: Hashable) -> bytes | None:
-        entry = self.blocks.get(block_hash)
-        if entry is None:
-            return None
-        entry[1] -= 1
-        if entry[1] == 0:
-            del self.blocks[block_hash]
-        identity: bytes | None = entry[0]
+    def discard(self, block_hash: Hashable) -> None:
+        identity = self.blocks.pop(block_hash, None)
         if identity is not None:
             self.names[identity] -= 1
             if self.names[identity] == 0:
                 del self.names[identity]
-        return identity
 
 
 class ResidencyIndex:
@@ -88,7 +81,8 @@ class ResidencyIndex:
         self._lock = threading.Lock()
         self._groups: dict[int | None, _Group] = {}
         self._named: dict[Hashable, bytes] = {}
-        self._changes: deque[dict[str, Any]] = deque(maxlen=max_changes)
+        self._changes: deque[dict[str, Any]] = deque()
+        self.max_changes = max_changes
         self.max_change_blocks = max_change_blocks
         self._change_blocks = 0
         # Presence before the current batch of each identity it touched, per group.
@@ -170,7 +164,9 @@ class ResidencyIndex:
             {"sequence": sequence, "cleared": cleared, "groups": groups, "size": size}
         )
         self._change_blocks += size
-        while self._change_blocks > self.max_change_blocks and len(self._changes) > 1:
+        while len(self._changes) > 1 and (
+            len(self._changes) > self.max_changes or self._change_blocks > self.max_change_blocks
+        ):
             self._change_blocks -= self._changes.popleft()["size"]
 
     def mark_empty(self) -> None:
@@ -250,9 +246,8 @@ class ResidencyIndex:
         )
         for block_hash in event.block_hashes:
             for key, group in groups:
-                entry = group.blocks.get(block_hash)
-                if entry is not None:
-                    self._touch(key, group, entry[0])
+                if block_hash in group.blocks:
+                    self._touch(key, group, group.blocks[block_hash])
                     group.discard(block_hash)
             if all(block_hash not in g.blocks for g in self._groups.values()):
                 self._named.pop(block_hash, None)
@@ -269,9 +264,7 @@ class ResidencyIndex:
                             "kind": group.kind,
                             "sliding_window": group.window,
                             "identities": [i.hex() for i in group.names],
-                            "unnamed": sum(
-                                1 for entry in group.blocks.values() if entry[0] is None
-                            ),
+                            "unnamed": sum(1 for i in group.blocks.values() if i is None),
                         }
                     )
             if not self.current and self.known:

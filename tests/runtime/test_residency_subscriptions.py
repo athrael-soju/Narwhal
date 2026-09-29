@@ -89,7 +89,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        # A second copy of block 3 arrives and one copy leaves; block 4 arrives and leaves.
+        # Hash 3 is stored again and evicted once; block 4 arrives and leaves.
         self.index.apply(
             1,
             [
@@ -102,12 +102,12 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         await self.subscriptions.refresh(self.client)
         names = self.names(range(16))
         self.assertEqual((view.sequence, view.resyncs, view.block_size), (1, 1, 4))
-        self.assertEqual(view.cached_prefix_blocks(names), 3)
-        self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
-        self.index.apply(2, [RemovedBlocks((3,), 0)])
-        await self.subscriptions.refresh(self.client)
         self.assertEqual(view.cached_prefix_blocks(names), 2)
         self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
+        self.index.apply(2, [stored([1, 2], prompt[:8]), RemovedBlocks((1, 2), 0)])
+        await self.subscriptions.refresh(self.client)
+        self.assertEqual(view.cached_prefix_blocks(names), 0)
+        self.assertEqual(view.groups["0"][2], set())
 
     async def test_gaps_restarts_and_process_changes_resynchronise_or_go_cold(self):
         prompt = range(8)
