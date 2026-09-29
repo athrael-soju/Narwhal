@@ -173,8 +173,8 @@ class GlobalScheduler:
         """Return endpoints eligible for new work and role changes."""
         return self.availability.live_instances(role, exclude=exclude)
 
-    def cost(self, request: Request, inst: Instance, *, warm: bool = False) -> Cost:
-        """Price a request with the current health and, with `warm`, prefix-reuse evidence."""
+    def cost(self, request: Request, inst: Instance, *, warm: bool = True) -> Cost:
+        """Price a request with the current health and prefix-reuse evidence."""
         return costs.cost(
             request,
             inst,
@@ -339,7 +339,7 @@ class GlobalScheduler:
         while a request waits.
         """
         floors = [
-            profile.prefill_time(request.input_len)
+            costs.prefill_seconds(profile, request)
             for inst in self._prefill_candidates()
             if (profile := self.profiles.get(inst.iid)) is not None
         ]
@@ -372,7 +372,7 @@ class GlobalScheduler:
         if inst.role is Role.PREFILL:
             indicator = 0.0 if inst.decode else 1.0
             resident = (
-                sum(profile.prefill_time(r.input_len) for r in inst.prefill.values())
+                sum(costs.prefill_seconds(profile, r) for r in inst.prefill.values())
                 if profile
                 else float(inst.prefill_tokens())
             )
@@ -622,36 +622,28 @@ class GlobalScheduler:
             self.unserved += 1
             chosen = min(candidates, key=lambda i: (costs[i.iid], i.iid))
         if request.phase is Phase.PREFILL and request.cached_tokens:
-            request.cache_proposal = self._cache_proposal(request, candidates, chosen)
+            request.cache_placement = self._cache_placement(request, chosen)
         return chosen
 
-    def _cache_proposal(
-        self, request: Request, candidates: list[Instance], chosen: Instance
-    ) -> dict[str, Any]:
-        """Price the same candidates with cache evidence and name the engine it would pick.
-
-        The proposal is evidence only; placement above used cold prices.
-        """
-        warm = {i.iid: self.cost(request, i, warm=True) for i in candidates}
-        eligible = [i for i in candidates if self.meets_slo(request, warm[i.iid])]
-        proposed = min(eligible or candidates, key=lambda i: (warm[i.iid], i.iid))
-
-        def own(inst: Instance, cached: bool) -> float | None:
-            profile = self.profiles.get(inst.iid)
-            if profile is None:
-                return None
-            if cached:
-                return costs.prefill_seconds(profile, request)
-            return profile.prefill_time(request.input_len)
-
+    def _cache_placement(self, request: Request, chosen: Instance) -> dict[str, Any] | None:
+        """Record why cache evidence priced the chosen prefill engine as it did."""
+        profile = self.profiles.get(chosen.iid)
+        if profile is None:
+            return None
         return {
-            "proposed_iid": proposed.iid,
             "placed_iid": chosen.iid,
-            "proposed_cached_tokens": request.cached_tokens.get(proposed.iid, 0),
-            "proposed_prefill_s": own(proposed, True),
-            "placed_cold_prefill_s": own(chosen, False),
-            "placed_warm_prefill_s": own(chosen, True),
+            "placed_cached_tokens": request.cached_tokens.get(chosen.iid, 0),
+            "predicted_prefill_s": costs.prefill_seconds(profile, request),
+            "cold_prefill_s": profile.prefill_time(request.input_len),
+            # The engine cold pricing would have chosen among the same candidates.
+            "cold_choice_iid": self._cold_choice(request, chosen),
         }
+
+    def _cold_choice(self, request: Request, chosen: Instance) -> str:
+        candidates = [i for i in self.live_instances() if i.role is chosen.role] or [chosen]
+        cold = {i.iid: self.cost(request, i, warm=False) for i in candidates}
+        eligible = [i for i in candidates if self.meets_slo(request, cold[i.iid])]
+        return min(eligible or candidates, key=lambda i: (cold[i.iid], i.iid)).iid
 
     def health_pass(self) -> None:
         """Sample live engines and apply drift verdicts."""

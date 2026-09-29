@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from statistics import median
 
 from ..profiling.model import Profile
-from ..types import Role
+from ..types import Request, Role
 from .monitor import InstanceMonitor
+from .prefill import prefill_seconds
 from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
-ArrivalObservation = tuple[Cohort[int] | None, Cohort[tuple[int, int]] | None]
 OutputEstimates = tuple[dict[tuple[int, int], float], dict[int, float]]
 
 
@@ -27,6 +27,26 @@ class Demand:
     arrivals: int
     output_observations: int
     complete: bool = True
+
+
+@dataclass(frozen=True)
+class Arrival:
+    """One offered prompt: its input tokens and the tokens each engine holds cached."""
+
+    input_len: int
+    cached: tuple[tuple[str, int], ...] = ()
+
+    def request(self) -> Request:
+        """Return a request that prices this arrival with the shared prefill estimate."""
+        return Request("offered", self.input_len, cached_tokens=dict(self.cached))
+
+
+ArrivalObservation = tuple[Cohort[Arrival] | None, Cohort[tuple[int, int]] | None]
+
+
+def _merge_arrivals(a: Arrival, b: Arrival) -> Arrival:
+    # A merged overflow cohort keeps the larger prompt and drops cache evidence, pricing cold.
+    return Arrival(max(a.input_len, b.input_len))
 
 
 class DemandModel:
@@ -49,7 +69,9 @@ class DemandModel:
         self.unsized = DemandWindow[bool](
             clock, retained_s=window_s, bucket_s=bucket_s, merge=lambda a, b: a, max_shapes=1
         )
-        self.arrivals = DemandWindow[int](clock, retained_s=window_s, bucket_s=bucket_s, merge=max)
+        self.arrivals = DemandWindow[Arrival](
+            clock, retained_s=window_s, bucket_s=bucket_s, merge=_merge_arrivals
+        )
         self.expected_decode = DemandWindow[tuple[int, int]](
             clock,
             retained_s=window_s,
@@ -87,18 +109,25 @@ class DemandModel:
     ) -> ArrivalObservation:
         """Record offered prefill work and requested decode work."""
         seen = self._clock() if at is None else at
-        arrival = self.arrivals.add(input_len, at=seen)
+        arrival = self.arrivals.add(Arrival(input_len), at=seen)
         expected = None
         if wanted_len is not None:
             expected = self.expected_decode.add((input_len, max(0, wanted_len)), at=seen)
         return arrival, expected
 
     def resize_arrival(
-        self, observation: ArrivalObservation, input_len: int, wanted_len: int, *, at: float
+        self,
+        observation: ArrivalObservation,
+        input_len: int,
+        wanted_len: int,
+        *,
+        at: float,
+        cached_tokens: dict[str, int] | None = None,
     ) -> None:
-        """Replace one local estimate with the admitted request's tokenizer count."""
+        """Replace one local estimate with the admitted request's count and cache evidence."""
         arrival, expected = observation
-        self.arrivals.replace(arrival, input_len, at=at)
+        cached = tuple(sorted((cached_tokens or {}).items()))
+        self.arrivals.replace(arrival, Arrival(input_len, cached), at=at)
         self.expected_decode.replace(expected, (input_len, max(0, wanted_len)), at=at)
 
     def saw_completion(
@@ -203,8 +232,15 @@ class DemandModel:
         prefill = 0.0
         demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
         for row in self.arrivals.rows(h0):
-            if profiles and all(p.covers_prefill(row.value) for p in profiles):
-                cost = sum(p.prefill_time(row.value) for p in profiles) / len(profiles)
+            length = row.value.input_len
+            if profiles and all(p.covers_prefill(length) for p in profiles):
+                offered = row.value.request()
+                # Placement sends a cached prompt to its cheapest engine; others spread evenly.
+                cost = (
+                    min(prefill_seconds(p, offered) for p in profiles)
+                    if row.value.cached
+                    else sum(p.prefill_time(length) for p in profiles) / len(profiles)
+                )
                 prefill += cost * row.count / span
             else:
                 demand_complete = False

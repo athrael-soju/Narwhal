@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
+from .prefill import prefill_seconds
 
 
 @dataclass(frozen=True)
@@ -301,7 +302,7 @@ class SplitScorer:
         resident_prefill = 0.0
         for inst in pool:
             profile = profiles[inst.iid]
-            resident = sum(profile.prefill_time(row.input_len) for row in inst.prefill.values())
+            resident = sum(prefill_seconds(profile, row) for row in inst.prefill.values())
             penalty = (
                 self.scheduler.health.penalty_s
                 if self.scheduler.health is not None
@@ -318,7 +319,7 @@ class SplitScorer:
             choices = []
             for inst in pool:
                 profile = profiles[inst.iid]
-                work = profile.prefill_time(row.input_len)
+                work = prefill_seconds(profile, row)
                 choices.append((loads[inst.iid] + work, inst.iid, work))
             completion, iid, work = min(choices)
             loads[iid] = completion
@@ -373,9 +374,7 @@ class SplitScorer:
         for inst in instances:
             profile = self.scheduler.profiles.get(inst.iid)
             if profile is not None:
-                resident_prefill += sum(
-                    profile.prefill_time(r.input_len) for r in inst.prefill.values()
-                )
+                resident_prefill += sum(prefill_seconds(profile, r) for r in inst.prefill.values())
             if inst.decode:
                 resident_covered = (
                     resident_covered
@@ -385,7 +384,7 @@ class SplitScorer:
         queued_prefill = 0.0
         if prefill_profiles:
             queued_prefill = sum(
-                min(p.prefill_time(r.input_len) for p in prefill_profiles)
+                min(prefill_seconds(p, r) for p in prefill_profiles)
                 for r in waiting
                 if r.phase is Phase.PREFILL
             )
@@ -464,7 +463,7 @@ class SplitScorer:
             profile_options=profile_options,
             demand_options=demand_options,
             offered_inputs=tuple(
-                row.value
+                row.value.input_len
                 for row in self.demand.arrivals.rows(
                     now - (window_s if window_s is not None else 0.0)
                 )

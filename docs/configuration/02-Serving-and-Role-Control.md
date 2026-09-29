@@ -108,7 +108,19 @@ Narwhal then selects the lowest-cost eligible engine. Equal-cost candidates are 
 
 If every candidate violates its projected SLO, Narwhal records an unserved placement and selects the least-cost fallback.
 
-Engine-side prefix caching is independent of router placement.
+### Prefix-cache pricing
+
+The router sizes a request with exact token IDs when it can. It then asks each engine's [residency view](../http-api/05-Live-State.md#residency) how many leading prompt tokens that engine holds in its prefix cache. Only those per-engine counts stay with the request. On an engine that holds a cached prefix, the request's prefill is priced with that engine's [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). Placement, predictive admission, resident work, pool load, offered demand and role-split scoring all use that price.
+
+The router prices a request on the cold curve of its full input when:
+
+- the router estimated the length without exact token IDs;
+- the request carries multimodal content;
+- the fleet has no engine contract;
+- the engine's residency is unknown;
+- the profile has no warm fit, or the case lies outside its measured domain.
+
+Cache pricing changes only the order of eligible engines. It does not bypass role pins, health holds, drains, ejection or the TTFT budget. The request journal records each placement priced with cache evidence in `cache_placement`.
 
 A live role change affects new placement immediately. Resident requests keep their current engine and reservation until completion or cancellation.
 

@@ -57,8 +57,8 @@ class Request:
     arrived_at: float | None = None
     # Prompt tokens each engine holds in its prefix cache, from sidecar residency at sizing.
     cached_tokens: dict[str, int] = field(default_factory=dict)
-    # The placement cache-aware pricing would choose, recorded while routing prices cold.
-    cache_proposal: dict[str, Any] | None = None
+    # Why cache evidence priced the chosen prefill engine as it did, without prompt content.
+    cache_placement: dict[str, Any] | None = None
 
     @property
     def length(self) -> int:
