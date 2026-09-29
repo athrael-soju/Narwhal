@@ -343,28 +343,27 @@ class GlobalScheduler:
         )
 
     def decode_admits(self, request: Request, *, concurrency: int = 0) -> bool:
-        """Return whether live decode engines have room for `request` after committed work.
+        """Return whether live decode engines have room for `request` beside decode work.
 
-        Committed work is resident decode, requests in prefill and requests waiting for a
-        decode slot. Each engine's capacity is its profile's `decode_max_requests`, capped
-        by `concurrency` when positive. A fleet without live decode engines, or with an
-        engine lacking a measured decode domain, admits. A request that misses the TPOT
-        budget on an idle engine admits; placement decides it.
+        Decode work is resident decode requests and requests waiting for a decode slot.
+        Each engine's capacity is its profile's `decode_request_limit` at the request's
+        context, capped by `concurrency` when positive. A fleet without live decode
+        engines, or with an engine lacking a measured decode bound, admits. A request that
+        misses the TPOT budget on an idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
             return True
+        context = request.input_len + max(1, request.wanted_len)
         capacity = 0
         for inst in engines:
             profile = self.profiles.get(inst.iid)
-            if profile is None or profile.decode_max_requests is None:
+            limit = profile.decode_request_limit(context) if profile is not None else 0
+            if limit <= 0:
                 return True
-            limit = profile.decode_max_requests
             capacity += min(limit, concurrency) if concurrency > 0 else limit
-        committed = (
-            sum(len(inst.decode) for inst in engines)
-            + sum(len(inst.prefill) for inst in self.monitor.instances.values())
-            + sum(1 for row in self.monitor.waiting.values() if row.phase is Phase.DECODE)
+        committed = sum(len(inst.decode) for inst in engines) + sum(
+            1 for row in self.monitor.waiting.values() if row.phase is Phase.DECODE
         )
         if committed >= capacity:
             return False

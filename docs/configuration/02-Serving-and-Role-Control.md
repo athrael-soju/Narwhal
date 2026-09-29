@@ -20,9 +20,9 @@ Predictive admission returns HTTP 429 with one of these causes:
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
 | `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
 | `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
-| `decode` | Committed decode work fills live decode capacity, or the least-loaded decode engine exceeds `slo.tpot_s` with the request while an idle engine meets it | `1` |
+| `decode` | Decode capacity is full at the request's context, or the least-loaded decode engine's load pushes the request past `slo.tpot_s` | `1` |
 
-Each decode engine's capacity is its profile's `decode_max_requests`, capped by `serving.decode_concurrency` when positive. Committed decode work counts resident decode requests, requests in prefill and requests waiting for a decode slot. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
+Each decode engine's capacity is its [profile decode limit](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) at the request's prompt plus requested output tokens, capped by `serving.decode_concurrency` when positive. Decode work counts resident decode requests and requests waiting for a decode slot. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 

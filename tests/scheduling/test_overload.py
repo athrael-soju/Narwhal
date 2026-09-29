@@ -87,8 +87,9 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.request = Request("new", 10)
 
     def fill(self, count):
-        for index in range(count):
-            self.scheduler.monitor.dispatched("e3", Request(f"d{index}", 10, phase=Phase.DECODE))
+        for _ in range(count):
+            rid = f"d{len(self.scheduler.monitor.instances['e3'].decode)}"
+            self.scheduler.monitor.dispatched("e3", Request(rid, 10, phase=Phase.DECODE))
 
     def test_decode_admission_follows_measured_concurrency(self):
         self.assertTrue(self.scheduler.decode_admits(self.request))
@@ -104,20 +105,23 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.fill(2)
         self.assertFalse(self.scheduler.decode_admits(self.request, concurrency=2))
         self.assertTrue(self.scheduler.decode_admits(self.request, concurrency=3))
-        limit = self.scheduler.profiles.get("e3").decode_max_requests
-        self.scheduler.monitor.instances["e3"].decode.clear()
-        self.prefilling(limit)
-        self.assertFalse(self.scheduler.decode_admits(self.request, concurrency=limit + 8))
 
-    def test_a_burst_counts_committed_decode_work(self):
-        self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1)
-        admitted = 0
-        for index in range(50):
-            arrival = Request(f"a{index}", 10)
-            if self.scheduler.decode_admits(arrival):
-                admitted += 1
-                self.scheduler.monitor.dispatched("e0", arrival)
-        self.assertEqual(admitted, 1)
+    def test_requests_in_prefill_hold_no_decode_slot(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 1)
+        self.prefilling(limit + 8)
+        self.assertTrue(self.scheduler.decode_admits(self.request))
+
+    def test_capacity_follows_the_request_context(self):
+        profile = self.scheduler.profiles.get("e3")
+        context = profile.decode_max_kv_tokens // 2
+        request = Request("long", context - 1, wanted_len=1)
+        limit = profile.decode_request_limit(context)
+        self.assertLess(limit, profile.decode_max_requests)
+        self.fill(limit - 1)
+        self.assertTrue(self.scheduler.decode_admits(request))
+        self.fill(limit)
+        self.assertFalse(self.scheduler.decode_admits(request))
 
     def test_requests_waiting_for_a_decode_slot_count_as_committed(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1)
