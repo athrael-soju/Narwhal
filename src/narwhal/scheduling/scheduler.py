@@ -342,6 +342,14 @@ class GlobalScheduler:
             inst.role is role or inst.iid not in self.pinned for inst in self.live_instances()
         )
 
+    def prefill_ready_s(self, request: Request, inst: Instance) -> float:
+        """Return seconds until `request` finishes prefill behind `inst`'s resident queue."""
+        profile = self.profiles.get(inst.iid)
+        if profile is None:
+            return 0.0
+        queue = sum(costs.prefill_seconds(profile, r) for r in inst.prefill.values())
+        return queue + costs.prefill_seconds(profile, request)
+
     def decode_admits(
         self,
         request: Request,
@@ -350,56 +358,80 @@ class GlobalScheduler:
         concurrency: int = 0,
         expected_output: Callable[[Request], int] | None = None,
     ) -> bool:
-        """Return whether live decode engines have room for `request` `ready_s` from now.
+        """Return whether live decode engines hold `request`'s decode window.
 
-        Decode work at `ready_s` is `request`, requests waiting for a decode slot, residents
-        still generating, and requests in prefill that start decode by then and are still
-        generating. Each holds one slot and `input_len` plus half its expected output in KV
-        tokens. Fleet slots sum `decode_max_requests`, capped by `concurrency` when positive;
-        fleet tokens sum `decode_token_limit`. The TPOT check prices the engine with the fewest
+        Each request holds decode from its start to its projected end: `request` from
+        `ready_s`, residents and requests waiting for a decode slot from now, and requests in
+        prefill from their projected prefill completion. Remaining output is the expected
+        output, then the `max_tokens` cap past the estimate; an unknown remainder holds
+        through the window. Tokens take each engine's interval at its slot limit. Peak
+        slots and KV tokens (prompt plus final output) over `request`'s window must fit the
+        fleet: slots sum `decode_max_requests`, capped by `concurrency` when positive, and
+        tokens sum `decode_token_limit`. The TPOT check prices the engine with the fewest
         residents generating at `ready_s`. A fleet without live decode engines, or with an
-        engine lacking a measured decode bound, admits. A request that misses the TPOT budget
-        on an idle engine admits; placement decides it.
+        engine lacking a measured decode bound, admits. A request that misses the TPOT
+        budget on an idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
             return True
-        output = expected_output or (lambda r: max(1, r.wanted_len))
-        slots, tokens, steps = 0, 0.0, []
+        estimate = expected_output or (lambda r: r.wanted_len)
+        slots, tokens, steps = 0, 0.0, {}
         for inst in engines:
             profile = self.profiles.get(inst.iid)
             if profile is None or profile.decode_max_requests is None:
                 return True
             limit = profile.decode_max_requests
-            slots += min(limit, concurrency) if concurrency > 0 else limit
+            limit = min(limit, concurrency) if concurrency > 0 else limit
             token_limit = profile.decode_token_limit
+            slots += limit
             tokens += float("inf") if token_limit is None else token_limit
-            steps.append(
-                profile.token_interval(inst.decode_tokens(), len(inst.decode))
-                * self.monitor.decode_correction(inst.iid)
+            context = (inst.decode_tokens() + request.input_len) / (len(inst.decode) + 1)
+            batch = limit * context if token_limit is None else min(limit * context, token_limit)
+            steps[inst.iid] = profile.token_interval(batch, limit) * self.monitor.decode_correction(
+                inst.iid
             )
-        step = sum(steps) / len(steps)
-        held = [request]
-        held += [row for row in self.monitor.waiting.values() if row.phase is Phase.DECODE]
-        generating = {
-            inst.iid: {
-                rid: r
-                for rid, r in inst.decode.items()
-                if max(1, output(r) - r.output_len) * resident_step >= ready_s
-            }
-            for inst, resident_step in zip(engines, steps, strict=True)
-        }
-        held += [r for residents in generating.values() for r in residents.values()]
+        step = sum(steps.values()) / len(steps)
+
+        def remaining_s(r: Request, token_s: float) -> float:
+            expected = estimate(r)
+            cap = expected if expected > r.output_len else r.wanted_len
+            return (cap - r.output_len) * token_s if cap > r.output_len else float("inf")
+
+        def kv(r: Request) -> float:
+            return r.input_len + max(r.output_len, estimate(r))
+
+        end = ready_s + remaining_s(request, step)
+        spans = [(0.0, float("inf"), r) for r in self.monitor.waiting.values()]
+        spans = [s for s in spans if s[2].phase is Phase.DECODE]
+        generating: dict[str, dict[str, Request]] = {}
+        for inst in engines:
+            generating[inst.iid] = {}
+            for rid, r in inst.decode.items():
+                finish = remaining_s(r, steps[inst.iid])
+                spans.append((0.0, finish, r))
+                if finish >= ready_s:
+                    generating[inst.iid][rid] = r
         for inst in self.monitor.instances.values():
             prefill_profile = self.profiles.get(inst.iid)
             done = 0.0
             for r in inst.prefill.values():
                 if prefill_profile is not None:
                     done += costs.prefill_seconds(prefill_profile, r)
-                if r.rid != request.rid and done <= ready_s <= done + output(r) * step:
-                    held.append(r)
-        kv = sum(r.input_len + output(r) / 2.0 for r in held)
-        if len(held) > 1 and (len(held) > slots or kv > tokens):
+                spans.append((done, done + remaining_s(r, step), r))
+        events = sorted(
+            (t, order, kv(r))
+            for first, last, r in spans
+            if first <= end and last >= ready_s
+            for t, order in ((max(first, ready_s), 0), (min(last, end), 1))
+        )
+        held, held_kv, peak, peak_kv = 1, kv(request), 1, 0.0
+        for _, order, tokens_held in events:
+            held += 1 if order == 0 else -1
+            held_kv += tokens_held if order == 0 else -tokens_held
+            if order == 0:
+                peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
+        if peak > 1 and (peak > slots or peak_kv > tokens):
             return False
         decode = replace(request, phase=Phase.DECODE)
         least = min(engines, key=lambda inst: (len(generating[inst.iid]), inst.iid))

@@ -59,6 +59,8 @@ class DemandModel:
         self.monitor = monitor
         self.scheduler = scheduler
         self._clock = clock
+        self.bucket_s = bucket_s
+        self._estimates: tuple[float, OutputEstimates] | None = None
         self.started_at = clock()
         self.unsized_pending = 0
         self.unsized = DemandWindow[bool](
@@ -325,9 +327,15 @@ class DemandModel:
         }
 
     def output_estimator(self) -> Callable[[Request], int]:
-        """Return expected output tokens per request, at least 1, from one estimate snapshot."""
-        estimates = self._output_estimates()
-        return lambda r: max(1, self._expected_output(r.input_len, r.wanted_len, estimates))
+        """Return expected output tokens per request, 0 when unknown.
+
+        The estimate snapshot refreshes at most once per history bucket.
+        """
+        now = self._clock()
+        if self._estimates is None or now - self._estimates[0] >= self.bucket_s:
+            self._estimates = (now, self._output_estimates())
+        estimates = self._estimates[1]
+        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates)
 
     def _expected_output(
         self,

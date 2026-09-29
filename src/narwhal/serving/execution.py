@@ -163,15 +163,15 @@ async def _prepare_once(
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
         cost = router.scheduler.cost(req, prefill)
-        ready = router.scheduler.prefill_admission_price(req, prefill)
-        priced = ready + max(0.0, router._clock() - state.arrived)
+        priced = router.scheduler.prefill_admission_price(req, prefill)
+        priced += max(0.0, router._clock() - state.arrived)
         if not router.scheduler.meets_slo(
             req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
         if not router.scheduler.decode_admits(
             req,
-            ready_s=ready,
+            ready_s=router.scheduler.prefill_ready_s(req, prefill),
             concurrency=router.cfg.serving.decode_concurrency,
             expected_output=router.controller.demand.output_estimator(),
         ):

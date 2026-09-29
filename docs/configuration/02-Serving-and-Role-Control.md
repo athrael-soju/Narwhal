@@ -20,22 +20,31 @@ Predictive admission returns HTTP 429 with one of these causes:
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
 | `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
 | `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
-| `decode` | Projected decode work at the request's prefill completion exceeds live decode capacity or pushes the request past `slo.tpot_s` | `1` |
+| `decode` | Peak projected decode work over the request's decode window exceeds live decode capacity, or decode load pushes the request past `slo.tpot_s` | `1` |
 
 For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
 
-The `decode` check projects decode work to the request's predicted prefill completion:
+The `decode` check projects decode work over the request's decode window, from its predicted prefill completion to its projected last token. Each request holds decode over this span:
 
-| Projected request | Condition |
+| Request | Holds decode |
 | --- | --- |
-| The request | Always |
-| Waiting for a decode slot | Always |
-| Resident in decode | Still generating at the request's prefill completion |
-| In prefill | Reaches decode by the request's prefill completion and is still generating |
+| The request | From its predicted prefill completion |
+| Waiting for a decode slot | From now, through the window |
+| Resident in decode | From now until its projected last token |
+| In prefill | From its predicted prefill completion until its projected last token |
 
-Each projected request holds one decode slot and its prompt plus half its expected output in KV tokens. Live decode capacity sums each engine's `decode_max_requests`, capped by `serving.decode_concurrency` when positive, and each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile). The TPOT check prices the decode engine with the fewest residents still generating at that time.
+A request's remaining output is its expected output, and its `max_tokens` once it passes that estimate. A request with an unknown remainder holds decode through the window. Each engine generates at its profiled token interval for a full batch at the current mean context.
 
-Expected output is `max_tokens`, scaled by the median delivered fraction once three requests of the same shape finish. A request that omits `max_tokens` uses the median delivered output for its prompt size, or 1 token.
+Peak projected work over the window must fit live decode capacity:
+
+| Budget | Per request | Fleet capacity |
+| --- | --- | --- |
+| Slots | 1 | Sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive |
+| KV tokens | Prompt plus final output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
+
+The TPOT check prices the decode engine with the fewest residents generating at the request's prefill completion.
+
+Expected output is `max_tokens`, scaled by the median delivered fraction once three requests in the same power-of-two prompt and `max_tokens` bucket finish. A request that omits `max_tokens` uses the median delivered output for its prompt bucket; otherwise its output is unknown.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 

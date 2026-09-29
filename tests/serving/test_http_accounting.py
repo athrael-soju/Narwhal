@@ -277,6 +277,19 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
             self.router.monitor.finished(decode.iid, f"d{index}")
         self.assertEqual((await self.post(client)).status_code, 200)
 
+    async def test_predictive_admission_projects_decode_from_prefill_completion(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        scheduler = self.router.scheduler
+        with patch.object(scheduler, "decode_admits", wraps=scheduler.decode_admits) as gate:
+            self.assertEqual((await self.post(client)).status_code, 200)
+        prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
+        request = gate.call_args.args[0]
+        self.assertEqual(
+            gate.call_args.kwargs["ready_s"], scheduler.prefill_ready_s(request, prefill)
+        )
+        self.assertEqual(gate.call_args.kwargs["expected_output"](request), 1)
+
     async def test_invalid_output_identity_fails_the_original_request(self):
         """Serving rejects unidentified output before committing a successful response."""
         client = self.client()
