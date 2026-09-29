@@ -45,4 +45,10 @@ A block identity chains the block's token IDs onto the identity of the block bef
 
 A prefix is reusable when every KV cache group can serve it. Full-attention groups must hold every leading block. Sliding-window groups must hold the blocks that cover the window before the prefix end. Boundary groups must hold the block at the prefix end. An engine with a group of any other kind, such as chunked local attention, is priced cold. Blocks carrying multimodal or prompt-embedding hash keys have no identity.
 
+### Residency limits
+
+vLLM keeps no residency snapshot. Its replay buffer holds the latest 10,000 event batches. A sidecar that starts, or restarts, after the engine has published more than that loses the engine's early history and reports residency unknown. Residency returns after a prefix-cache reset or an engine restart. vLLM serves its cache-reset route only in development mode, so a production engine needs a restart. Keep the sidecar running for the life of its engine process.
+
+Consider a hybrid attention and Mamba model. An engine that receives a prompt's KV cache over NIXL reports the prompt's attention blocks but no Mamba state. It cannot reuse that prefix, and the reuse rule counts zero blocks for it.
+
 Container engines run as root, so their event sockets belong to root. Run the sidecar as the same user as the engine.
