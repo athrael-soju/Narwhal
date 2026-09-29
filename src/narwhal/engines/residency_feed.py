@@ -47,12 +47,14 @@ class ResidencyFeed:
         *,
         replay_timeout_s: float = 5.0,
         poll_s: float = 0.2,
+        max_replay_rounds: int = 100,
     ) -> None:
         self.index = index
         self.endpoint = endpoint
         self.replay_endpoint = replay_endpoint
         self.replay_timeout_s = replay_timeout_s
         self.poll_s = poll_s
+        self.max_replay_rounds = max_replay_rounds
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="residency-feed", daemon=True)
         self._context = zmq.Context()
@@ -67,12 +69,17 @@ class ResidencyFeed:
         self._thread.join(timeout=5)
         self._context.term()
 
-    def _replay(self, start: int) -> list[tuple[int, bytes]] | None:
-        """Return buffered batches from `start`, or None when replay is unavailable."""
+    def _replay(self, start: int) -> tuple[list[tuple[int, bytes]], bool] | None:
+        """Return batches replayed from `start` and whether the end marker arrived.
+
+        None means no replay answered. vLLM's ROUTER socket drops messages past
+        its high-water mark, so a long replay can lose batches or its end marker.
+        """
         if self.replay_endpoint is None:
             return None
         dealer = self._context.socket(zmq.DEALER)
         dealer.setsockopt(zmq.LINGER, 0)
+        dealer.setsockopt(zmq.RCVHWM, 0)
         dealer.connect(self.replay_endpoint)
         try:
             dealer.send_multipart([b"", start.to_bytes(8, "big")])
@@ -80,39 +87,66 @@ class ResidencyFeed:
             while True:
                 # A long history replays for as long as batches keep arriving.
                 if not dealer.poll(int(self.replay_timeout_s * 1000)):
-                    return None
+                    return (batches, False) if batches else None
                 frames = dealer.recv_multipart()
                 if len(frames) < 2:
-                    return None
+                    return (batches, False) if batches else None
                 sequence = int.from_bytes(frames[-2], "big", signed=True)
                 if sequence == _END:
-                    return batches
+                    return batches, True
                 batches.append((sequence, frames[-1]))
         finally:
             dealer.close()
 
-    def _apply(self, batches: list[tuple[int, bytes]]) -> None:
-        for sequence, payload in sorted(batches):
-            self.index.apply(sequence, _decoded(payload))
+    def _catch_up(self, start: int, until: int | None = None) -> bool | None:
+        """Apply buffered batches from `start` in replay rounds.
+
+        Each round applies the contiguous run it received and asks again from
+        the first missing batch. Returns False when the buffer was empty, None
+        when no replay answered, and True otherwise.
+        """
+        expected = start
+        applied = False
+        for _ in range(self.max_replay_rounds):
+            result = self._replay(expected)
+            if result is None:
+                return True if applied else None
+            batches, ended = result
+            batches = sorted(b for b in batches if until is None or b[0] < until)
+            batches = [b for b in batches if b[0] >= expected]
+            if not batches:
+                if applied:
+                    return True
+                return False if ended else None
+            if batches[0][0] != expected:
+                # The buffer no longer holds `expected`; the index records the loss.
+                for sequence, payload in batches:
+                    self.index.apply(sequence, _decoded(payload))
+                return True
+            for sequence, payload in batches:
+                if sequence != expected:
+                    break
+                self.index.apply(sequence, _decoded(payload))
+                expected += 1
+                applied = True
+            if ended and expected > batches[-1][0]:
+                return True
+        return True
 
     def _run(self) -> None:
         subscriber = self._context.socket(zmq.SUB)
         subscriber.setsockopt(zmq.LINGER, 0)
+        subscriber.setsockopt(zmq.RCVHWM, 0)
         subscriber.setsockopt(zmq.SUBSCRIBE, b"")
         subscriber.connect(self.endpoint)
         try:
-            # Live batches can arrive during replay; ordering by sequence merges both.
-            history = self._replay(0)
-            pending: list[tuple[int, bytes]] = []
-            while subscriber.poll(0):
-                _, raw, payload = _frames(subscriber.recv_multipart())
-                pending.append((int.from_bytes(raw, "big"), payload))
-            if history == [] and not pending:
+            # Live batches can arrive during replay; the index ignores repeats.
+            history = self._catch_up(0)
+            if history is False and not subscriber.poll(0):
                 # vLLM's replay buffer only drops old batches, so an empty buffer means none.
                 self.index.mark_empty()
-            elif history is None and not pending:
+            elif history is None:
                 self.index.lose("cache-event replay is unavailable")
-            self._apply((history or []) + pending)
             while not self._stop.is_set():
                 if not subscriber.poll(int(self.poll_s * 1000)):
                     continue
@@ -120,9 +154,7 @@ class ResidencyFeed:
                 sequence = int.from_bytes(raw, "big")
                 last = self.index.sequence
                 if last is not None and sequence > last + 1:
-                    missed = self._replay(last + 1)
-                    if missed is not None:
-                        self._apply([batch for batch in missed if batch[0] < sequence])
+                    self._catch_up(last + 1, until=sequence)
                 self.index.apply(sequence, _decoded(payload))
         except Exception as exc:
             # A dead feed must not leave a stale known state behind it.

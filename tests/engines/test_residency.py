@@ -58,8 +58,10 @@ def wait_for(condition, timeout=5.0):
 class FakePublisher:
     """Publish numbered batches and serve replay requests like vLLM's ZeroMQ publisher."""
 
-    def __init__(self, directory, *, buffer=100, replay=True, replay_gap_s=0.0):
+    def __init__(self, directory, *, buffer=100, replay=True, replay_gap_s=0.0, replay_limit=None):
         self.replay_gap_s = replay_gap_s
+        # Emulate a ROUTER that drops a long replay's tail and its end marker.
+        self.replay_limit = replay_limit
         self.endpoint = f"ipc://{directory}/events.sock"
         self.replay_endpoint = f"ipc://{directory}/replay.sock" if replay else None
         self.context = zmq.Context()
@@ -90,13 +92,20 @@ class FakePublisher:
                 continue
             client, _, start = self.router.recv_multipart()
             with self.lock:
+                sent = 0
                 for sequence, payload in list(self.buffer):
                     if sequence >= int.from_bytes(start, "big"):
+                        if self.replay_limit is not None and sent == self.replay_limit:
+                            break
                         time.sleep(self.replay_gap_s)
                         self.router.send_multipart(
                             [client, b"", sequence.to_bytes(8, "big"), payload]
                         )
-                self.router.send_multipart([client, b"", (-1).to_bytes(8, "big", signed=True), b""])
+                        sent += 1
+                else:
+                    self.router.send_multipart(
+                        [client, b"", (-1).to_bytes(8, "big", signed=True), b""]
+                    )
 
     def close(self):
         self.stopped.set()
@@ -294,6 +303,24 @@ class ResidencyFeedTests(unittest.TestCase):
         self.run_feed(publisher, index)
         self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
         self.assertTrue(index.known)
+
+    def test_truncated_replays_continue_from_the_first_missing_batch(self):
+        """A replay that loses its tail and end marker resumes until the history is complete."""
+        publisher = FakePublisher(self.directory, replay_limit=4)
+        self.addCleanup(publisher.close)
+        prompt = tuple(range(4))
+        publisher.publish(batch(stored([1], prompt)))
+        for _ in range(12):
+            publisher.publish(batch())
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        feed = ResidencyFeed(
+            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.3, poll_s=0.02
+        )
+        feed.start()
+        self.addCleanup(feed.stop)
+        self.assertTrue(wait_for(lambda: index.sequence == 12, timeout=8))
+        self.assertTrue(index.known)
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
 
     def test_history_outside_the_replay_buffer_waits_for_a_reset(self):
         publisher = FakePublisher(self.directory, buffer=2)
