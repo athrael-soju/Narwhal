@@ -65,6 +65,13 @@ class ResidencyIndex:
         self.reason = "no cache events observed"
         self.sequence: int | None = None
         self.block_size: int | None = None
+        # A feed replaying history holds a consistent but stale state until it reaches the stream.
+        self.current = True
+
+    def set_current(self, current: bool) -> None:
+        """Record whether applied batches have reached the engine's live stream."""
+        with self._lock:
+            self.current = current
 
     def apply(self, sequence: int, events: Sequence[CacheEvent | None] | None) -> None:
         """Apply the batch numbered `sequence`; None marks a batch that failed to decode."""
@@ -206,6 +213,14 @@ class ResidencyIndex:
                             "unnamed": len(group.blocks) - len(named),
                         }
                     )
+            if not self.current:
+                return {
+                    "known": False,
+                    "reason": "replaying buffered history",
+                    "sequence": self.sequence,
+                    "block_size": self.block_size,
+                    "groups": [],
+                }
             return {
                 "known": self.known,
                 "reason": self.reason,
@@ -220,7 +235,9 @@ class ResidencyIndex:
         None means the caller needs a snapshot.
         """
         with self._lock:
-            if not self.known or self.sequence is None or sequence > self.sequence:
+            if not self.known or not self.current or self.sequence is None:
+                return None
+            if sequence > self.sequence:
                 return None
             if sequence == self.sequence:
                 return self.sequence, []
@@ -232,7 +249,7 @@ class ResidencyIndex:
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
         """Return how many leading prompt blocks this engine can reuse."""
         with self._lock:
-            if not self.known:
+            if not self.known or not self.current:
                 return 0
             groups = [(g.kind, g.window, set(g.blocks.values())) for g in self._groups.values()]
             block_size = self.block_size

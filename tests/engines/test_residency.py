@@ -302,7 +302,28 @@ class ResidencyFeedTests(unittest.TestCase):
         index = ResidencyIndex(MODEL, TOKENIZER)
         self.run_feed(publisher, index)
         self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
-        self.assertTrue(index.known)
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+
+    def test_residency_stays_unknown_until_replay_rounds_reach_the_stream(self):
+        """Between replay rounds the index is consistent but stale, so it serves nothing."""
+        publisher = FakePublisher(self.directory, replay_limit=2, replay_gap_s=0.1)
+        self.addCleanup(publisher.close)
+        for _ in range(8):
+            publisher.publish(batch())
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        feed = ResidencyFeed(
+            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.3, poll_s=0.02
+        )
+        feed.start()
+        self.addCleanup(feed.stop)
+        self.assertTrue(wait_for(lambda: index.sequence is not None and index.sequence >= 1))
+        snapshot = index.snapshot()
+        self.assertEqual(
+            (snapshot["known"], snapshot["reason"]), (False, "replaying buffered history")
+        )
+        self.assertIsNone(index.changes_after(0))
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"], timeout=8))
+        self.assertEqual(index.sequence, 7)
 
     def test_truncated_replays_continue_from_the_first_missing_batch(self):
         """A replay that loses its tail and end marker resumes until the history is complete."""

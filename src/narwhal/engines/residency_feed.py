@@ -133,6 +133,18 @@ class ResidencyFeed:
                 return True
         return True
 
+    def _drain(self, subscriber: zmq.Socket) -> None:
+        """Apply batches that queued on the live socket during replay."""
+        while subscriber.poll(0):
+            _, raw, payload = _frames(subscriber.recv_multipart())
+            self._receive(int.from_bytes(raw, "big"), payload)
+
+    def _receive(self, sequence: int, payload: bytes) -> None:
+        last = self.index.sequence
+        if last is not None and sequence > last + 1:
+            self._catch_up(last + 1, until=sequence)
+        self.index.apply(sequence, _decoded(payload))
+
     def _run(self) -> None:
         subscriber = self._context.socket(zmq.SUB)
         subscriber.setsockopt(zmq.LINGER, 0)
@@ -141,21 +153,20 @@ class ResidencyFeed:
         subscriber.connect(self.endpoint)
         try:
             # Live batches can arrive during replay; the index ignores repeats.
+            self.index.set_current(False)
             history = self._catch_up(0)
             if history is False and not subscriber.poll(0):
                 # vLLM's replay buffer only drops old batches, so an empty buffer means none.
                 self.index.mark_empty()
             elif history is None:
                 self.index.lose("cache-event replay is unavailable")
+            self._drain(subscriber)
+            self.index.set_current(True)
             while not self._stop.is_set():
                 if not subscriber.poll(int(self.poll_s * 1000)):
                     continue
                 _, raw, payload = _frames(subscriber.recv_multipart())
-                sequence = int.from_bytes(raw, "big")
-                last = self.index.sequence
-                if last is not None and sequence > last + 1:
-                    self._catch_up(last + 1, until=sequence)
-                self.index.apply(sequence, _decoded(payload))
+                self._receive(int.from_bytes(raw, "big"), payload)
         except Exception as exc:
             # A dead feed must not leave a stale known state behind it.
             if not self._stop.is_set():

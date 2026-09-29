@@ -39,7 +39,7 @@ Residency is unknown in these cases, and a snapshot then lists no blocks:
 - an unreadable batch;
 - an index larger than 1,000,000 blocks.
 
-Unknown residency lasts until the engine resets its prefix cache.
+Unknown residency lasts until the engine resets its prefix cache. While the sidecar replays buffered history, including after its own restart, a snapshot reports `"known": false` with the reason `replaying buffered history`.
 
 A block identity chains the block's token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace. The namespace holds the served model name, the engine contract fingerprint, the LoRA adapter name, and the request's cache salt. Some groups keep only boundary state, such as Mamba state in vLLM's `align` mode. They take each block identity from a group that reported every block in the same run.
 
