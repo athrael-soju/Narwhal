@@ -6,11 +6,7 @@
 
 Narwhal sends the producer a non-streaming, one-token completion request and discards the generated token after capturing the KV handoff descriptor.
 
-`PrefillResult` associates the backend-owned KV descriptor with:
-
-- producer URL
-- endpoint
-- backend request ID
+`PrefillResult` holds the KV handoff descriptor, producer URL, endpoint, and backend request ID.
 
 ### Decode
 
@@ -23,20 +19,18 @@ Remote decode receives:
 
 Decode generates every client-visible output token.
 
-For same-worker decode, Narwhal removes transfer parameters, including client-provided values, and relies on engine prefix caching or prompt recomputation.
+Same-engine decode strips transfer parameters, including client-provided values, and uses engine prefix caching or prompt recomputation.
 
 ### Descriptor validation
 
-Narwhal validates the descriptor before making the decode HTTP request.
-
-It rejects:
+Narwhal validates the KV handoff descriptor before the decode HTTP request and rejects:
 
 - missing engine identity
 - malformed block IDs
-- connector mismatch
-- endpoint mismatch
+- a connector mismatch
+- an endpoint mismatch
 
-Opaque runtime fields are retained.
+Narwhal retains opaque runtime fields.
 
 [Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
 
@@ -51,17 +45,14 @@ The original client request owns:
 
 Handoff age begins when the producer HTTP leg starts.
 
-Every retry receives:
+Each retry gets fresh backend request IDs and a new KV handoff.
 
-- fresh backend request IDs
-- new producer ownership
+Durations from the request's arrival at the router:
 
-Narwhal records two durations from the original request's arrival at the router:
+- `ttft_s`: time to producer HTTP completion.
+- `first_byte_s`: time to the first generated decode output observed by the router.
 
-- `ttft_s`: elapsed time to producer HTTP completion.
-- `first_byte_s`: elapsed time to the first generated decode output observed by the router.
-
-Their difference, `first_byte_s - ttft_s`, gives the interval between those events. See the [measurement contract](../measure/01-Profile.md).
+`first_byte_s - ttft_s` measures the time from producer completion to the first decode output. See [Measurement contract and profiling](../measure/01-Profile.md).
 
 ### Python API
 
@@ -72,30 +63,50 @@ from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import PrefillResult
 ```
 
-Pass the result of `EngineClient.prefill()` directly to `EngineClient.decode()`. For inspection, `result.parameters()` returns a detached dictionary.
-
-Internal Python APIs may change between releases.
+Pass the `EngineClient.prefill()` result to `EngineClient.decode()`. `result.parameters()` returns a detached dictionary.
 
 ---
 
 ## Engine failure handling
 
-Narwhal maps timeout-shaped engine faults to HTTP `504` and other engine faults to HTTP `502`.
+Timeout-shaped engine faults map to HTTP `504`. Other engine faults map to HTTP `502`.
 
-Narwhal counts a nonempty `prompt` array of nonnegative integer token IDs locally. For text and chat input, when `engine.tokenize` is enabled and the configured dialect has an exact-count endpoint, a tokenisation timeout returns HTTP `504` before placement. Other tokenisation failures return an engine error. Character-ratio sizing applies when token counting is disabled or the dialect omits the exact-count endpoint.
+| Failure                                                     | Client response                                     |
+| ----------------------------------------------------------- | --------------------------------------------------- |
+| Prefill, streaming or non-streaming                         | HTTP error status                                   |
+| Decode, non-streaming                                       | HTTP error status                                   |
+| Decode, streaming, outside the [retry conditions](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
 
-Prefill finishes before client streaming begins, so prefill failures can be returned as ordinary HTTP errors.
+A streaming response commits HTTP `200` before decode starts.
+
+Terminal SSE event:
+
+```text
+data: {"error": ...}
+```
+
+The decode status codes below apply to non-streaming requests.
+
+The client error body carries a generic message, such as `Upstream request failed` and the engine's failure detail goes to the `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records).
+
+### Input sizing
+
+| Input                                                                              | Sizing before placement    |
+| ---------------------------------------------------------------------------------- | -------------------------- |
+| Nonempty `prompt` array of nonnegative integer token IDs                           | Local ID count             |
+| Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
+| Other input                                                                        | Character ratio            |
+
+A tokenization timeout returns HTTP `504` before placement. Other tokenization failures follow the [engine-fault mapping](#engine-failure-handling).
 
 ### Breaker readmission
 
-When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
-
-After `recovery.eject_after` consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
-
-The failure streak includes:
+After `recovery.eject_after` consecutive stream failures, Narwhal ejects the engine until an inference probe succeeds. Stream failures:
 
 - first-token timeout
 - mid-stream silence
+- stream closed before `[DONE]`
+- `[DONE]` before any token
 
 After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
 
@@ -107,14 +118,15 @@ Whole-wave restart policy continues to apply.
 
 ### Successful stream termination
 
-A valid engine stream contains:
+A valid engine stream ends with `data: [DONE]` after generated output.
 
-1. generated output
-2. `data: [DONE]`
+| Stream                                       | Result                                                                  |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| Closes before `[DONE]`                       | Engine failure                                                          |
+| `[DONE]` before the first generated token    | HTTP `502`                                                              |
+| Upstream HTTP `200` carrying an error object | Engine failure; status from integer `code` in 400 to 599, otherwise 500 |
 
-Closing the stream before `[DONE]` is an engine failure.
-
-Receiving `[DONE]` before the first generated token returns HTTP `502` with:
+Journal `error` for an early `[DONE]`:
 
 ```text
 stream ended with [DONE] before any token arrived

@@ -1,6 +1,6 @@
-# HA handoff and engine lifecycle
+# State handoff and engine lifecycle
 
-## HA handoff
+## State handoff
 
 ### `GET /narwhal/handoff`
 
