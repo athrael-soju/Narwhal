@@ -11,3 +11,4 @@ Bind each production result to a deployment identifier that records the model, e
 5. [Ordered benchmark points](measure/05-Benchmark-Runner.md)
 6. [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md)
 7. [GPU benchmark qualification](measure/07-GPU-Qualification.md)
+8. [Cache-aware placement trial](measure/08-Cache-Aware-Trial.md)
