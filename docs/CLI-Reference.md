@@ -1,20 +1,21 @@
 # Narwhal CLI reference
 
-`narwhal-inference` installs `narwhal` and the five `narwhal-*` commands. Each executable accepts `-h`, `--help`, and `--version`.
+`narwhal-inference` installs `narwhal` and the five `narwhal-*` commands.
 
-Relative paths resolve from the process working directory, and `narwhal --help` lists all six executables.
-
-Use the installed commands in deployment scripts, though `python -m narwhal.cli` also starts a router.
+- Each executable accepts `-h`, `--help`, and `--version`.
+- `narwhal --help` lists all six executables.
+- Relative paths resolve from the process working directory.
+- `python -m narwhal.cli` starts a router.
 
 | Command                                        | Purpose                                                                   |
 | ---------------------------------------------- | ------------------------------------------------------------------------- |
 | [`narwhal config`](Config-Inspection.md)       | Validate fleet files and inspect resolved defaults and paths offline      |
-| [`narwhal diagnostics`](Diagnostic-Bundles.md) | Collect private router snapshots and selected incident artifacts            |
+| [`narwhal diagnostics`](Diagnostic-Bundles.md) | Collect private router snapshots and incident artifacts                   |
 | [`narwhal dev`](cli/Dev.md)                    | Initialize, launch, verify, and stop a local shared-GPU development fleet |
 | [`narwhal-engine`](cli/Engine.md)              | Prepare and launch checked engine processes                               |
 | [`narwhal-attest`](cli/Attest.md)              | Serve engine identity and attestation data for one vLLM engine            |
 | [`narwhal-serve`](cli/Serve.md)                | Run a Narwhal router                                                      |
-| [`narwhal-profile`](cli/Profile.md)            | Measure engine behaviour and write the profile store used by the router   |
+| [`narwhal-profile`](cli/Profile.md)            | Measure engine behaviour and write the profile store                      |
 | [`narwhal-check`](cli/Check.md)                | Run deployment preflight gates                                            |
 
 ## Text-mode exit codes
@@ -48,4 +49,7 @@ Full lists: [`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-cod
 
 ## JSON command results
 
-All commands except `narwhal-serve` and `narwhal-attest` accept `--format json` and write a [versioned command result](Command-Results.md), whose `status` maps to an exit code.
+- Commands: `narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check`.
+- Flag: `--format json`.
+- Output: a [versioned command result](Command-Results.md).
+- Exit code: derived from the result `status`.

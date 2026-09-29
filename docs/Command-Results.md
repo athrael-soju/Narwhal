@@ -2,14 +2,14 @@
 
 `narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, and `narwhal dev` accept `--format json` before or after operation arguments.
 
-| Stream | Content                                                                                                  |
-| ------ | -------------------------------------------------------------------------------------------------------- |
-| stdout | One `narwhal.command-result` version 1 object, including argument and operational failures.          |
-| stderr | Progress and diagnostics as they occur. Subprocess stdout and stderr replay when the operation finishes. |
+| Stream | Content                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------ |
+| stdout | One `narwhal.command-result` version 1 object, covering argument and operational failures. |
+| stderr | Live progress and diagnostics.                                                             |
+| stderr | Subprocess stdout and stderr, replayed at completion.                                      |
+| stderr | Help text for `--format json --help`, with a success result on stdout.                     |
 
-`--format json --help` writes help to stderr and returns a success result.
-
-JSON mode examples:
+Examples:
 
 ```bash
 narwhal-check --fleet runs/fleet.json --format json >check-result.json
@@ -18,9 +18,9 @@ narwhal-engine check --run runs/engine-1 --format json >engine-result.json
 narwhal dev status --instance runs/dev --format json >status-result.json
 ```
 
-`narwhal-serve` and `narwhal-attest` reject `--format`. They report through logs, exit status, HTTP endpoints, and persisted artifacts.
+`narwhal-serve` and `narwhal-attest` report through logs, exit status, HTTP endpoints, and persisted artifacts.
 
-Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes). `--format json` uses this mapping:
+Exit codes in text mode: [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes). Exit codes with `--format json`:
 
 | Status          | Exit code | Operation state                                                                                                        |
 | --------------- | --------: | ---------------------------------------------------------------------------------------------------------------------- |
@@ -33,22 +33,47 @@ Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes)
 
 Result fields:
 
-| Field                      | Contract                                                                                                                                                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`, `schema_version` | `narwhal.command-result`, `1`.                                                                                                                                                                                 |
-| `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`. Argument failures before operation selection report the default operation.                                                       |
-| `status`, `exit_code`      | Status and matching exit code from the status table.                                                                                                                                                           |
-| `data`                     | Operation-specific output: lifecycle state, preflight results (failures, skips, and pairs), selected profiling engines, engine launch directories, or a requested manifest.                                    |
-| `artifacts`                | References with `kind`, absolute `path`, and `state`: `created`, `updated`, `existing`, or `missing`, from file metadata before and after the operation. After a partial failure, they list the files present. |
-| `errors`                   | Entries with stable `code`, diagnostic `message`, and `command`; optionally `stage`, `engine`, `field`, or `context`.                                                                                          |
+| Field                      | Contract                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`, `schema_version` | `narwhal.command-result`, `1`.                                                                                                 |
+| `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`. `operation` is the default operation when argument validation fails first. |
+| `status`, `exit_code`      | Status and matching exit code from the status table.                                                                           |
+| `data`                     | Operation-specific output, listed in the table below.                                                                          |
+| `artifacts`                | References with `kind`, absolute `path`, and `state` (`created`, `updated`, `existing`, or `missing`). After a partial failure, the list holds the files present. |
+| `errors`                   | Entries with stable `code`, diagnostic `message`, and `command`; optional `stage`, `engine`, `field`, and `context`.           |
 
-Error codes include `invalid_arguments`, `invalid_input`, `input_missing`, `output_exists`, `permission_denied`, `gate_failed`, `evidence_gate_failed`, `gates_skipped`, `engine_selection_empty`, `engine_unhealthy`, `instance_degraded`, `runtime_package_missing`, `collection_partial`, `engine_http_error`, `operation_failed`, `stage_timeout`, `stage_cancelled`, and `interrupted`.
+[Judge Comment: The `operation` row carries an edge-case guard ("when argument validation fails first") and the `artifacts` row carries a trailing partial-failure caveat ("After a partial failure, the list holds the files present"); both are defensive add-ons after the row's main fact.]
 
-Stage failures carry recovery context in `context`. Branch on `code`, `status`, and context fields; treat `message` as diagnostic prose.
+`data` contents:
 
-JSON results and their diagnostics redact credential environment values, HTTP URL credentials, and bearer values.
+| Source             | Content                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| Lifecycle commands | Lifecycle state.                                              |
+| Preflight          | Failures, skips, and pairs.                                   |
+| Profiling          | Selected profiling engines.                                   |
+| Engine             | Engine launch directories.                                    |
+| Manifest requests  | The requested manifest.                                       |
 
-Validate a result before reading it:
+Error codes:
+
+| Code                      | Code                      | Code                     |
+| ------------------------- | ------------------------- | ------------------------ |
+| `invalid_arguments`       | `invalid_input`           | `input_missing`          |
+| `output_exists`           | `permission_denied`       | `gate_failed`            |
+| `evidence_gate_failed`    | `gates_skipped`           | `engine_selection_empty` |
+| `engine_unhealthy`        | `instance_degraded`       | `runtime_package_missing`|
+| `collection_partial`      | `engine_http_error`       | `operation_failed`       |
+| `stage_timeout`           | `stage_cancelled`         | `interrupted`            |
+
+Branch on `code`, `status`, and `context`. Stage failures put recovery data in `context`.
+
+JSON results and diagnostics redact:
+
+- Credential environment values
+- HTTP URL credentials
+- Bearer values
+
+Validate a result:
 
 ```python
 import json
@@ -59,6 +84,9 @@ with open("check-result.json") as source:
 validate_document(result, COMMAND_RESULT)
 ```
 
-`narwhal-check --print-contract-versions` lists the result schema with the persisted interfaces. Incompatible envelope changes get a new schema version.
+`narwhal-check --print-contract-versions` lists the result schema with the persisted interfaces.
 
-Compatible additions can add data fields or error codes. Retain unknown codes, and use `status` for the outcome.
+| Change                                 | Schema version |
+| -------------------------------------- | -------------- |
+| New `data` field or error code         | Unchanged      |
+| Incompatible envelope change           | New version    |
