@@ -18,7 +18,7 @@ from ..engines.client import (
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
-from ..types import Instance, Phase, Request
+from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
@@ -90,17 +90,18 @@ def _status_of(exc: BaseException) -> int:
     return 502
 
 
-def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool) -> None:
+def _failed_leg(
+    state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool, started: float
+) -> None:
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
-    busy = any(rid != state.request.rid for rid in (*inst.prefill, *inst.decode))
     router._leg_failed(
         inst.iid,
         exc,
         prefill_iid=state.prefill_iid if decode else None,
         decode_leg=decode,
-        busy=busy,
+        progressed=router.monitor.output_since(inst.iid, started),
     )
     reason = leg_failure_reason(exc)
     if decode and isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
@@ -156,6 +157,9 @@ async def _prepare_once(
 ) -> PreparedAttempt:
     router, req = state.router, state.request
     req.prefill_instance = None
+    for role in (Role.PREFILL, Role.DECODE):
+        if not router.scheduler.role_placeable(role):
+            raise NoEngine(f"no schedulable engines for the {role.value} role")
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
         cost = router.scheduler.cost(req, prefill)
@@ -181,7 +185,7 @@ async def _prepare_once(
             )
         )
     except Exception as exc:
-        _failed_leg(state, prefill, exc, decode=False)
+        _failed_leg(state, prefill, exc, decode=False, started=began)
         raise
     finally:
         state.record_upstream_time("prefill", began)
@@ -409,7 +413,7 @@ async def _decode_attempt(
             yield frame
         router.scheduler.record_answer(prepared.decode.iid, "decode")
     except Exception as exc:
-        _failed_leg(state, prepared.decode, exc, decode=True)
+        _failed_leg(state, prepared.decode, exc, decode=True, started=began)
         raise
     finally:
         try:

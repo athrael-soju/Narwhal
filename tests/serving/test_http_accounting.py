@@ -121,6 +121,29 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(((prefill.iid, 36),), arrivals)
         self.assert_released()
 
+    async def test_an_unplaceable_decode_role_fails_before_prefill(self):
+        self.cfg.engines = [replace(spec, pin=True) for spec in self.cfg.engines]
+        for queue in (0, 4):
+            with self.subTest(queue=queue):
+                self.calls.clear()
+                self.cfg.serving = (
+                    ServingPolicy(
+                        queue_capacity=queue,
+                        queue_timeout_s=5.0,
+                        prefill_concurrency=4,
+                        decode_concurrency=4,
+                        handoff_timeout_s=5.0,
+                    )
+                    if queue
+                    else ServingPolicy()
+                )
+                client = self.client()
+                self.router.scheduler.eject("e3")
+                response = await self.post(client)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(self.calls, [])
+                self.assert_released()
+
     async def test_readiness_blocks_traffic_until_identity_capture(self):
         """Declared engines require captured process identities before admission."""
         client = self.client()

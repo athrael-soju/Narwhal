@@ -98,7 +98,7 @@ class EngineAvailability:
         """Hold a just-failed engine out of scheduling for `seconds`.
 
         Hold failed engines out of new placement while health checks catch up.
-        Preserve one eligible engine for aggregate fallback.
+        An engine whose removal leaves its role unserved stays live.
         """
         if seconds <= 0 or iid in self.ejected:
             return False
@@ -107,7 +107,7 @@ class EngineAvailability:
             return False
         now = self._clock()
         self._sweep_quarantine(now)
-        if not self._can_hold_out(iid):
+        if not self.role_covered_without(iid):
             return False
         self.quarantined[iid] = max(self.quarantined.get(iid, 0.0), now + seconds)
         log.info("quarantined %s for %.1fs after an engine fault", iid, seconds)

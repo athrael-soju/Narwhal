@@ -336,25 +336,44 @@ class GlobalScheduler:
             return float("inf")
         return self.cost(request, inst)[1]
 
-    def decode_admits(self, request: Request, *, concurrency: int = 0) -> bool:
-        """Return whether a live decode engine can take `request` within capacity and TPOT.
+    def role_placeable(self, role: Role) -> bool:
+        """Return whether a live engine of `role`, or a live unpinned engine, can take a leg."""
+        return any(
+            inst.role is role or inst.iid not in self.pinned for inst in self.live_instances()
+        )
 
-        Capacity is `concurrency` when positive, otherwise the profile's measured
-        `decode_max_requests`. A fleet without live decode engines, or with an
-        engine lacking a measured decode domain, admits.
+    def decode_admits(self, request: Request, *, concurrency: int = 0) -> bool:
+        """Return whether live decode engines have room for `request` after committed work.
+
+        Committed work is resident decode, requests in prefill and requests waiting for a
+        decode slot. Each engine's capacity is its profile's `decode_max_requests`, capped
+        by `concurrency` when positive. A fleet without live decode engines, or with an
+        engine lacking a measured decode domain, admits. A request that misses the TPOT
+        budget on an idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
             return True
-        decode = replace(request, phase=Phase.DECODE)
+        capacity = 0
         for inst in engines:
             profile = self.profiles.get(inst.iid)
-            limit = concurrency or (profile.decode_max_requests if profile is not None else None)
-            if profile is None or limit is None:
+            if profile is None or profile.decode_max_requests is None:
                 return True
-            if len(inst.decode) < limit and self.meets_slo(decode, self.cost(decode, inst)):
-                return True
-        return False
+            limit = profile.decode_max_requests
+            capacity += min(limit, concurrency) if concurrency > 0 else limit
+        committed = (
+            sum(len(inst.decode) for inst in engines)
+            + sum(len(inst.prefill) for inst in self.monitor.instances.values())
+            + sum(1 for row in self.monitor.waiting.values() if row.phase is Phase.DECODE)
+        )
+        if committed >= capacity:
+            return False
+        decode = replace(request, phase=Phase.DECODE)
+        least = min(engines, key=lambda inst: (len(inst.decode), inst.iid))
+        if self.meets_slo(decode, self.cost(decode, least)):
+            return True
+        idle = replace(least, prefill={}, decode={})
+        return not self.meets_slo(decode, self.cost(decode, idle))
 
     def cheapest_own_prefill(self, request: Request) -> float | None:
         """Return the request's cheapest isolated prefill cost.

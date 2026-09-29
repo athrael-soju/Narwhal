@@ -112,6 +112,8 @@ class InstanceMonitor:
         self._windows: dict[str, _Window] = {}
         self._prices: dict[str, _PriceWindow] = {}
         self._last_token: dict[str, float] = {}
+        # Latest prefill completion or decode token per engine.
+        self._last_output: dict[str, float] = {}
         # The first decode gap includes transfer and queue time, so exclude it
         # from the engine's generation latency.
         self._decode_started: set[str] = set()
@@ -156,7 +158,7 @@ class InstanceMonitor:
         """Move a request out of prefill and start its token clock."""
         if self.instances[iid].prefill.pop(rid, None) is not None:
             self._prefill_changed(iid)
-        self._last_token[rid] = self._clock()
+        self._last_token[rid] = self._last_output[iid] = self._clock()
         self._reprice(iid)
         self.on_capacity_change()
 
@@ -183,10 +185,14 @@ class InstanceMonitor:
             )
             window.add(now - prev, expected)
         self._decode_started.add(rid)
-        self._last_token[rid] = now
+        self._last_token[rid] = self._last_output[iid] = now
         req = self.instances[iid].decode.get(rid)
         if req is not None:
             req.output_len += 1
+
+    def output_since(self, iid: str, since: float) -> bool:
+        """Return whether `iid` completed a prefill or emitted a decode token after `since`."""
+        return self._last_output.get(iid, float("-inf")) > since
 
     def finished(self, iid: str, rid: str) -> None:
         """Remove all tracking state for a completed request."""

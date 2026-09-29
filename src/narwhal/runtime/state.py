@@ -51,7 +51,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "holder": str(router.lease_holder),
         "engines": sorted(router.monitor.instances),
         "roles": {iid: i.role.value for iid, i in router.monitor.instances.items()},
-        "ejected": sorted(set(router.scheduler.ejected) | router.scheduler.inference_suspects),
+        "ejected": sorted(router.scheduler.ejected),
         "inference_sources": {
             iid: sorted(router._inference_sources.get(iid, {""}))
             for iid in sorted(router.scheduler.inference_suspects)
@@ -109,13 +109,12 @@ def validate(doc: Any) -> dict[str, Any]:
     engines = doc.get("engines", [])
     if not isinstance(sources, dict) or any(
         iid not in engines
-        or iid not in doc.get("ejected", [])
         or not isinstance(peers, list)
         or not peers
         or any(not isinstance(peer, str) or (peer and peer not in engines) for peer in peers)
         for iid, peers in sources.items()
     ):
-        raise ValueError("handoff inference_sources must name held engines and configured peers")
+        raise ValueError("handoff inference_sources must name configured engines and peers")
     risk = doc.get("demand_risk")
     if risk is not None:
         if not isinstance(risk, dict):
@@ -212,6 +211,13 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     for iid, peers in doc.get("inference_sources", {}).items():
         router.scheduler.inference_suspects.add(iid)
         router._inference_sources[iid] = set(peers)
+        # A suspect resolves through a readmission probe while another engine covers its role.
+        if (
+            iid not in router.scheduler.ejected
+            and router.scheduler.availability.role_covered_without(iid)
+        ):
+            router.scheduler.ejected[iid] = now - 1e9
+            ejected.append(iid)
     # apply() bypasses the scheduler paths that normally update floor state.
     router.scheduler.refresh_floor_state()
 

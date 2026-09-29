@@ -481,7 +481,7 @@ class NarwhalRouter:
         *,
         prefill_iid: str | None = None,
         decode_leg: bool = False,
-        busy: bool = False,
+        progressed: bool = False,
     ) -> None:
         """Classify a failed leg and update breaker state.
 
@@ -511,11 +511,11 @@ class NarwhalRouter:
             return
         if (
             klass == LEG_STREAM
-            and busy
+            and progressed
             and isinstance(exc, EngineError)
             and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
         ):
-            # A first-token timeout on an engine holding other work is overload.
+            # A first-token timeout while the engine produced other output is overload.
             klass = LEG_OVERLOAD
         if klass == "stream":
             self._inference_sources.setdefault(iid, set()).add(prefill_iid or "")
@@ -581,6 +581,9 @@ class NarwhalRouter:
             self.scheduler.record_answer(iid, "health")
             log.info("suspect %s passed health verification; health failure classes cleared", iid)
             return
+        if not self.scheduler.availability.role_covered_without(iid):
+            log.warning("%s stays live after a failed /health probe: it alone serves its role", iid)
+            return
         if self.scheduler.eject(iid):
             log.warning("ejected %s: timeout-shaped failures and /health did not answer", iid)
 
@@ -635,6 +638,8 @@ class NarwhalRouter:
             return True
         detail = ", ".join(f"{name} leg failed {klass}" for name, klass in sorted(failed.items()))
         if not self.scheduler.availability.role_covered_without(iid):
+            self.scheduler.quarantined.pop(iid, None)
+            self.scheduler.refresh_floor_state()
             log.warning(
                 "%s stays live after a failed inference probe (%s): it alone serves its role",
                 iid,

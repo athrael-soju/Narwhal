@@ -280,29 +280,65 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(router.engines.aclose)
         return router
 
-    def test_first_token_timeouts_on_busy_engines_count_as_overload(self):
+    def test_first_token_timeouts_count_as_overload_while_the_engine_produces_output(self):
         router = self.router()
         with patch.object(router, "_start_verification") as start:
-            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True, busy=True)
+            router._leg_failed(
+                "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=True
+            )
             start.assert_called_once_with("e3", "verify_health")
             self.assertNotIn("e3", router.scheduler.inference_suspects)
-            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True, busy=False)
+            router._leg_failed(
+                "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=False
+            )
             start.assert_called_with("e3", "verify_inference")
         self.assertIn("e3", router.scheduler.inference_suspects)
 
-    def test_failed_legs_report_whether_the_engine_holds_other_work(self):
+    def test_failed_legs_report_output_after_the_leg_started(self):
         router = self.router()
         inst = router.monitor.instances["e3"]
         request = Request("r", 10, phase=Phase.DECODE)
         other = Request("o", 10, phase=Phase.DECODE)
         state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
         router.monitor.dispatched("e3", request)
-        for resident, busy in ((False, False), (True, True)):
-            if resident:
-                router.monitor.dispatched("e3", other)
-            with self.subTest(busy=busy), patch.object(router, "_leg_failed") as leg:
-                _failed_leg(state, inst, self.timeout, decode=True)
-                self.assertIs(leg.call_args.kwargs["busy"], busy)
+        router.monitor.dispatched("e3", other)
+        started = router._clock()
+        with patch.object(router, "_leg_failed") as leg:
+            _failed_leg(state, inst, self.timeout, decode=True, started=started)
+            self.assertIs(leg.call_args.kwargs["progressed"], False)
+            router.monitor.output_token("e3", "o")
+            _failed_leg(state, inst, self.timeout, decode=True, started=started)
+            self.assertIs(leg.call_args.kwargs["progressed"], True)
+
+    def test_a_hung_engine_with_resident_work_reaches_inference_verification(self):
+        router = self.router()
+        inst = router.monitor.instances["e3"]
+        request = Request("r", 10, phase=Phase.DECODE)
+        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        router.monitor.dispatched("e3", request)
+        router.monitor.dispatched("e3", Request("stuck", 10, phase=Phase.DECODE))
+        with patch.object(router, "_start_verification") as start:
+            _failed_leg(state, inst, self.timeout, decode=True, started=router._clock())
+        start.assert_called_once_with("e3", "verify_inference")
+
+    def test_a_sole_role_engine_leaves_its_hold_after_a_failed_probe(self):
+        router = self.router(pinned=True)
+        router.scheduler.inference_suspects.add("e3")
+        router.scheduler.quarantined["e3"] = math.inf
+        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertNotIn("e3", router.scheduler.quarantined)
+        self.assertNotIn("e3", router.scheduler.ejected)
+
+    async def test_health_verification_and_timed_holds_keep_a_sole_role_engine_live(self):
+        for pinned, held in ((True, False), (False, True)):
+            with self.subTest(pinned=pinned):
+                self.setUp()
+                router = self.router(pinned=pinned)
+                self.assertIs(router.scheduler.quarantine("e3", 5.0), held)
+                router.scheduler.quarantined.pop("e3", None)
+                with patch.object(router.engines, "healthy", new=AsyncMock(return_value=False)):
+                    await router._verify_health("e3", self.cfg.engines[1].url)
+                self.assertEqual("e3" in router.scheduler.ejected, held)
 
     def test_the_only_engine_for_a_pinned_role_stays_live(self):
         router = self.router(pinned=True)
