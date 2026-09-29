@@ -102,6 +102,27 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(view.known)
         self.assertIn("residency refresh failed", view.reason)
 
+    async def test_an_unreachable_sidecar_leaves_only_its_engine_cold(self):
+        self.index.mark_empty()
+        app = httpx.ASGITransport(app=self.sidecar(self.index)._transport.app)
+
+        async def route(request):
+            if request.url.host == "down":
+                raise httpx.ConnectError("refused", request=request)
+            return await app.handle_async_request(request)
+
+        subscriptions = ResidencySubscriptions(
+            [
+                self.spec,
+                EngineSpec("e2", "http://engine", attestation_url="http://down:1/v1/attestation"),
+            ]
+        )
+        async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+            await subscriptions.refresh(client)
+        self.assertTrue(subscriptions.view("e1").known)
+        self.assertIn("ConnectError", subscriptions.view("e2").reason)
+        self.assertEqual(set(subscriptions.snapshot()), {"e1", "e2"})
+
     async def test_engines_without_residency_are_priced_cold(self):
         cold = self.sidecar(None)
         await self.subscriptions.refresh(cold)

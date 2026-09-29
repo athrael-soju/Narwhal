@@ -214,7 +214,7 @@ While prefix caching stays on, the launcher configures vLLM to publish KV cache 
 | `events.sock` | Published event batches, each with a sequence number      |
 | `replay.sock` | Replay requests for batches still in vLLM's replay buffer |
 
-Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`, and they stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds.
+Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
 
 To keep prefix caching on without publishing events, add vLLM's own event setting to `extra_args`:
 

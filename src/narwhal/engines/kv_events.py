@@ -34,6 +34,8 @@ class StoredBlocks:
     group: int | None = None
     kind: str | None = None
     medium: str | None = None
+    # Tokens a sliding-window group attends to; None for other groups.
+    sliding_window: int | None = None
 
     @property
     def block_count(self) -> int:
@@ -105,6 +107,7 @@ def _event(item: Any) -> CacheEvent | None:
         item.get("group_idx"),
         item.get("kv_cache_spec_kind"),
         item.get("medium"),
+        item.get("kv_cache_spec_sliding_window"),
     )
 
 

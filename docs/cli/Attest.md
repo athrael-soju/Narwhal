@@ -41,6 +41,8 @@ Residency is unknown in these cases, and a snapshot then lists no blocks:
 
 Unknown residency lasts until the engine resets its prefix cache.
 
-A block identity chains the block's token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace. The namespace holds the served model name, the engine contract fingerprint, the LoRA adapter name, and the request's cache salt. Some groups keep only boundary state, such as Mamba state in vLLM's `align` mode. They take each block identity from a group that reported every block in the same run. Blocks carrying multimodal or prompt-embedding hash keys have no identity.
+A block identity chains the block's token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace. The namespace holds the served model name, the engine contract fingerprint, the LoRA adapter name, and the request's cache salt. Some groups keep only boundary state, such as Mamba state in vLLM's `align` mode. They take each block identity from a group that reported every block in the same run.
+
+A prefix is reusable when every KV cache group can serve it. Full-attention groups must hold every leading block. Sliding-window groups must hold the blocks that cover the window before the prefix end. Boundary groups must hold the block at the prefix end. An engine with a group of any other kind, such as chunked local attention, is priced cold. Blocks carrying multimodal or prompt-embedding hash keys have no identity.
 
 Container engines run as root, so their event sockets belong to root. Run the sidecar as the same user as the engine.

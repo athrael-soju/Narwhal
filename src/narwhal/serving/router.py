@@ -142,6 +142,7 @@ class NarwhalRouter:
                 f"engine {iid} was excluded"
             )
         self.lifecycle_transport = transport
+        self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
         self.engines = EngineClient(
             timeout_s=cfg.request_timeout_s,
             prefill_timeout_s=cfg.prefill_timeout_s,

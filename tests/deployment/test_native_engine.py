@@ -228,6 +228,12 @@ class NativeEngineOwnershipTests(unittest.TestCase):
     def test_stop_requires_recorded_process_start_and_terminates_owned_group(self):
         with tempfile.TemporaryDirectory() as folder:
             run = Path(folder)
+            sockets = run / "kv-events"
+            sockets.mkdir()
+            (sockets / "events.sock").touch()
+            (run / "launch.json").write_text(
+                json.dumps({"kv_events": {"socket_dir": str(sockets)}})
+            )
             process = subprocess.Popen(
                 [sys.executable, "-c", "import time; time.sleep(30)"],
                 start_new_session=True,
@@ -243,6 +249,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                 stop(run)
                 self.assertIsNotNone(process.wait(timeout=5))
                 self.assertTrue((run / "native-stop.json").exists())
+                self.assertFalse(sockets.exists())
             finally:
                 if process.poll() is None:
                     process.terminate()

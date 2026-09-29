@@ -495,7 +495,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
             patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
             patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
-            patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7])),
+            patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7, 7])),
             redirect_stdout(io.StringIO()),
         ):
             row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
@@ -515,12 +515,17 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         decode = [
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
         ]
-        for counters, message in (([7, 71], "served 64 prompt tokens"), ([None, None], None)):
+        for counters, message in (
+            ([7, 71], "served 64 prompt tokens"),
+            ([None, None, None], None),
+            ([7, 3, 3], None),
+        ):
             evidence = {}
+            decode_sweep = AsyncMock(return_value=decode)
             with (
                 self.subTest(counters=counters),
                 patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
-                patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
+                patch.object(probe, "probe_decode", decode_sweep),
                 patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
                 patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=counters)),
                 redirect_stdout(io.StringIO()),
@@ -531,6 +536,8 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                             None, "e", "http://e", "stub", evidence=evidence
                         )
                     self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
+                    # Cached prefill fails before the decode sweep runs.
+                    decode_sweep.assert_not_awaited()
                 else:
                     await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
                     self.assertIsNone(evidence["prefix_cache_hit_tokens"])

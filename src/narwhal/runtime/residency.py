@@ -9,6 +9,7 @@ without a sidecar, or whose sidecar serves no residency, is priced cold.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,14 +32,15 @@ class EngineResidency:
     process_start_time_seconds: float | None = None
     sequence: int | None = None
     block_size: int | None = None
-    groups: dict[str, tuple[str | None, set[bytes]]] = field(default_factory=dict)
+    # Group key to (kind, sliding window, named resident blocks).
+    groups: dict[str, tuple[str | None, int | None, set[bytes]]] = field(default_factory=dict)
     resyncs: int = 0
 
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
         """Return how many leading prompt blocks the engine can reuse, or 0 when unknown."""
         if not self.known:
             return 0
-        return cached_prefix_blocks(self.groups.values(), identities)
+        return cached_prefix_blocks(self.groups.values(), identities, self.block_size)
 
     def forget(self, reason: str) -> None:
         """Drop the view so the engine is priced cold until the next snapshot."""
@@ -76,7 +78,7 @@ class ResidencySubscriptions:
                 "epoch": view.epoch,
                 "sequence": view.sequence,
                 "block_size": view.block_size,
-                "resident_blocks": {key: len(blocks) for key, (_, blocks) in view.groups.items()},
+                "resident_blocks": {key: len(group[2]) for key, group in view.groups.items()},
                 "resyncs": view.resyncs,
             }
             for iid, view in self.views.items()
@@ -84,19 +86,22 @@ class ResidencySubscriptions:
 
     async def refresh(self, client: httpx.AsyncClient) -> None:
         """Bring every engine's view up to date; failures leave that engine cold."""
-        for iid, spec in self._specs.items():
-            view = self.views[iid]
-            base = _sidecar_base(spec)
-            if base is None:
-                view.forget("engine has no attestation sidecar")
-                continue
-            try:
-                following = view.known and view.epoch is not None and view.sequence is not None
-                if following and await self._follow(client, base, view):
-                    continue
-                await self._resync(client, base, view)
-            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                view.forget(f"residency refresh failed: {type(exc).__name__}: {exc}")
+        # Sidecars refresh concurrently, so one slow sidecar delays the pass by one timeout.
+        await asyncio.gather(*(self._refresh_one(client, iid) for iid in self._specs))
+
+    async def _refresh_one(self, client: httpx.AsyncClient, iid: str) -> None:
+        view = self.views[iid]
+        base = _sidecar_base(self._specs[iid])
+        if base is None:
+            view.forget("engine has no attestation sidecar")
+            return
+        try:
+            following = view.known and view.epoch is not None and view.sequence is not None
+            if following and await self._follow(client, base, view):
+                return
+            await self._resync(client, base, view)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            view.forget(f"residency refresh failed: {type(exc).__name__}: {exc}")
 
     async def _follow(self, client: httpx.AsyncClient, base: str, view: EngineResidency) -> bool:
         """Apply ordered changes; return False when a snapshot is required."""
@@ -130,7 +135,11 @@ class ResidencySubscriptions:
         view.known = bool(snapshot["known"])
         view.reason = snapshot["reason"]
         view.groups = {
-            str(group["group"]): (group["kind"], {bytes.fromhex(i) for i in group["identities"]})
+            str(group["group"]): (
+                group["kind"],
+                group.get("sliding_window"),
+                {bytes.fromhex(i) for i in group["identities"]},
+            )
             for group in snapshot["groups"]
         }
 
@@ -140,7 +149,11 @@ class ResidencySubscriptions:
         if change["cleared"]:
             view.groups.clear()
         for key, delta in change["groups"].items():
-            kind, blocks = view.groups.get(key, (None, set()))
+            kind, window, blocks = view.groups.get(key, (None, None, set()))
             blocks.difference_update(bytes.fromhex(i) for i in delta["removed"])
             blocks.update(bytes.fromhex(i) for i in delta["stored"])
-            view.groups[key] = (delta.get("kind", kind), blocks)
+            view.groups[key] = (
+                delta.get("kind", kind),
+                delta.get("sliding_window", window),
+                blocks,
+            )

@@ -470,6 +470,30 @@ async def probe_decode(
     return samples
 
 
+async def _require_cold(
+    client: httpx.AsyncClient,
+    iid: str,
+    url: str,
+    before: int | None,
+    timeout_s: float | None,
+    evidence: dict[str, object] | None,
+) -> None:
+    """Fail when the engine served prompt tokens from its prefix cache since `before`.
+
+    A missing counter, or one that went backwards after an engine restart,
+    records no count; profile generation checks reject a restarted engine.
+    """
+    after = await prefix_cache_hits(client, url, timeout_s or 30.0)
+    hit_tokens = None if before is None or after is None or after < before else after - before
+    if evidence is not None:
+        evidence["prefix_cache_hit_tokens"] = hit_tokens
+    if hit_tokens:
+        raise RuntimeError(
+            f"{iid} served {hit_tokens} prompt tokens from its prefix cache during cold "
+            "profiling; reserve the engine for profiling and repeat the sweep"
+        )
+
+
 async def profile_instance(
     client: httpx.AsyncClient,
     iid: str,
@@ -501,6 +525,8 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence["prefill"] = prefill
+    # Check before the decode sweep so cached prefill fails early.
+    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     (a, b, c), representatives, prefill_fit_mape = fit_prefill_samples(prefill)
     print(f"    prefill median fit MAPE {prefill_fit_mape:.1%}")
     if evidence is not None:
@@ -525,15 +551,7 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
-    hits_after = await prefix_cache_hits(client, url, observation_timeout_s or 30.0)
-    hit_tokens = None if hits_before is None or hits_after is None else hits_after - hits_before
-    if evidence is not None:
-        evidence["prefix_cache_hit_tokens"] = hit_tokens
-    if hit_tokens:
-        raise RuntimeError(
-            f"{iid} served {hit_tokens} prompt tokens from its prefix cache during cold "
-            "profiling; reserve the engine for profiling and repeat the sweep"
-        )
+    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
     capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)

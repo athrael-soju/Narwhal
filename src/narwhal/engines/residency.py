@@ -28,13 +28,17 @@ from .kv_events import (
 
 MAX_RESIDENT_BLOCKS = 1_000_000
 MAX_RETAINED_CHANGES = 10_000
-# Groups that keep only boundary state, rather than every block, for a prefix.
+# vLLM KV cache group kinds by what a prefix hit needs from the group:
+# every leading block, the trailing attention window, or boundary state only.
+FULL_KINDS = frozenset({None, "full_attention", "mla_attention", "sink_full_attention"})
+WINDOW_KINDS = frozenset({"sliding_window", "sliding_window_mla"})
 BOUNDARY_KINDS = frozenset({"mamba"})
 
 
 @dataclass
 class _Group:
     kind: str | None
+    window: int | None = None
     # Backend hash to Narwhal identity; None marks a resident block Narwhal cannot name.
     blocks: dict[Hashable, bytes | None] = field(default_factory=dict)
 
@@ -139,7 +143,7 @@ class ResidencyIndex:
         if not self._gpu(event.medium):
             return
         self.block_size = event.block_size
-        group = self._groups.setdefault(event.group, _Group(event.kind))
+        group = self._groups.setdefault(event.group, _Group(event.kind, event.sliding_window))
         if event.complete:
             parent = None if event.parent_hash is None else self._named.get(event.parent_hash)
             identities: Sequence[bytes | None] | None = stored_identities(
@@ -150,7 +154,8 @@ class ResidencyIndex:
         else:
             identities = matched_identities(event, self._named)
         stored = change["groups"].setdefault(
-            str(event.group), {"kind": event.kind, "stored": [], "removed": []}
+            str(event.group),
+            {"kind": event.kind, "sliding_window": group.window, "stored": [], "removed": []},
         )
         for block_hash, identity in zip(event.block_hashes, identities, strict=True):
             group.blocks[block_hash] = identity
@@ -173,7 +178,13 @@ class ResidencyIndex:
                 identity = group.blocks.pop(block_hash, None)
                 if identity is not None:
                     removed = change["groups"].setdefault(
-                        str(key), {"kind": group.kind, "stored": [], "removed": []}
+                        str(key),
+                        {
+                            "kind": group.kind,
+                            "sliding_window": group.window,
+                            "stored": [],
+                            "removed": [],
+                        },
                     )
                     removed["removed"].append(identity.hex())
             if all(block_hash not in g.blocks for g in self._groups.values()):
@@ -190,6 +201,7 @@ class ResidencyIndex:
                         {
                             "group": key,
                             "kind": group.kind,
+                            "sliding_window": group.window,
                             "identities": named,
                             "unnamed": len(group.blocks) - len(named),
                         }
@@ -202,44 +214,64 @@ class ResidencyIndex:
                 "groups": groups,
             }
 
-    def changes_after(self, sequence: int) -> list[dict[str, Any]] | None:
-        """Return ordered changes after `sequence`, or None when a snapshot is required."""
+    def changes_after(self, sequence: int) -> tuple[int, list[dict[str, Any]]] | None:
+        """Return the last applied sequence and the ordered changes after `sequence`.
+
+        None means the caller needs a snapshot.
+        """
         with self._lock:
             if not self.known or self.sequence is None or sequence > self.sequence:
                 return None
             if sequence == self.sequence:
-                return []
+                return self.sequence, []
             retained = list(self._changes)
             if not retained or retained[0]["sequence"] > sequence + 1:
                 return None
-            return [c for c in retained if c["sequence"] > sequence]
+            return self.sequence, [c for c in retained if c["sequence"] > sequence]
 
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
         """Return how many leading prompt blocks this engine can reuse."""
         with self._lock:
             if not self.known:
                 return 0
-            groups = [(g.kind, set(g.blocks.values())) for g in self._groups.values()]
-        return cached_prefix_blocks(groups, identities)
+            groups = [(g.kind, g.window, set(g.blocks.values())) for g in self._groups.values()]
+            block_size = self.block_size
+        return cached_prefix_blocks(groups, identities, block_size)
 
 
 def cached_prefix_blocks(
-    groups: Iterable[tuple[str | None, Collection[bytes | None]]], identities: Sequence[bytes]
+    groups: Iterable[tuple[str | None, int | None, Collection[bytes | None]]],
+    identities: Sequence[bytes],
+    block_size: int | None,
 ) -> int:
-    """Return how many leading prompt blocks every KV cache group holds.
+    """Return how many leading prompt blocks the engine can reuse from every KV cache group.
 
-    Groups that keep every block must hold each leading block. Boundary
-    groups, such as Mamba state, must hold the block at the prefix end.
+    Full-attention groups must hold each leading block. Sliding-window groups
+    must hold the contiguous blocks covering the window before the prefix end.
+    Boundary groups, such as Mamba state, must hold the block at the prefix
+    end. A group of any other kind, or without a known window, prices cold.
     """
     groups = list(groups)
-    if not groups:
+    if not groups or any(
+        kind not in FULL_KINDS | WINDOW_KINDS | BOUNDARY_KINDS
+        or (kind in WINDOW_KINDS and (not window or not block_size))
+        for kind, window, _ in groups
+    ):
         return 0
-    full = [blocks for kind, blocks in groups if kind not in BOUNDARY_KINDS]
-    boundary = [blocks for kind, blocks in groups if kind in BOUNDARY_KINDS]
+    full = [blocks for kind, _, blocks in groups if kind in FULL_KINDS]
+    windows = [
+        (blocks, -(-(window - 1) // block_size))
+        for kind, window, blocks in groups
+        if kind in WINDOW_KINDS and window and block_size
+    ]
+    boundary = [blocks for kind, _, blocks in groups if kind in BOUNDARY_KINDS]
     best = 0
     for count, identity in enumerate(identities, start=1):
         if any(identity not in blocks for blocks in full):
             break
-        if all(identity in blocks for blocks in boundary):
+        if all(identity in blocks for blocks in boundary) and all(
+            all(i in blocks for i in identities[max(0, count - needed) : count])
+            for blocks, needed in windows
+        ):
             best = count
     return best

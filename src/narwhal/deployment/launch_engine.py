@@ -146,7 +146,7 @@ def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict
         if len(str(socket_dir / name).encode()) > MAX_SOCKET_PATH_BYTES:
             raise ValueError(
                 f"cache-event socket path under {socket_dir} exceeds "
-                f"{MAX_SOCKET_PATH_BYTES} bytes; prepare a shorter launch directory"
+                f"{MAX_SOCKET_PATH_BYTES} bytes; the socket root or user ID is too long"
             )
     return {
         "socket_dir": str(socket_dir),
@@ -165,6 +165,17 @@ def kv_events_directory(plan: dict) -> None:
         info = path.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise ValueError(f"{path} must be a directory private to the launching user")
+
+
+def remove_kv_events_directory(plan: dict) -> None:
+    """Remove the plan's socket directory once its engine process has stopped."""
+    if plan.get("kv_events") is None:
+        return
+    directory = Path(plan["kv_events"]["socket_dir"])
+    for name in KV_EVENTS_SOCKETS.values():
+        (directory / name).unlink(missing_ok=True)
+    with contextlib.suppress(FileNotFoundError):
+        directory.rmdir()
 
 
 def digest(path: Path) -> str:

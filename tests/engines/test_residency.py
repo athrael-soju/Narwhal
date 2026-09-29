@@ -160,14 +160,15 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(index, 0, stored([1, 2], prompt))
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
         self.assertEqual(index.cached_prefix_blocks(names), 1)
-        changes = index.changes_after(0)
+        sequence, changes = index.changes_after(0)
+        self.assertEqual(sequence, 1)
         self.assertEqual(changes[0]["groups"]["0"]["removed"], [names[1].hex()])
-        self.assertEqual(index.changes_after(1), [])
+        self.assertEqual(index.changes_after(1), (1, []))
         self.assertIsNone(index.changes_after(5))
         self.apply(index, 2, {"type": "AllBlocksCleared"})
         self.assertTrue(index.known)
         self.assertEqual(index.cached_prefix_blocks(names), 0)
-        self.assertTrue(index.changes_after(1)[0]["cleared"])
+        self.assertTrue(index.changes_after(1)[1][0]["cleared"])
 
     def test_missing_history_stays_unknown_until_a_cache_reset(self):
         """Late starts, gaps and unreadable batches serve no blocks."""
@@ -197,6 +198,35 @@ class ResidencyIndexTests(unittest.TestCase):
                 self.apply(index, last + 3, stored([2], prompt))
                 self.assertTrue(index.known)
                 self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
+
+    def test_sliding_window_groups_need_only_the_trailing_window(self):
+        """vLLM reuses a sliding-window prefix when blocks cover the window before its end."""
+        prompt = tuple(range(24))
+        names = identities(prompt)
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(
+            index,
+            0,
+            stored([1, 2, 3, 4, 5, 6], prompt),
+            stored(
+                [1, 2, 3, 4, 5, 6],
+                prompt,
+                group=1,
+                kind="sliding_window",
+                kv_cache_spec_sliding_window=5,
+            ),
+        )
+        # The window frees early blocks; a 5-token window needs one block before each end.
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [1, 2], "group_idx": 1})
+        self.assertEqual(index.cached_prefix_blocks(names), 6)
+        self.apply(index, 2, {"type": "BlockRemoved", "block_hashes": [6], "group_idx": 1})
+        self.assertEqual(index.cached_prefix_blocks(names), 5)
+        unsupported = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(unsupported, 0, stored([1], prompt[:4], kind="chunked_local_attention"))
+        self.assertEqual(unsupported.cached_prefix_blocks(names), 0)
+        windowless = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(windowless, 0, stored([1], prompt[:4], kind="sliding_window"))
+        self.assertEqual(windowless.cached_prefix_blocks(names), 0)
 
     def test_bound_offload_tiers_and_unnamed_blocks(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_blocks=2)
@@ -264,6 +294,19 @@ class ResidencyFeedTests(unittest.TestCase):
         cleared = batch({"type": "AllBlocksCleared"})
         # Repeat the reset until the live subscription has joined.
         self.assertTrue(wait_for(lambda: publisher.publish(cleared) or index.known))
+
+    def test_malformed_messages_leave_residency_unknown(self):
+        """A feed that cannot read its socket stops serving a stale known state."""
+        publisher = FakePublisher(self.directory)
+        self.addCleanup(publisher.close)
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.run_feed(publisher, index)
+        self.assertTrue(wait_for(lambda: index.known))
+        with self.assertLogs("narwhal.residency", level="ERROR"):
+            self.assertTrue(
+                wait_for(lambda: publisher.pub.send_multipart([b"", b"short"]) or not index.known)
+            )
+        self.assertIn("cache-event subscription failed", index.reason)
 
     def test_idle_engine_is_known_empty_and_missing_replay_is_unknown(self):
         publisher = FakePublisher(self.directory)

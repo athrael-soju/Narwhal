@@ -216,6 +216,14 @@ class EngineLauncherTests(unittest.TestCase):
                     launcher.kv_events_directory(plan)
                 socket_dir.chmod(0o700)
 
+    def test_sidecar_connects_to_the_socket_names_the_launcher_binds(self):
+        from narwhal.engines.attestation import EVENTS_SOCKET, REPLAY_SOCKET
+
+        self.assertEqual(
+            launcher.KV_EVENTS_SOCKETS,
+            {"endpoint": EVENTS_SOCKET, "replay_endpoint": REPLAY_SOCKET},
+        )
+
     def test_backend_settings_disable_cache_event_publication(self):
         for options in (
             ["--no-enable-prefix-caching"],

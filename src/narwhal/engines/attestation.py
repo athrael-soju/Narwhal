@@ -25,6 +25,9 @@ from .residency_feed import ResidencyFeed
 
 ATTESTATION_PATH = "/v1/attestation"
 RESIDENCY_PATH = "/v1/residency"
+# Socket names inside the launch plan's cache-event directory; the launcher uses the same.
+EVENTS_SOCKET = "events.sock"
+REPLAY_SOCKET = "replay.sock"
 _PROCESS_START = re.compile(
     r"^process_start_time_seconds(?:\{[^}]*\})?\s+([0-9.eE+-]+)(?:\s|$)", re.MULTILINE
 )
@@ -358,10 +361,11 @@ def build_app(
     async def residency_events(after: int) -> dict[str, Any]:
         await current_identity()
         index = require_residency()
-        changes = index.changes_after(after)
-        if changes is None:
+        result = index.changes_after(after)
+        if result is None:
             raise HTTPException(status_code=410, detail="resynchronise from the residency snapshot")
-        return {"epoch": epoch, "sequence": index.sequence, "changes": changes}
+        sequence, changes = result
+        return {"epoch": epoch, "sequence": sequence, "changes": changes}
 
     return app
 
@@ -411,8 +415,8 @@ def main(argv: list[str] | None = None) -> int:
         residency = ResidencyIndex(args.model, document.contract.fingerprint())
         feed = ResidencyFeed(
             residency,
-            f"ipc://{args.kv_events / 'events.sock'}",
-            f"ipc://{args.kv_events / 'replay.sock'}",
+            f"ipc://{args.kv_events / EVENTS_SOCKET}",
+            f"ipc://{args.kv_events / REPLAY_SOCKET}",
         )
         feed.start()
     try:

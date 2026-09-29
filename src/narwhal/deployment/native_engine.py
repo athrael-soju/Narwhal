@@ -23,6 +23,7 @@ from .launch_engine import (
     digest,
     gpu_memory,
     kv_events_directory,
+    remove_kv_events_directory,
     validate_shared_runs,
     write_private,
 )
@@ -219,6 +220,7 @@ def stop(run: Path) -> None:
     """Stop only the process group recorded for this native launch directory."""
     identity = json.loads((run / "native-process.json").read_text())
     _terminate(identity)
+    remove_kv_events_directory(json.loads((run / "launch.json").read_text()))
     write_private(
         run / "native-stop.json",
         json.dumps({"identity": identity, "stopped_at": time.time()}, indent=2) + "\n",

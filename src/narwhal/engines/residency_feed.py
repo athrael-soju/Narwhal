@@ -10,6 +10,7 @@ holds leaves the index unknown until the engine resets its cache.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -19,6 +20,14 @@ from .kv_events import CacheEvent, decode_batch
 from .residency import ResidencyIndex
 
 _END = -1
+log = logging.getLogger("narwhal.residency")
+
+
+def _frames(frames: list[bytes]) -> tuple[bytes, bytes, bytes]:
+    """Split one published message into topic, sequence and payload frames."""
+    if len(frames) != 3 or len(frames[1]) != 8:
+        raise ValueError(f"cache-event message has {len(frames)} frames; expected 3")
+    return frames[0], frames[1], frames[2]
 
 
 def _decoded(payload: bytes) -> list[CacheEvent | None] | None:
@@ -98,7 +107,7 @@ class ResidencyFeed:
             history = self._replay(0)
             pending: list[tuple[int, bytes]] = []
             while subscriber.poll(0):
-                _, raw, payload = subscriber.recv_multipart()
+                _, raw, payload = _frames(subscriber.recv_multipart())
                 pending.append((int.from_bytes(raw, "big"), payload))
             if history == [] and not pending:
                 # vLLM's replay buffer only drops old batches, so an empty buffer means none.
@@ -109,7 +118,7 @@ class ResidencyFeed:
             while not self._stop.is_set():
                 if not subscriber.poll(int(self.poll_s * 1000)):
                     continue
-                _, raw, payload = subscriber.recv_multipart()
+                _, raw, payload = _frames(subscriber.recv_multipart())
                 sequence = int.from_bytes(raw, "big")
                 last = self.index.sequence
                 if last is not None and sequence > last + 1:
@@ -117,8 +126,10 @@ class ResidencyFeed:
                     if missed is not None:
                         self._apply([batch for batch in missed if batch[0] < sequence])
                 self.index.apply(sequence, _decoded(payload))
-        except zmq.ZMQError as exc:
+        except Exception as exc:
+            # A dead feed must not leave a stale known state behind it.
             if not self._stop.is_set():
-                self.index.lose(f"cache-event subscription failed: {exc}")
+                log.exception("cache-event subscription failed")
+                self.index.lose(f"cache-event subscription failed: {type(exc).__name__}: {exc}")
         finally:
             subscriber.close()

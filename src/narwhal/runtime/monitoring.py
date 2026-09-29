@@ -9,8 +9,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import (
@@ -408,8 +406,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         else:
             router.monitoring.ok("liveness")
     try:
-        async with httpx.AsyncClient(timeout=router.cfg.health_timeout_s) as client:
-            await router.residency.refresh(client)
+        await router.residency.refresh(router.residency_client)
     except Exception as exc:
         router.monitoring.fail("residency", exc)
     else:
