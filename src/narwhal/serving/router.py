@@ -29,7 +29,7 @@ from ..scheduling.controller import ReactiveController
 from ..scheduling.health import DriftTracker
 from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
-from ..types import Instance, Phase, Role
+from ..types import Instance, Phase, Request, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
 from .dispatch import Dispatcher
 from .execution import request_error, serve_request
@@ -148,6 +148,7 @@ class NarwhalRouter:
                 relative_band=cfg.health_relative_band,
             ),
         )
+        self.scheduler.recheck_cache_evidence = self.recheck_cache_evidence
         self.lifecycle = LifecycleManager(self)
         if cfg.engine_restart_policy == "whole_wave":
             self.scheduler.on_eject = lambda iid: self.lifecycle.require_restart_wave(
@@ -247,8 +248,10 @@ class NarwhalRouter:
         """Return the exact or estimated input token count."""
         return (await self.size(body))[0]
 
-    async def size(self, body: dict[str, Any]) -> tuple[int, dict[str, int], dict[str, int]]:
-        """Return the input token count and the prompt tokens each engine holds cached.
+    async def size(
+        self, body: dict[str, Any]
+    ) -> tuple[int, dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return the input token count and the prefix-cache evidence for the prompt.
 
         Already-tokenized prompts supply their exact count locally. Other
         requests query one engine. A failed exact-count call fails the request
@@ -278,10 +281,10 @@ class NarwhalRouter:
                     self._tokenizer = live[k].iid
                     ids = got.token_ids
                     if ids is None:
-                        return got.count, {}, {}
+                        return got.count, {}, {}, {}
                     return got.count, *self.prefix_cache_evidence(body, ids)
                 self._tokenizer = live[(k + 1) % len(live)].iid
-        return self.estimate_length(body), {}, {}
+        return self.estimate_length(body), {}, {}, {}
 
     def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
         """Return the prompt tokens each engine can serve from its prefix cache."""
@@ -289,21 +292,26 @@ class NarwhalRouter:
 
     def prefix_cache_evidence(
         self, body: dict[str, Any], token_ids: Sequence[int]
-    ) -> tuple[dict[str, int], dict[str, int]]:
-        """Return cached prompt tokens per engine and the residency sequence behind each.
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return cached prompt tokens per engine, the residency sequence behind each,
+        and the prompt's leading block identities up to its longest cached prefix.
 
-        Only token counts leave this method; the prompt's identities are not
-        retained. Multimodal requests and fleets without an engine contract
-        have no evidence and are priced cold.
+        vLLM computes at least the final prompt token, so identities cover the
+        prompt without it. The request keeps the matched identities so placement
+        can recheck them; counts and sequences are all that reach decision
+        records. Multimodal requests, fleets without an engine contract and
+        token IDs outside the identity range have no evidence and are priced cold.
         """
         contract = self.cfg.engine_contract
-        if contract is None or not token_ids or _multimodal(body):
-            return {}, {}
+        if contract is None or len(token_ids) < 2 or _multimodal(body):
+            return {}, {}, {}
         salt = body.get("cache_salt")
         namespace = CacheNamespace(
             self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
         )
+        reusable = token_ids[:-1]
         by_size: dict[int, list[bytes]] = {}
+        matched: dict[int, int] = {}
         cached: dict[str, int] = {}
         sequences: dict[str, int] = {}
         for iid, view in self.residency.views.items():
@@ -311,15 +319,37 @@ class NarwhalRouter:
             if not view.known or not size:
                 continue
             if size not in by_size:
-                by_size[size] = block_identities(namespace, token_ids, size)
-            # vLLM computes at least the final prompt token, so reuse stops one token short.
-            usable = (len(token_ids) - 1) // size * size
-            tokens = min(view.cached_prefix_blocks(by_size[size]) * size, usable)
-            if tokens > 0:
-                cached[iid] = tokens
+                try:
+                    by_size[size] = block_identities(namespace, reusable, size)
+                except ValueError:
+                    return {}, {}, {}
+            blocks = view.cached_prefix_blocks(by_size[size])
+            if blocks > 0:
+                cached[iid] = blocks * size
+                matched[size] = max(matched.get(size, 0), blocks)
                 if view.sequence is not None:
                     sequences[iid] = view.sequence
-        return cached, sequences
+        return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
+
+    def recheck_cache_evidence(self, request: Request) -> None:
+        """Keep only the cache evidence current residency still supports.
+
+        Evidence can go stale while a request waits for placement: the engine
+        evicts the prefix, clears its cache or restarts, or its sidecar resyncs.
+        Each engine keeps the prefix its current view holds; the rest price cold.
+        """
+        for iid in list(request.cached_tokens):
+            view = self.residency.views.get(iid)
+            if view is not None and view.block_size:
+                identities = request.cache_identities.get(view.block_size, [])
+                blocks = view.cached_prefix_blocks(identities)
+                if blocks:
+                    request.cached_tokens[iid] = blocks * view.block_size
+                    if view.sequence is not None:
+                        request.cache_sequences[iid] = view.sequence
+                    continue
+            del request.cached_tokens[iid]
+            request.cache_sequences.pop(iid, None)
 
     def estimate_length(self, body: dict[str, Any]) -> int:
         """Estimate offered input length locally."""

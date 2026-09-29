@@ -56,6 +56,8 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
+        # Rechecks a request's cache evidence against current residency before prefill placement.
+        self.recheck_cache_evidence: Callable[[Request], None] | None = None
         # Apply cooldown to the opening P-to-D change as well.
         self._last_p2d_flip = clock()
         self.panic_bypasses = 0
@@ -610,6 +612,13 @@ class GlobalScheduler:
         # matching role whenever that pool has a live engine.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
         candidates = [i for i in instances if i.role is want] or instances
+        if (
+            request.phase is Phase.PREFILL
+            and request.cached_tokens
+            and self.recheck_cache_evidence is not None
+        ):
+            # Evidence from sizing can go stale while the request waits for placement.
+            self.recheck_cache_evidence(request)
         costs = {i.iid: self.cost(request, i) for i in candidates}
 
         # 2. Lowest-cost instance that also meets the SLO.
@@ -622,10 +631,12 @@ class GlobalScheduler:
             self.unserved += 1
             chosen = min(candidates, key=lambda i: (costs[i.iid], i.iid))
         if request.phase is Phase.PREFILL and request.cached_tokens:
-            request.cache_placement = self._cache_placement(request, chosen)
+            request.cache_placement = self._cache_placement(request, chosen, candidates)
         return chosen
 
-    def _cache_placement(self, request: Request, chosen: Instance) -> dict[str, Any] | None:
+    def _cache_placement(
+        self, request: Request, chosen: Instance, candidates: list[Instance]
+    ) -> dict[str, Any] | None:
         """Record why cache evidence priced the chosen prefill engine as it did."""
         profile = self.profiles.get(chosen.iid)
         if profile is None:
@@ -638,11 +649,10 @@ class GlobalScheduler:
             "predicted_prefill_s": costs.prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
             # The engine cold pricing would have chosen among the same candidates.
-            "cold_choice_iid": self._cold_choice(request, chosen),
+            "cold_choice_iid": self._cold_choice(request, candidates),
         }
 
-    def _cold_choice(self, request: Request, chosen: Instance) -> str:
-        candidates = [i for i in self.live_instances() if i.role is chosen.role] or [chosen]
+    def _cold_choice(self, request: Request, candidates: list[Instance]) -> str:
         cold = {i.iid: self.cost(request, i, warm=False) for i in candidates}
         eligible = [i for i in candidates if self.meets_slo(request, cold[i.iid])]
         return min(eligible or candidates, key=lambda i: (cold[i.iid], i.iid)).iid

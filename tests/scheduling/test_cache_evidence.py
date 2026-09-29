@@ -37,6 +37,8 @@ class CacheEvidenceTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.cfg = fleet(Path(folder.name))
         self.router = create_app(self.cfg).state.router
+        # These tests price given evidence; PlacementRecheckTests cover the placement recheck.
+        self.router.scheduler.recheck_cache_evidence = None
         self.first, self.second = (spec.iid for spec in self.cfg.engines)
         self.namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
 
@@ -54,9 +56,13 @@ class CacheEvidenceTests(unittest.TestCase):
         self.hold(self.first, prompt[:16])
         self.hold(self.second, prompt[:8])
         self.router.residency.view(self.first).sequence = 41
-        cached, sequences = self.router.prefix_cache_evidence({"prompt": prompt}, prompt)
+        cached, sequences, identities = self.router.prefix_cache_evidence(
+            {"prompt": prompt}, prompt
+        )
         self.assertEqual(cached, {self.first: 16, self.second: 8})
         self.assertEqual(sequences, {self.first: 41})
+        # The request keeps identities up to its longest cached prefix, not the whole prompt.
+        self.assertEqual(identities, {BLOCK: block_identities(self.namespace, prompt[:16], BLOCK)})
         # vLLM computes the final prompt token, so a fully cached prompt reuses one block less.
         self.assertEqual(
             self.router.prefix_cache_tokens({"prompt": prompt[:16]}, prompt[:16])[self.first], 12
@@ -79,6 +85,29 @@ class CacheEvidenceTests(unittest.TestCase):
         self.router.cfg.engine_contract = None
         self.router.residency.view(self.first).known = True
         self.assertEqual(self.router.prefix_cache_tokens({"cache_salt": "salt"}, prompt), {})
+
+    def test_boundary_state_must_sit_at_the_reusable_prefix_end(self):
+        """A block-aligned prompt reuses at most the blocks before its final token."""
+        prompt = list(range(8))
+        view = self.router.residency.view(self.first)
+        view.known, view.block_size = True, BLOCK
+        blocks = block_identities(self.namespace, prompt, BLOCK)
+        # Full attention holds both blocks; boundary state exists only after block two.
+        view.groups = {
+            "0": ("full_attention", None, set(blocks)),
+            "1": ("mamba", None, {blocks[1]}),
+        }
+        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {})
+        view.groups["1"] = ("mamba", None, {blocks[0]})
+        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {self.first: 4})
+
+    def test_token_ids_outside_the_identity_range_carry_no_evidence(self):
+        prompt = list(range(16))
+        self.hold(self.first, prompt)
+        self.assertEqual(
+            self.router.prefix_cache_evidence({}, [*prompt[:8], 1 << 64, *prompt[9:]]),
+            ({}, {}, {}),
+        )
 
     def test_shared_estimate_falls_back_to_cold_pricing(self):
         fitted = warm("e0")
@@ -122,6 +151,85 @@ class CacheEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no schedulable instances"):
             scheduler.schedule(Request("x", 40, cached_tokens={other: 32}), exclude={placed.iid})
 
+    def test_cold_choice_comes_from_the_placement_candidates(self):
+        scheduler = self.router.scheduler
+        role = scheduler.monitor.instances[self.first].role
+        for iid in (self.first, self.second):
+            digest = scheduler.profiles.get(iid).generation_digest
+            scheduler.profiles.put(warm(iid, generation_digest=digest))
+            scheduler.monitor.instances[iid].role = role
+        cold_iid = scheduler.schedule(Request("cold", 40)).iid
+        other = self.second if cold_iid == self.first else self.first
+        retry = Request("retry", 40, cached_tokens={other: 32, cold_iid: 32})
+        self.assertEqual(scheduler.schedule(retry, exclude={cold_iid}).iid, other)
+        self.assertEqual(retry.cache_placement["cold_choice_iid"], other)
+
+
+class PlacementRecheckTests(unittest.TestCase):
+    """Placement prices the evidence current residency supports, not what sizing saw."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cfg = fleet(Path(folder.name))
+        self.router = create_app(self.cfg).state.router
+        self.scheduler = self.router.scheduler
+        self.first, self.second = (spec.iid for spec in self.cfg.engines)
+        role = self.scheduler.monitor.instances[self.first].role
+        for iid in (self.first, self.second):
+            digest = self.scheduler.profiles.get(iid).generation_digest
+            self.scheduler.profiles.put(warm(iid, generation_digest=digest))
+            self.scheduler.monitor.instances[iid].role = role
+        self.namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
+        self.prompt = list(range(40))
+        # Hold the whole prompt on the engine cold pricing would not choose.
+        cold_iid = self.scheduler.schedule(Request("cold", 40)).iid
+        self.warm_iid = self.second if cold_iid == self.first else self.first
+        self.view = self.router.residency.view(self.warm_iid)
+        self.view.known, self.view.block_size, self.view.sequence = True, BLOCK, 5
+        self.blocks = block_identities(self.namespace, self.prompt, BLOCK)
+        self.view.groups = {"0": ("full_attention", None, set(self.blocks))}
+
+    def sized(self):
+        cached, sequences, identities = self.router.prefix_cache_evidence({}, self.prompt)
+        return Request(
+            "r",
+            len(self.prompt),
+            cached_tokens=cached,
+            cache_sequences=sequences,
+            cache_identities=identities,
+        )
+
+    def test_placement_uses_evidence_that_is_still_resident(self):
+        request = self.sized()
+        self.assertEqual(request.cached_tokens, {self.warm_iid: 36})
+        self.view.sequence = 9
+        self.assertEqual(self.scheduler.schedule(request).iid, self.warm_iid)
+        self.assertEqual(request.cache_placement["evidence_sequence"], 9)
+
+    def test_eviction_after_sizing_shrinks_the_evidence(self):
+        request = self.sized()
+        self.view.groups["0"][2].difference_update(self.blocks[2:])
+        self.scheduler.schedule(request)
+        self.assertEqual(request.cached_tokens, {self.warm_iid: 8})
+
+    def test_reset_restart_or_unknown_view_prices_cold(self):
+        for stale in (
+            lambda: self.view.groups["0"][2].clear(),
+            lambda: self.view.forget("engine restarted"),
+            lambda: setattr(self.view, "groups", {"0": ("full_attention", None, set())}),
+            lambda: setattr(self.view, "block_size", BLOCK * 2),
+        ):
+            with self.subTest(stale=stale):
+                self.setUp()
+                request = self.sized()
+                stale()
+                placed = self.scheduler.schedule(request)
+                self.assertEqual(request.cached_tokens, {})
+                self.assertEqual(request.cache_sequences, {})
+                self.assertIsNone(request.cache_placement)
+                self.assertNotEqual(placed.iid, self.warm_iid)
+
 
 class SharedCostContractTests(unittest.TestCase):
     """Placement, resident work, load, refusal pricing and demand agree on one estimate."""
@@ -132,6 +240,7 @@ class SharedCostContractTests(unittest.TestCase):
         self.cfg = fleet(Path(folder.name))
         self.router = create_app(self.cfg).state.router
         self.scheduler = self.router.scheduler
+        self.scheduler.recheck_cache_evidence = None
         self.iid = self.cfg.engines[0].iid
         for spec in self.cfg.engines:
             digest = self.scheduler.profiles.get(spec.iid).generation_digest
@@ -178,6 +287,43 @@ class SharedCostContractTests(unittest.TestCase):
             prefill_seconds(profiles[0], Request("r", 40, cached_tokens={profiles[0].iid: 32}))
             / (sum(p.prefill_time(40) for p in profiles) / len(profiles)),
         )
+
+    def test_demand_keeps_cold_pricing_for_evidence_without_a_warm_price(self):
+        """Evidence on an engine without a warm fit, or outside its domain, leaves demand cold."""
+        demand = self.router.controller.demand
+        now = self.router._clock()
+        cold_only = replace(
+            self.scheduler.profiles.get(self.iid),
+            ttft_a=2e-6,
+            **{f"cached_{k}": None for k in ("ttft_a", "ttft_b", "ttft_c", "ttft_d", "cv_mape")},
+            **{
+                f"cached_{k}_tokens": None
+                for k in ("min_prefix", "max_prefix", "min_suffix", "max_suffix")
+            },
+        )
+        other = next(p for p in self.scheduler.profiles.all_profiles() if p.iid != self.iid)
+        profiles = (cold_only, other)
+
+        def offered(cached, length=40):
+            model = type(demand)(
+                demand.monitor, demand.scheduler, demand._clock, window_s=60.0, bucket_s=1.0
+            )
+            observation = model.saw_arrival(length, wanted_len=4, at=now)
+            model.resize_arrival(observation, length, 4, at=now, cached_tokens=cached)
+            return model.price_profiles(
+                now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).prefill_engines
+
+        self.assertAlmostEqual(offered({self.iid: 32}), offered({}))
+        self.assertAlmostEqual(offered({other.iid: 128}, 200), offered({}, 200))
+        self.assertLess(offered({other.iid: 32}), offered({}))
+
+    def test_released_reservation_returns_the_engine_to_its_idle_price(self):
+        request = Request("r", 40, cached_tokens={self.iid: 32})
+        self.scheduler.monitor.dispatched(self.iid, request)
+        self.assertGreater(self.scheduler.monitor._prices[self.iid].current, 0.0)
+        self.scheduler.monitor.finished(self.iid, "r")
+        self.assertEqual(self.scheduler.monitor._prices[self.iid].current, 0.0)
 
     def test_role_change_keeps_resident_evidence_and_retries_use_their_engine(self):
         """Resident work keeps its price across a role change; a retry uses the new engine."""

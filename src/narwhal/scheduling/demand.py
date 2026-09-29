@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from statistics import median
 
 from ..profiling.model import Profile
-from ..types import Request, Role
+from ..types import Role
 from .monitor import InstanceMonitor
-from .prefill import prefill_seconds
 from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
@@ -35,10 +34,6 @@ class Arrival:
 
     input_len: int
     cached: tuple[tuple[str, int], ...] = ()
-
-    def request(self) -> Request:
-        """Return a request that prices this arrival with the shared prefill estimate."""
-        return Request("offered", self.input_len, cached_tokens=dict(self.cached))
 
 
 ArrivalObservation = tuple[Cohort[Arrival] | None, Cohort[tuple[int, int]] | None]
@@ -234,13 +229,15 @@ class DemandModel:
         for row in self.arrivals.rows(h0):
             length = row.value.input_len
             if profiles and all(p.covers_prefill(length) for p in profiles):
-                offered = row.value.request()
-                # Placement sends a cached prompt to its cheapest engine; others spread evenly.
-                cost = (
-                    min(prefill_seconds(p, offered) for p in profiles)
-                    if row.value.cached
-                    else sum(p.prefill_time(length) for p in profiles) / len(profiles)
-                )
+                # Cold work spreads evenly; placement sends a prompt with a warm price
+                # to its cheapest engine. Evidence without a warm price stays cold.
+                cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+                cached = dict(row.value.cached)
+                for p in profiles:
+                    tokens = cached.get(p.iid, 0)
+                    warm = p.cached_prefill_time(tokens, length - tokens) if tokens else None
+                    if warm is not None:
+                        cost = min(cost, warm)
                 prefill += cost * row.count / span
             else:
                 demand_complete = False
