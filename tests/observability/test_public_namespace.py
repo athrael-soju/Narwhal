@@ -99,6 +99,10 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitoring["event_loop_lag_high_water_s"], 0.03)
         self.assertIn("narwhal_event_loop_lag_seconds 0.01", metrics_response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.03", metrics_response.text)
+        # The route's response model keeps each engine's residency synchronisation.
+        residency = state_response.json()["residency"]
+        self.assertEqual(set(residency), {spec.iid for spec in self.router.cfg.engines})
+        self.assertTrue(all(row["known"] is False for row in residency.values()))
 
     async def test_state_retains_documented_controller_decision_fields(self):
         details = {
