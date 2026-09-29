@@ -1205,6 +1205,16 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
     return 0
 
 
+def _evidence_matches(saved: object, row: Profile) -> bool:
+    """Return whether saved profile evidence describes `row`; absent optional fields are unset."""
+    if not isinstance(saved, dict):
+        return False
+    try:
+        return Profile(**saved) == row
+    except (TypeError, ValueError):
+        return False
+
+
 def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str]) -> int:
     """Combine separately measured role mixes, retaining source sidecars."""
     sidecar_path = output_path.with_suffix(".samples.json")
@@ -1230,7 +1240,9 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
             if row.iid not in engine_ids:
                 raise ValueError(f"{source}: profile {row.iid} is outside the fleet")
             evidence = record["engines"].get(row.iid)
-            if not isinstance(evidence, dict) or evidence.get("profile") != asdict(row):
+            if not isinstance(evidence, dict) or not _evidence_matches(
+                evidence.get("profile"), row
+            ):
                 raise ValueError(
                     f"{samples}: profile {row.iid} lacks matching measurement evidence"
                 )

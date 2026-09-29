@@ -204,6 +204,37 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(merged.profiles_for_split(["e0"], 2, 1)[0].colocated_group, "gpu-0")
             self.assertEqual(len(merged.all_profiles()), 2)
 
+    async def test_merge_accepts_evidence_saved_before_optional_profile_fields(self):
+        newer = ("ttft_block_tokens", "ttft_split", *probe.CACHED_PROFILE_FIELDS)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = [root / "one.json", root / "two.json"]
+            rows = []
+            for path, mix in zip(sources, ((1, 2), (2, 1)), strict=True):
+                row = replace(
+                    profile("e0"),
+                    colocated_group="gpu-0",
+                    colocated_target_role="prefill",
+                    colocated_prefill_engines=mix[0],
+                    colocated_decode_engines=mix[1],
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+                rows.append(row)
+                ProfileStore(path, load=False).put(row)
+                saved = {k: v for k, v in asdict(row).items() if k not in newer}
+                path.with_suffix(".samples.json").write_text(
+                    json.dumps({"engines": {"e0": {"profile": saved}}})
+                )
+            self.assertEqual(probe.merge_profiles(sources, root / "merged.json", {"e0"}), 0)
+            # Evidence that describes another measurement still stops the merge.
+            stale = {**asdict(rows[0]), "ttft_c": rows[0].ttft_c + 1.0}
+            sources[0].with_suffix(".samples.json").write_text(
+                json.dumps({"engines": {"e0": {"profile": stale}}})
+            )
+            with self.assertRaisesRegex(ValueError, "lacks matching measurement evidence"):
+                probe.merge_profiles(sources, root / "again.json", {"e0"})
+
     async def test_prompt_uses_the_engine_count_after_resizing(self):
         """Prompt resizing records the measured count used as the fit axis."""
         counts = iter((20, 9))
