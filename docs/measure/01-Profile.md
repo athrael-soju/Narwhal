@@ -71,11 +71,11 @@ After the cold sweeps, the profiler measures prefill when part of the prompt com
 
 For each `--cached-prefix-lens` and `--cached-suffix-lens` pair within the engine's `max_model_len`, the profiler repeats three requests three times:
 
-1. It sends the prefix and the suffix's first word under a fresh cache salt. A hybrid attention and Mamba engine keeps boundary state for a prompt's last full block when the prompt extends past that block.
+1. It sends the prefix and the suffix's first words under a fresh cache salt. The profiler adds words until this primer ends inside the block after the prefix's last full block. A hybrid attention and Mamba engine keeps boundary state for a prompt's last full block when the prompt extends past that block.
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. Each case contributes the medians of its repeats, and the fit needs at least five cases. The profiler reports four errors:
+The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. Each case contributes the medians of its repeats. The fit needs two prefix lengths, two suffix lengths and five cases within the engine context; the profiler checks the grid before the warm sweep and keeps cold pricing for a smaller grid. The profiler reports four errors:
 
 * the fit's leave-one-case-out error;
 * pricing only the suffix on the cold curve;
@@ -83,6 +83,8 @@ The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` 
 * the cold curve against the measured cold controls.
 
 Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit or its held-out error exceeds 20%. The profiler prints the reason.
+
+Establish the warm fit on one engine first. Select it with `--only <iid>`, compare its held-out error with the recorded threshold, then profile every engine with `--overwrite`.
 
 ## 3. Retain profile samples and fits
 
@@ -131,7 +133,7 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted cold and warm prefill curves and copied measured decode coefficients, preserving the original pair. Earlier sample files require a fresh sweep against the current engine processes.
+The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted cold and warm prefill curves and copied measured decode coefficients, preserving the original pair. An engine whose saved warm evidence records a `reason` keeps cold pricing with that reason. Earlier sample files require a fresh sweep against the current engine processes.
 
 After refitting:
 
