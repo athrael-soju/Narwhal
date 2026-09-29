@@ -62,7 +62,7 @@ A completed probe acts on the engine:
 | --- | --- | --- |
 | Passes | Any | Clears the relevant failure streaks |
 | Fails | Another live engine serves its role or accepts role changes | Ejects the engine |
-| Fails | Sole live engine of a pinned role | Keeps the engine in placement |
+| Fails | Its removal leaves its role unserved | Keeps the engine in placement and lifts its hold |
 
 `narwhal_ejected` exports engine ejection.
 

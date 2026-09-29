@@ -46,6 +46,14 @@ A handoff restores these persisted totals:
 - `rejected`
 - `cancelled`
 
+A handoff restores held engines:
+
+| Saved state | Restored as |
+| --- | --- |
+| `ejected` engine | Ejected, with an immediate readmission probe |
+| `inference_sources` suspect whose role another live engine covers | Ejected, with an immediate readmission probe |
+| `inference_sources` suspect whose removal leaves its role unserved | Live suspect |
+
 The replacement process starts fresh process-local state for:
 
 - resident tracking

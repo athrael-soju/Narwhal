@@ -120,7 +120,7 @@ When the failed engine later passes readmission, Narwhal assigns its role accord
 
 ### Aggregate fallback from an idle decode engine
 
-If failures or drains empty a phase's pool, the scheduler can place that phase on a live unpinned engine of the other role. With only pinned engines of the other role live, the request fails with HTTP 503.
+If failures or drains empty a phase's pool, the scheduler can place that phase on a live unpinned engine of the other role. With only pinned engines of the other role live, the router answers HTTP 503 before prefill.
 
 Predictive admission rejects new work on that engine until its resident decode work drains, because the measured curves price one phase at a time.
 

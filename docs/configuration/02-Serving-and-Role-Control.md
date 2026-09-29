@@ -8,7 +8,7 @@ By default, Narwhal dispatches admitted requests directly with one prefill and d
 
 | Field                        | Default        | Meaning                                                                                                                                                                                      |
 | ---------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serving.admission`          | `"predictive"` | `predictive` prices every prefill path against the TTFT target and constrains aggregate placement to the single-phase region covered by measurements. `open` disables both admission checks. |
+| `serving.admission`          | `"predictive"` | `predictive` prices every prefill path against the TTFT target and constrains aggregate placement to the single-phase region covered by measurements. `open` skips every predictive admission check. |
 | `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget to reduce boundary churn. Nonnegative.                                                                                                           |
 | `serving.max_connections`    | `512`          | Global admitted-request limit and HTTP data-pool size. At least 1.                                                                                                                           |
 | `engine.control_connections` | `0`            | HTTP connections reserved for health and recovery. `0` derives two per engine, with a minimum of four. Nonnegative.                                                                          |
@@ -20,9 +20,9 @@ Predictive admission returns HTTP 429 with one of these causes:
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
 | `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
 | `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
-| `decode` | Every live decode engine holds its decode capacity or exceeds `slo.tpot_s` with the request | `1` |
+| `decode` | Committed decode work fills live decode capacity, or the least-loaded decode engine exceeds `slo.tpot_s` with the request while an idle engine meets it | `1` |
 
-Decode capacity is `serving.decode_concurrency` when positive and the profile's `decode_max_requests` otherwise. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
+Each decode engine's capacity is its profile's `decode_max_requests`, capped by `serving.decode_concurrency` when positive. Committed decode work counts resident decode requests, requests in prefill and requests waiting for a decode slot. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
