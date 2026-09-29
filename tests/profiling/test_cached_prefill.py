@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.profiling import probe
-from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples
+from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
 from tests.fixtures import profile
 
 A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
@@ -116,7 +116,7 @@ class ColdSplitStepTests(unittest.TestCase):
         def cold(n):
             return 1e-9 * n * n + 2e-5 * n + 0.07 + (0.06 if n > 512 and n % 512 else 0.0)
 
-        lengths = (256, 700, 1300, 2300, 4300, 8300)
+        lengths = (256, 700, 1300, 2300, 4096, 4300, 8300)
         (a, b, c, split), _, mape = fit_prefill_samples([(n, cold(n)) for n in lengths], 512)
         self.assertAlmostEqual(split, 0.06, places=6)
         self.assertLess(mape, 1e-6)
@@ -124,13 +124,39 @@ class ColdSplitStepTests(unittest.TestCase):
         row = replace(row, ttft_block_tokens=512, ttft_split=split)
         for n in (300, 512, 513, 1024, 1500):
             self.assertAlmostEqual(row.prefill_time(n), cold(n), places=6)
-        # Without a block size, or with one regime only, the fit keeps the plain curve.
-        self.assertEqual(fit_prefill_samples([(n, cold(n)) for n in lengths[1:]], 512)[0][3], 0)
-        plain = fit_prefill_samples([(n, cold(n)) for n in lengths])
-        self.assertEqual(plain[0][3], 0)
+        # Without a block size, or with fewer than two lengths on either side of the rule,
+        # the fit keeps the plain curve.
+        one_short = (256, 700, 1300, 2300, 4300, 8300)
+        for kept in (one_short, one_short[1:]):
+            with self.subTest(lengths=kept):
+                self.assertIsNone(fit_prefill_samples([(n, cold(n)) for n in kept], 512)[0][3])
+        plain = fit_prefill_samples([(n, cold(n)) for n in one_short])
+        self.assertIsNone(plain[0][3])
         self.assertGreater(plain[2], 0.05)
         with self.assertRaisesRegex(ValueError, "go together"):
             replace(profile("e0"), ttft_split=0.06)
+
+    def test_a_one_step_engine_keeps_the_plain_curve(self):
+        def cold(n):
+            return 1e-9 * n * n + 2e-5 * n + 0.05
+
+        # The short point sits off the curve, as measurement noise can leave it.
+        for offset in (0.95, 1.05):
+            samples = [(n, cold(n) * (offset if n == 256 else 1.0)) for n in probe.PREFILL_LENS]
+            for block in (16, 512):
+                with self.subTest(offset=offset, block=block):
+                    (a, b, c, split), _, _ = fit_prefill_samples(samples, block)
+                    self.assertIsNone(split)
+                    row = replace(profile("e0"), ttft_a=a, ttft_b=b, ttft_c=c)
+                    for n in (1024, 4096, 8192):
+                        self.assertLess(abs(row.prefill_time(n) - cold(n)) / cold(n), 0.015)
+
+    def test_default_lengths_measure_both_regimes_for_common_block_sizes(self):
+        for block in (16, 512):
+            with self.subTest(block=block):
+                one_step = [n for n in probe.PREFILL_LENS if not splits_prefill(n, block)]
+                self.assertGreaterEqual(len(one_step), 2)
+        self.assertEqual(list(probe.PREFILL_LENS), sorted(probe.PREFILL_LENS))
 
     def test_block_size_comes_from_the_engine_cache_metric(self):
         metrics = 'vllm:cache_config_info{block_size="512",engine="0"} 1.0\n'
@@ -282,10 +308,15 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
         def cold(n):
             return 1e-9 * n * n + 2e-5 * n + 0.08 + (0.06 if n > 512 and n % 512 else 0.0)
 
-        prefill = [(float(n), cold(n)) for n in (256, 700, 1300, 2300, 4300)]
+        prefill = [(float(n), cold(n)) for n in (256, 700, 1300, 2300, 4096, 4300)]
         row, evidence = await self.profile_with(([], "none"), block=512, prefill=prefill)
         self.assertEqual(row.ttft_block_tokens, 512)
         self.assertAlmostEqual(row.ttft_split, 0.06, places=6)
+        self.assertEqual(evidence["prefill_block_tokens"], 512)
+        # One length inside the first block leaves no split step to measure.
+        row, evidence = await self.profile_with(([], "none"), block=512, prefill=prefill[:-2])
+        self.assertIsNone(row.ttft_block_tokens)
+        self.assertIsNone(row.ttft_split)
         self.assertEqual(evidence["prefill_block_tokens"], 512)
 
 

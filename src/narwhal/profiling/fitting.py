@@ -8,6 +8,10 @@ from collections.abc import Sequence
 
 MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
+# Distinct lengths each side of the cache-block rule needs before the fit measures a split step.
+SPLIT_REGIME_LENGTHS = 2
+# A split step must bring the median fit error below this share of the plain curve's error.
+SPLIT_ERROR_RATIO = 0.5
 
 
 def _solve(a: list[list[float]], b: list[float]) -> list[float]:
@@ -78,13 +82,15 @@ def splits_prefill(length: float, block_tokens: int | None) -> bool:
 def fit_prefill_samples(
     samples: list[tuple[float, float]],
     block_tokens: int | None = None,
-) -> tuple[tuple[float, float, float, float], list[tuple[float, float]], float]:
+) -> tuple[tuple[float, float, float, float | None], list[tuple[float, float]], float]:
     """Fit one median per exact input length and reject poor representative fits.
 
     Returns `(a, b, c, split)` for `a*n*n + b*n + c`, plus `split` for a prompt that
     ends inside a cache block past the first. An engine that splits such a prompt
-    into two prefill steps measures a positive `split`. Without a block size, or
-    without lengths on both sides of that rule, `split` is 0.
+    into two prefill steps measures a positive `split`. The fit keeps `split` when
+    each side of that rule has `SPLIT_REGIME_LENGTHS` distinct lengths, the sweep
+    has more lengths than the fit has terms, and the step brings the fit error
+    below `SPLIT_ERROR_RATIO` of the plain curve's; otherwise `split` is None.
     """
     if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
         raise ValueError("prefill samples must be finite and nonnegative")
@@ -95,18 +101,31 @@ def fit_prefill_samples(
         (length, statistics.median(times)) for length, times in sorted(groups.items())
     ]
     flags = [splits_prefill(length, block_tokens) for length, _ in representatives]
-    if len(representatives) > 3 and len(set(flags)) == 2:
+
+    def point_errors(a: float, b: float, c: float, step: float) -> list[float]:
+        return [
+            abs(a * length * length + b * length + c + step * flag - elapsed) / max(elapsed, 1e-9)
+            for (length, elapsed), flag in zip(representatives, flags, strict=True)
+        ]
+
+    a, b, c = fit_quadratic(representatives)
+    split: float | None = None
+    errors = point_errors(a, b, c, 0.0)
+    if (
+        len(representatives) > 4
+        and flags.count(True) >= SPLIT_REGIME_LENGTHS
+        and flags.count(False) >= SPLIT_REGIME_LENGTHS
+    ):
         split_rows = [
             (x * x, x, 1.0, float(flag))
             for (x, _), flag in zip(representatives, flags, strict=True)
         ]
-        a, b, c, split = _nonnegative_fit(split_rows, [y for _, y in representatives])
-    else:
-        (a, b, c), split = fit_quadratic(representatives), 0.0
-    errors = [
-        abs(a * length * length + b * length + c + split * flag - elapsed) / max(elapsed, 1e-9)
-        for (length, elapsed), flag in zip(representatives, flags, strict=True)
-    ]
+        sa, sb, sc, step = _nonnegative_fit(split_rows, [y for _, y in representatives])
+        stepped = point_errors(sa, sb, sc, step)
+        # A one-step engine's short-length noise also lowers the error a little; a second
+        # prefill step leaves the plain curve far off at both regimes.
+        if statistics.mean(stepped) < SPLIT_ERROR_RATIO * statistics.mean(errors):
+            a, b, c, split, errors = sa, sb, sc, step, stepped
     mape = statistics.mean(errors)
     if mape > MAX_PREFILL_FIT_MAPE or max(errors) > MAX_PREFILL_POINT_ERROR:
         raise ValueError(

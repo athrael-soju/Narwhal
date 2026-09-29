@@ -41,9 +41,9 @@ from .model import CACHED_PROFILE_FIELDS, Profile, decode_evidence_problems
 from .store import ProfileStore
 
 # Candidate lengths are bounded by each live engine's reported context limit.
-# One length within a small cache block and the rest between block boundaries, where served
-# prompts usually end.
-PREFILL_LENS = (256, 700, 1300, 2300, 4300, 8300, 12300, 16300)
+# 256 and 4096 end on a block boundary for 16- and 512-token blocks, so the fit measures the
+# one-step regime twice; the rest end between block boundaries, where served prompts usually end.
+PREFILL_LENS = (256, 700, 1300, 2300, 4096, 4300, 8300, 12300, 16300)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
@@ -768,7 +768,7 @@ async def profile_instance(
     (a, b, c, split), representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
     print(
         f"    prefill median fit MAPE {prefill_fit_mape:.1%}"
-        + (f"; split step {split * 1000:.1f} ms past {block_tokens}" if block_tokens else "")
+        + (f"; split step {split * 1000:.1f} ms past {block_tokens}" if split is not None else "")
     )
     if evidence is not None:
         evidence.update(
@@ -818,8 +818,8 @@ async def profile_instance(
         ttft_a=a,
         ttft_b=b,
         ttft_c=c,
-        ttft_block_tokens=block_tokens,
-        ttft_split=None if block_tokens is None else split,
+        ttft_block_tokens=None if split is None else block_tokens,
+        ttft_split=split,
         tpot_slope=slope,
         tpot_intercept=intercept,
         kv_capacity_tokens=capacity,
@@ -1130,8 +1130,8 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
                 "ttft_a": a,
                 "ttft_b": b,
                 "ttft_c": c,
-                "ttft_block_tokens": block_tokens,
-                "ttft_split": None if block_tokens is None else split,
+                "ttft_block_tokens": None if split is None else block_tokens,
+                "ttft_split": split,
                 **dict.fromkeys(CACHED_PROFILE_FIELDS),
             }
         )

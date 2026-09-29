@@ -8,7 +8,7 @@ Reserve the real engines and keep them otherwise idle. From the router:
 .venv/bin/narwhal-profile \
   --fleet runs/deployment/fleet.json \
   --limits runs/deployment/profiling-limits.json \
-  --prefill-lens 256,700,1300,2300,4300,8300,12300 \
+  --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
   --decode-input-lens 512,4096,8192
 ```
 
@@ -16,7 +16,7 @@ Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`.
 
 Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model. Engines keep prefix caching on during profiling; each cold probe request carries a fresh cache salt.
 
-Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic, with prefill lengths between cache block boundaries. Keep the `.samples.json` sidecar written alongside the profile store configured by `profiles.path`.
+Prefill profiling measures one-token latency versus input length. Decode profiling varies prompt length and concurrency while the cohort stays in decode, then fits observed token intervals against active-request count plus estimated resident KV. Choose lengths and concurrency points that cover expected production traffic, with two prefill lengths on cache block boundaries and the rest between them. Keep the `.samples.json` sidecar written alongside the profile store configured by `profiles.path`.
 
 The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
 
