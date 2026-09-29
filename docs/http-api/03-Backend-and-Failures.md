@@ -90,12 +90,20 @@ Prefill finishes before client streaming begins, so prefill failures can be retu
 
 When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
 
-After `recovery.eject_after` consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
+The breaker classifies each failed decode leg:
 
-The failure streak includes:
+| Failure | Engine | Class | Verification at `recovery.eject_after` consecutive failures |
+| --- | --- | --- | --- |
+| First-token timeout | Holds other requests | `overload` | Health probe |
+| First-token timeout | Idle | `stream` | Inference probe |
+| Mid-stream silence | Any | `stream` | Inference probe |
 
-- first-token timeout
-- mid-stream silence
+An inference-probe suspect leaves placement until the probe succeeds:
+
+| Suspect | Placement during verification |
+| --- | --- |
+| Another live engine serves its role or accepts role changes | Held out |
+| Sole live engine of a pinned role | Kept |
 
 After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
 

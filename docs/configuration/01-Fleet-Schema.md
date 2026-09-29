@@ -110,7 +110,7 @@ Example:
 }
 ```
 
-An engine defaults to `decode`. A pinned engine retains its configured role through controller movement, placement changes, and resume. Pinning can reserve prefill capacity for warm-standby takeover.
+An engine defaults to `decode`. A pinned engine retains its configured role through controller movement, placement changes, and resume, and serves its configured phase alone. Pinning can reserve prefill capacity for warm-standby takeover.
 
 Set TTFT and TPOT targets from measurements taken on the deployed engine shape. Narwhal derives Prometheus histogram buckets from those values.
 

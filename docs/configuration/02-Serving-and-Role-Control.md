@@ -13,11 +13,16 @@ By default, Narwhal dispatches admitted requests directly with one prefill and d
 | `serving.max_connections`    | `512`          | Global admitted-request limit and HTTP data-pool size. At least 1.                                                                                                                           |
 | `engine.control_connections` | `0`            | HTTP connections reserved for health and recovery. `0` derives two per engine, with a minimum of four. Nonnegative.                                                                          |
 
-Predictive admission returns HTTP 429 when the least expensive prefill path exceeds the TTFT budget.
+Predictive admission returns HTTP 429 with one of these causes:
 
-Backlog-driven refusals include `Retry-After` with the projected wait.
+| Cause | Condition | `Retry-After` |
+| --- | --- | --- |
+| `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
+| `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
+| `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
+| `decode` | Every live decode engine holds its decode capacity or exceeds `slo.tpot_s` with the request | `1` |
 
-For a prompt whose projected TTFT exceeds the target at zero backlog, Narwhal returns an error envelope directing the caller to shorten the prompt or increase the TTFT target.
+Decode capacity is `serving.decode_concurrency` when positive and the profile's `decode_max_requests` otherwise. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
@@ -140,7 +145,7 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `serving.prefill_timeout_s`     | `120.0`                | Elapsed prefill-leg deadline. Positive and at most `serving.request_timeout_s`.                                                         |
 | `recovery.failure_quarantine_s` | `0.0`                  | Time a failed engine remains excluded from placement. `0` disables quarantine.                                                          |
 | `engine.decode_read_timeout_s`  | `60.0`                 | Maximum silent interval between decode chunks. `0` disables the gap limit.                                                              |
-| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token and for each functional-verification leg. Positive and at most `serving.request_timeout_s`.         |
+| `engine.first_token_timeout_s`  | `2.5`                  | Deadline to the first decode token. Positive and at most `serving.request_timeout_s`.                                                   |
 | `engine.first_token_calibration_path` | `""` | Path to a completed first-token calibration artifact under `runs/`. An empty value leaves calibration evidence unconfigured. |
 | `engine.tokenize`               | `true`                 | Requests exact text/chat input length from the dialect tokenisation endpoint. Token-ID prompts are counted locally.                     |
 | `engine.tokenize_timeout_s`     | `2.0`                  | Elapsed exact-token-count deadline. Positive. Errors from an available tokenizer route fail the request before placement.             |
@@ -177,7 +182,7 @@ Set `engine.decode_read_timeout_s` to `0` to use the overall request deadline as
 }
 ```
 
-Breaker verification applies `engine.first_token_timeout_s` independently to each complete prefill and decode verification leg.
+Each breaker verification leg has a budget of the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s`.
 
 `engine.chars_per_token` feeds the quadratic prefill estimate during character-based fallback. Profile this ratio for every dialect that uses that fallback.
 
