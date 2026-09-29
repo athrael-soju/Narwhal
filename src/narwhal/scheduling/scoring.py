@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..profiling.model import Profile
@@ -265,6 +266,14 @@ class SplitScorer:
         self.monitor = demand.monitor
         self.scheduler = demand.scheduler
 
+    def _recheck(self, waiting: Iterable[Request]) -> None:
+        """Refresh the cache evidence of requests waiting for prefill placement."""
+        recheck = self.scheduler.recheck_cache_evidence
+        if recheck is not None:
+            for row in waiting:
+                if row.phase is Phase.PREFILL and row.cached_tokens:
+                    recheck(row)
+
     def project_prefill(
         self,
         now: float,
@@ -292,6 +301,7 @@ class SplitScorer:
         waiting = [row for row in self.monitor.waiting.values() if row.phase is Phase.PREFILL]
         if request is not None and all(row.rid != request.rid for row in waiting):
             waiting.append(request)
+        self._recheck(waiting)
         if not waiting:
             return None
         # Stable sorting preserves queue publication order when several offers
@@ -369,6 +379,7 @@ class SplitScorer:
             if (profile := self.scheduler.profiles.get(inst.iid)) is not None
         )
         waiting = tuple(self.monitor.waiting.values())
+        self._recheck(waiting)
         resident_prefill = 0.0
         resident_covered = True
         for inst in instances:

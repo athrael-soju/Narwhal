@@ -1,12 +1,15 @@
 """Check prefix-cache evidence at sizing, the shared prefill estimate and advisory proposals."""
 
+import asyncio
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.costs import prefill_seconds
+from narwhal.serving import router as router_module
 from narwhal.serving.app import create_app
 from narwhal.types import Request, Role
 from tests.fixtures import fleet, profile
@@ -228,6 +231,65 @@ class PlacementRecheckTests(unittest.TestCase):
                 self.assertEqual(request.cache_sequences, {})
                 self.assertIsNone(request.cache_placement)
                 self.assertNotEqual(placed.iid, self.warm_iid)
+
+    def test_a_retry_placed_cold_clears_the_earlier_placement_record(self):
+        request = self.sized()
+        self.scheduler.schedule(request)
+        self.assertEqual(request.cache_placement["placed_iid"], self.warm_iid)
+        self.view.forget("engine restarted")
+        self.scheduler.schedule(request)
+        self.assertIsNone(request.cache_placement)
+
+    def test_projections_price_waiting_work_with_current_evidence(self):
+        controller = self.router.controller
+        now = self.router._clock()
+        request = self.sized()
+        request.arrived_at = now
+        self.scheduler.monitor.waiting[request.rid] = request
+        warm_price = self.scheduler.profiles.get(self.warm_iid).cached_prefill_time(36, 4)
+        cold_price = self.scheduler.profiles.get(self.warm_iid).prefill_time(40)
+
+        def captured():
+            controller._demand(now)
+            return controller.scorer.capture(
+                now,
+                controller.last_demand,
+                utilization=controller.utilization,
+                observed_load=(0.0, 0.0),
+                window_s=controller.window_s,
+                step_s=controller.step_s,
+            )
+
+        self.assertAlmostEqual(controller.scorer.project_prefill(now).queued_prefill_s, warm_price)
+        self.assertAlmostEqual(captured().queued_prefill_s, warm_price)
+        self.view.forget("engine restarted")
+        self.assertAlmostEqual(controller.scorer.project_prefill(now).queued_prefill_s, cold_price)
+        self.assertAlmostEqual(captured().queued_prefill_s, cold_price)
+        self.assertEqual(request.cached_tokens, {})
+
+    def test_projections_price_resident_work_with_its_placement_evidence(self):
+        now = self.router._clock()
+        request = self.sized()
+        self.scheduler.monitor.dispatched(self.warm_iid, request)
+        self.scheduler.monitor.waiting["w"] = Request("w", 40, arrived_at=now)
+        projection = self.router.controller.scorer.project_prefill(now)
+        warm_price = self.scheduler.profiles.get(self.warm_iid).cached_prefill_time(36, 4)
+        self.assertAlmostEqual(projection.resident_prefill_s, warm_price)
+
+    def test_long_prompts_hash_in_a_worker_thread(self):
+        long = list(range(router_module.HASH_THREAD_TOKENS + 8))
+        self.view.groups = {
+            "0": ("full_attention", None, set(block_identities(self.namespace, long, BLOCK)))
+        }
+        for prompt, threaded in ((long, True), (self.prompt, False)):
+            with (
+                self.subTest(tokens=len(prompt)),
+                patch.object(router_module.asyncio, "to_thread", wraps=asyncio.to_thread) as spy,
+            ):
+                evidence = asyncio.run(self.router._cache_evidence({}, prompt))
+                self.assertEqual(spy.called, threaded)
+                self.assertEqual(evidence, self.router.prefix_cache_evidence({}, prompt))
+                self.assertTrue(evidence[0])
 
 
 class SharedCostContractTests(unittest.TestCase):

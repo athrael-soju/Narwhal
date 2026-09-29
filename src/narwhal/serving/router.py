@@ -42,6 +42,22 @@ if TYPE_CHECKING:
 log = logging.getLogger("narwhal.server")
 
 
+# Prompts at least this long hash their block identities in a worker thread.
+HASH_THREAD_TOKENS = 8192
+
+
+def _hash_prompt(
+    namespace: CacheNamespace | None, reusable: Sequence[int], sizes: set[int]
+) -> dict[int, list[bytes]]:
+    """Return the prompt's block identities per block size; empty for invalid token IDs."""
+    if namespace is None:
+        return {}
+    try:
+        return {size: block_identities(namespace, reusable, size) for size in sizes}
+    except ValueError:
+        return {}
+
+
 def _multimodal(body: dict[str, Any]) -> bool:
     """Return whether a chat request carries non-text content parts."""
     for message in body.get("messages") or []:
@@ -265,7 +281,7 @@ class NarwhalRouter:
             and prompt
             and all(type(token) is int and token >= 0 for token in prompt)
         ):
-            return len(prompt), *self.prefix_cache_evidence(body, prompt)
+            return len(prompt), *(await self._cache_evidence(body, prompt))
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
@@ -282,7 +298,7 @@ class NarwhalRouter:
                     ids = got.token_ids
                     if ids is None:
                         return got.count, {}, {}, {}
-                    return got.count, *self.prefix_cache_evidence(body, ids)
+                    return got.count, *(await self._cache_evidence(body, ids))
                 self._tokenizer = live[(k + 1) % len(live)].iid
         return self.estimate_length(body), {}, {}, {}
 
@@ -298,27 +314,40 @@ class NarwhalRouter:
         Identities cover the prompt minus its final token. Multimodal requests, fleets
         without an engine contract and out-of-range token IDs return empty evidence.
         """
+        return self._match_evidence(_hash_prompt(*self._evidence_inputs(body, token_ids)))
+
+    async def _cache_evidence(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """`prefix_cache_evidence`, hashing a long prompt in a worker thread."""
+        inputs = self._evidence_inputs(body, token_ids)
+        if len(inputs[1]) >= HASH_THREAD_TOKENS:
+            return self._match_evidence(await asyncio.to_thread(_hash_prompt, *inputs))
+        return self._match_evidence(_hash_prompt(*inputs))
+
+    def _evidence_inputs(
+        self, body: dict[str, Any], token_ids: Sequence[int]
+    ) -> tuple[CacheNamespace | None, Sequence[int], set[int]]:
         contract = self.cfg.engine_contract
         if contract is None or len(token_ids) < 2 or _multimodal(body):
-            return {}, {}, {}
+            return None, (), set()
         salt = body.get("cache_salt")
         namespace = CacheNamespace(
             self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
         )
-        reusable = token_ids[:-1]
-        by_size: dict[int, list[bytes]] = {}
+        sizes = {v.block_size for v in self.residency.views.values() if v.known and v.block_size}
+        return namespace, token_ids[:-1], sizes
+
+    def _match_evidence(
+        self, by_size: dict[int, list[bytes]]
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         matched: dict[int, int] = {}
         cached: dict[str, int] = {}
         sequences: dict[str, int] = {}
         for iid, view in self.residency.views.items():
             size = view.block_size
-            if not view.known or not size:
+            if not view.known or not size or size not in by_size:
                 continue
-            if size not in by_size:
-                try:
-                    by_size[size] = block_identities(namespace, reusable, size)
-                except ValueError:
-                    return {}, {}, {}
             blocks = view.cached_prefix_blocks(by_size[size])
             if blocks > 0:
                 cached[iid] = blocks * size
@@ -328,7 +357,7 @@ class NarwhalRouter:
         return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
 
     def recheck_cache_evidence(self, request: Request) -> None:
-        """Shrink the request's cache evidence to what current residency holds."""
+        """Refresh the request's cache evidence from current residency."""
         for iid in list(request.cached_tokens):
             view = self.residency.views.get(iid)
             if view is not None and view.block_size:

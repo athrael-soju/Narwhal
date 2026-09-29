@@ -612,12 +612,10 @@ class GlobalScheduler:
         # matching role whenever that pool has a live engine.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
         candidates = [i for i in instances if i.role is want] or instances
-        if (
-            request.phase is Phase.PREFILL
-            and request.cached_tokens
-            and self.recheck_cache_evidence is not None
-        ):
-            self.recheck_cache_evidence(request)
+        if request.phase is Phase.PREFILL:
+            request.cache_placement = None
+            if request.cached_tokens and self.recheck_cache_evidence is not None:
+                self.recheck_cache_evidence(request)
         costs = {i.iid: self.cost(request, i) for i in candidates}
 
         # 2. Lowest-cost instance that also meets the SLO.

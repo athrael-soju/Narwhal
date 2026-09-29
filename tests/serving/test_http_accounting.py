@@ -10,10 +10,13 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.router import NarwhalRouter
+from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices
+from tests.scheduling.test_cache_evidence import warm
 
 
 class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
@@ -89,6 +92,34 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.inflight, 0)
         self.assertEqual(self.router.ingress_inflight, 0)
         self.assertFalse(self.router.monitor.waiting)
+
+    async def test_token_id_prompt_carries_cache_evidence_to_demand_and_journal(self):
+        client = self.client()
+        scheduler = self.router.scheduler
+        prefill = next(i for i in scheduler.monitor.instances.values() if i.role is Role.PREFILL)
+        digest = scheduler.profiles.get(prefill.iid).generation_digest
+        scheduler.profiles.put(warm(prefill.iid, generation_digest=digest))
+        prompt = list(range(40))
+        namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
+        view = self.router.residency.view(prefill.iid)
+        view.known, view.block_size, view.sequence = True, 4, 3
+        view.groups = {"0": ("full_attention", None, set(block_identities(namespace, prompt, 4)))}
+        response = await client.post(
+            "/v1/completions",
+            json={"model": self.cfg.model, "prompt": prompt, "max_tokens": 1, "stream": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        row = self.terminal_rows()[-1]
+        self.assertEqual(row["cached_tokens"], {prefill.iid: 36})
+        placement = row["cache_placement"]
+        self.assertEqual(
+            (placement["placed_iid"], placement["placed_cached_tokens"]), (prefill.iid, 36)
+        )
+        self.assertEqual(placement["evidence_sequence"], 3)
+        self.assertLess(placement["predicted_prefill_s"], placement["cold_prefill_s"])
+        arrivals = [cohort.value.cached for cohort in self.router.controller.demand.arrivals.rows()]
+        self.assertIn(((prefill.iid, 36),), arrivals)
+        self.assert_released()
 
     async def test_readiness_blocks_traffic_until_identity_capture(self):
         """Declared engines require captured process identities before admission."""

@@ -428,6 +428,7 @@ async def run_decode(
                 async for frame in attempt:
                     if streaming:
                         state.output_started = True
+                        state.request.cache_identities = {}
                         yield frame
                     else:
                         size += len(frame.encode())
