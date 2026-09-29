@@ -33,18 +33,20 @@ The `decode` check projects decode work over the request's decode window, from i
 | Resident in decode | From now until its projected last token |
 | In prefill | From its predicted prefill completion until its projected last token |
 
-A request's remaining output is its expected output, and its `max_tokens` once it passes that estimate. A request with an unknown remainder holds decode through the window. Each engine generates at its profiled token interval for a full batch at the current mean context.
+Remaining output is the expected output, and the output cap once a request passes that estimate. A request with an unknown remainder holds decode indefinitely. When the checked request's output is unknown, its window is the instant of its predicted prefill completion.
+
+Residents generate at their decode engine's token interval, and other requests at the fleet mean. Each engine's interval is its profiled interval for a full batch at the current mean context, within the decode KV token bound. The live decode correction scales it.
 
 Peak projected work over the window must fit live decode capacity:
 
 | Budget | Per request | Fleet capacity |
 | --- | --- | --- |
 | Slots | 1 | Sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive |
-| KV tokens | Prompt plus final output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
+| KV tokens | Prompt plus delivered and remaining output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
 
 The TPOT check prices the decode engine with the fewest residents generating at the request's prefill completion.
 
-Expected output is `max_tokens`, scaled by the median delivered fraction once three requests in the same power-of-two prompt and `max_tokens` bucket finish. A request that omits `max_tokens` uses the median delivered output for its prompt bucket; otherwise its output is unknown.
+The output cap is `max_tokens`, or `max_completion_tokens` when `max_tokens` is unset. Expected output is the output cap times the median delivered fraction for the request's bucket: its power-of-two prompt and output-cap sizes. A bucket's fraction applies once three of its requests finish. An uncapped request uses the median delivered output for its prompt bucket, or the fleet-wide median delivered output. A shape overflow in the completion history suspends the fractions and medians until the overflow ages out.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 

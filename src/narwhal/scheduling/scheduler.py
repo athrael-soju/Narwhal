@@ -360,17 +360,20 @@ class GlobalScheduler:
     ) -> bool:
         """Return whether live decode engines hold `request`'s decode window.
 
-        Each request holds decode from its start to its projected end: `request` from
+        Each request holds decode from its start to its projected last token: `request` from
         `ready_s`, residents and requests waiting for a decode slot from now, and requests in
         prefill from their projected prefill completion. Remaining output is the expected
-        output, then the `max_tokens` cap past the estimate; an unknown remainder holds
-        through the window. Tokens take each engine's interval at its slot limit. Peak
-        slots and KV tokens (prompt plus final output) over `request`'s window must fit the
-        fleet: slots sum `decode_max_requests`, capped by `concurrency` when positive, and
-        tokens sum `decode_token_limit`. The TPOT check prices the engine with the fewest
-        residents generating at `ready_s`. A fleet without live decode engines, or with an
-        engine lacking a measured decode bound, admits. A request that misses the TPOT
-        budget on an idle engine admits; placement decides it.
+        output, then the `max_tokens` cap past the estimate. A request with an unknown
+        remainder holds decode indefinitely; `request`'s own window is then the instant
+        `ready_s`. Residents generate at their engine's token interval and other requests at
+        the fleet mean. Each interval is the profile's full-batch interval at the current mean
+        context, within the decode token bound, times the live correction. Peak slots and KV
+        tokens (prompt plus projected final output) over the window must fit the fleet: slots
+        sum `decode_max_requests`, capped by `concurrency` when positive, and tokens sum
+        `decode_token_limit`. The TPOT check prices the engine with the fewest residents
+        generating at `ready_s`. A fleet without live decode engines, or with an engine
+        lacking a measured decode bound, admits. A request that misses the TPOT budget on an
+        idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
@@ -393,24 +396,34 @@ class GlobalScheduler:
             )
         step = sum(steps.values()) / len(steps)
 
-        def remaining_s(r: Request, token_s: float) -> float:
+        def remaining(r: Request) -> int | None:
             expected = estimate(r)
-            cap = expected if expected > r.output_len else r.wanted_len
-            return (cap - r.output_len) * token_s if cap > r.output_len else float("inf")
+            if expected > r.output_len:
+                return expected - r.output_len
+            if r.wanted_len > 0:
+                return max(0, r.wanted_len - r.output_len)
+            return None
 
-        def kv(r: Request) -> float:
-            return r.input_len + max(r.output_len, estimate(r))
+        def span(r: Request, start: float, token_s: float) -> tuple[float, float, int]:
+            left = remaining(r)
+            if left is None:
+                return start, float("inf"), r.input_len + r.output_len
+            return start, start + left * token_s, r.input_len + r.output_len + left
 
-        end = ready_s + remaining_s(request, step)
-        spans = [(0.0, float("inf"), r) for r in self.monitor.waiting.values()]
-        spans = [s for s in spans if s[2].phase is Phase.DECODE]
+        _, end, request_kv = span(request, ready_s, step)
+        end = ready_s if end == float("inf") else end
+        spans = [
+            (0.0, float("inf"), span(r, 0.0, step)[2])
+            for r in self.monitor.waiting.values()
+            if r.phase is Phase.DECODE
+        ]
         generating: dict[str, dict[str, Request]] = {}
         for inst in engines:
             generating[inst.iid] = {}
             for rid, r in inst.decode.items():
-                finish = remaining_s(r, steps[inst.iid])
-                spans.append((0.0, finish, r))
-                if finish >= ready_s:
+                resident = span(r, 0.0, steps[inst.iid])
+                spans.append(resident)
+                if resident[1] >= ready_s:
                     generating[inst.iid][rid] = r
         for inst in self.monitor.instances.values():
             prefill_profile = self.profiles.get(inst.iid)
@@ -418,17 +431,17 @@ class GlobalScheduler:
             for r in inst.prefill.values():
                 if prefill_profile is not None:
                     done += costs.prefill_seconds(prefill_profile, r)
-                spans.append((done, done + remaining_s(r, step), r))
+                spans.append(span(r, done, step))
         events = sorted(
-            (t, order, kv(r))
-            for first, last, r in spans
+            (t, order, kv)
+            for first, last, kv in spans
             if first <= end and last >= ready_s
             for t, order in ((max(first, ready_s), 0), (min(last, end), 1))
         )
-        held, held_kv, peak, peak_kv = 1, kv(request), 1, 0.0
-        for _, order, tokens_held in events:
+        held, held_kv, peak, peak_kv = 1, float(request_kv), 1, 0.0
+        for _, order, kv in events:
             held += 1 if order == 0 else -1
-            held_kv += tokens_held if order == 0 else -tokens_held
+            held_kv += kv if order == 0 else -kv
             if order == 0:
                 peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
         if peak > 1 and (peak > slots or peak_kv > tokens):

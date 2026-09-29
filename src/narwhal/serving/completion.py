@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-_INTEGER_FIELDS = ("n", "best_of", "max_tokens")
+_INTEGER_FIELDS = ("n", "best_of", "max_tokens", "max_completion_tokens")
+
+
+def output_cap(body: dict[str, Any]) -> int:
+    """Return the requested output cap from `max_tokens` or `max_completion_tokens`, 0 if unset."""
+    for name in ("max_tokens", "max_completion_tokens"):
+        value = body.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return 0
 
 
 def completion_body_error(body: Any) -> tuple[str, str | None] | None:

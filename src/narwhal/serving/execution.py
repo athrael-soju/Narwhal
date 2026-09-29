@@ -20,7 +20,7 @@ from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
 from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
-from .completion import reassemble
+from .completion import output_cap, reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
 from .response import RequestStreamResponse
@@ -271,7 +271,7 @@ async def serve_request(
     req = Request(
         rid=rid,
         input_len=router.estimate_length(body),
-        wanted_len=int(body.get("max_tokens") or 0),
+        wanted_len=output_cap(body),
     )
     state = lifecycle or RequestLifecycle(
         router, req, arrived, client_rid=headers.get("x-request-id")

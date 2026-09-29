@@ -72,7 +72,7 @@ class ReactivePolicy:
             )
             return None
 
-        estimates = controller.demand._output_estimates()
+        estimates = controller.demand.refresh_output_estimates()
         correction = controller.demand._decode_correction()
         prefill, decode = controller._demand(now, estimates=estimates, correction=correction)
         demand = Demand(

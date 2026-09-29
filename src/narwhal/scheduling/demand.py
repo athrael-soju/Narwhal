@@ -59,8 +59,8 @@ class DemandModel:
         self.monitor = monitor
         self.scheduler = scheduler
         self._clock = clock
-        self.bucket_s = bucket_s
-        self._estimates: tuple[float, OutputEstimates] | None = None
+        self.window_s = window_s
+        self._estimates: tuple[float, OutputEstimates, int] | None = None
         self.started_at = clock()
         self.unsized_pending = 0
         self.unsized = DemandWindow[bool](
@@ -326,16 +326,34 @@ class DemandModel:
             "residency": self.residency.summary(),
         }
 
+    def refresh_output_estimates(self) -> OutputEstimates:
+        """Rebuild the output estimates and the fleet-wide delivered-output median."""
+        return self._estimate_snapshot()[1]
+
+    def _estimate_snapshot(self) -> tuple[float, OutputEstimates, int]:
+        estimates = self._output_estimates()
+        rows = list(self.observed_decode.rows())
+        delivered = [(float(row.value[2]), row.count) for row in rows if row.value[2] > 0]
+        fleet = (
+            round(weighted_median(delivered))
+            if delivered and not any(row.overflow for row in rows)
+            else 0
+        )
+        self._estimates = (self._clock(), estimates, fleet)
+        return self._estimates
+
     def output_estimator(self) -> Callable[[Request], int]:
         """Return expected output tokens per request, 0 when unknown.
 
-        The estimate snapshot refreshes at most once per history bucket.
+        A request lacking a shape estimate uses the fleet-wide delivered-output median. The
+        controller pass refreshes the snapshot; a snapshot older than the demand window
+        rebuilds here.
         """
-        now = self._clock()
-        if self._estimates is None or now - self._estimates[0] >= self.bucket_s:
-            self._estimates = (now, self._output_estimates())
-        estimates = self._estimates[1]
-        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates)
+        snapshot = self._estimates
+        if snapshot is None or self._clock() - snapshot[0] >= self.window_s:
+            snapshot = self._estimate_snapshot()
+        _, estimates, fleet = snapshot
+        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
 
     def _expected_output(
         self,

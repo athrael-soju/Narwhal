@@ -37,6 +37,7 @@ from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
 from ..types import LEG_OVERLOAD, LEG_STREAM, Instance, Phase, Request, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
+from .completion import output_cap
 from .dispatch import Dispatcher
 from .execution import request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
@@ -400,7 +401,7 @@ class NarwhalRouter:
         rid, arrived = state.rid, state.arrived
         req = state.request
         req.input_len = self.estimate_length(body)
-        req.wanted_len = int(body.get("max_tokens") or 0)
+        req.wanted_len = output_cap(body)
         state.sized = True
         state.resolve_demand()
         invalid = request_error(self, body)

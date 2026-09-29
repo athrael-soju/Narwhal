@@ -281,13 +281,18 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.admission = "predictive"
         client = self.client()
         scheduler = self.router.scheduler
-        with patch.object(scheduler, "decode_admits", wraps=scheduler.decode_admits) as gate:
-            self.assertEqual((await self.post(client)).status_code, 200)
         prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
-        request = gate.call_args.args[0]
-        self.assertEqual(
-            gate.call_args.kwargs["ready_s"], scheduler.prefill_ready_s(request, prefill)
-        )
+        self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
+        with (
+            patch.object(scheduler, "decode_admits", wraps=scheduler.decode_admits) as gate,
+            patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
+        ):
+            self.assertEqual((await self.post(client)).status_code, 200)
+            request = replace(gate.call_args.args[0], phase=Phase.PREFILL)
+            ready = scheduler.prefill_ready_s(request, prefill)
+            self.assertLess(ready, scheduler.prefill_admission_price(request, prefill))
+        self.assertGreater(ready, 1.0)
+        self.assertEqual(gate.call_args.kwargs["ready_s"], ready)
         self.assertEqual(gate.call_args.kwargs["expected_output"](request), 1)
 
     async def test_invalid_output_identity_fails_the_original_request(self):
