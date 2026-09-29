@@ -1,39 +1,47 @@
 # `narwhal-serve`
 
-`narwhal-serve --fleet PATH` starts one router process from a fleet configuration.
+`narwhal-serve` runs one Narwhal router from a fleet config.
 
-Before reading the fleet config, the command probes `--host` and `--port` using Uvicorn's IPv4, IPv6 and wildcard bind behaviour, exiting with status 1 when the listener bind fails. Uvicorn binds again at startup to detect any process that claimed the address after the check.
+```bash
+narwhal-serve --fleet fleet.json
+```
 
-[Configuration](../configuration/06-Fabric-and-Operations.md#18-cli-precedence) defines CLI and configuration precedence.
+Before it reads the fleet config, the command checks that it can bind `--host` and `--port`, following Uvicorn's rules for IPv4, IPv6, and wildcard addresses. If the bind fails, it exits with status 1. Uvicorn binds again when it starts, so a process that takes the address in between is still caught.
 
-## Serving options
+For how command-line options interact with values in the config, see [CLI precedence](../configuration/06-Fabric-and-Operations.md#18-cli-precedence).
 
-| Option                       | Default                                | Contract                                                                            |
-| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
-| `--version`                 |                                        | Print the installed distribution version. |
-| `--fleet PATH`               | required                               | Fleet config JSON                                                                   |
-| `--host HOST`                | `127.0.0.1`                            | Uvicorn bind address                                                                |
-| `--port PORT`                | `8000`                                 | Uvicorn bind port                                                                   |
-| `--log-level LEVEL`          | `info`                                 | `critical`, `error`, `warning`, `info`, `debug`, or `trace`                         |
-| `--journal PATH`             | `journal.jsonl` beside `profiles.path` | Request journal, opened in append mode                                              |
-| `--max-concurrent N`         | Config `serving.max_connections`       | Router admission limit. Must be between 1 and `serving.max_connections`, inclusive. |
-| `--graceful-timeout SECONDS` | Config `serving.graceful_timeout_s`    | Uvicorn shutdown drain time in nonnegative integer seconds                          |
-| `--resume`                   | Config `recovery.resume`               | Restores roles, breaker holds, and counters from the last state handoff              |
+## Options
 
-## Standby takeover and lease fencing
+| Option                       | Default                                 | Description                                                                                   |
+| ---------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `--fleet PATH`               | required                                | Fleet config file (JSON).                                                                     |
+| `--host HOST`                | `127.0.0.1`                             | Address to listen on.                                                                         |
+| `--port PORT`                | `8000`                                  | Port to listen on.                                                                            |
+| `--log-level LEVEL`          | `info`                                  | One of `critical`, `error`, `warning`, `info`, `debug`, or `trace`.                           |
+| `--journal PATH`             | `journal.jsonl` next to `profiles.path` | Request journal. New entries are appended to the file.                                        |
+| `--max-concurrent N`         | `serving.max_connections`               | Most requests the router will admit at once. Must be between 1 and `serving.max_connections`. |
+| `--graceful-timeout SECONDS` | `serving.graceful_timeout_s`            | How long Uvicorn waits for in-flight requests at shutdown. A whole number, 0 or more.         |
+| `--resume`                   | `recovery.resume`                       | Restore roles, breaker holds, and counters from the last state handoff.                       |
+| `--version`                  |                                         | Print the installed version.                                                                  |
 
-`--standby-of URL` starts a shadow router that polls the primary and attempts takeover after the configured number of consecutive failed polls and expiry of the shared lease. Supply `--lease-path` on storage shared by both routers. [Operate Narwhal](../operate/01-Start-Routers.md#4-start-a-router-pair) specifies the filesystem contract, partition behaviour, and load-balancer checks.
+## Standby routers and lease fencing
 
-| Option                              | Default       | Contract                                                                                                                 |
-| ----------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `--standby-of URL`                  | `""`          | Primary router URL for shadow mode and fenced takeover; `""` starts active.                                         |
-| `--standby-probe-interval SECONDS`  | `0.25`        | Primary poll interval. Must be finite and positive.                                                                      |
-| `--standby-takeover-after N`        | `4`           | Failed polls required before takeover. Must be at least 1.                                                               |
-| `--standby-max-handoff-age SECONDS` | `30.0`        | Oldest state eligible for takeover. Must be finite and positive.                                                         |
-| `--lease-path PATH`                 | `""`          | Shared lease file path, required with `--standby-of`; `""` uses local control.                                          |
-| `--router-id NAME`                  | host and port | Stable router name used as the prefix of its lease-holder token. A new token is generated each time the router starts. |
-| `--lease-ttl SECONDS`               | `5.0`         | Finite lease lifetime. Must exceed the renewal interval plus the safety margin.                                          |
-| `--lease-renew-interval SECONDS`    | `1.0`         | Lease renewal interval. Must be finite and positive.                                                                     |
-| `--lease-safety-margin SECONDS`     | `1.0`         | Reserved maximum relative clock skew before local expiry. Must be finite and nonnegative.                                |
+You can run a second router as a standby. Give it the primary's URL with `--standby-of` and it will poll the primary. It takes over once enough polls in a row have failed and the shared lease has expired.
 
-Lease reads require finite `expires_at` and `updated_at` timestamps; invalid records block acquisition and renewal while the holder's last successful monotonic deadline continues to expire.
+Both routers read and write the lease file, so `--lease-path` must point to storage they share. [Start a router pair](../operate/01-Start-Routers.md#4-start-a-router-pair) covers the filesystem requirements, what happens during a network partition, and how to set up load-balancer checks.
+
+Durations are in seconds and must be finite.
+
+| Option                              | Default                           | Description                                                                                                                                         |
+| ----------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--standby-of URL`                  | `""` (start as the active router) | URL of the primary. Setting this starts the router as a standby that can take over with fencing.                                                    |
+| `--standby-probe-interval SECONDS`  | `0.25`                            | How often to poll the primary. Must be positive.                                                                                                    |
+| `--standby-takeover-after N`        | `4`                               | Failed polls in a row before the standby tries to take over. At least 1.                                                                            |
+| `--standby-max-handoff-age SECONDS` | `30.0`                            | The standby won't take over from saved state older than this. Must be positive.                                                                     |
+| `--lease-path PATH`                 | `""` (local control only)         | Lease file on shared storage. Required with `--standby-of`.                                                                                         |
+| `--router-id NAME`                  | host and port                     | A stable name for this router, used as the prefix of its lease-holder token. The router generates a new token each time it starts.                  |
+| `--lease-ttl SECONDS`               | `5.0`                             | How long a lease lasts. Must be longer than the renewal interval plus the safety margin.                                                            |
+| `--lease-renew-interval SECONDS`    | `1.0`                             | How often the holder renews the lease. Must be positive.                                                                                            |
+| `--lease-safety-margin SECONDS`     | `1.0`                             | The most clock skew between the routers that the lease allows for. This much time is set aside before the lease expires locally. Must be 0 or more. |
+
+If a lease record's `expires_at` or `updated_at` isn't a finite timestamp, no router can acquire or renew the lease. The current holder keeps counting down to its last good deadline on its monotonic clock, so its lease still runs out on time.

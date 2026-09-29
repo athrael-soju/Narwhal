@@ -1,40 +1,19 @@
 # `narwhal-engine`
 
-Prepare and run vLLM engines from the existing `narwhal.engine-launch` record. The `native` backend runs the checked Python environment on Linux or WSL2; `container` retains the existing Docker launch path. Both use the same model, GPU allocation, ports, NIXL connector and runtime argument checks.
+`narwhal-engine` prepares and runs vLLM engines from an existing `narwhal.engine-launch` record. It has two backends:
 
-The native path requires `NARWHAL_MODEL_REVISION` alongside the launch environment produced during deployment. A local GGUF file can be selected with `NARWHAL_MODEL_PATH`; preparation records its SHA-256. Each run directory is immutable. A fresh start needs a fresh directory.
+- `native` runs vLLM from the checked Python environment on Linux or WSL2.
+- `container` runs it in Docker, the same way as before.
 
-For GGUF, pin `vllm-gguf-plugin` in `runtime.expected_packages` and keep the model path inside its snapshot directory so the loader can find companion files. Supply the base model tokenizer and configuration through `--tokenizer` and `--hf-config-path` in `runtime.extra_args`.
+Both backends use the same model, GPU allocation, ports, and NIXL connector, and both run the same checks on the runtime arguments.
 
-## Actions
+## Overview
 
-| Action | Backend | Inputs and operation |
-| --- | --- | --- |
-| `prepare` | container, native | Read `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), verify model and hook hashes, then write a fresh launch directory with `launch.json` and the backend environment. |
-| `check` | container, native | Read the prepared plan, check the pinned packages, model, tokenizer and NIXL connector, then bind `checked.json` to that plan. Repeated checks append their attempts to the backend check log. |
-| `measure-cache` | container | Start a temporary sizing container from a checked, unused plan, write `cache-layout.json`, then remove the completed sizing container. |
-| `model-dimensions` | container | Inspect the model through the checked runtime and write `model-dimensions.json`. |
-| `handshake-policy` | container, native | Inspect the installed NIXL worker against the checked connector settings and write `handshake-policy.json`. |
-| `start` | container | Start one serving container from a checked plan and record `container.id`. Verify its HTTP readiness after launch. |
-| `capture-cache` | container | Read the running container recorded in a checked launch directory and retain its live cache pages in `cache-layout.json`. |
-| `cache-registration` | container, native | Resolve block grouping from the checked runtime plus either a serving startup log or captured runtime layout; write `cache-registration.json`. |
-| `start-shared` | container, native | Validate two to eight checked plans sharing one GPU, start them sequentially, and retain readiness, identity and memory readings in each `shared-start.json`. |
-| `stop-native` | native | Validate recorded boot ID and process start ticks, then stop the owned process groups and write `native-stop.json`. |
+Every action works on a launch directory. `prepare` creates one, which you name with `--out`. Every later action points at it with `--run`.
 
-Preparation requires a fresh `--out`; subsequent actions use `--run`. Each inspection output is retained in its launch directory, so select a fresh prepared and checked directory when recapturing it.
+Launch directories aren't reused. To start again, or to redo an inspection, prepare and check a new directory.
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `--version` | | Print the installed distribution version. |
-| `--format` | `text` | Select `json` for [versioned command results](../Command-Results.md). |
-| `--backend` | `container` | Select `container` or `native` for `prepare` and `start-shared`; shared startup requires every selected plan to use that backend. Other actions read the plan's backend. |
-| `--out` | required for `prepare` | Create a fresh launch directory. |
-| `--run` | required after preparation | Select an existing launch directory; repeat two to eight times for `start-shared`. |
-| `--ready-seconds` | `180` | Positive integer seconds allowed per engine's readiness and identity checks during `start-shared`. |
-| `--startup-log` | choose one registration source | Serving log with one resolved KV layout, used by `cache-registration`; exclusive with `--runtime-layout`. |
-| `--runtime-layout` | choose one registration source | Captured runtime cache-layout JSON used by `cache-registration`; exclusive with `--startup-log`. |
-
-## Native shared startup
+A typical native run on one GPU looks like this:
 
 ```bash
 narwhal-engine prepare --backend native --out runs/engine-1
@@ -44,18 +23,90 @@ python -m narwhal.deployment.attestation_contract native-capture --run runs/engi
 narwhal-engine stop-native --run runs/engine-1
 ```
 
-`start-shared` checks every selected role, port and GPU budget before launching sequentially. All selected plans must share their group, GPU UUID and device allowance, with unique roles and ports. Each engine's `gpu_memory_utilization` is a fraction of total device memory; the decimal sum of those fractions must be at most `shared_device.device_allowance`. The selected CUDA device must resolve to `shared_device.gpu_uuid`; numeric ordinals and UUID prefixes resolve inside the checked runtime with its recorded environment.
+## Before you start
 
-Both backends record the first prelaunch GPU reading as their baseline and compare the increase in whole-device memory use after each engine passes readiness and identity checks with `shared_device.device_allowance` times total device memory. Equality passes. Existing allocations consume the free headroom checked before each launch; allocations added or released by other processes during startup also affect the observed increase. Each ready engine's `shared-start.json` retains the baseline, before/after readings, per-engine and aggregate increases, and allowance in MiB.
+The native backend needs `NARWHAL_MODEL_REVISION` set, along with the launch environment created during deployment. To use a local GGUF file, set `NARWHAL_MODEL_PATH`. `prepare` records the file's SHA-256.
 
-The container backend records each container ID, Linux PID, image ID and serving arguments. A failed invocation removes every container it created in reverse launch order and updates their `shared-start.json` records to `failed`, retaining the startup cause and each removal outcome in `cleanup_status`. A removal failure retains `cleanup_error` and appears in the command error; inspect the recorded container ID before recovery. Container IDs and launch evidence remain in the run directories.
+### Using a GGUF model
 
-The native backend records the Linux PID, boot ID and process start tick, vLLM version and `/metrics` process start, model revision and arguments. A failed invocation terminates its current process and stops previously ready process groups using their recorded identities. The failing engine's `shared-start.json` retains its startup cause, cleanup errors and post-cleanup GPU reading; `native-stop.json` records successful stops of previously ready engines.
+- Pin `vllm-gguf-plugin` in `runtime.expected_packages`.
+- Keep the model file inside its snapshot directory, so the loader can find the files that go with it.
+- Pass the base model's tokenizer and config with `--tokenizer` and `--hf-config-path` in `runtime.extra_args`.
 
-Native port checks bind the HTTP endpoint from `launch.json` and the NIXL address from `engine.env`, preserving vLLM's kernel IPv6 default and NIXL's dual-stack bind. Supply `NARWHAL_NODE_<n>_ATTESTATION_URL` at preparation or shared startup to check the sidecar's configured address through Uvicorn's event loop; the startup environment takes precedence over the prepared URL. `narwhal dev` supplies the URL from the instance fleet. Each process binds again at startup to detect an address claimed after the check.
+## Actions
 
-`native-capture` applies the recorded engine environment to Narwhal's model, cache, NIXL and handshake checks, then writes a process-bound attestation. Set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>` to serve it. `stop-native` verifies the recorded process identity and waits for owned workers through group-leader exit, escalating survivors to SIGKILL.
+| Action               | Backends  | What it does                                                                                                                                                                                                                 |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prepare`            | both      | Reads `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), checks the model and hook hashes, and creates a new launch directory containing `launch.json` and the backend's environment. |
+| `check`              | both      | Checks the pinned packages, model, tokenizer, and NIXL connector for the prepared plan, then writes `checked.json` for that plan. Each run of `check` is added to the backend's check log.                                   |
+| `measure-cache`      | container | Starts a temporary container from a checked plan that hasn't been used yet, writes `cache-layout.json`, and removes the container when it's done.                                                                            |
+| `model-dimensions`   | container | Inspects the model through the checked runtime and writes `model-dimensions.json`.                                                                                                                                           |
+| `handshake-policy`   | both      | Compares the installed NIXL worker with the checked connector settings and writes `handshake-policy.json`.                                                                                                                   |
+| `start`              | container | Starts one serving container from a checked plan, saves its ID in `container.id`, and then checks that it's ready over HTTP.                                                                                                 |
+| `capture-cache`      | container | Reads the running container recorded in a checked launch directory and saves its live cache pages to `cache-layout.json`.                                                                                                    |
+| `cache-registration` | both      | Works out block grouping from the checked runtime plus either a serving startup log or a captured runtime layout, and writes `cache-registration.json`.                                                                      |
+| `start-shared`       | both      | Starts two to eight checked plans that share one GPU, one at a time. Each engine gets a `shared-start.json` with its readiness, identity, and memory readings.                                                               |
+| `stop-native`        | native    | Confirms each process is the one that was started, stops its process group, and writes `native-stop.json`.                                                                                                                   |
 
-When starting engines through Windows OpenSSH, keep a WSL terminal open for
-the fleet's lifetime. Closing the final `wsl.exe` session can stop the WSL
-instance and its engine processes.
+## Options
+
+| Option             | Default                  | Description                                                                                                                                                          |
+| ------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--out`            | required for `prepare`   | New launch directory to create.                                                                                                                                      |
+| `--run`            | required after `prepare` | Existing launch directory to use. Give it two to eight times for `start-shared`.                                                                                     |
+| `--backend`        | `container`              | `container` or `native`. Used by `prepare` and `start-shared`, and every plan passed to `start-shared` must use it. Other actions use the backend saved in the plan. |
+| `--ready-seconds`  | `180`                    | Seconds each engine has to pass its readiness and identity checks during `start-shared`. A positive whole number.                                                    |
+| `--startup-log`    | none                     | Serving log containing exactly one resolved KV layout, for `cache-registration`. Can't be combined with `--runtime-layout`.                                          |
+| `--runtime-layout` | none                     | Captured runtime cache-layout JSON, for `cache-registration`. Can't be combined with `--startup-log`.                                                                |
+| `--format`         | `text`                   | Use `json` for [versioned command results](../Command-Results.md).                                                                                                   |
+| `--version`        |                          | Print the installed version.                                                                                                                                         |
+
+`cache-registration` needs either `--startup-log` or `--runtime-layout`.
+
+## Running several engines on one GPU
+
+Before it launches anything, `start-shared` checks every plan's role, ports, and GPU budget. All the plans must have the same group, GPU UUID, and device allowance, and no two can have the same role or port.
+
+Each engine's `gpu_memory_utilization` is a fraction of the GPU's total memory. The fractions are added exactly, with no floating-point rounding, and the total can't exceed `shared_device.device_allowance`.
+
+The CUDA device you select must resolve to `shared_device.gpu_uuid`. Numeric device ordinals and UUID prefixes are resolved inside the checked runtime, using its recorded environment.
+
+### Memory checks during startup
+
+Engines start one at a time. Before the first launch, the command takes a reading of GPU memory as a baseline. Each time an engine passes its readiness and identity checks, the command measures how much whole-device memory use has grown since the baseline and compares that with `device_allowance` times the GPU's total memory. Reaching the allowance exactly is allowed.
+
+Memory that's already in use on the GPU reduces the free space checked before each launch. If other processes allocate or free memory while the engines are starting, that changes the measured growth too.
+
+Each ready engine's `shared-start.json` records the baseline, the readings before and after, the growth for that engine and in total, and the allowance, all in MiB.
+
+### If startup fails with the container backend
+
+For each container, the command records its ID, Linux PID, image ID, and serving arguments.
+
+If startup fails, the command removes every container it created, newest first. It marks their `shared-start.json` records as `failed` and saves the cause of the failure and the result of each removal in `cleanup_status`. If a container can't be removed, the error is saved in `cleanup_error` and included in the command's error message. Check that container ID before you try to recover. Container IDs and launch evidence stay in the run directories.
+
+### If startup fails with the native backend
+
+For each engine, the command records its Linux PID, the machine's boot ID, the process start time (in kernel clock ticks), the vLLM version, the process start time reported by `/metrics`, the model revision, and the arguments.
+
+If startup fails, the command stops the engine that was starting, then stops the engines that were already ready, using their recorded identities. The failed engine's `shared-start.json` records the cause, any cleanup errors, and a GPU memory reading taken after cleanup. Each engine that was stopped successfully gets a `native-stop.json`.
+
+### Port checks with the native backend
+
+Before launching, the native backend tries binding the HTTP address from `launch.json` and the NIXL address from `engine.env`. It binds the same way vLLM (IPv6 by default in the kernel) and NIXL (dual-stack) do. Each engine binds again when it starts, so an address taken after the check is still caught.
+
+To check the attestation sidecar's address as well, set `NARWHAL_NODE_<n>_ATTESTATION_URL` when you run `prepare` or `start-shared`. The check runs through Uvicorn's event loop. If the variable is set at both steps, the value at `start-shared` wins. `narwhal dev` sets this URL for you from the instance's fleet config.
+
+## Attestation and shutdown with the native backend
+
+`native-capture` applies the engine's recorded environment, runs Narwhal's model, cache, NIXL, and handshake checks, and writes an attestation tied to the running process. To serve it, set `NARWHAL_NODE_<n>_ATTESTATION_URL` and run:
+
+```bash
+python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>
+```
+
+`stop-native` checks the recorded boot ID and process start time, so it only stops processes it started. It then waits for each process group's leader and workers to exit, and sends SIGKILL to any that are still running.
+
+## Starting engines over Windows OpenSSH
+
+If you start engines through Windows OpenSSH, keep a WSL terminal open for as long as the fleet is running. Closing the last `wsl.exe` session can shut down the WSL instance, and your engines with it.

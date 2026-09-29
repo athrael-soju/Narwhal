@@ -1,12 +1,16 @@
 # `narwhal-attest`
 
-Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serves its attestation over HTTP, and stops when the engine version or process start time changes.
+`narwhal-attest` is a sidecar for a single vLLM engine. It reads the engine's identity and serves its attestation over HTTP. If the engine's version or process start time changes, the sidecar exits, so it never serves an attestation for an engine that has since restarted or been upgraded.
 
-| Option                | Default     | Contract                                                |
-| --------------------- | ----------- | ------------------------------------------------------- |
-| `--version`           |             | Print the installed distribution version.               |
-| `--document PATH`     | required    | Contract values plus a source for every populated field |
-| `--engine-base URL`   | required    | vLLM base URL queried at `/version` and `/metrics`      |
-| `--host HOST`         | `127.0.0.1` | Sidecar bind address                                    |
-| `--port PORT`         | `8010`      | Sidecar port                                            |
-| `--timeout-s SECONDS` | `5.0`       | Time budget for reading engine identity                 |
+Start it after vLLM is running.
+
+## Options
+
+| Option                | Default     | Description                                                                          |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------ |
+| `--document PATH`     | required    | The attestation contract values, with a source for every field that has a value.     |
+| `--engine-base URL`   | required    | Base URL of the vLLM engine. The sidecar queries `/version` and `/metrics` under it. |
+| `--host HOST`         | `127.0.0.1` | Address the sidecar listens on.                                                      |
+| `--port PORT`         | `8010`      | Port the sidecar listens on.                                                         |
+| `--timeout-s SECONDS` | `5.0`       | How long to wait when reading the engine's identity.                                 |
+| `--version`           |             | Print the installed version.                                                         |
