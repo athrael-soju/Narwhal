@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 
 import zmq
 
@@ -78,10 +77,9 @@ class ResidencyFeed:
         try:
             dealer.send_multipart([b"", start.to_bytes(8, "big")])
             batches: list[tuple[int, bytes]] = []
-            deadline = time.monotonic() + self.replay_timeout_s
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not dealer.poll(int(remaining * 1000)):
+                # A long history replays for as long as batches keep arriving.
+                if not dealer.poll(int(self.replay_timeout_s * 1000)):
                     return None
                 frames = dealer.recv_multipart()
                 if len(frames) < 2:

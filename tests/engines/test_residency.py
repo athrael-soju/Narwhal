@@ -58,7 +58,8 @@ def wait_for(condition, timeout=5.0):
 class FakePublisher:
     """Publish numbered batches and serve replay requests like vLLM's ZeroMQ publisher."""
 
-    def __init__(self, directory, *, buffer=100, replay=True):
+    def __init__(self, directory, *, buffer=100, replay=True, replay_gap_s=0.0):
+        self.replay_gap_s = replay_gap_s
         self.endpoint = f"ipc://{directory}/events.sock"
         self.replay_endpoint = f"ipc://{directory}/replay.sock" if replay else None
         self.context = zmq.Context()
@@ -91,6 +92,7 @@ class FakePublisher:
             with self.lock:
                 for sequence, payload in list(self.buffer):
                     if sequence >= int.from_bytes(start, "big"):
+                        time.sleep(self.replay_gap_s)
                         self.router.send_multipart(
                             [client, b"", sequence.to_bytes(8, "big"), payload]
                         )
@@ -281,6 +283,17 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: index.sequence == last + 1))
         self.assertTrue(index.known)
         self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
+
+    def test_a_long_replay_completes_while_batches_keep_arriving(self):
+        """The replay timeout bounds silence between batches, not the whole history."""
+        publisher = FakePublisher(self.directory, replay_gap_s=0.3)
+        self.addCleanup(publisher.close)
+        for _ in range(6):
+            publisher.publish(batch())
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.run_feed(publisher, index)
+        self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
+        self.assertTrue(index.known)
 
     def test_history_outside_the_replay_buffer_waits_for_a_reset(self):
         publisher = FakePublisher(self.directory, buffer=2)
