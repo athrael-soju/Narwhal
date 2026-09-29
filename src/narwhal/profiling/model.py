@@ -354,6 +354,12 @@ class Profile:
             hi is None or value <= hi for _, hi, value in bounds
         )
 
+    @property
+    def decode_token_limit(self) -> int | None:
+        """Return the decode KV token bound: measured domain and physical capacity."""
+        bounds = [b for b in (self.kv_capacity_tokens, self.decode_max_kv_tokens) if b is not None]
+        return min(bounds) if bounds else None
+
     def decode_request_limit(self, context_tokens: float) -> int:
         """Return the concurrent decode-request limit for the context length.
 
@@ -363,13 +369,7 @@ class Profile:
         if context_tokens <= 0 or measured is None or measured <= 0:
             return 0
         limits = [measured]
-        token_limit = self.kv_capacity_tokens
-        if self.decode_max_kv_tokens is not None:
-            token_limit = (
-                self.decode_max_kv_tokens
-                if token_limit is None
-                else min(token_limit, self.decode_max_kv_tokens)
-            )
+        token_limit = self.decode_token_limit
         if token_limit is not None:
             limits.append(max(1, int(token_limit / context_tokens)))
         return max(1, min(limits))

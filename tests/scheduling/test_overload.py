@@ -86,10 +86,12 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.scheduler = self.router.scheduler
         self.request = Request("new", 10)
 
-    def fill(self, count):
+    def fill(self, count, wanted_len=0):
         for _ in range(count):
             rid = f"d{len(self.scheduler.monitor.instances['e3'].decode)}"
-            self.scheduler.monitor.dispatched("e3", Request(rid, 10, phase=Phase.DECODE))
+            self.scheduler.monitor.dispatched(
+                "e3", Request(rid, 10, phase=Phase.DECODE, wanted_len=wanted_len)
+            )
 
     def test_decode_admission_follows_measured_concurrency(self):
         self.assertTrue(self.scheduler.decode_admits(self.request))
@@ -97,30 +99,74 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.fill(limit)
         self.assertFalse(self.scheduler.decode_admits(self.request))
 
-    def prefilling(self, count):
-        for index in range(count):
-            self.scheduler.monitor.dispatched("e0", Request(f"p{index}", 10))
+    def prefilling(self, count, wanted_len=0):
+        for _ in range(count):
+            rid = f"p{len(self.scheduler.monitor.instances['e0'].prefill)}"
+            self.scheduler.monitor.dispatched("e0", Request(rid, 10, wanted_len=wanted_len))
+
+    def ready(self, request):
+        prefill = self.scheduler.monitor.instances["e0"]
+        return self.scheduler.prefill_admission_price(request, prefill)
 
     def test_a_serving_concurrency_limit_caps_the_measured_limit(self):
         self.fill(2)
         self.assertFalse(self.scheduler.decode_admits(self.request, concurrency=2))
         self.assertTrue(self.scheduler.decode_admits(self.request, concurrency=3))
 
-    def test_requests_in_prefill_hold_no_decode_slot(self):
+    def test_requests_in_prefill_count_once_they_reach_decode_by_ready_time(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
-        self.fill(limit - 1)
-        self.prefilling(limit + 8)
+        self.fill(limit - 3, wanted_len=10_000)
+        self.prefilling(3, wanted_len=10_000)
         self.assertTrue(self.scheduler.decode_admits(self.request))
+        ready = self.ready(self.request)
+        self.assertFalse(self.scheduler.decode_admits(self.request, ready_s=ready))
 
-    def test_capacity_follows_the_request_context(self):
-        profile = self.scheduler.profiles.get("e3")
-        context = profile.decode_max_kv_tokens // 2
-        request = Request("long", context - 1, wanted_len=1)
-        limit = profile.decode_request_limit(context)
-        self.assertLess(limit, profile.decode_max_requests)
-        self.fill(limit - 1)
+    def test_requests_in_prefill_that_finish_decode_by_ready_time_hold_no_slot(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 1, wanted_len=10_000)
+        self.prefilling(3, wanted_len=1)
+        self.assertTrue(
+            self.scheduler.decode_admits(self.request, ready_s=self.ready(self.request) + 5.0)
+        )
+
+    def test_the_demand_model_estimates_output_from_the_requested_cap(self):
+        estimate = self.router.controller.demand.output_estimator()
+        self.assertEqual(estimate(Request("r", 10, wanted_len=64)), 64)
+        self.assertEqual(estimate(Request("r", 10)), 1)
+
+    def test_residents_that_finish_before_ready_time_hold_no_slot(self):
+        self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2)
+        self.assertFalse(self.scheduler.decode_admits(self.request))
+        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=10.0))
+
+    def test_a_burst_admits_up_to_projected_decode_capacity(self):
+        self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1, wanted_len=10_000)
+        admitted = 0
+        for index in range(50):
+            arrival = Request(f"a{index}", 10, wanted_len=10_000)
+            if self.scheduler.decode_admits(arrival, ready_s=self.ready(arrival)):
+                admitted += 1
+                self.scheduler.monitor.dispatched("e0", arrival)
+        self.assertEqual(admitted, 1)
+
+    def test_expected_output_sizes_decode_tokens(self):
+        for index in range(6):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"d{index}", 500, phase=Phase.DECODE, wanted_len=32_768)
+            )
+        request = Request("new", 500, wanted_len=32_768)
+        self.assertFalse(self.scheduler.decode_admits(request))
+        self.assertTrue(self.scheduler.decode_admits(request, expected_output=lambda r: 300))
+
+    def test_residents_and_the_request_share_the_token_budget(self):
+        request = Request("long", 30_000, wanted_len=20_000)
+        for index in range(5):
+            self.scheduler.monitor.dispatched("e3", Request(f"s{index}", 500, phase=Phase.DECODE))
         self.assertTrue(self.scheduler.decode_admits(request))
-        self.fill(limit)
+        for index in range(2):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"l{index}", 30_000, phase=Phase.DECODE, wanted_len=20_000)
+            )
         self.assertFalse(self.scheduler.decode_admits(request))
 
     def test_requests_waiting_for_a_decode_slot_count_as_committed(self):

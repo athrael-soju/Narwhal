@@ -20,9 +20,22 @@ Predictive admission returns HTTP 429 with one of these causes:
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget at zero backlog | |
 | `queue` | The least expensive prefill path exceeds the TTFT budget | Projected wait |
 | `aggregate_unpriced` | Every live engine holds decode work during aggregate fallback | `1` |
-| `decode` | Decode capacity is full at the request's context, or the least-loaded decode engine's load pushes the request past `slo.tpot_s` | `1` |
+| `decode` | Projected decode work at the request's prefill completion exceeds live decode capacity or pushes the request past `slo.tpot_s` | `1` |
 
-Each decode engine's capacity is its [profile decode limit](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) at the request's prompt plus requested output tokens, capped by `serving.decode_concurrency` when positive. Decode work counts resident decode requests and requests waiting for a decode slot. For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
+For `prompt`, the error envelope directs the caller to shorten the prompt or raise the TTFT target.
+
+The `decode` check projects decode work to the request's predicted prefill completion:
+
+| Projected request | Condition |
+| --- | --- |
+| The request | Always |
+| Waiting for a decode slot | Always |
+| Resident in decode | Still generating at the request's prefill completion |
+| In prefill | Reaches decode by the request's prefill completion and is still generating |
+
+Each projected request holds one decode slot and its prompt plus half its expected output in KV tokens. Live decode capacity sums each engine's `decode_max_requests`, capped by `serving.decode_concurrency` when positive, and each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile). The TPOT check prices the decode engine with the fewest residents still generating at that time.
+
+Expected output is `max_tokens`, scaled by the median delivered fraction once three requests of the same shape finish. A request that omits `max_tokens` uses the median delivered output for its prompt size, or 1 token.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 

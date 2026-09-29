@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from statistics import median
 
 from ..profiling.model import Profile
-from ..types import Role
+from ..types import Request, Role
 from .monitor import InstanceMonitor
 from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
@@ -323,6 +323,11 @@ class DemandModel:
             "observed_decode": self.observed_decode.summary(),
             "residency": self.residency.summary(),
         }
+
+    def output_estimator(self) -> Callable[[Request], int]:
+        """Return expected output tokens per request, at least 1, from one estimate snapshot."""
+        estimates = self._output_estimates()
+        return lambda r: max(1, self._expected_output(r.input_len, r.wanted_len, estimates))
 
     def _expected_output(
         self,

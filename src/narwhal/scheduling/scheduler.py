@@ -342,34 +342,68 @@ class GlobalScheduler:
             inst.role is role or inst.iid not in self.pinned for inst in self.live_instances()
         )
 
-    def decode_admits(self, request: Request, *, concurrency: int = 0) -> bool:
-        """Return whether live decode engines have room for `request` beside decode work.
+    def decode_admits(
+        self,
+        request: Request,
+        *,
+        ready_s: float = 0.0,
+        concurrency: int = 0,
+        expected_output: Callable[[Request], int] | None = None,
+    ) -> bool:
+        """Return whether live decode engines have room for `request` `ready_s` from now.
 
-        Decode work is resident decode requests and requests waiting for a decode slot.
-        Each engine's capacity is its profile's `decode_request_limit` at the request's
-        context, capped by `concurrency` when positive. A fleet without live decode
-        engines, or with an engine lacking a measured decode bound, admits. A request that
-        misses the TPOT budget on an idle engine admits; placement decides it.
+        Decode work at `ready_s` is `request`, requests waiting for a decode slot, residents
+        still generating, and requests in prefill that start decode by then and are still
+        generating. Each holds one slot and `input_len` plus half its expected output in KV
+        tokens. Fleet slots sum `decode_max_requests`, capped by `concurrency` when positive;
+        fleet tokens sum `decode_token_limit`. The TPOT check prices the engine with the fewest
+        residents generating at `ready_s`. A fleet without live decode engines, or with an
+        engine lacking a measured decode bound, admits. A request that misses the TPOT budget
+        on an idle engine admits; placement decides it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
             return True
-        context = request.input_len + max(1, request.wanted_len)
-        capacity = 0
+        output = expected_output or (lambda r: max(1, r.wanted_len))
+        slots, tokens, steps = 0, 0.0, []
         for inst in engines:
             profile = self.profiles.get(inst.iid)
-            limit = profile.decode_request_limit(context) if profile is not None else 0
-            if limit <= 0:
+            if profile is None or profile.decode_max_requests is None:
                 return True
-            capacity += min(limit, concurrency) if concurrency > 0 else limit
-        committed = sum(len(inst.decode) for inst in engines) + sum(
-            1 for row in self.monitor.waiting.values() if row.phase is Phase.DECODE
-        )
-        if committed >= capacity:
+            limit = profile.decode_max_requests
+            slots += min(limit, concurrency) if concurrency > 0 else limit
+            token_limit = profile.decode_token_limit
+            tokens += float("inf") if token_limit is None else token_limit
+            steps.append(
+                profile.token_interval(inst.decode_tokens(), len(inst.decode))
+                * self.monitor.decode_correction(inst.iid)
+            )
+        step = sum(steps) / len(steps)
+        held = [request]
+        held += [row for row in self.monitor.waiting.values() if row.phase is Phase.DECODE]
+        generating = {
+            inst.iid: {
+                rid: r
+                for rid, r in inst.decode.items()
+                if max(1, output(r) - r.output_len) * resident_step >= ready_s
+            }
+            for inst, resident_step in zip(engines, steps, strict=True)
+        }
+        held += [r for residents in generating.values() for r in residents.values()]
+        for inst in self.monitor.instances.values():
+            prefill_profile = self.profiles.get(inst.iid)
+            done = 0.0
+            for r in inst.prefill.values():
+                if prefill_profile is not None:
+                    done += costs.prefill_seconds(prefill_profile, r)
+                if r.rid != request.rid and done <= ready_s <= done + output(r) * step:
+                    held.append(r)
+        kv = sum(r.input_len + output(r) / 2.0 for r in held)
+        if len(held) > 1 and (len(held) > slots or kv > tokens):
             return False
         decode = replace(request, phase=Phase.DECODE)
-        least = min(engines, key=lambda inst: (len(inst.decode), inst.iid))
-        if self.meets_slo(decode, self.cost(decode, least)):
+        least = min(engines, key=lambda inst: (len(generating[inst.iid]), inst.iid))
+        if self.meets_slo(decode, self.cost(decode, replace(least, decode=generating[least.iid]))):
             return True
         idle = replace(least, prefill={}, decode={})
         return not self.meets_slo(decode, self.cost(decode, idle))
