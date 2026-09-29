@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 # Each engine leg failure increments one per-engine streak. Liveness counts
 # failed sweeps. These names are also state keys and metric label values.
@@ -54,6 +55,10 @@ class Request:
     wanted_len: int = 0
     # Monotonic ingress time for end-to-end TTFT projections.
     arrived_at: float | None = None
+    # Prompt tokens each engine holds in its prefix cache, from sidecar residency at sizing.
+    cached_tokens: dict[str, int] = field(default_factory=dict)
+    # The placement cache-aware pricing would choose, recorded while routing prices cold.
+    cache_proposal: dict[str, Any] | None = None
 
     @property
     def length(self) -> int:

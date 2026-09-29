@@ -173,8 +173,8 @@ class GlobalScheduler:
         """Return endpoints eligible for new work and role changes."""
         return self.availability.live_instances(role, exclude=exclude)
 
-    def cost(self, request: Request, inst: Instance) -> Cost:
-        """Price a request with the current health and prefix-reuse evidence."""
+    def cost(self, request: Request, inst: Instance, *, warm: bool = False) -> Cost:
+        """Price a request with the current health and, with `warm`, prefix-reuse evidence."""
         return costs.cost(
             request,
             inst,
@@ -182,6 +182,7 @@ class GlobalScheduler:
             profiles=self.profiles,
             slo=self.slo,
             health=self.health,
+            warm=warm,
         )
 
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
@@ -615,12 +616,42 @@ class GlobalScheduler:
         eligible = [i for i in candidates if self.meets_slo(request, costs[i.iid])]
         if eligible:
             chosen = min(eligible, key=lambda i: (costs[i.iid], i.iid))
-            return chosen
+        else:
+            # Admission decides whether to accept an over-budget placement.
+            # Role changes belong to the monitoring controller.
+            self.unserved += 1
+            chosen = min(candidates, key=lambda i: (costs[i.iid], i.iid))
+        if request.phase is Phase.PREFILL and request.cached_tokens:
+            request.cache_proposal = self._cache_proposal(request, candidates, chosen)
+        return chosen
 
-        # Admission decides whether to accept an over-budget placement.
-        # Role changes belong to the monitoring controller.
-        self.unserved += 1
-        return min(candidates, key=lambda i: (costs[i.iid], i.iid))
+    def _cache_proposal(
+        self, request: Request, candidates: list[Instance], chosen: Instance
+    ) -> dict[str, Any]:
+        """Price the same candidates with cache evidence and name the engine it would pick.
+
+        The proposal is evidence only; placement above used cold prices.
+        """
+        warm = {i.iid: self.cost(request, i, warm=True) for i in candidates}
+        eligible = [i for i in candidates if self.meets_slo(request, warm[i.iid])]
+        proposed = min(eligible or candidates, key=lambda i: (warm[i.iid], i.iid))
+
+        def own(inst: Instance, cached: bool) -> float | None:
+            profile = self.profiles.get(inst.iid)
+            if profile is None:
+                return None
+            if cached:
+                return costs.prefill_seconds(profile, request)
+            return profile.prefill_time(request.input_len)
+
+        return {
+            "proposed_iid": proposed.iid,
+            "placed_iid": chosen.iid,
+            "proposed_cached_tokens": request.cached_tokens.get(proposed.iid, 0),
+            "proposed_prefill_s": own(proposed, True),
+            "placed_cold_prefill_s": own(chosen, False),
+            "placed_warm_prefill_s": own(chosen, True),
+        }
 
     def health_pass(self) -> None:
         """Sample live engines and apply drift verdicts."""

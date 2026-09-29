@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.engines.client import EngineError, InferenceProbe, ProbeLeg
+from narwhal.engines.client import EngineError, InferenceProbe, ProbeLeg, Tokenization
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from tests.fixtures import bind_identity_profiles, fleet
@@ -32,7 +32,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.tokenize = True
         with patch.object(
             self.router.engines,
-            "token_count",
+            "tokenize",
             new=AsyncMock(
                 side_effect=EngineError("tokenize", "http://engine", 400, "string required")
             ),
@@ -55,7 +55,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 self.subTest(body=body),
                 patch.object(
                     self.router.engines,
-                    "token_count",
+                    "tokenize",
                     new=AsyncMock(
                         side_effect=EngineError("tokenize", "http://engine", 504, "late")
                     ),
@@ -70,9 +70,13 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.tokenize = True
         with patch.object(
             self.router.engines,
-            "token_count",
+            "tokenize",
             new=AsyncMock(
-                side_effect=[EngineError("tokenize", "http://engine", 504, "late"), 9, 10]
+                side_effect=[
+                    EngineError("tokenize", "http://engine", 504, "late"),
+                    Tokenization(9, None),
+                    Tokenization(10, None),
+                ]
             ),
         ) as count:
             with self.assertRaisesRegex(EngineError, "late"):
@@ -87,7 +91,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         )
         for iid in ("e0", "e3"):
             self.router.scheduler.eject(iid)
-        with patch.object(self.router.engines, "token_count", new=AsyncMock()) as count:
+        with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
             self.assertEqual(await self.router.input_length({"prompt": ""}), 1)
             count.assert_not_awaited()
 

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -17,6 +17,7 @@ from ..contracts import STATE, versioned
 from ..engines.client import EngineClient, EngineError, InferenceProbe, leg_failure_class
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
+from ..engines.prefix import CacheNamespace, block_identities
 from ..observability.journal import RunJournal
 from ..observability.metrics import Histogram, buckets_for
 from ..profiling.store import ProfileStore
@@ -39,6 +40,17 @@ if TYPE_CHECKING:
     from ..runtime.lease import FileLease
 
 log = logging.getLogger("narwhal.server")
+
+
+def _multimodal(body: dict[str, Any]) -> bool:
+    """Return whether a chat request carries non-text content parts."""
+    for message in body.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list) and any(
+            not isinstance(part, dict) or part.get("type") != "text" for part in content
+        ):
+            return True
+    return False
 
 
 class NarwhalRouter:
@@ -232,12 +244,16 @@ class NarwhalRouter:
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
 
     async def input_length(self, body: dict[str, Any]) -> int:
-        """Return the exact or estimated input token count.
+        """Return the exact or estimated input token count."""
+        return (await self.size(body))[0]
+
+    async def size(self, body: dict[str, Any]) -> tuple[int, dict[str, int]]:
+        """Return the input token count and the prompt tokens each engine holds cached.
 
         Already-tokenized prompts supply their exact count locally. Other
         requests query one engine. A failed exact-count call fails the request
         and rotates the preferred engine for the next request. Disabled or
-        unavailable token counting uses the local estimate.
+        unavailable token counting uses the local estimate and no cache evidence.
         """
         prompt = body.get("prompt")
         if (
@@ -246,13 +262,13 @@ class NarwhalRouter:
             and prompt
             and all(type(token) is int and token >= 0 for token in prompt)
         ):
-            return len(prompt)
+            return len(prompt), self.prefix_cache_tokens(body, prompt)
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
                 k = next((j for j, i in enumerate(live) if i.iid == self._tokenizer), 0)
                 try:
-                    got = await self.engines.token_count(
+                    got = await self.engines.tokenize(
                         live[k].url, body, self.cfg.tokenize_timeout_s, strict=True
                     )
                 except EngineError:
@@ -260,9 +276,40 @@ class NarwhalRouter:
                     raise
                 if got is not None:
                     self._tokenizer = live[k].iid
-                    return got
+                    ids = got.token_ids
+                    cached = {} if ids is None else self.prefix_cache_tokens(body, ids)
+                    return got.count, cached
                 self._tokenizer = live[(k + 1) % len(live)].iid
-        return self.estimate_length(body)
+        return self.estimate_length(body), {}
+
+    def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
+        """Return the prompt tokens each engine can serve from its prefix cache.
+
+        Only token counts leave this method; the prompt's identities are not
+        retained. Multimodal requests and fleets without an engine contract
+        have no evidence and are priced cold.
+        """
+        contract = self.cfg.engine_contract
+        if contract is None or not token_ids or _multimodal(body):
+            return {}
+        salt = body.get("cache_salt")
+        namespace = CacheNamespace(
+            self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
+        )
+        by_size: dict[int, list[bytes]] = {}
+        cached: dict[str, int] = {}
+        for iid, view in self.residency.views.items():
+            size = view.block_size
+            if not view.known or not size:
+                continue
+            if size not in by_size:
+                by_size[size] = block_identities(namespace, token_ids, size)
+            # vLLM computes at least the final prompt token, so reuse stops one token short.
+            usable = (len(token_ids) - 1) // size * size
+            tokens = min(view.cached_prefix_blocks(by_size[size]) * size, usable)
+            if tokens > 0:
+                cached[iid] = tokens
+        return cached
 
     def estimate_length(self, body: dict[str, Any]) -> int:
         """Estimate offered input length locally."""

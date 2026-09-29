@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..profiling.model import Profile
 from ..profiling.store import ProfileStore
 from ..types import Instance, Phase, Request
 from .health import DriftTracker
@@ -16,6 +17,21 @@ if TYPE_CHECKING:
 Cost = tuple[float, float]
 
 
+def prefill_seconds(profile: Profile, request: Request) -> float:
+    """Price one request's prefill on the profiled engine.
+
+    A prefix that engine holds in its prefix cache is priced with the profile's
+    warm fit. Without cache evidence, a warm fit, or coverage by its measured
+    domain, the request is priced on the cold curve of its full input.
+    """
+    cached = request.cached_tokens.get(profile.iid, 0)
+    if cached > 0:
+        warm = profile.cached_prefill_time(cached, request.input_len - cached)
+        if warm is not None:
+            return warm
+    return profile.prefill_time(request.input_len)
+
+
 def cost(
     request: Request,
     inst: Instance,
@@ -24,8 +40,11 @@ def cost(
     profiles: ProfileStore,
     slo: SLO,
     health: DriftTracker | None,
+    warm: bool = False,
 ) -> Cost:
     """Compute the request's lexicographic placement cost, based on Arrow §5.3.
+
+    With `warm`, prefill work is priced with each request's cache evidence.
 
     Arrow: https://arxiv.org/abs/2505.11916
 
@@ -42,9 +61,12 @@ def cost(
         penalty = health.penalty_s
 
     if request.phase is Phase.PREFILL:
-        resident = sum(profile.prefill_time(r.input_len) for r in inst.prefill.values())
-        own = profile.prefill_time(request.input_len)
-        return (float(inst.decode_tokens()), resident + own + penalty)
+
+        def price(r: Request) -> float:
+            return prefill_seconds(profile, r) if warm else profile.prefill_time(r.input_len)
+
+        resident = sum(price(r) for r in inst.prefill.values())
+        return (float(inst.decode_tokens()), resident + price(request) + penalty)
 
     correction = monitor.decode_correction(inst.iid)
     headroom = profile.max_tokens(
