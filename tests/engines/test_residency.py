@@ -181,6 +181,49 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertEqual(index.cached_prefix_blocks(names), 0)
         self.assertTrue(index.changes_after(1)[1][0]["cleared"])
 
+    def test_changes_report_net_presence_per_batch_with_duplicate_copies(self):
+        """vLLM can hold one hash twice; a batch's change lists only net transitions."""
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        prompt = tuple(range(12))
+        names = identities(tuple(range(16)))
+        self.apply(index, 0, stored([1, 2, 3], prompt))
+        removed = {"type": "BlockRemoved", "group_idx": 0}
+        self.apply(
+            index,
+            1,
+            stored([3], prompt[8:], parent=2),
+            {**removed, "block_hashes": [3]},
+            stored([4], (12, 13, 14, 15), parent=3),
+            {**removed, "block_hashes": [4]},
+        )
+        self.assertEqual(index.cached_prefix_blocks(names), 3)
+        _, changes = index.changes_after(0)
+        self.assertEqual(changes[0]["groups"]["0"]["stored"], [])
+        self.assertEqual(changes[0]["groups"]["0"]["removed"], [])
+        self.apply(index, 2, {**removed, "block_hashes": [3]})
+        self.assertEqual(index.cached_prefix_blocks(names), 2)
+        self.assertEqual(index.changes_after(1)[1][0]["groups"]["0"]["removed"], [names[2].hex()])
+
+    def test_change_log_bound_and_mixed_block_sizes(self):
+        index = ResidencyIndex(MODEL, TOKENIZER, max_change_blocks=3)
+        prompt = tuple(range(8))
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
+        self.assertIsNotNone(index.changes_after(-1))
+        self.apply(index, 2, stored([2], prompt[4:], parent=1))
+        # The log holds at most three changed blocks, so batch 0 leaves it.
+        self.assertIsNone(index.changes_after(-1))
+        self.assertEqual(len(index.changes_after(0)[1]), 2)
+        self.apply(index, 3, stored([9], prompt, group=1, size=8))
+        self.assertFalse(index.known)
+        self.assertIn("block size 8", index.snapshot()["reason"])
+
+    def test_a_lost_feed_reports_its_reason_during_replay(self):
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        index.set_current(False)
+        index.lose("cache-event subscription failed: ZMQError")
+        self.assertIn("subscription failed", index.snapshot()["reason"])
+
     def test_missing_history_stays_unknown_until_a_cache_reset(self):
         """Late starts, gaps and unreadable batches serve no blocks."""
         prompt = tuple(range(4))

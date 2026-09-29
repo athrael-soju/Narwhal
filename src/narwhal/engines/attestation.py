@@ -365,7 +365,12 @@ def build_app(
         if result is None:
             raise HTTPException(status_code=410, detail="resynchronise from the residency snapshot")
         sequence, changes = result
-        return {"epoch": epoch, "sequence": sequence, "changes": changes}
+        return {
+            "epoch": epoch,
+            "sequence": sequence,
+            "block_size": index.block_size,
+            "changes": changes,
+        }
 
     return app
 

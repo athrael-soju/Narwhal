@@ -6,7 +6,7 @@ import httpx
 
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, build_app
-from narwhal.engines.kv_events import CacheCleared, StoredBlocks
+from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex
 from narwhal.runtime.residency import ResidencySubscriptions
@@ -74,6 +74,41 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.cached_prefix_blocks(names), 0)
         self.assertEqual(view.resyncs, 1)
 
+    async def test_a_router_following_an_empty_engine_matches_its_sidecar(self):
+        """Net batch changes and the block size reach a router that started with no blocks."""
+        self.index.mark_empty()
+        await self.subscriptions.refresh(self.client)
+        view = self.subscriptions.view("e1")
+        prompt = tuple(range(12))
+        self.index.apply(
+            0,
+            [
+                stored([1, 2, 3], prompt),
+                StoredBlocks(
+                    (1, 2, 3), None, prompt, 4, group=1, kind="sliding_window", sliding_window=5
+                ),
+            ],
+        )
+        # A second copy of block 3 arrives and one copy leaves; block 4 arrives and leaves.
+        self.index.apply(
+            1,
+            [
+                stored([3], prompt[8:], parent=2),
+                RemovedBlocks((3,), 0),
+                stored([4], (12, 13, 14, 15), parent=3),
+                RemovedBlocks((4,), 0),
+            ],
+        )
+        await self.subscriptions.refresh(self.client)
+        names = self.names(range(16))
+        self.assertEqual((view.sequence, view.resyncs, view.block_size), (1, 1, 4))
+        self.assertEqual(view.cached_prefix_blocks(names), 3)
+        self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
+        self.index.apply(2, [RemovedBlocks((3,), 0)])
+        await self.subscriptions.refresh(self.client)
+        self.assertEqual(view.cached_prefix_blocks(names), 2)
+        self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
+
     async def test_gaps_restarts_and_process_changes_resynchronise_or_go_cold(self):
         prompt = range(8)
         self.index.apply(0, [stored([1, 2], prompt)])
@@ -100,7 +135,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.start = 101.0
         await self.subscriptions.refresh(self.client)
         self.assertFalse(view.known)
-        self.assertIn("residency refresh failed", view.reason)
+        self.assertEqual(view.reason, "residency refresh failed: HTTP 503")
 
     async def test_an_unreachable_sidecar_leaves_only_its_engine_cold(self):
         self.index.mark_empty()

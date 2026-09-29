@@ -21,8 +21,8 @@ With `--kv-events`, the sidecar subscribes to the engine's cache events. It keep
 
 | Route | Response |
 | --- | --- |
-| `GET /v1/residency` | Snapshot: `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds`, and each KV cache group's `kind` and named block `identities` |
-| `GET /v1/residency/events?after=N` | Ordered changes after sequence `N`, with the sidecar `epoch`; HTTP 410 when the caller needs a fresh snapshot |
+| `GET /v1/residency` | Snapshot: `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds`, and per KV cache group its `group` key, `kind`, `sliding_window`, named block `identities` and count of `unnamed` blocks |
+| `GET /v1/residency/events?after=N` | One change per event batch after sequence `N`, in order, with the sidecar `epoch` and `block_size`. Each change lists per group the identities the batch made resident and those it evicted. HTTP 410 when the caller needs a fresh snapshot |
 
 Both routes answer HTTP 503 after the engine process changes.
 
@@ -37,6 +37,7 @@ In these cases residency is unknown and a snapshot lists zero blocks:
 - a sequence gap that replay leaves open;
 - a subscription that starts after vLLM's replay buffer dropped earlier batches;
 - an unreadable batch;
+- cache groups that report different block sizes;
 - an index larger than 1,000,000 blocks.
 
 Unknown residency lasts until the engine resets its prefix cache. While the sidecar replays buffered history, including after a sidecar restart, a snapshot reports `"known": false` with the reason `replaying buffered history`.

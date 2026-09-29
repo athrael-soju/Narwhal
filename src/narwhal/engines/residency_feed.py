@@ -150,8 +150,8 @@ class ResidencyFeed:
         subscriber.setsockopt(zmq.LINGER, 0)
         subscriber.setsockopt(zmq.RCVHWM, 0)
         subscriber.setsockopt(zmq.SUBSCRIBE, b"")
-        subscriber.connect(self.endpoint)
         try:
+            subscriber.connect(self.endpoint)
             # Live batches can arrive during replay; the index ignores repeats.
             self.index.set_current(False)
             history = self._catch_up(0)
@@ -171,6 +171,6 @@ class ResidencyFeed:
             # A dead feed must not leave a stale known state behind it.
             if not self._stop.is_set():
                 log.exception("cache-event subscription failed")
-                self.index.lose(f"cache-event subscription failed: {type(exc).__name__}: {exc}")
+                self.index.lose(f"cache-event subscription failed: {type(exc).__name__}")
         finally:
             subscriber.close()

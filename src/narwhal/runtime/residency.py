@@ -100,8 +100,11 @@ class ResidencySubscriptions:
             if following and await self._follow(client, base, view):
                 return
             await self._resync(client, base, view)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            view.forget(f"residency refresh failed: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            # State reasons carry the failure class and status only, never the sidecar URL.
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            detail = type(exc).__name__ if status is None else f"HTTP {status}"
+            view.forget(f"residency refresh failed: {detail}")
 
     async def _follow(self, client: httpx.AsyncClient, base: str, view: EngineResidency) -> bool:
         """Apply ordered changes; return False when a snapshot is required."""
@@ -114,6 +117,7 @@ class ResidencySubscriptions:
         body = response.json()
         if body["epoch"] != view.epoch:
             return False
+        view.block_size = body["block_size"]
         for change in body["changes"]:
             if view.sequence is None or change["sequence"] != view.sequence + 1:
                 return False
