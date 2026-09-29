@@ -43,23 +43,21 @@ from .model import CACHED_PROFILE_FIELDS, Profile, decode_evidence_problems
 from .store import ProfileStore
 
 # Candidate lengths are bounded by each live engine's reported context limit.
-# 256 and 4096 end on a block boundary for 16- and 512-token blocks, so the fit measures the
-# one-step regime twice; the rest end between block boundaries, where served prompts usually end.
+# 256, 1024 and 4096 end on a 16- and 512-token block boundary; the rest end between boundaries.
 PREFILL_LENS = (256, 700, 1024, 1300, 2300, 4096, 4300, 8300, 12300, 16300)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
 PREFILL_REPEATS = 3
-# Cached-prefix sweep: prompts share a salted prefix that an earlier request cached.
+# Warm sweep grid.
 CACHED_PREFIX_LENS = (2048, 4096, 8192)
-# Suffixes past one cache block, like most served suffixes.
 CACHED_SUFFIX_LENS = (700, 1300, 2600)
 CACHED_REPEATS = 3
-# Words a warm primer may add to end inside the block after its prefix's last full block.
+# Words a primer may add to end past its prefix's last full block.
 PRIMER_PAD_WORDS = 8
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
 _BLOCK_TOKENS = re.compile(r'^vllm:cache_config_info\{[^}]*\bblock_size="([0-9]+)"', re.MULTILINE)
-# A warm fit whose held-out error exceeds this leaves the engine priced cold.
+# Held-out error above this keeps an engine cold.
 MAX_CACHED_CV_MAPE = 0.20
 # vLLM counts prompt tokens served from its prefix cache for new requests only.
 _PREFIX_CACHE_HITS = re.compile(
@@ -547,15 +545,9 @@ async def probe_cached_prefill(
     max_model_len: int | None = None,
     block_tokens: int | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Measure prefill with a cached prefix and an uncached suffix, plus cold controls.
+    """Measure warm prefill and a cold control for each (prefix, suffix) case.
 
-    Each case caches a primer under a fresh salt, then times prefix plus suffix under
-    the same salt. The primer is the prefix and the suffix's first words; with an
-    exact-count tokenizer and `block_tokens`, it ends inside the block after the
-    prefix's last full block. The engine's hit counter supplies the cached token
-    count each sample records. A cold control repeats the prompt under another salt.
-    A case longer than `max_model_len` is skipped.
-    Returns the samples and, when the sweep stopped early or measured no case, why.
+    Returns the samples and the reason the sweep stopped early, or None.
     """
     timeout = observation_timeout_s or 30.0
 
@@ -574,8 +566,7 @@ async def probe_cached_prefill(
     samples: list[dict[str, Any]] = []
     for prefix_target in sweep.cached_prefix_lens:
         prefix, _ = await make_prompt(client, url, model, prefix_target, dialect, timeout_s=timeout)
-        # A hybrid engine keeps boundary state only for a prompt that runs past a block
-        # boundary, so the primer runs at least one word past the prefix.
+        # Boundary state exists only for a prompt that runs past a block boundary.
         primer = prefix + " context"
         if exact and block_tokens is not None:
             boundary = prefix_target // block_tokens * block_tokens
@@ -672,11 +663,7 @@ def _valid_cached_samples(samples: Any) -> bool:
 def apply_cached_fit(
     profile: Profile, samples: list[dict[str, Any]]
 ) -> tuple[Profile, dict[str, Any]]:
-    """Fit warm prefill from retained samples and compare it with cold pricing.
-
-    Each target case contributes the medians of its repeats. A fit whose held-out
-    error exceeds `MAX_CACHED_CV_MAPE` raises ValueError, leaving the engine cold.
-    """
+    """Fit warm prefill from retained samples; raise ValueError above `MAX_CACHED_CV_MAPE`."""
     cases: dict[tuple[Any, Any], dict[str, list[float]]] = {}
     for sample in samples:
         case = cases.setdefault(
@@ -732,10 +719,8 @@ def apply_cached_fit(
     return fitted, {
         "fit_points": groups,
         "cv_mape": cv_mape,
-        # Pricing only the suffix on the cold curve ignores attention to the cached prefix.
         "suffix_on_cold_curve_mape": error(lambda p, s: profile.prefill_time(int(s))),
         "full_prompt_cold_mape": error(lambda p, s: profile.prefill_time(int(p + s))),
-        # The measured cold controls against the cold curve at the same prompt lengths.
         "cold_control_curve_mape": statistics.mean(
             abs(profile.prefill_time(int(n)) - y) / max(y, 1e-9) for n, y in controls
         )
@@ -882,7 +867,6 @@ async def profile_instance(
             raise ValueError(reason)
         profile, fit = apply_cached_fit(profile, cached)
     except ValueError as exc:
-        # A warm fit that cannot be formed leaves the engine priced cold.
         print(f"    cached prefill kept cold: {exc}")
         if evidence is not None:
             evidence["cached_prefill"] = {"samples": cached, "reason": str(exc)}
@@ -1102,7 +1086,7 @@ def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = N
                 f"max_num_seqs {max_num_seqs} leaves fewer than two decode concurrency "
                 "points; adjust the engine launch policy before profiling"
             )
-    # A cached case needs its prefix, its suffix and one output token inside the context.
+    # Prefix, suffix and one output token fit the context.
     shortest_suffix = min(sweep.cached_suffix_lens, default=0)
     shortest_prefix = min(sweep.cached_prefix_lens, default=0)
     prefixes = tuple(p for p in sweep.cached_prefix_lens if p + shortest_suffix + 1 < max_model_len)
@@ -1187,7 +1171,7 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
         )
         cached = row.get("cached_prefill") or {}
         if cached.get("reason") is not None and cached.get("cv_mape") is None:
-            # The live run kept this engine cold; its samples may stop partway through the sweep.
+            # A stopped live sweep stays cold.
             row["cached_prefill"] = {
                 "samples": cached.get("samples", []),
                 "reason": cached["reason"],
@@ -1200,7 +1184,6 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             except (KeyError, TypeError) as exc:
                 raise ValueError(f"{iid}: saved cached prefill samples are invalid") from exc
             except ValueError as exc:
-                # The live run kept this engine cold for the same reason.
                 row["cached_prefill"] = {"samples": cached["samples"], "reason": str(exc)}
             else:
                 updated = refit

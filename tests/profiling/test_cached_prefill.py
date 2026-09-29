@@ -92,14 +92,12 @@ class CachedPrefillFitTests(unittest.TestCase):
         self.assertIsNone(cold.cached_prefill_time(2048, 1024))
         self.assertEqual(fitted.cached_prefill_time(0, 1024), fitted.prefill_time(1024))
         self.assertLess(fit["cv_mape"], 1e-6)
-        # Pricing only the suffix on the cold curve misses the cached prefix.
         self.assertGreater(fit["suffix_on_cold_curve_mape"], 0.05)
         self.assertIsNotNone(fit["cold_control_curve_mape"])
         with self.assertRaisesRegex(ValueError, "cached prefill fit requires"):
             replace(cold, cached_ttft_a=A)
 
     def test_a_suffix_past_a_block_carries_the_measured_split_step(self):
-        """A suffix that splits costs the cold fit's split step; the warm terms fit the rest."""
         split, block = 0.06, 512
         points = [
             (p, s, warm_time(p, s) + (split if splits_prefill(s, block) else 0.0))
@@ -110,7 +108,6 @@ class CachedPrefillFitTests(unittest.TestCase):
         self.assertLess(cv_mape, 1e-6)
         self.assertAlmostEqual(c, C, places=6)
         self.assertAlmostEqual(d / D, 1, places=4)
-        # Without the step, the warm terms absorb it and the held-out error grows.
         self.assertGreater(fit_cached_prefill(points)[2], 0.05)
         cold = profile(
             "e0", ttft_a=1e-9, ttft_b=2e-5, ttft_c=0.08, ttft_block_tokens=block, ttft_split=split
@@ -127,7 +124,7 @@ class CachedPrefillFitTests(unittest.TestCase):
     def test_repeats_group_by_target_case_and_a_poor_fit_stays_cold(self):
         cold = profile("e0")
         grid = warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048))
-        # Observed hit counts that differ between repeats still describe one case.
+        # Hit counts vary between repeats of one case.
         for index, sample in enumerate(grid):
             if sample["state"] == "warm":
                 sample["prefix_tokens"] += 16 * (index % 2)
@@ -151,8 +148,6 @@ class ColdSplitStepTests(unittest.TestCase):
         row = replace(row, ttft_block_tokens=512, ttft_split=split)
         for n in (300, 512, 513, 1024, 1500):
             self.assertAlmostEqual(row.prefill_time(n), cold(n), places=6)
-        # Without a block size, or with fewer than two lengths on either side of the rule,
-        # the fit keeps the plain curve.
         one_short = (256, 700, 1300, 2300, 4300, 8300)
         for kept in (one_short, one_short[1:]):
             with self.subTest(lengths=kept):
@@ -167,7 +162,7 @@ class ColdSplitStepTests(unittest.TestCase):
         def cold(n):
             return 1e-9 * n * n + 2e-5 * n + 0.05
 
-        # The short point sits off the curve, as measurement noise can leave it.
+        # The short point sits off the curve.
         for offset in (0.95, 1.05):
             samples = [(n, cold(n) * (offset if n == 256 else 1.0)) for n in probe.PREFILL_LENS]
             for block in (16, 512):
@@ -184,7 +179,7 @@ class ColdSplitStepTests(unittest.TestCase):
                 one_step = [n for n in probe.PREFILL_LENS if not splits_prefill(n, block)]
                 self.assertGreaterEqual(len(one_step), 2)
         self.assertEqual(list(probe.PREFILL_LENS), sorted(probe.PREFILL_LENS))
-        # A 4096-token context still keeps two one-step lengths for the split fit.
+        # Two one-step lengths remain in a 4096-token context.
         short = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
         for block in (16, 512):
             with self.subTest(block=block, context=4096):
@@ -214,11 +209,11 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
     def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None, blind_after_cold=False):
         cache: dict[str, int] = {}
         hits = [0]
-        # `blind_after_cold` loses the hit counter once the first cold control completes.
+        # `blind_after_cold`: /metrics fails after the first cold control.
         blind, reused = [False], [False]
 
         def cached(tokens):
-            # A hybrid engine keeps boundary state only inside the prompt's final block.
+            # Hybrid: boundary state only inside the prompt's final block.
             if hybrid and tokens % 16 == 0:
                 return 0
             return tokens // 16 * 16
@@ -406,7 +401,6 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.ttft_block_tokens, 512)
         self.assertAlmostEqual(row.ttft_split, 0.06, places=6)
         self.assertEqual(evidence["prefill_block_tokens"], 512)
-        # One length inside the first block leaves no split step to measure.
         row, evidence = await self.profile_with(([], "none"), block=512, prefill=prefill[:-2])
         self.assertIsNone(row.ttft_block_tokens)
         self.assertIsNone(row.ttft_split)
@@ -446,7 +440,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
 
     def test_saved_samples_reproduce_the_warm_fit_offline(self):
         fitted, fit = probe.apply_cached_fit(self.base(), warm_samples())
-        # The saved profile carries no warm fit, so the refit must compute it from the samples.
+        # The saved profile has no warm fit.
         row, evidence = self.refit({"samples": warm_samples(), **fit}, self.base())
         for name in (
             "cached_ttft_a",
@@ -491,7 +485,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
                 self.refit({"samples": bad}, self.base())
 
     def test_refit_keeps_an_engine_cold_when_its_live_warm_sweep_stopped(self):
-        # The live sweep stopped early; its saved samples would still form a fit.
+        # A stopped sweep's samples would still form a fit.
         reason = "case prefix~8192 suffix~700 reused no cached prefix"
         row, evidence = self.refit({"samples": warm_samples(), "reason": reason}, self.base())
         self.assertIsNone(row["cached_ttft_a"])

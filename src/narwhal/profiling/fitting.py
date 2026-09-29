@@ -8,9 +8,9 @@ from collections.abc import Sequence
 
 MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
-# Distinct lengths each side of the cache-block rule needs before the fit measures a split step.
+# Lengths each side of the block rule needs for a split fit.
 SPLIT_REGIME_LENGTHS = 2
-# A split step must bring the median fit error below this share of the plain curve's error.
+# Share of the plain curve's error a split fit must stay below.
 SPLIT_ERROR_RATIO = 0.5
 
 
@@ -83,14 +83,11 @@ def fit_prefill_samples(
     samples: list[tuple[float, float]],
     block_tokens: int | None = None,
 ) -> tuple[tuple[float, float, float, float | None], list[tuple[float, float]], float]:
-    """Fit one median per exact input length and reject poor representative fits.
+    """Fit `a*n*n + b*n + c + split*s` to each input length's median; raise on a poor fit.
 
-    Returns `(a, b, c, split)` for `a*n*n + b*n + c`, plus `split` for a prompt that
-    ends inside a cache block past the first. An engine that splits such a prompt
-    into two prefill steps measures a positive `split`. The fit keeps `split` when
-    each side of that rule has `SPLIT_REGIME_LENGTHS` distinct lengths, the sweep
-    has more lengths than the fit has terms, and the step brings the fit error
-    below `SPLIT_ERROR_RATIO` of the plain curve's; otherwise `split` is None.
+    `s` marks a prompt that ends inside a cache block past the first. `split` is None
+    unless both sides of that rule have `SPLIT_REGIME_LENGTHS` lengths and the step
+    brings the error below `SPLIT_ERROR_RATIO` of the plain curve's.
     """
     if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
         raise ValueError("prefill samples must be finite and nonnegative")
@@ -122,8 +119,6 @@ def fit_prefill_samples(
         ]
         sa, sb, sc, step = _nonnegative_fit(split_rows, [y for _, y in representatives])
         stepped = point_errors(sa, sb, sc, step)
-        # A one-step engine's short-length noise also lowers the error a little; a second
-        # prefill step leaves the plain curve far off at both regimes.
         if statistics.mean(stepped) < SPLIT_ERROR_RATIO * statistics.mean(errors):
             a, b, c, split, errors = sa, sb, sc, step, stepped
     mape = statistics.mean(errors)
@@ -229,8 +224,7 @@ def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> li
 
 
 def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
-    # The suffix attends causally to the cached prefix and to earlier suffix tokens,
-    # and prefill reads the cached prefix.
+    # Terms for a, b, c, d: suffix attention, suffix tokens, constant, prefix read.
     return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
 
 
@@ -264,10 +258,8 @@ def fit_cached_prefill(
 ) -> tuple[tuple[float, float, float, float], list[tuple[float, float, float]], float]:
     """Fit warm prefill `c + b*S + d*P + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
 
-    A suffix that ends inside a cache block past its first carries the cold
-    fit's measured `split`, and the warm terms fit the remaining time. Returns
-    the coefficients, the per-(prefix, suffix) medians they fit, and the mean
-    error when each median is predicted by a fit without it.
+    Suffixes that split carry the cold `split`. Returns the coefficients, the per-case
+    medians and the leave-one-case-out error.
     """
     if any(not math.isfinite(v) or v < 0 for sample in samples for v in sample):
         raise ValueError("cached prefill samples must be finite and nonnegative")

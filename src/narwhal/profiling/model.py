@@ -64,7 +64,7 @@ _OPTIONAL_FLOAT_FIELDS = (
     "cached_cv_mape",
 )
 
-# A warm prefill fit is complete only with its coefficients, measured domain and held-out error.
+# Fields a warm prefill fit sets together.
 _CACHED_FIELDS = (
     "cached_ttft_a",
     "cached_ttft_b",
@@ -236,12 +236,10 @@ class Profile:
     colocated_decode_engines: int | None = None
     colocated_prefill_rps: float | None = None
     colocated_decode_rps: float | None = None
-    # Engines that prefill a prompt ending inside a cache block past the first in two steps:
-    # their cache block size and the measured cost of the extra step.
+    # Cache block size and the extra prefill step for a prompt ending past the first block.
     ttft_block_tokens: int | None = None
     ttft_split: float | None = None
-    # Prefill with P tokens served from the prefix cache and S uncached suffix tokens:
-    # c + b*S + d*P + a*(2*P*S + S*S), fitted from warm samples inside the measured domain.
+    # Warm prefill c + b*S + d*P + a*(2*P*S + S*S) for P cached and S uncached tokens.
     cached_ttft_a: float | None = None
     cached_ttft_b: float | None = None
     cached_ttft_c: float | None = None
@@ -261,10 +259,7 @@ class Profile:
         _check({f.name: getattr(self, f.name) for f in fields(self)}, label)
 
     def prefill_time(self, input_len: int) -> float:
-        """Predict prefill time for an input length.
-
-        A prompt that ends inside a cache block past the first adds `ttft_split`.
-        """
+        """Predict prefill time for an input length, adding `ttft_split` when it splits."""
         x = float(input_len)
         return max(
             0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(input_len)
@@ -278,13 +273,9 @@ class Profile:
         return self.ttft_split
 
     def cached_prefill_time(self, prefix_tokens: int, suffix_tokens: int) -> float | None:
-        """Predict prefill time when `prefix_tokens` come from the prefix cache.
+        """Predict prefill time with `prefix_tokens` cached; None outside the warm fit's domain.
 
-        Returns None without a warm fit or outside its measured domain, so the
-        caller prices the request cold. The cold curve of the suffix alone is
-        not a warm estimate: the suffix still attends to the cached prefix. A
-        cached prefix ends on a block boundary, so a suffix that ends inside a
-        block past its first adds `ttft_split`, as a cold prompt does.
+        A suffix that ends inside a block past its first adds `ttft_split`.
         """
         if prefix_tokens <= 0:
             return self.prefill_time(suffix_tokens)

@@ -227,7 +227,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps({"engines": {"e0": {"profile": saved}}})
                 )
             self.assertEqual(probe.merge_profiles(sources, root / "merged.json", {"e0"}), 0)
-            # Evidence that describes another measurement still stops the merge.
+            # Evidence from another measurement stops the merge.
             stale = {**asdict(rows[0]), "ttft_c": rows[0].ttft_c + 1.0}
             sources[0].with_suffix(".samples.json").write_text(
                 json.dumps({"engines": {"e0": {"profile": stale}}})
