@@ -16,14 +16,14 @@ from narwhal.profiling import probe
 from narwhal.profiling.fitting import fit_cached_prefill
 from tests.fixtures import profile
 
-A, B, C = 2e-9, 1e-5, 0.07
+A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
 
 
 def warm_time(prefix, suffix):
-    return A * (2 * prefix * suffix + suffix * suffix) + B * suffix + C
+    return A * (2 * prefix * suffix + suffix * suffix) + B * suffix + D * prefix + C
 
 
-def warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048), repeats=3):
+def warm_samples(prefixes=(1024, 2048, 4096), suffixes=(256, 1024, 2048), repeats=3):
     return [
         {
             "target_prefix": p,
@@ -43,19 +43,21 @@ def warm_samples(prefixes=(1024, 4096), suffixes=(256, 2048), repeats=3):
 
 
 class CachedPrefillFitTests(unittest.TestCase):
-    def test_fit_recovers_attention_to_the_cached_prefix(self):
-        points = [(p, s, warm_time(p, s)) for p in (1024, 4096) for s in (256, 2048)]
-        (a, b, c), groups, cv_mape = fit_cached_prefill(points)
+    def test_fit_recovers_prefix_reads_and_attention_to_the_cached_prefix(self):
+        points = [(p, s, warm_time(p, s)) for p in (1024, 2048, 4096) for s in (256, 1024, 2048)]
+        (a, b, c, d), groups, cv_mape = fit_cached_prefill(points)
         self.assertAlmostEqual(a / A, 1, places=4)
         self.assertAlmostEqual(b / B, 1, places=4)
+        self.assertAlmostEqual(d / D, 1, places=4)
         self.assertAlmostEqual(c, C, places=6)
-        self.assertEqual(len(groups), 4)
+        self.assertEqual(len(groups), 9)
         self.assertLess(cv_mape, 1e-6)
 
-    def test_fit_needs_two_prefix_and_two_suffix_lengths(self):
+    def test_fit_needs_two_prefix_and_two_suffix_lengths_and_five_cases(self):
         for points in (
             [(1024, s, 0.1) for s in (256, 2048)],
             [(p, 256, 0.1) for p in (1024, 4096)],
+            [(p, s, 0.1) for p in (1024, 4096) for s in (256, 2048)],
             [(0, 256, 0.1), (1024, 256, 0.1), (4096, 2048, 0.2), (1024, 2048, 0.2)],
         ):
             with self.subTest(points=points), self.assertRaises(ValueError):
@@ -176,6 +178,12 @@ class CachedPrefillRefitTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(probe.refit_saved_prefill(source, out, {"e0"}), 0)
             row = json.loads(out.read_text())["profiles"][0]
-        for name in ("cached_ttft_a", "cached_ttft_b", "cached_ttft_c", "cached_max_prefix_tokens"):
+        for name in (
+            "cached_ttft_a",
+            "cached_ttft_b",
+            "cached_ttft_c",
+            "cached_ttft_d",
+            "cached_max_prefix_tokens",
+        ):
             self.assertAlmostEqual(row[name], getattr(fitted, name), places=12)
         self.assertTrue(re.fullmatch(r"sha256:a{64}", row["generation_digest"]))

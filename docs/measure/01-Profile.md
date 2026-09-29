@@ -73,7 +73,7 @@ For each `--cached-prefix-lens` and `--cached-suffix-lens` pair, the profiler re
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 
-The warm fit is `c + b*S + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `P*S` term covers the suffix's attention to the cached prefix. The profiler reports the fit's leave-one-case-out error and the error of pricing only the suffix on the cold curve. Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit.
+The warm fit is `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached tokens and `S` uncached tokens. The `d*P` term covers each step's read of the cached prefix, and the `P*S` term covers the suffix's attention to it. The fit needs at least five prefix and suffix cases. The profiler reports the fit's leave-one-case-out error and the error of pricing only the suffix on the cold curve. Retain a threshold for the held-out error in the private execution record before profiling. An engine keeps cold pricing when its samples fall short of a warm fit.
 
 ## 3. Retain profile samples and fits
 

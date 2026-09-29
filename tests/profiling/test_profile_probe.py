@@ -345,13 +345,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         max_model_len=limit,
                     )
                 self.assertEqual(len(samples), len(sweep.prefill_lens))
-                self.assertEqual(max(sent), 12288)
+                self.assertEqual(max(sent), 16300)
                 with self.assertRaisesRegex(ValueError, "exceeds.*max_model_len"):
                     await probe.probe_prefill(
                         client, "http://e", "stub", lens=(16384,), repeats=1, max_model_len=limit
                     )
-                self.assertEqual(max(sent), 12288)
-        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4096)
+                self.assertEqual(max(sent), 16300)
+        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4300)
 
     async def test_tokenizer_must_report_live_context_limit(self):
         async with httpx.AsyncClient(
@@ -655,7 +655,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
-            self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 12288)
+            self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 16300)
 
     async def test_run_rejects_decode_fit_outside_policy(self):
         """An unstable colocated fit leaves raw evidence but no usable profile."""

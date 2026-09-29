@@ -116,7 +116,7 @@
     "neighbour_decode_input_tokens": 128,
     "neighbour_decode_output_tokens": 32,
     "decode_repeats": 3,
-    "cached_prefix_lens": [1024, 2048],
+    "cached_prefix_lens": [1024, 1536, 2048],
     "cached_suffix_lens": [256, 1024]
   },
   "role_cycle": {

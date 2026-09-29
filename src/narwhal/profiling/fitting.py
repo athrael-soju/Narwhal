@@ -9,21 +9,22 @@ MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
 
 
-def _solve3(a: list[list[float]], b: list[float]) -> list[float]:
-    """Gaussian elimination with partial pivoting on a 3x3 system."""
+def _solve(a: list[list[float]], b: list[float]) -> list[float]:
+    """Gaussian elimination with partial pivoting on a square system."""
+    n = len(b)
     m = [[*row, rhs] for row, rhs in zip(a, b, strict=True)]
-    for col in range(3):
-        pivot = max(range(col, 3), key=lambda r: abs(m[r][col]))
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
         if abs(m[pivot][col]) < 1e-12:
             raise ValueError("singular system: profiling samples are degenerate")
         m[col], m[pivot] = m[pivot], m[col]
-        for r in range(3):
+        for r in range(n):
             if r == col:
                 continue
             f = m[r][col] / m[col][col]
-            for c in range(col, 4):
+            for c in range(col, n + 1):
                 m[r][c] -= f * m[col][c]
-    return [m[i][3] / m[i][i] for i in range(3)]
+    return [m[i][n] / m[i][i] for i in range(n)]
 
 
 def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, float]:
@@ -55,7 +56,7 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
             for i in range(3)
         ]
         try:
-            coefficients = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
+            coefficients = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
         except ValueError:
             continue
         if any(value < 0 for value in coefficients):
@@ -108,7 +109,7 @@ def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, 
     gram = [[sum(row[i] * row[j] for row in rows) for j in range(3)] for i in range(3)]
     rhs = [sum(row[i] * y for row, y in zip(rows, ys, strict=True)) for i in range(3)]
     # Reject unidentifiable axes even if a boundary fit could hide them.
-    _solve3(gram, rhs)
+    _solve(gram, rhs)
     best = [0.0, 0.0, 0.0]
     best_error = sum(y * y for y in ys)
     for mask in range(1, 8):
@@ -117,7 +118,7 @@ def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, 
             [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(3)]
             for i in range(3)
         ]
-        coefficients = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
+        coefficients = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
         if any(value < 0 for value in coefficients):
             continue
         error = sum(
@@ -158,22 +159,23 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
     return sum(errors) / len(errors)
 
 
-def _nonnegative_fit3(rows: list[tuple[float, float, float]], ys: list[float]) -> list[float]:
-    """Fit `y = w0 f0 + w1 f1 + w2 f2` with nonnegative weights by checking every face."""
-    scales = [max(abs(row[i]) for row in rows) or 1.0 for i in range(3)]
-    scaled = [[row[i] / scales[i] for i in range(3)] for row in rows]
-    gram = [[sum(r[i] * r[j] for r in scaled) for j in range(3)] for i in range(3)]
-    rhs = [sum(r[i] * y for r, y in zip(scaled, ys, strict=True)) for i in range(3)]
-    best = [0.0, 0.0, 0.0]
+def _nonnegative_fit(rows: list[tuple[float, ...]], ys: list[float]) -> list[float]:
+    """Fit `y = sum(w_i f_i)` with nonnegative weights by checking every face."""
+    n = len(rows[0])
+    scales = [max(abs(row[i]) for row in rows) or 1.0 for i in range(n)]
+    scaled = [[row[i] / scales[i] for i in range(n)] for row in rows]
+    gram = [[sum(r[i] * r[j] for r in scaled) for j in range(n)] for i in range(n)]
+    rhs = [sum(r[i] * y for r, y in zip(scaled, ys, strict=True)) for i in range(n)]
+    best = [0.0] * n
     best_error = sum(y * y for y in ys)
-    for mask in range(1, 8):
-        active = [bool(mask & (1 << i)) for i in range(3)]
+    for mask in range(1, 1 << n):
+        active = [bool(mask & (1 << i)) for i in range(n)]
         matrix = [
-            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(3)]
-            for i in range(3)
+            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(n)]
+            for i in range(n)
         ]
         try:
-            weights = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
+            weights = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(n)])
         except ValueError:
             continue
         if any(value < 0 for value in weights):
@@ -187,22 +189,25 @@ def _nonnegative_fit3(rows: list[tuple[float, float, float]], ys: list[float]) -
     return [w / s for w, s in zip(best, scales, strict=True)]
 
 
-def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float]:
-    # The suffix attends causally to the cached prefix and to earlier suffix tokens.
-    return (2 * prefix * suffix + suffix * suffix, suffix, 1.0)
+def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
+    # The suffix attends causally to the cached prefix and to earlier suffix tokens,
+    # and each step reads the cached prefix once.
+    return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
 
 
-def _fit_cached_groups(groups: list[tuple[float, float, float]]) -> tuple[float, float, float]:
-    a, b, c = _nonnegative_fit3(
+def _fit_cached_groups(
+    groups: list[tuple[float, float, float]],
+) -> tuple[float, float, float, float]:
+    a, b, c, d = _nonnegative_fit(
         [_cached_features(p, s) for p, s, _ in groups], [y for _, _, y in groups]
     )
-    return a, b, c
+    return a, b, c, d
 
 
 def fit_cached_prefill(
     samples: list[tuple[float, float, float]],
-) -> tuple[tuple[float, float, float], list[tuple[float, float, float]], float]:
-    """Fit warm prefill `c + b*S + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
+) -> tuple[tuple[float, float, float, float], list[tuple[float, float, float]], float]:
+    """Fit warm prefill `c + b*S + d*P + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
 
     Returns the coefficients, the per-(prefix, suffix) medians they fit, and the
     mean error when each median is predicted by a fit without it.
@@ -215,12 +220,20 @@ def fit_cached_prefill(
             raise ValueError("cached prefill samples need a cached prefix and an uncached suffix")
         grouped.setdefault((prefix, suffix), []).append(elapsed)
     groups = [(p, s, statistics.median(times)) for (p, s), times in sorted(grouped.items())]
-    if len({p for p, _, _ in groups}) < 2 or len({s for _, s, _ in groups}) < 2:
-        raise ValueError("a cached prefill fit needs two prefix and two suffix lengths")
+    if (
+        len({p for p, _, _ in groups}) < 2
+        or len({s for _, s, _ in groups}) < 2
+        or len(groups) <= len(_cached_features(1.0, 1.0))
+    ):
+        raise ValueError(
+            "a cached prefill fit needs two prefix lengths, two suffix lengths and five cases"
+        )
     coefficients = _fit_cached_groups(groups)
     errors = []
     for index, (prefix, suffix, observed) in enumerate(groups):
-        a, b, c = _fit_cached_groups(groups[:index] + groups[index + 1 :])
-        f0, f1, _ = _cached_features(prefix, suffix)
-        errors.append(abs(a * f0 + b * f1 + c - observed) / max(observed, 1e-9))
+        weights = _fit_cached_groups(groups[:index] + groups[index + 1 :])
+        predicted = sum(
+            w * f for w, f in zip(weights, _cached_features(prefix, suffix), strict=True)
+        )
+        errors.append(abs(predicted - observed) / max(observed, 1e-9))
     return coefficients, groups, sum(errors) / len(errors)

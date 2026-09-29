@@ -41,14 +41,15 @@ from .model import Profile, decode_evidence_problems
 from .store import ProfileStore
 
 # Candidate lengths are bounded by each live engine's reported context limit.
-PREFILL_LENS = (256, 512, 1024, 2048, 4096, 8192, 12288, 16384)
+# Lengths between cache block boundaries, where served prompts usually end.
+PREFILL_LENS = (300, 700, 1300, 2300, 4300, 8300, 12300, 16300)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
 PREFILL_REPEATS = 3
 # Cached-prefix sweep: prompts share a salted prefix that an earlier request cached.
-CACHED_PREFIX_LENS = (2048, 8192)
-CACHED_SUFFIX_LENS = (256, 2048)
+CACHED_PREFIX_LENS = (2048, 4096, 8192)
+CACHED_SUFFIX_LENS = (256, 1024, 2048)
 CACHED_REPEATS = 3
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
 # vLLM counts prompt tokens served from its prefix cache for new requests only.
@@ -594,12 +595,13 @@ def apply_cached_fit(
         for s in samples
         if s["state"] == "warm"
     ]
-    (a, b, c), groups, cv_mape = fit_cached_prefill(warm)
+    (a, b, c, d), groups, cv_mape = fit_cached_prefill(warm)
     fitted = replace(
         profile,
         cached_ttft_a=a,
         cached_ttft_b=b,
         cached_ttft_c=c,
+        cached_ttft_d=d,
         cached_cv_mape=cv_mape,
         cached_min_prefix_tokens=int(min(p for p, _, _ in warm)),
         cached_max_prefix_tokens=int(max(p for p, _, _ in warm)),
@@ -1409,7 +1411,8 @@ def _main(argv: list[str]) -> int:
         "--cached-prefix-lens",
         default=",".join(str(n) for n in CACHED_PREFIX_LENS),
         help="comma-separated cached prefix lengths for the warm prefill sweep, which runs "
-        "when the engine reuses a cached prefix; at least two (default: %(default)s)",
+        "when the engine reuses a cached prefix; at least two, and at least five cases "
+        "with --cached-suffix-lens (default: %(default)s)",
     )
     ap.add_argument(
         "--cached-suffix-lens",
@@ -1524,8 +1527,12 @@ def _main(argv: list[str]) -> int:
             "--prefill-lens, --decode-input-lens, --decode-concurrency, --cached-prefix-lens "
             "and --cached-suffix-lens take comma-separated integers"
         )
-    if len(set(sweep.cached_prefix_lens)) < 2 or len(set(sweep.cached_suffix_lens)) < 2:
-        ap.error("the warm prefill fit needs two distinct prefix and two distinct suffix lengths")
+    prefixes, suffixes = set(sweep.cached_prefix_lens), set(sweep.cached_suffix_lens)
+    if len(prefixes) < 2 or len(suffixes) < 2 or len(prefixes) * len(suffixes) < 5:
+        ap.error(
+            "the warm prefill fit needs two distinct prefix lengths, two distinct suffix "
+            "lengths and at least five prefix and suffix cases"
+        )
     if any(value <= 0 for value in (*sweep.cached_prefix_lens, *sweep.cached_suffix_lens)):
         ap.error("cached prefix and suffix lengths must be positive")
     if len(set(sweep.prefill_lens)) < 3:

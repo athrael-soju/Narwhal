@@ -22,6 +22,7 @@ _FLOAT_FIELDS = (
     "cached_ttft_a",
     "cached_ttft_b",
     "cached_ttft_c",
+    "cached_ttft_d",
     "cached_cv_mape",
 )
 
@@ -56,6 +57,7 @@ _OPTIONAL_FLOAT_FIELDS = (
     "cached_ttft_a",
     "cached_ttft_b",
     "cached_ttft_c",
+    "cached_ttft_d",
     "cached_cv_mape",
 )
 
@@ -64,6 +66,7 @@ _CACHED_FIELDS = (
     "cached_ttft_a",
     "cached_ttft_b",
     "cached_ttft_c",
+    "cached_ttft_d",
     "cached_cv_mape",
     "cached_min_prefix_tokens",
     "cached_max_prefix_tokens",
@@ -226,10 +229,11 @@ class Profile:
     colocated_prefill_rps: float | None = None
     colocated_decode_rps: float | None = None
     # Prefill with P tokens served from the prefix cache and S uncached suffix tokens:
-    # c + b*S + a*(2*P*S + S*S), fitted from warm samples inside the measured domain.
+    # c + b*S + d*P + a*(2*P*S + S*S), fitted from warm samples inside the measured domain.
     cached_ttft_a: float | None = None
     cached_ttft_b: float | None = None
     cached_ttft_c: float | None = None
+    cached_ttft_d: float | None = None
     cached_cv_mape: float | None = None
     cached_min_prefix_tokens: int | None = None
     cached_max_prefix_tokens: int | None = None
@@ -262,6 +266,7 @@ class Profile:
             self.cached_ttft_a is None
             or self.cached_ttft_b is None
             or self.cached_ttft_c is None
+            or self.cached_ttft_d is None
             or self.cached_min_prefix_tokens is None
             or self.cached_max_prefix_tokens is None
             or self.cached_min_suffix_tokens is None
@@ -273,7 +278,10 @@ class Profile:
         p, s = float(prefix_tokens), float(suffix_tokens)
         return max(
             0.0,
-            self.cached_ttft_a * (2 * p * s + s * s) + self.cached_ttft_b * s + self.cached_ttft_c,
+            self.cached_ttft_a * (2 * p * s + s * s)
+            + self.cached_ttft_b * s
+            + self.cached_ttft_d * p
+            + self.cached_ttft_c,
         )
 
     def covers_prefill(self, input_len: int) -> bool:

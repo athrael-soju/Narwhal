@@ -114,7 +114,7 @@
     "neighbour_decode_input_tokens": 128,
     "neighbour_decode_output_tokens": 32,
     "decode_repeats": 3,
-    "cached_prefix_lens": [256, 512],
+    "cached_prefix_lens": [256, 384, 512],
     "cached_suffix_lens": [64, 256]
   }
 }
