@@ -71,7 +71,7 @@ The suite runs `make check` on GitHub-hosted runners. It runs the unit suite and
 
 The CI jobs use synthetic test inputs and a standard read-only GitHub token.
 
-CodeQL scans the Python source and GitHub Actions workflows on pushes and pull requests to `main`, and weekly. A push or pull request that changes only files under `docs/`, Markdown files or `mkdocs.yml` skips the scan.
+CodeQL scans the Python source and GitHub Actions workflows on pushes and pull requests to `main`, and weekly.
 
 `make test` runs the unit suite. Pass unittest discovery options through
 `TEST_ARGS` to select tests or change verbosity:
