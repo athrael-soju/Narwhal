@@ -1,48 +1,67 @@
 # `narwhal-attest`
 
-Start `narwhal-attest` after vLLM. The sidecar reads one engine's identity, serves its attestation over HTTP, and stops when the engine version or process start time changes.
+`narwhal-attest` is a sidecar that runs alongside vLLM. It reads the engine's identity and serves the attestation document over HTTP. Start it after vLLM is up, and run it as the same user as the engine (root, for container engines).
 
-| Option                | Default     | Contract                                                |
-| --------------------- | ----------- | ------------------------------------------------------- |
-| `--version`           |             | Print the installed distribution version.               |
-| `--document PATH`     | required    | Contract values plus a source for every populated field |
-| `--engine-base URL`   | required    | vLLM base URL queried at `/version` and `/metrics`      |
-| `--host HOST`         | `127.0.0.1` | Sidecar bind address                                    |
-| `--port PORT`         | `8010`      | Sidecar port                                            |
-| `--timeout-s SECONDS` | `5.0`       | Time budget for reading engine identity                 |
-| `--kv-events DIR`     | omitted     | Directory holding the engine's cache-event sockets; serves the residency routes |
-| `--model NAME`        | omitted     | Served model name for block identities; required with `--kv-events` |
+When it starts, it checks the engine's vLLM version against the one in the attestation document and exits with status 1 if they don't match. After that it keeps watching. If the version or the engine's process start time changes, the sidecar stays up but answers every route with HTTP 503.
 
-`tools/deployment/attestation_contract.py serve` passes `--kv-events` and `--model` when the checked launch keeps prefix caching on and publishes cache events.
+## Options
 
-## Residency routes
+| Option                | Default     | Description                                                              |
+| --------------------- | ----------- | ------------------------------------------------------------------------ |
+| `--version`           |             | Print the installed distribution version.                                |
+| `--document PATH`     | required    | The attestation document: contract values, plus a source for each field. |
+| `--engine-base URL`   | required    | vLLM base URL. The sidecar queries `/version` and `/metrics`.            |
+| `--host HOST`         | `127.0.0.1` | Address to bind.                                                         |
+| `--port PORT`         | `8010`      | Port to listen on.                                                       |
+| `--timeout-s SECONDS` | `5.0`       | How long to wait when reading the engine's identity.                     |
+| `--kv-events DIR`     |             | Directory with the engine's cache-event sockets. Turns on residency.     |
+| `--model NAME`        |             | Served model name, used in block identities.                             |
 
-With `--kv-events`, the sidecar subscribes to the engine's cache events. It keeps a bounded index of the prefix blocks that the engine process holds on its GPU. Without it, both routes answer HTTP 404, and the router prices the engine cold.
+`--kv-events` requires `--model`.
 
-| Route | Response |
-| --- | --- |
-| `GET /v1/residency` | Snapshot: `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds`, and each KV cache group's `kind` and named block `identities` |
-| `GET /v1/residency/events?after=N` | Ordered changes after sequence `N`, with the sidecar `epoch`; HTTP 410 when the sidecar no longer holds them |
+You don't have to assemble these flags yourself. The contract tool's `serve` action passes both whenever the checked launch has prefix caching on and publishes cache events. Run it from a checkout with `tools/deployment/attestation_contract.py serve`, or from an installed package with `python -m narwhal.deployment.attestation_contract serve`.
 
-Both routes answer HTTP 503 after the engine process changes.
+## Residency
 
-The sidecar knows the engine's residency only after it has applied every event batch since a known state. It reaches a known state in three ways:
+With `--kv-events` set, the sidecar subscribes to the engine's cache events and keeps a bounded index of the prefix blocks currently held on the engine's GPU. A router can read that index to see which prompts an engine can already serve from cache.
 
-- replaying the engine's history from sequence 0;
-- observing that the engine has published no batch;
-- applying a cache reset.
+### Routes
 
-Residency is unknown in these cases, and a snapshot then lists no blocks:
+`GET /v1/residency` returns a snapshot. At the top level you get `known`, `reason`, `sequence`, `block_size`, `epoch`, and `process_start_time_seconds`. Each KV cache group then lists its `kind`, `sliding_window`, block `identities`, and a count of `unnamed` blocks.
 
-- a sequence gap that replay cannot fill;
-- a subscription that starts after vLLM's replay buffer dropped earlier batches;
-- an unreadable batch;
-- an index larger than 1,000,000 blocks.
+`GET /v1/residency/events?after=N` returns the changes applied after sequence `N`, along with the sidecar's `epoch`. It answers HTTP 410 if residency is unknown, if `N` is ahead of the last applied sequence, or if the bounded change log no longer reaches back to `N + 1`. On a 410, fetch a new snapshot and resume from there.
 
-Unknown residency lasts until the engine resets its prefix cache.
+Without `--kv-events`, both routes return 404. A router that sees a 404 assumes the engine's prefix cache is empty, which we call pricing the engine cold. After the engine process changes, both routes return 503.
 
-A block identity chains the block's token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace. The namespace holds the served model name, the engine contract fingerprint, the LoRA adapter name, and the request's cache salt. Some groups keep only boundary state, such as Mamba state in vLLM's `align` mode. They take each block identity from a group that reported every block in the same run.
+### When residency is known
 
-A prefix is reusable when every KV cache group can serve it. Full-attention groups must hold every leading block. Sliding-window groups must hold the blocks that cover the window before the prefix end. Boundary groups must hold the block at the prefix end. An engine with a group of any other kind, such as chunked local attention, is priced cold. Blocks carrying multimodal or prompt-embedding hash keys have no identity.
+Residency counts as known only once the sidecar has applied every event batch since a known starting point. There are three such points:
 
-Container engines run as root, so their event sockets belong to root. Run the sidecar as the same user as the engine.
+- the engine's first batch, at sequence 0, whether it arrives live or through replay
+- an empty replay buffer at subscription, which starts the index empty
+- a cache reset
+
+Residency becomes unknown, and every group's block list is cleared, if any of these happen:
+
+- a sequence gap remains after replay
+- the first batch arrives after sequence 0
+- a batch fails to decode
+- the index grows past 1,000,000 blocks
+- replay or subscription fails
+
+It stays unknown until the engine resets its prefix cache.
+
+### Block identities
+
+A block's identity is built by chaining its token IDs onto the identity of the block before it. The first block chains from the block size and the cache namespace, which is made up of the served model name, the engine contract fingerprint, the LoRA adapter name, and the request cache salt.
+
+Boundary groups store only boundary state (Mamba state in vLLM's `align` mode, for example). They borrow their identities from a group that reported every block in the same run. Blocks keyed by multimodal or prompt-embedding hashes can't be named this way, so they're counted in the group's `unnamed` total instead.
+
+### Reusable prefixes
+
+A prefix is reusable only if every KV cache group can serve it. What each group needs depends on its kind:
+
+- **Full attention:** every leading block.
+- **Sliding window:** the blocks covering the window before the prefix end.
+- **Boundary:** the block at the prefix end.
+- **Anything else** (chunked local attention, for example): the router prices the engine cold.

@@ -1,7 +1,7 @@
 # Narwhal telemetry and artifacts
 
 - [Request journal](telemetry/01-Journal.md): reconcile terminal outcomes, retries, placement, and timing.
-- [Engine profiles and capacity](telemetry/02-Profiles.md): validate the curves Narwhal uses for pricing.
-- [Metrics and controller state](telemetry/03-Metrics-and-Control.md): inspect current and process-lifetime state.
-- [Monitoring and engine failure diagnosis](telemetry/04-Failures.md): trace monitor degradation and breaker holds.
+- [Engine profiles and capacity](telemetry/02-Profiles.md): validate the per-engine cost model that Narwhal uses for pricing.
+- [Metrics and role controller state](telemetry/03-Metrics-and-Control.md): inspect live state and what has accumulated over the process lifetime.
+- [Engine monitoring and failure diagnosis](telemetry/04-Failures.md): trace monitoring degradation and breaker streaks, then see how verification probes determine whether an engine gets ejected.
 - [Interface versions and compatibility](telemetry/05-Compatibility.md): compare contract manifests before an upgrade.
