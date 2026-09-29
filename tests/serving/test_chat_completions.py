@@ -348,6 +348,8 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
             ({"modalities": ["text", "audio"]}, "modalities"),
             ({"tools": [{"type": "custom"}]}, "tools"),
             ({"stream": True, "vllm_xargs": {"kv_cache_report_mode": "full"}}, "vllm_xargs"),
+            ({"vllm_xargs": {"kv_transfer_params": {"do_remote_decode": True}}}, "vllm_xargs"),
+            ({"vllm_xargs": {"ec_transfer_params": {}}}, "vllm_xargs"),
         ):
             with self.subTest(fields=fields):
                 response = await self.post(**fields)
@@ -358,7 +360,7 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.json()["error"]["param"], "vllm_xargs")
         self.assertFalse(self.calls)
-        self.assertEqual(self.router.invalid_requests, 5)
+        self.assertEqual(self.router.invalid_requests, 7)
 
     async def test_upstream_error_cannot_be_folded_into_success(self):
         self.frames = [

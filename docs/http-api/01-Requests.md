@@ -47,7 +47,7 @@ Example:
 }
 ```
 
-Narwhal also returns HTTP `400` for a `vllm_xargs` object that sets `kv_cache_report_mode`. Fields outside the router validation set pass through unchanged.
+Narwhal also returns HTTP `400` for a `vllm_xargs` object that sets `kv_cache_report_mode`, `kv_transfer_params` or `ec_transfer_params`. Fields outside the router validation set pass through unchanged.
 
 ### Model handling
 
