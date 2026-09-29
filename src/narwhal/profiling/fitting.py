@@ -234,6 +234,20 @@ def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float,
     return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
 
 
+# A warm fit needs more cases than it has terms.
+CACHED_FIT_MIN_CASES = len(_cached_features(1.0, 1.0)) + 1
+
+
+def cached_fit_possible(cases: Sequence[tuple[float, float]]) -> bool:
+    """Return whether (prefix, suffix) cases can form a warm prefill fit."""
+    distinct = set(cases)
+    return (
+        len({p for p, _ in distinct}) >= 2
+        and len({s for _, s in distinct}) >= 2
+        and len(distinct) >= CACHED_FIT_MIN_CASES
+    )
+
+
 def _fit_cached_groups(
     groups: list[tuple[float, float, float]],
 ) -> tuple[float, float, float, float]:
@@ -259,11 +273,7 @@ def fit_cached_prefill(
             raise ValueError("cached prefill samples need a cached prefix and an uncached suffix")
         grouped.setdefault((prefix, suffix), []).append(elapsed)
     groups = [(p, s, statistics.median(times)) for (p, s), times in sorted(grouped.items())]
-    if (
-        len({p for p, _, _ in groups}) < 2
-        or len({s for _, s, _ in groups}) < 2
-        or len(groups) <= len(_cached_features(1.0, 1.0))
-    ):
+    if not cached_fit_possible([(p, s) for p, s, _ in groups]):
         raise ValueError(
             "a cached prefill fit needs two prefix lengths, two suffix lengths and five cases"
         )

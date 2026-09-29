@@ -30,6 +30,8 @@ from ..engines.stream import event_choices, event_object, token_ids
 from ..provenance import stamp
 from ..types import Role
 from .fitting import (
+    CACHED_FIT_MIN_CASES,
+    cached_fit_possible,
     decode_cross_validation_mape,
     decode_mape,
     fit_cached_prefill,
@@ -796,10 +798,14 @@ async def profile_instance(
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     cached: list[dict[str, Any]] = []
     reason: str | None
+    cases = warm_cases(s, max_model_len)
     if hits_before is None:
         reason = "engine exports no prefix-cache hit counter"
-    elif not (s.cached_prefix_lens and s.cached_suffix_lens):
-        reason = "warm sweep lengths exceed the engine context"
+    elif not cached_fit_possible(cases):
+        reason = (
+            f"the warm sweep has {len(cases)} cases within the engine context; a warm fit needs "
+            f"two prefix lengths, two suffix lengths and {CACHED_FIT_MIN_CASES} cases"
+        )
     else:
         cached, reason = await probe_cached_prefill(
             client,
@@ -1031,6 +1037,16 @@ class NeighbourLoad:
         return self.evidence()
 
 
+def warm_cases(sweep: Sweep, max_model_len: int | None = None) -> list[tuple[int, int]]:
+    """Return the warm (prefix, suffix) cases whose prompt and output token fit the context."""
+    return [
+        (p, q)
+        for p in sweep.cached_prefix_lens
+        for q in sweep.cached_suffix_lens
+        if max_model_len is None or p + q + 1 < max_model_len
+    ]
+
+
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
     """Keep candidate lengths and cohorts within the serving engine's limits."""
     prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
@@ -1051,12 +1067,10 @@ def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = N
                 "points; adjust the engine launch policy before profiling"
             )
     # A cached case needs its prefix, its suffix and one output token inside the context.
-    prefixes = tuple(
-        p for p in sweep.cached_prefix_lens if p + min(sweep.cached_suffix_lens) + 1 < max_model_len
-    )
-    suffixes = tuple(
-        s for s in sweep.cached_suffix_lens if min(sweep.cached_prefix_lens) + s + 1 < max_model_len
-    )
+    shortest_suffix = min(sweep.cached_suffix_lens, default=0)
+    shortest_prefix = min(sweep.cached_prefix_lens, default=0)
+    prefixes = tuple(p for p in sweep.cached_prefix_lens if p + shortest_suffix + 1 < max_model_len)
+    suffixes = tuple(s for s in sweep.cached_suffix_lens if shortest_prefix + s + 1 < max_model_len)
     return replace(
         sweep,
         prefill_lens=prefill,

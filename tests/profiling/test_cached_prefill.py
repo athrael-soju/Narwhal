@@ -164,6 +164,17 @@ class ColdSplitStepTests(unittest.TestCase):
         self.assertIsNone(probe.parse_cache_block_tokens("vllm:num_requests_running 0\n"))
 
 
+class WarmSweepBoundsTests(unittest.TestCase):
+    def test_bounded_sweep_trims_warm_lengths_and_accepts_empty_lists(self):
+        empty = replace(probe.Sweep(), cached_prefix_lens=(), cached_suffix_lens=())
+        bounded = probe.bounded_sweep(empty, 16384)
+        self.assertEqual((bounded.cached_prefix_lens, bounded.cached_suffix_lens), ((), ()))
+        trimmed = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
+        self.assertEqual(trimmed.cached_prefix_lens, (2048,))
+        self.assertEqual(probe.warm_cases(trimmed, 4096), [(2048, 700), (2048, 1300)])
+        self.assertEqual(len(probe.warm_cases(probe.Sweep())), 9)
+
+
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
     """A fake engine caches whole 16-token blocks per salt and counts reused tokens."""
 
@@ -268,7 +279,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
-    async def profile_with(self, sweep_result, *, block=None, prefill=None):
+    async def profile_with(self, sweep_result, *, block=None, prefill=None, **kwargs):
         prefill = prefill or [(float(n), 1e-9 * n * n + 2e-5 * n + 0.08) for n in (256, 1024, 4096)]
         decode = [
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
@@ -280,10 +291,15 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
             patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
             patch.object(probe, "cache_block_tokens", AsyncMock(return_value=block)),
             patch.object(probe, "prefix_cache_hits", AsyncMock(return_value=7)),
-            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=sweep_result)),
+            patch.object(
+                probe, "probe_cached_prefill", AsyncMock(return_value=sweep_result)
+            ) as sweep,
             redirect_stdout(io.StringIO()),
         ):
-            row = await probe.profile_instance(None, "e0", "http://e", "stub", evidence=evidence)
+            row = await probe.profile_instance(
+                None, "e0", "http://e", "stub", evidence=evidence, **kwargs
+            )
+        self.warm_sweeps = sweep.await_count
         return row, evidence
 
     async def test_a_warm_fit_enters_the_profile_with_its_evidence(self):
@@ -303,6 +319,20 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(row.cached_ttft_a)
                 self.assertIn(reason, evidence["cached_prefill"]["reason"])
                 self.assertEqual(evidence["cached_prefill"]["samples"], result[0])
+
+    async def test_too_few_warm_cases_keep_cold_pricing_before_the_sweep(self):
+        for sweep, limit in (
+            (replace(probe.Sweep(), cached_prefix_lens=(2048,)), None),
+            (replace(probe.Sweep(), cached_prefix_lens=(), cached_suffix_lens=()), None),
+            (probe.Sweep(), 4096),
+        ):
+            with self.subTest(sweep=sweep.cached_prefix_lens, limit=limit):
+                row, evidence = await self.profile_with(
+                    (warm_samples(), None), sweep=sweep, max_model_len=limit
+                )
+                self.assertEqual(self.warm_sweeps, 0)
+                self.assertIsNone(row.cached_ttft_a)
+                self.assertIn("a warm fit needs", evidence["cached_prefill"]["reason"])
 
     async def test_the_cold_curve_records_the_engine_block_and_split_step(self):
         def cold(n):
