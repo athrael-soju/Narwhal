@@ -122,6 +122,28 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}
 
 
+def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> None:
+    """List each CUDA engine's host peers' GPUs after its own in CUDA_VISIBLE_DEVICES.
+
+    The engine runs on its leading devices. UCX reaches the peer devices through CUDA IPC.
+    Shared-device engines keep their single GPU.
+    """
+    for roles in hosts:
+        cuda = [
+            role
+            for role in roles
+            if role in launches
+            and launches[role]["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES"
+            and "shared_device" not in launches[role]
+        ]
+        for role in cuda:
+            own = launches[role]["gpu_ids"]
+            peers = [d for other in cuda for d in launches[other]["gpu_ids"] if d not in own]
+            launches[role]["environment"]["CUDA_VISIBLE_DEVICES"] = ",".join(
+                [*own, *dict.fromkeys(peers)]
+            )
+
+
 def load_launches(path: Path, roles: list[str], envs: dict[str, dict[str, str]]) -> dict[str, dict]:
     """Select launch records for the deployment's engine roles from a checkout-local file."""
     if not path.is_file():

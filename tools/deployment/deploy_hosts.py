@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.deployment.engine_launch import load_launches
+from tools.deployment.engine_launch import expose_colocated_gpus, load_launches
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
@@ -112,6 +112,7 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
         engine_roles,
         selected,
     )
+    expose_colocated_gpus(launches, [list(host.roles) for host in hosts])
     budget_tool = FABRIC_BUDGET_SOURCE.read_bytes()
     budget_hash = hashlib.sha256(budget_tool).hexdigest()
     launcher_tool = ENGINE_LAUNCHER_SOURCE.read_bytes()

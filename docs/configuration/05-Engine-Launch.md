@@ -96,7 +96,7 @@ To change GPU allocation or runtime policy, change the corresponding `.env` poli
 | `accelerator`          | Product identity. Compare against host inspection and fleet hardware fields.                                                         |
 | `gpu_ids`              | Selected GPU indices or UUIDs for the replica.                                                                                       |
 | `tensor_parallel_size` | TP size for the replica.                                                                                                             |
-| `gpu_visibility_env`   | Chooses `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. Preparation joins `gpu_ids` into the exported value.                       |
+| `gpu_visibility_env`   | Chooses `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. Preparation exports `gpu_ids`, followed by colocated CUDA engines' GPUs.   |
 | `accelerator_devices`  | Host device paths mapped into the container. ROCm requires `/dev/kfd` plus DRI mappings for allocated GPUs.                          |
 | `network_mode`         | Uses `host` for the recorded network and port allocation.                                                                            |
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                             |
@@ -107,6 +107,8 @@ To change GPU allocation or runtime policy, change the corresponding `.env` poli
 `prepare` validates every assigned engine record before it creates the output directory.
 
 It derives GPU visibility and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
+
+Colocated CUDA engines run on their allocated GPUs and transfer KV to each other through CUDA IPC. A shared-device engine keeps its single GPU.
 
 `install` copies the selected launch record into the engine checkout's `config/` directory. The role environment points to that file.
 
