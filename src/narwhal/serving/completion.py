@@ -35,6 +35,14 @@ def completion_body_error(body: Any) -> tuple[str, str | None] | None:
             return "messages must be an array", "messages"
         if any(not isinstance(item, dict) for item in messages):
             return "every item in messages must be an object", "messages"
+    xargs = body.get("vllm_xargs")
+    if isinstance(xargs, dict):
+        # Full cache reports re-announce cached blocks, including positions that sliding-window
+        # and Mamba groups leave empty, which the residency sidecars would record as resident.
+        # Transfer parameters would replace the router's own KV and encoder-cache handoff.
+        for key in ("kv_cache_report_mode", "kv_transfer_params", "ec_transfer_params"):
+            if key in xargs:
+                return f"vllm_xargs.{key} is reserved for Narwhal", "vllm_xargs"
     if not stream:
         if body.get("audio") is not None:
             return "non-streaming audio output is not supported", "audio"

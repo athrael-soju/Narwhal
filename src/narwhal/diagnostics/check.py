@@ -218,14 +218,17 @@ async def gate_pace(
 ) -> set[str]:
     """Find live engines whose prefill pace exceeds the allowed tolerance.
 
-    The minimum of `repeats` filters one scheduling delay. Each engine is
-    compared with the fleet median and, when available, its saved profile.
+    The minimum of `repeats` filters one scheduling delay. Each repeat carries
+    the dialect's cold-probe fields, so an engine with prefix caching enabled
+    still prefills every repeat. Each engine is compared with the fleet median
+    and, when available, its saved profile.
     Fewer than three engines require individual profiles to establish pace.
 
     KV gates must skip failed engines because a stalled transfer can terminate
     a healthy peer's engine core.
     """
     print("pace")
+    dialect = lookup_dialect(cfg.dialect)
     base_body = {
         "model": cfg.model,
         "prompt": PACE_PROMPT,
@@ -248,7 +251,9 @@ async def gate_pace(
             for _ in range(repeats):
                 start = asyncio.get_event_loop().time()
                 try:
-                    r = await c.post(f"{spec.url}/v1/completions", json=body)
+                    r = await c.post(
+                        f"{spec.url}/v1/completions", json={**body, **dialect.cold_probe_extras()}
+                    )
                 except httpx.HTTPError as exc:
                     rep.fail(f"{spec.iid} pace probe: {type(exc).__name__}")
                     failed_probes.add(spec.iid)
@@ -256,7 +261,6 @@ async def gate_pace(
                     break
                 if r.status_code == 400 and body["prompt"] == PACE_PROMPT:
                     try:
-                        dialect = lookup_dialect(cfg.dialect)
                         limit = await engine_context_limit(c, spec.url, cfg.model, dialect)
                         if limit < 2:
                             raise ValueError(f"engine context limit {limit} leaves no output token")
@@ -269,7 +273,10 @@ async def gate_pace(
                             )
                         body["prompt"] = prompt
                         start = asyncio.get_event_loop().time()
-                        r = await c.post(f"{spec.url}/v1/completions", json=body)
+                        r = await c.post(
+                            f"{spec.url}/v1/completions",
+                            json={**body, **dialect.cold_probe_extras()},
+                        )
                     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                         rep.fail(f"{spec.iid} pace probe: 400; context adaptation failed: {exc}")
                         failed_probes.add(spec.iid)
@@ -460,6 +467,8 @@ async def gate_consume(
 
     Ring mode covers each eligible producer and consumer with a peer. Mesh mode
     covers every eligible ordered pair. Repeat each pair the requested number of times.
+    Each attempt carries fresh cold-probe fields in both legs, so a consumer's prefix
+    cache cannot replace the transfer under test.
     """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
@@ -476,8 +485,15 @@ async def gate_consume(
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
-    body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 4, "temperature": 0.0}
     dialect = lookup_dialect(cfg.dialect)
+    # Force output so a model that ends the probe prompt at once still proves the transfer.
+    body = {
+        "model": cfg.model,
+        "prompt": PROBE_PROMPT,
+        "max_tokens": 4,
+        "temperature": 0.0,
+        **dialect.decode_probe_extras(4),
+    }
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
@@ -491,17 +507,18 @@ async def gate_consume(
                 before_dst = await _pair_snapshot(cfg, dst)
                 record["producer_before"] = before_src
                 record["consumer_before"] = before_dst
+            attempt = {**body, **dialect.cold_probe_extras()}
             deadline = asyncio.timeout(cfg.request_timeout_s)
             async with deadline:
                 started = time.monotonic()
-                params = await client.prefill(by_id[src].url, "/v1/completions", body, {})
+                params = await client.prefill(by_id[src].url, "/v1/completions", attempt, {})
                 prefill_seconds = time.monotonic() - started
                 started = decode_started = time.monotonic()
                 tokens = 0
                 async for line in client.decode(
                     by_id[dst].url,
                     "/v1/completions",
-                    body,
+                    attempt,
                     {},
                     params,
                     first_token_timeout_s=cfg.first_token_timeout_s,

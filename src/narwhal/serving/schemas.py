@@ -421,6 +421,18 @@ class BreakerOut(BaseModel):
     verifying: list[VerifyingOut] = Field(default_factory=list)
 
 
+class ResidencyOut(BaseModel):
+    """One engine's prefix-residency synchronisation with its attestation sidecar."""
+
+    known: bool
+    reason: str
+    epoch: str | None = None
+    sequence: int | None = None
+    block_size: int | None = None
+    resident_blocks: dict[str, int] = Field(default_factory=dict)
+    resyncs: int = 0
+
+
 class StateOut(BaseModel):
     """Live router and scheduler state."""
 
@@ -482,4 +494,5 @@ class StateOut(BaseModel):
     # Breaker failure accounting: per-engine per-class streaks and the
     # engines with a verification probe in flight.
     breaker: BreakerOut = Field(default_factory=BreakerOut)
+    residency: dict[str, ResidencyOut] = Field(default_factory=dict)
     decode_floor: DecodeFloorOut

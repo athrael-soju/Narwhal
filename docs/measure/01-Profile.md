@@ -30,7 +30,7 @@ Narwhal includes empty-text and reasoning-only token IDs in output length and co
 
 [Gate F](../deploy/06-Profile-and-Preflight.md) binds the retained `profiles.json` and `profiles.samples.json` pair to attested engine generations. Measurement runs can reuse the pair while the engine processes and runtime remain unchanged. Retain a passing preflight for the fleet configuration under test.
 
-For a new engine process or runtime, reserve the production engine shape, warm the model with prefix caching disabled, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
+For a new engine process or runtime, reserve the production engine shape, warm the model, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
 
 ```bash
 narwhal-profile \
@@ -59,6 +59,8 @@ Give the decode sweep at least two input lengths and two concurrency values. For
 
 The profiler keeps decode inputs whose input and requested output fit the live context limit. Extend the sweep for long-context deployments; when that limit leaves too few usable cells to fit the profile, select shorter inputs.
 
+Each probe request sets a unique vLLM `cache_salt` to prevent prefix cache reuse. The profile measures cold prefill regardless of the engine's prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each sweep. If any prompt tokens were served from the prefix cache, the sweep fails and must be rerun.
+
 Each decode probe requests one identified token per SSE event. The profiler validates token identity as events arrive, then checks stream completion and output token counts. It retains the intervals only after all streams pass these checks and enough intervals have been collected.
 
 ## 3. Retain profile samples and fits
@@ -74,6 +76,7 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * decode intervals;
 * cell medians;
 * fitted profiles;
+* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the hit counter is absent;
 * the verified attestation response or process identity that binds each fit to its engine generation.
 
 The sample sidecar retains raw prefill measurements and the fit error when a TTFT fit fails, and keeps completed engine data if a later engine fails. `--overwrite` creates a new output pair for the selected engines.

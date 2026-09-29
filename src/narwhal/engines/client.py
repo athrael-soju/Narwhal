@@ -106,6 +106,14 @@ def leg_failure_class(exc: BaseException) -> str | None:
 
 
 @dataclass(frozen=True)
+class Tokenization:
+    """One engine tokenization: the exact count and, when reported, the prompt token IDs."""
+
+    count: int
+    token_ids: tuple[int, ...] | None
+
+
+@dataclass(frozen=True)
 class ProbeLeg:
     """Result of one inference-probe leg.
 
@@ -247,6 +255,17 @@ class EngineClient:
         Without `strict`, unavailable counts return None for callers that own a
         documented fallback. Strict callers receive the actual failure.
         """
+        result = await self.tokenize(url, body, timeout_s, strict=strict)
+        return None if result is None else result.count
+
+    async def tokenize(
+        self, url: str, body: dict[str, Any], timeout_s: float, *, strict: bool = False
+    ) -> Tokenization | None:
+        """Ask the engine for the exact input length and prompt token IDs.
+
+        Failures follow `token_count`. Token IDs are None when the response
+        omits them or they disagree with the count.
+        """
         if self.dialect.tokenize_path is None:
             return None
         try:
@@ -278,9 +297,12 @@ class EngineClient:
                 raise EngineError("tokenize", url, 502, "invalid JSON response") from None
             return None
         count = self.dialect.tokenize_response(payload)
-        if count is None and strict:
-            raise EngineError("tokenize", url, 502, "response has no valid token count")
-        return count
+        if count is None:
+            if strict:
+                raise EngineError("tokenize", url, 502, "response has no valid token count")
+            return None
+        token_ids = self.dialect.tokenize_token_ids(payload)
+        return Tokenization(count, None if token_ids is None else tuple(token_ids))
 
     def _prefill_leg(self, body: dict[str, Any]) -> dict[str, Any]:
         """Build the forced one-token prefill leg out of a request body."""
@@ -517,6 +539,8 @@ class EngineClient:
             "prompt": prompt,
             "max_tokens": 1,
             "stream": True,
+            # A model may end this prompt at once, so the probe forces the output it measures.
+            **self.dialect.decode_probe_extras(1),
         }
         body = self.kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)
         timeouts = self._control.timeout.as_dict()

@@ -92,7 +92,12 @@ def counter_deltas(samples: list[dict]) -> tuple[dict, list[dict]]:
     by_run = defaultdict(list)
     for sample in samples:
         run = sample.get("state", {}).get("journal_run")
-        if run and sample.get("router_metrics") is not None:
+        # A router restart between the state and metrics reads leaves the counters unattributed.
+        if (
+            run
+            and sample.get("router_metrics") is not None
+            and sample.get("journal_run_after", run) == run
+        ):
             by_run[run].append((sample["at"], metric_values(sample["router_metrics"])))
     diagnostics = []
     result = {}
@@ -327,6 +332,7 @@ class EvidenceCollector:
             for name, url, json_body in [
                 ("state", self.base + "/narwhal/state", True),
                 ("router_metrics", self.base + "/metrics", False),
+                ("state_after", self.base + "/narwhal/state", True),
                 *(
                     (f"engine:{iid}", url, False)
                     for iid, url in self.config["engine_metrics_urls"].items()
@@ -334,12 +340,20 @@ class EvidenceCollector:
             ]:
                 try:
                     response = client.get(
-                        url, headers=self.headers if name in ("state", "router_metrics") else {}
+                        url,
+                        headers=self.headers
+                        if name in ("state", "router_metrics", "state_after")
+                        else {},
                     )
                     response.raise_for_status()
                     item[name] = response.json() if json_body else response.text
                 except (httpx.HTTPError, ValueError) as error:
                     item["errors"][name] = str(error)
+        # The second state read directly follows the metrics it vouches for.
+        if "state_after" in item:
+            item["journal_run_after"] = item.pop("state_after").get("journal_run")
+        elif "state_after" in item["errors"]:
+            item["journal_run_after"] = None
         self.samples.append(item)
 
     def start(self) -> None:

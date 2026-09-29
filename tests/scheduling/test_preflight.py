@@ -170,6 +170,26 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("own profile", report.failed[0])
         self.assertEqual(report.skipped, [])
 
+    async def test_pace_repeats_cannot_reuse_a_cached_prefix(self):
+        """Every pace repeat carries a fresh cache salt with the same prompt."""
+        bodies = []
+
+        def answer(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"usage": {"prompt_tokens": 100}})
+
+        await gate_pace(
+            self.cfg,
+            {spec.iid for spec in self.cfg.engines},
+            Report(),
+            repeats=3,
+            transport=httpx.MockTransport(answer),
+        )
+        self.assertEqual(len(bodies), 3 * len(self.cfg.engines))
+        salts = {body["cache_salt"] for body in bodies}
+        self.assertEqual(len(salts), len(bodies))
+        self.assertEqual({body["prompt"] for body in bodies}, {check.PACE_PROMPT})
+
     async def test_pace_small_fleets_require_individual_evidence(self):
         """The pace check skips a two-engine fleet with missing profiles."""
         slow, report = await self.pace([1, 1, 1, 1])
@@ -390,6 +410,37 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             self.cfg, {"e0", "e3"}, {"e0": result, "e3": result}, client, report, mesh=False
         )
         self.assertEqual(len(report.failed), 2)
+
+    async def test_consume_attempts_salt_both_legs_with_a_fresh_value(self):
+        """A repeated pair cannot let the consumer's prefix cache replace the transfer."""
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+        decoded = []
+
+        async def output(url, endpoint, body, headers, params, **kwargs):
+            decoded.append(body)
+            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+
+        client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
+        pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
+        with patch.object(check, "validation_pairs", return_value=pair):
+            report = Report()
+            await gate_consume(
+                self.cfg, set(pair[0]), dict.fromkeys(pair[0], result), client, report, True, 3
+            )
+        self.assertEqual(report.failed, [])
+        produced = [call.args[2] for call in client.prefill.await_args_list]
+        self.assertEqual(len(produced), 3)
+        self.assertEqual(
+            [body["cache_salt"] for body in decoded], [body["cache_salt"] for body in produced]
+        )
+        self.assertEqual(len({body["cache_salt"] for body in produced}), 3)
+        self.assertTrue(all(body["min_tokens"] == 4 and body["ignore_eos"] for body in decoded))
 
     async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
         connector = NixlConnector()

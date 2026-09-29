@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from narwhal.deployment import launch_engine as launcher
 from narwhal.deployment import stages
-from tests.deployment.fixtures import launcher_inputs
+from tests.deployment.fixtures import cache_settings_line, launcher_inputs
 
 
 class RuntimeCheckCliTests(unittest.TestCase):
@@ -112,8 +112,11 @@ class RuntimeCheckCliTests(unittest.TestCase):
             if failing and failure in details:
                 return subprocess.CompletedProcess(command, 1, stdout, details[failure])
             version = "0.30.0" if failing and failure == "identity" else "0.29.0"
-            stdout += "NARWHAL_TOKENIZER_READY=1\nNARWHAL_IMAGE_RUNTIME=" + json.dumps(
-                {"vllm_api_version": version}
+            stdout += (
+                "NARWHAL_TOKENIZER_READY=1\n"
+                + cache_settings_line(json.loads(plan_bytes))
+                + "\nNARWHAL_IMAGE_RUNTIME="
+                + json.dumps({"vllm_api_version": version})
             )
             return subprocess.CompletedProcess(command, 0, stdout, "")
 

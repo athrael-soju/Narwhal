@@ -11,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-from tests.deployment.fixtures import launcher_inputs
+from tests.deployment.fixtures import engine_config_modules, launcher_inputs
 from tools.deployment.launch_engine import check, load, prepare
 
 
@@ -91,6 +91,7 @@ class TokenizerCheckTests(unittest.TestCase):
         ].KVConnectorFactory.get_connector_class.return_value = type("NixlConnector", (), {})
         modules["vllm.version"].__version__ = "0.29.0"
         modules["transformers"].AutoTokenizer = Mock()
+        modules.update(engine_config_modules())
         # Python 3.11's Path factory consults pathlib.Path while that name is patched.
         path_type = type(root)
 

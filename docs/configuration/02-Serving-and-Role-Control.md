@@ -134,7 +134,7 @@ If admitted work exceeds what engines can drain before KV handoffs expire, decod
 | `engine.chars_per_token`        | `3.8`                  | Character-to-token fallback ratio. Positive.                                                                                            |
 | `engine.pool_timeout_s`         | `5.0`                  | Maximum wait for an engine HTTP connection on serving or control pools. Probe exhaustion leaves the engine verdict unchanged. Positive. |
 | `engine.connect_timeout_s`      | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                     |
-| `engine.health_timeout_s`       | `5.0`                  | HTTP I/O timeout for preflight, breaker, and readmission health probes. Positive.                                                       |
+| `engine.health_timeout_s`       | `5.0`                  | HTTP I/O timeout for preflight, breaker, readmission and residency requests. Positive.                                                  |
 
 Set `engine.first_token_timeout_s` above the candidate in a [completed crossed-handoff calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and set `engine.first_token_calibration_path` to that artifact. `narwhal-check` checks the artifact against the configured value and current engine generations. When the path is empty, preflight reports a warning and router startup logs one. A stale or insufficient artifact fails preflight and blocks router startup.
 

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -30,6 +31,7 @@ VALUE_OPTIONS = {
     "--tokenizer",
     "--hf-config-path",
     "--load-format",
+    "--kv-events-config",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -38,7 +40,16 @@ FLAG_OPTIONS = {
     "--async-scheduling",
     "--no-disable-hybrid-kv-cache-manager",
     "--disable-hybrid-kv-cache-manager",
+    "--enable-prefix-caching",
+    "--no-enable-prefix-caching",
 }
+# vLLM binds these per-plan sockets; a host subscriber connects to the same files.
+# Launch directories can exceed the socket path limit, so the sockets use a short root.
+KV_EVENTS_ROOT = Path("/tmp")
+KV_EVENTS_MOUNT = "/narwhal-kv-events"
+KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
+# sockaddr_un holds 108 bytes, including the terminating NUL.
+MAX_SOCKET_PATH_BYTES = 107
 MANAGED_ENV = {
     "ROCR_VISIBLE_DEVICES",
     "CUDA_VISIBLE_DEVICES",
@@ -107,6 +118,66 @@ def validate_runtime(runtime: dict) -> None:
             raise ValueError(f"unsupported runtime environment field: {name}")
 
 
+def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:
+    """Select cache-event publication from the backend's own launch settings.
+
+    Publication follows prefix caching unless the operator disables it with vLLM's
+    own `--kv-events-config`. Narwhal selects the local IPC endpoints.
+    """
+    if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
+        raise ValueError("runtime.extra_args must select prefix caching at most once")
+    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
+    if len(supplied) > 1:
+        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
+    if supplied:
+        try:
+            value = json.loads(supplied[0])
+        except ValueError:
+            value = None
+        if value != {"enable_kv_cache_events": False}:
+            raise ValueError(
+                "runtime.extra_args --kv-events-config may only set "
+                '{"enable_kv_cache_events": false}; the launcher selects event endpoints'
+            )
+        return None
+    if "--no-enable-prefix-caching" in args:
+        return None
+    for name in KV_EVENTS_SOCKETS.values():
+        if len(str(socket_dir / name).encode()) > MAX_SOCKET_PATH_BYTES:
+            raise ValueError(
+                f"cache-event socket path under {socket_dir} exceeds "
+                f"{MAX_SOCKET_PATH_BYTES} bytes; the socket root or user ID is too long"
+            )
+    return {
+        "socket_dir": str(socket_dir),
+        **{key: f"ipc://{engine_dir}/{name}" for key, name in KV_EVENTS_SOCKETS.items()},
+    }
+
+
+def kv_events_directory(plan: dict) -> None:
+    """Create or reuse the plan's socket directory and its parent, private to this user."""
+    if plan.get("kv_events") is None:
+        return
+    directory = Path(plan["kv_events"]["socket_dir"])
+    for path in (directory.parent, directory):
+        with contextlib.suppress(FileExistsError):
+            path.mkdir(mode=0o700)
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError(f"{path} must be a directory private to the launching user")
+
+
+def remove_kv_events_directory(plan: dict) -> None:
+    """Remove the plan's socket directory once its engine process has stopped."""
+    if plan.get("kv_events") is None:
+        return
+    directory = Path(plan["kv_events"]["socket_dir"])
+    for name in KV_EVENTS_SOCKETS.values():
+        (directory / name).unlink(missing_ok=True)
+    with contextlib.suppress(FileNotFoundError):
+        directory.rmdir()
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -129,7 +200,11 @@ def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> 
 
 def requires_ds_conv_state_layout(model_dir: Path) -> bool:
     """Detect checkpoint metadata that uses convolutional SSM transfer state."""
-    model = json.loads((model_dir / "config.json").read_text())
+    return ds_conv_state_layout_required(json.loads((model_dir / "config.json").read_text()))
+
+
+def ds_conv_state_layout_required(model: dict) -> bool:
+    """Detect convolutional SSM transfer state in parsed checkpoint configuration."""
     text_model = model.get("text_config", model)
     linear = text_model.get("linear_attn_config", {})
     if (
@@ -235,6 +310,13 @@ def build(
         raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
+    name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
+    socket_dir = KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
+    kv_events = kv_events_policy(
+        runtime.get("extra_args", []),
+        socket_dir,
+        KV_EVENTS_MOUNT if backend == "container" else str(socket_dir),
+    )
     common = [
         "--network",
         "host",
@@ -252,6 +334,8 @@ def build(
         f"type=bind,src={output / 'hook'},dst=/narwhal-hooks,readonly",
     ]
     if backend == "container":
+        if kv_events is not None:
+            common.extend(["--mount", f"type=bind,src={socket_dir},dst={KV_EVENTS_MOUNT}"])
         for device in record["accelerator_devices"] + record["transfer"]["devices"]:
             common.extend(["--device", device])
         if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
@@ -287,7 +371,21 @@ def build(
         runtime["kv_cache_dtype"],
         "--block-size",
         str(runtime["block_size"]),
-        "--no-enable-prefix-caching",
+        *(
+            []
+            if kv_events is None
+            else [
+                "--kv-events-config",
+                json.dumps(
+                    {
+                        "enable_kv_cache_events": True,
+                        "publisher": "zmq",
+                        "endpoint": kv_events["endpoint"],
+                        "replay_endpoint": kv_events["replay_endpoint"],
+                    }
+                ),
+            ]
+        ),
         "--kv-transfer-config",
         json.dumps(connector),
         *runtime.get("extra_args", []),
@@ -313,10 +411,11 @@ def build(
         "role": role,
         "image": image,
         "model_dir": model_dir,
-        "name": f"narwhal-{role}-{uuid.uuid4().hex[:12]}",
+        "name": name,
         "common": common,
         "args": args,
         "connector": connector,
+        "kv_events": kv_events,
         "expected_packages": runtime["expected_packages"],
         "endpoint": endpoint.geturl(),
         "attestation_port": attest_port,
@@ -357,6 +456,7 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     output.mkdir(mode=0o700, parents=True)
     (output / "cache").mkdir(mode=0o700)
     (output / "hook").mkdir(mode=0o700)
+    kv_events_directory(plan)
     write_private(output / "hook/sitecustomize.py", hook_source.read_text())
     write_private(output / "hook/launch_engine.py", Path(__file__).read_text())
     env_file = "container.env" if backend == "container" else "engine.env"
@@ -536,6 +636,7 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
     from narwhal.deployment import stages
 
     if plan.get("backend") != "native":
+        kv_events_directory(plan)
         return docker(
             [
                 "run",
@@ -588,6 +689,7 @@ def check(run: Path, plan: dict) -> None:
     log = "runtime-check.log" if native else "image-check.log"
     if (run / "checked.json").exists():
         require_checked(run, plan)
+    kv_events_directory(plan)
     append_private(
         run / log,
         "\n"
@@ -663,6 +765,18 @@ tokenizer = AutoTokenizer.from_pretrained(
 assert tokenizer is not None, 'checkpoint tokenizer did not initialise'
 print(json.dumps({'connector': connector.__module__ + '.' + connector.__name__}))
 print('NARWHAL_TOKENIZER_READY=1')
+from vllm.engine.arg_utils import EngineArgs
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+parser = EngineArgs.add_cli_args(FlexibleArgumentParser())
+engine_args = parser.parse_args(json.loads(__import__('sys').argv[6]))
+engine = EngineArgs.from_cli_args(engine_args).create_engine_config()
+events = engine.kv_events_config
+published = events is not None and events.enable_kv_cache_events and events.publisher == 'zmq'
+print('NARWHAL_CACHE_SETTINGS=' + json.dumps({
+    'prefix_caching': bool(engine.cache_config.enable_prefix_caching),
+    'kv_events': {'endpoint': events.endpoint, 'replay_endpoint': events.replay_endpoint}
+    if published else None,
+}))
 print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
 """
     )
@@ -674,6 +788,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         json.dumps(trust_remote_code),
         json.dumps(ds_required),
         tokenizer_path,
+        json.dumps(engine_arguments(plan)),
     ]
     if native:
         values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
@@ -715,10 +830,26 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
         raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
+    prefix = "NARWHAL_CACHE_SETTINGS="
+    settings = [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
+    if len(settings) != 1 or type(settings[0].get("prefix_caching")) is not bool:
+        raise ValueError(f"runtime check requires one resolved cache setting; inspect {run / log}")
+    planned = plan.get("kv_events")
+    expected = (
+        None if planned is None else {key: planned[key] for key in ("endpoint", "replay_endpoint")}
+    )
+    if settings[0].get("kv_events") != expected:
+        raise ValueError(
+            f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
+        )
     marker = run / "checked.json"
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
         "vllm_api_version": api_version,
+        "prefix_caching": settings[0]["prefix_caching"],
+        "kv_events": settings[0]["kv_events"],
     }
     if native:
         evidence.update(
@@ -736,6 +867,12 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     else:
         write_private(marker, value)
     print("Runtime identity, package pins, connector import and tokenizer passed.")
+    if not evidence["prefix_caching"]:
+        print("Prefix caching is off; the engine publishes no cache events.")
+    elif planned is None or evidence["kv_events"] is None:
+        print("Prefix caching is on; cache-event publication is disabled.")
+    else:
+        print(f"Prefix caching is on; cache events publish under {planned['socket_dir']}.")
 
 
 def require_checked(run: Path, plan: dict) -> None:
@@ -783,6 +920,16 @@ def cache_groups(groups: list) -> list[dict]:
     return result
 
 
+def engine_arguments(plan: dict) -> list[str]:
+    """Return the serving arguments that EngineArgs owns."""
+    # HTTP listener options belong to the API server.
+    arguments = list(plan["args"][2:])
+    for option in ("--host", "--port"):
+        index = arguments.index(option)
+        del arguments[index : index + 2]
+    return arguments
+
+
 def runtime_config(plan: dict) -> Any:
     """Resolve the serving arguments inside the image before creating model workers."""
     from vllm.engine.arg_utils import EngineArgs  # type: ignore[import-not-found]
@@ -791,13 +938,10 @@ def runtime_config(plan: dict) -> Any:
     model_config = Path(plan.get("model_config_path", "/model/config.json"))
     if digest(model_config) != plan["model_config_sha256"]:
         raise ValueError("model config changed since launch preparation")
-    # EngineArgs owns the model options; HTTP listener options belong to the API server.
-    arguments = list(plan["args"][2:])
-    for option in ("--host", "--port"):
-        index = arguments.index(option)
-        del arguments[index : index + 2]
     parser = EngineArgs.add_cli_args(FlexibleArgumentParser())
-    return EngineArgs.from_cli_args(parser.parse_args(arguments)).create_engine_config()
+    return EngineArgs.from_cli_args(
+        parser.parse_args(engine_arguments(plan))
+    ).create_engine_config()
 
 
 def runtime_model_dimensions(plan_path: Path) -> dict:
@@ -831,6 +975,7 @@ def model_dimensions(run: Path, plan: dict) -> None:
     destination = run / "model-dimensions.json"
     if destination.exists():
         raise ValueError("model dimensions exist; retain the capture and use a fresh plan")
+    kv_events_directory(plan)
     output = docker(
         [
             "run",
@@ -1063,6 +1208,7 @@ def measure_cache(run: Path, plan: dict) -> None:
         (run / name).exists() for name in ("container.id", "cache-probe.id", "cache-layout.json")
     ):
         raise ValueError("launch directory has a container or sizing record; use a fresh plan")
+    kv_events_directory(plan)
     cid = docker(
         [
             "create",
@@ -1111,6 +1257,7 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError("cache capture plan changed; prepare a fresh launch plan")
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
+    kv_events_directory(plan)
     cid = docker(
         [
             "create",

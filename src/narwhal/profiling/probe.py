@@ -45,6 +45,10 @@ DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
 PREFILL_REPEATS = 3
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
+# vLLM counts prompt tokens served from its prefix cache for new requests only.
+_PREFIX_CACHE_HITS = re.compile(
+    r"^vllm:prefix_cache_hits_total(?:\{[^}]*\})?\s+([0-9.eE+-]+)", re.MULTILINE
+)
 
 
 def parse_kv_capacity(metrics: str) -> int | None:
@@ -61,6 +65,24 @@ async def kv_capacity(client: httpx.AsyncClient, url: str, timeout_s: float = 30
     except httpx.HTTPError:
         return None
     return parse_kv_capacity(response.text)
+
+
+def parse_prefix_cache_hits(metrics: str) -> int | None:
+    """Sum vLLM's prefix-cache hit tokens across its engine label sets."""
+    values = [float(match) for match in _PREFIX_CACHE_HITS.findall(metrics)]
+    return round(sum(values)) if values else None
+
+
+async def prefix_cache_hits(
+    client: httpx.AsyncClient, url: str, timeout_s: float = 30.0
+) -> int | None:
+    """Read cumulative prefix-cache hit tokens when the engine exports them."""
+    try:
+        response = await client.get(f"{url}/metrics", timeout=timeout_s)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return parse_prefix_cache_hits(response.text)
 
 
 async def _tokenize_response(
@@ -220,6 +242,7 @@ async def probe_prefill(
                 "temperature": 0.0,
                 "stream": False,
                 **dialect.decode_probe_extras(1),
+                **dialect.cold_probe_extras(),
             }
             start = time.monotonic()
             r = await client.post(
@@ -281,6 +304,7 @@ async def _one_decode_stream(
         "temperature": 0.0,
         "stream": True,
         **dialect.decode_probe_extras(tokens),
+        **dialect.cold_probe_extras(),
         "return_token_ids": True,
         "stream_interval": 1,
     }
@@ -446,6 +470,30 @@ async def probe_decode(
     return samples
 
 
+async def _require_cold(
+    client: httpx.AsyncClient,
+    iid: str,
+    url: str,
+    before: int | None,
+    timeout_s: float | None,
+    evidence: dict[str, object] | None,
+) -> None:
+    """Fail when the engine served prompt tokens from its prefix cache since `before`.
+
+    A missing counter, or one that went backwards after an engine restart,
+    records no count; profile generation checks reject a restarted engine.
+    """
+    after = await prefix_cache_hits(client, url, timeout_s or 30.0)
+    hit_tokens = None if before is None or after is None or after < before else after - before
+    if evidence is not None:
+        evidence["prefix_cache_hit_tokens"] = hit_tokens
+    if hit_tokens:
+        raise RuntimeError(
+            f"{iid} served {hit_tokens} prompt tokens from its prefix cache during cold "
+            "profiling; reserve the engine for profiling and repeat the sweep"
+        )
+
+
 async def profile_instance(
     client: httpx.AsyncClient,
     iid: str,
@@ -463,6 +511,7 @@ async def profile_instance(
     s = sweep or Sweep()
     dialect = dialect or VllmDialect()
     print(f"  {iid}")
+    hits_before = await prefix_cache_hits(client, url, observation_timeout_s or 30.0)
     prefill = await probe_prefill(
         client,
         url,
@@ -476,6 +525,8 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence["prefill"] = prefill
+    # Check before the decode sweep so cached prefill fails early.
+    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     (a, b, c), representatives, prefill_fit_mape = fit_prefill_samples(prefill)
     print(f"    prefill median fit MAPE {prefill_fit_mape:.1%}")
     if evidence is not None:
@@ -500,6 +551,7 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
+    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
     capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)
@@ -634,7 +686,9 @@ class NeighbourLoad:
         while True:
             await asyncio.sleep(max(0.0, next_at - time.monotonic()))
             try:
-                response = await self.client.post(f"{url}/v1/completions", json=body)
+                response = await self.client.post(
+                    f"{url}/v1/completions", json={**body, **self.dialect.cold_probe_extras()}
+                )
                 response.raise_for_status()
                 result = response.json()
                 if (

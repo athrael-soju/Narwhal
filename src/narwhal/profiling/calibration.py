@@ -340,6 +340,7 @@ async def calibrate(
                                         "prompt": prompt,
                                         "max_tokens": output_tokens,
                                         "temperature": 0.0,
+                                        **dialect.decode_probe_extras(output_tokens),
                                     }
                                     phase = "prefill"
                                     began = time.monotonic()

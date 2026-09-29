@@ -495,9 +495,11 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
             patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
             patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+            patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7, 7])),
             redirect_stdout(io.StringIO()),
         ):
             row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+        self.assertEqual(evidence["prefix_cache_hit_tokens"], 0)
         self.assertEqual((row.decode_min_requests, row.decode_max_requests), (1, 16))
         self.assertEqual((row.decode_min_kv_tokens, row.decode_max_kv_tokens), (100, 10000))
         self.assertAlmostEqual(row.tpot_request_slope, 0.001)
@@ -506,6 +508,91 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["prefill_fit_points"], prefill)
         self.assertLess(evidence["prefill_fit_mape"], 0.01)
         self.assertEqual(evidence["decode"], decode)
+
+    async def test_cold_profile_rejects_prefix_cache_hits_and_records_missing_counter(self):
+        """Cached prefill cannot enter a cold profile; an absent counter stays unknown."""
+        prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
+        decode = [
+            (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
+        ]
+        for counters, message in (
+            ([7, 71], "served 64 prompt tokens"),
+            ([None, None, None], None),
+            ([7, 3, 3], None),
+        ):
+            evidence = {}
+            decode_sweep = AsyncMock(return_value=decode)
+            with (
+                self.subTest(counters=counters),
+                patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
+                patch.object(probe, "probe_decode", decode_sweep),
+                patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
+                patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=counters)),
+                redirect_stdout(io.StringIO()),
+            ):
+                if message:
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        await probe.profile_instance(
+                            None, "e", "http://e", "stub", evidence=evidence
+                        )
+                    self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
+                    # Cached prefill fails before the decode sweep runs.
+                    decode_sweep.assert_not_awaited()
+                else:
+                    await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+                    self.assertIsNone(evidence["prefix_cache_hit_tokens"])
+
+    async def test_cold_probes_salt_every_request(self):
+        """Repeated probes of one prompt cannot share a cached prefix."""
+        bodies = []
+
+        def answer(request):
+            body = json.loads(request.content)
+            bodies.append(body)
+            if body.get("stream"):
+                frames = [token(0), token(1), token(2, finish="length"), "[DONE]"]
+                return httpx.Response(200, stream=MeasuredStream(frames))
+            return httpx.Response(
+                200,
+                json={
+                    "usage": {"prompt_tokens": 4, "completion_tokens": body["max_tokens"]},
+                    "choices": [{"finish_reason": "length"}],
+                },
+            )
+
+        workload = probe.ColocatedWorkload(40.0, 40.0, 4, 4, 3)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            with (
+                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 4))),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+                redirect_stdout(io.StringIO()),
+            ):
+                await probe.probe_prefill(client, "http://e", "stub", lens=(4,), repeats=3)
+                state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": 2}
+                await probe.asyncio.gather(
+                    *(
+                        probe._one_decode_stream(
+                            client, "http://e", "stub", "prompt", 4, state, [], tokens=3
+                        )
+                        for _ in range(2)
+                    )
+                )
+                load = probe.NeighbourLoad(
+                    client,
+                    [("p", "http://p", Role.PREFILL)],
+                    "stub",
+                    probe.VllmDialect(),
+                    3.8,
+                    workload,
+                )
+                await load.start()
+                await probe.asyncio.sleep(0.06)
+                await load.stop()
+        self.assertGreater(len(bodies), 6)
+        salts = [body.get("cache_salt") for body in bodies]
+        self.assertTrue(all(isinstance(salt, str) and len(salt) >= 43 for salt in salts))
+        self.assertEqual(len(set(salts)), len(salts))
+        self.assertEqual({body["prompt"] for body in bodies}, {"prompt"})
 
     async def test_run_protects_existing_and_symlink_outputs(self):
         """Profiling rejects existing output files and symlinks before contacting engines."""
@@ -779,3 +866,14 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             900,
         )
         self.assertIsNone(probe.parse_kv_capacity(""))
+
+    def test_prefix_cache_hits_sum_engine_counters(self):
+        """Hit tokens sum across engine label sets and ignore creation timestamps."""
+        metrics = (
+            'vllm:prefix_cache_hits_total{engine="0",model_name="m"} 12.0\n'
+            'vllm:prefix_cache_hits_created{engine="0",model_name="m"} 1.7e9\n'
+            'vllm:prefix_cache_hits_total{engine="1",model_name="m"} 30.0\n'
+            'vllm:prefix_cache_queries_total{engine="0",model_name="m"} 99.0\n'
+        )
+        self.assertEqual(probe.parse_prefix_cache_hits(metrics), 42)
+        self.assertIsNone(probe.parse_prefix_cache_hits("vllm:num_requests_running 0\n"))

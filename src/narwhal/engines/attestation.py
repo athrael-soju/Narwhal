@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import httpx
 import uvicorn
@@ -19,8 +20,14 @@ from fastapi import FastAPI, HTTPException
 from ..cli_support import add_version_argument
 from ..config import EngineContract
 from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
+from .residency import ResidencyIndex
+from .residency_feed import ResidencyFeed
 
 ATTESTATION_PATH = "/v1/attestation"
+RESIDENCY_PATH = "/v1/residency"
+# Socket names inside the launch plan's cache-event directory; the launcher uses the same.
+EVENTS_SOCKET = "events.sock"
+REPLAY_SOCKET = "replay.sock"
 _PROCESS_START = re.compile(
     r"^process_start_time_seconds(?:\{[^}]*\})?\s+([0-9.eE+-]+)(?:\s|$)", re.MULTILINE
 )
@@ -295,9 +302,17 @@ def build_app(
     *,
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
+    residency: ResidencyIndex | None = None,
 ) -> FastAPI:
-    """Build a sidecar that stops attesting after its engine process changes."""
+    """Build a sidecar that stops attesting after its engine process changes.
+
+    With `residency`, the sidecar also serves the engine's resident prefix
+    blocks. Without it, the residency routes answer 404 and callers price the
+    engine cold.
+    """
     app = FastAPI(title="narwhal-engine-attestation")
+    # A restarted sidecar serves a new epoch, so subscribers resynchronise.
+    epoch = uuid4().hex
 
     async def current_identity() -> EngineIdentity:
         try:
@@ -327,6 +342,36 @@ def build_app(
         identity = await current_identity()
         return make_attestation(document, identity)
 
+    def require_residency() -> ResidencyIndex:
+        if residency is None:
+            raise HTTPException(status_code=404, detail="engine publishes no cache events")
+        return residency
+
+    @app.get(RESIDENCY_PATH)
+    async def residency_snapshot() -> dict[str, Any]:
+        identity = await current_identity()
+        index = require_residency()
+        return {
+            **index.snapshot(),
+            "epoch": epoch,
+            "process_start_time_seconds": identity.process_start_time_seconds,
+        }
+
+    @app.get(RESIDENCY_PATH + "/events")
+    async def residency_events(after: int) -> dict[str, Any]:
+        await current_identity()
+        index = require_residency()
+        result = index.changes_after(after)
+        if result is None:
+            raise HTTPException(status_code=410, detail="resynchronise from the residency snapshot")
+        sequence, changes = result
+        return {
+            "epoch": epoch,
+            "sequence": sequence,
+            "block_size": index.block_size,
+            "changes": changes,
+        }
+
     return app
 
 
@@ -344,9 +389,17 @@ def main(argv: list[str] | None = None) -> int:
         default=5.0,
         help="engine identity HTTP timeout in seconds (default: %(default)s)",
     )
+    parser.add_argument(
+        "--kv-events",
+        type=Path,
+        help="directory holding the engine's cache-event sockets; enables residency routes",
+    )
+    parser.add_argument("--model", help="served model name; required with --kv-events")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
+    if args.kv_events is not None and not args.model:
+        parser.error("--kv-events requires --model")
     from ..cli_errors import failure
 
     try:
@@ -362,11 +415,26 @@ def main(argv: list[str] | None = None) -> int:
             )
     except (OSError, ValueError, httpx.HTTPError) as exc:
         return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)
-    uvicorn.run(
-        build_app(document, args.engine_base, identity, timeout_s=args.timeout_s),
-        host=args.host,
-        port=args.port,
-    )
+    residency = feed = None
+    if args.kv_events is not None:
+        residency = ResidencyIndex(args.model, document.contract.fingerprint())
+        feed = ResidencyFeed(
+            residency,
+            f"ipc://{args.kv_events / EVENTS_SOCKET}",
+            f"ipc://{args.kv_events / REPLAY_SOCKET}",
+        )
+        feed.start()
+    try:
+        uvicorn.run(
+            build_app(
+                document, args.engine_base, identity, timeout_s=args.timeout_s, residency=residency
+            ),
+            host=args.host,
+            port=args.port,
+        )
+    finally:
+        if feed is not None:
+            feed.stop()
     return 0
 
 

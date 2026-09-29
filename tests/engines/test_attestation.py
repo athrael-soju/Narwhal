@@ -20,6 +20,7 @@ from narwhal.engines.attestation import (
     parse_process_start,
     verify_attestation,
 )
+from narwhal.engines.residency import ResidencyIndex
 from tests.fixtures import ROOT
 
 
@@ -144,3 +145,44 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get("/v1/attestation")).status_code, 503)
             failed = True
             self.assertEqual((await client.get("/health")).status_code, 503)
+
+    async def test_sidecar_serves_residency_only_with_an_event_feed(self):
+        """Residency routes follow the bound process and send stale subscribers to the snapshot."""
+        start = 100
+
+        def handle(request):
+            if request.url.path == "/version":
+                return httpx.Response(200, json={"version": self.identity.vllm_version})
+            return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
+
+        transport = httpx.MockTransport(handle)
+        index = ResidencyIndex("model", self.document.contract.fingerprint())
+        index.mark_empty()
+        index.apply(0, [])
+        index.apply(1, [])
+        apps = {
+            "residency": build_app(
+                self.document, "http://engine", self.identity, transport=transport, residency=index
+            ),
+            "cold": build_app(self.document, "http://engine", self.identity, transport=transport),
+        }
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=apps["residency"]), base_url="http://sidecar"
+            ) as client,
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=apps["cold"]), base_url="http://sidecar"
+            ) as cold,
+        ):
+            snapshot = (await client.get("/v1/residency")).json()
+            self.assertEqual((snapshot["known"], snapshot["sequence"]), (True, 1))
+            self.assertEqual(snapshot["process_start_time_seconds"], 100)
+            events = (await client.get("/v1/residency/events", params={"after": 0})).json()
+            self.assertEqual((events["epoch"], len(events["changes"])), (snapshot["epoch"], 1))
+            index.lose("sequence gap after 1")
+            self.assertEqual(
+                (await client.get("/v1/residency/events", params={"after": 1})).status_code, 410
+            )
+            self.assertEqual((await cold.get("/v1/residency")).status_code, 404)
+            start = 101
+            self.assertEqual((await client.get("/v1/residency")).status_code, 503)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import ipaddress
 import json
 import os
@@ -18,10 +19,18 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
-from tools.deployment.launch_engine import ENV_PREFIXES, MANAGED_ENV, validate_runtime
+from tools.deployment.launch_engine import (
+    ENV_PREFIXES,
+    MANAGED_ENV,
+    ds_conv_state_layout_required,
+    validate_runtime,
+)
 from tools.deployment.prepare_host_env import select_values, write_environment
 
-PROBE = r'''
+# The remote probe applies the launcher's own convolutional-state rule.
+PROBE = (
+    inspect.getsource(ds_conv_state_layout_required)
+    + r'''
 import hashlib, json, re, subprocess, sys
 from pathlib import Path
 
@@ -138,15 +147,7 @@ for entry in image.get("Config", {}).get("Env", []) or []:
         ):
             environment[name] = value
 text_model = model.get("text_config", model)
-linear = text_model.get("linear_attn_config", {})
-requires_ds_conv_state_layout = (
-    isinstance(linear, dict)
-    and bool(linear.get("kda_layers"))
-    and bool(linear.get("short_conv_kernel_size"))
-) or bool(text_model.get("mamba_d_conv") or text_model.get("mamba_d_state")) or any(
-    isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
-    for layer in text_model.get("layer_types", [])
-)
+requires_ds_conv_state_layout = ds_conv_state_layout_required(model)
 print(
     json.dumps(
         {
@@ -169,6 +170,7 @@ print(
     )
 )
 '''
+)
 
 
 def value(env: dict[str, str], node: int, field: str, default: str = "") -> str:

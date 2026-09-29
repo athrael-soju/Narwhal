@@ -11,7 +11,7 @@ For GGUF, pin `vllm-gguf-plugin` in `runtime.expected_packages` and keep the mod
 | Action | Backend | Inputs and operation |
 | --- | --- | --- |
 | `prepare` | container, native | Read `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), verify model and hook hashes, then write a fresh launch directory with `launch.json` and the backend environment. |
-| `check` | container, native | Read the prepared plan, check the pinned packages, model, tokenizer and NIXL connector, then bind `checked.json` to that plan. Repeated checks append their attempts to the backend check log. |
+| `check` | container, native | Read the prepared plan and check the pinned packages, model, tokenizer and NIXL connector. Resolve the effective prefix-caching and cache-event settings, then bind `checked.json` to that plan. Repeated checks append their attempts to the backend check log. |
 | `measure-cache` | container | Start a temporary sizing container from a checked, unused plan, write `cache-layout.json`, then remove the completed sizing container. |
 | `model-dimensions` | container | Inspect the model through the checked runtime and write `model-dimensions.json`. |
 | `handshake-policy` | container, native | Inspect the installed NIXL worker against the checked connector settings and write `handshake-policy.json`. |

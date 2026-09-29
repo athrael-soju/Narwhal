@@ -21,6 +21,7 @@ drains
 rollover
 readmission
 liveness
+residency
 handoff
 telemetry
 ```

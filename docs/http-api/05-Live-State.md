@@ -45,6 +45,7 @@ Narwhal returns live scheduler and router state as `narwhal.state` schema versio
 | `health`                | Per-engine drift-window accounting                                                   |
 | `quarantined`           | Engines temporarily excluded after engine failure                                    |
 | `breaker`               | Per-engine consecutive failure streaks and probe state                               |
+| `residency`             | Per-engine prefix-residency synchronisation with its attestation sidecar             |
 | `decode_floor`          | Decode floor state and restoration count                                             |
 | `attainment`            | Bounded diagnostic SLO outcome buckets                                               |
 | `demand_history`        | Retained demand, shape counts, and overflow state                                    |
@@ -82,6 +83,22 @@ Failure streaks are maintained separately for:
 - `liveness`
 
 The record also identifies engines with a health or inference probe currently in flight.
+
+#### `residency`
+
+Each monitoring pass refreshes one record per engine from its attestation sidecar's ordered changes. The router resynchronises from a snapshot at start, after a sidecar epoch change, after HTTP 410 from the change route, and after a failed refresh.
+
+| Field | Meaning |
+| --- | --- |
+| `known` | `true` when the router holds the engine's complete residency |
+| `reason` | Cause of the current `known` value |
+| `epoch` | Sidecar instance the record follows |
+| `sequence` | Last engine event batch applied |
+| `block_size` | Tokens per cache block |
+| `resident_blocks` | Named resident blocks per KV cache group |
+| `resyncs` | Snapshots taken since router start |
+
+An engine reports `known: false` when its sidecar is absent or answers the residency routes with HTTP 404.
 
 ---
 
