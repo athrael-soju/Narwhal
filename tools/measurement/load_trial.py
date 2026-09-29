@@ -59,10 +59,24 @@ def provenance() -> dict:
     }
 
 
+SHARED_PREFIX = "shared-prefix-token-ids"
+
+
 def load_workload(path: Path) -> dict:
     value = json.loads(path.read_text())
-    if value.get("schema") != 1 or value.get("kind") != "synthetic-token-length":
-        raise ValueError("Workload requires schema 1 and synthetic-token-length kind")
+    if value.get("schema") != 1 or value.get("kind") not in (
+        "synthetic-token-length",
+        SHARED_PREFIX,
+    ):
+        raise ValueError("Workload requires schema 1 and a synthetic-token-length kind")
+    if value["kind"] == SHARED_PREFIX:
+        prefix, families = value.get("prefix_tokens"), value.get("families")
+        if type(prefix) is not int or type(value.get("input_tokens")) is not int:
+            raise ValueError("A shared-prefix workload requires integer prefix and input tokens")
+        if not 1 <= prefix < value["input_tokens"]:
+            raise ValueError("A shared-prefix workload needs a prefix shorter than its input")
+        if type(families) is not int or families < 0:
+            raise ValueError("A shared-prefix workload requires families >= 0")
     for key, minimum in (("input_tokens", 1), ("output_tokens", 1), ("seed", 0)):
         if type(value.get(key)) is not int or value[key] < minimum:
             raise ValueError(f"Workload requires integer {key} >= {minimum}")
@@ -74,11 +88,37 @@ def load_workload(path: Path) -> dict:
     return value
 
 
-def body_for(workload: dict, sequence: int) -> dict:
-    rng = random.Random(workload["seed"] + sequence)
+def _tokens(seed: str, pool: list[int], count: int) -> list[int]:
+    rng = random.Random(seed)
+    return [rng.choice(pool) for _ in range(count)]
+
+
+def prompt_for(workload: dict, sequence: int, run_seed: int = 0) -> list[int]:
+    """Return one request's token IDs.
+
+    A shared-prefix request draws one of `families` prefixes, which repeat across
+    runs, and a suffix unique to the run and sequence. With zero families each
+    prefix is unique to the run and sequence, so the prompt shares no cached prefix.
+    """
+    pool, seed, length = workload["token_pool"], workload["seed"], workload["input_tokens"]
+    if workload["kind"] != SHARED_PREFIX:
+        rng = random.Random(seed + sequence)
+        return [rng.choice(pool) for _ in range(length)]
+    prefix_len = workload["prefix_tokens"]
+    if workload["families"]:
+        family = random.Random(f"{seed}:{run_seed}:family:{sequence}").randrange(
+            workload["families"]
+        )
+        prefix = _tokens(f"{seed}:prefix:{family}", pool, prefix_len)
+    else:
+        prefix = _tokens(f"{seed}:{run_seed}:prefix:{sequence}", pool, prefix_len)
+    return prefix + _tokens(f"{seed}:{run_seed}:suffix:{sequence}", pool, length - prefix_len)
+
+
+def body_for(workload: dict, sequence: int, run_seed: int = 0) -> dict:
     return {
         "model": workload["model"],
-        "prompt": [rng.choice(workload["token_pool"]) for _ in range(workload["input_tokens"])],
+        "prompt": prompt_for(workload, sequence, run_seed),
         "max_tokens": workload["output_tokens"],
         "min_tokens": workload["output_tokens"],
         "ignore_eos": True,
@@ -321,14 +361,28 @@ async def prepare(client, base, args):
         args.out / "workload.json",
         {
             "schema": 1,
-            "kind": "synthetic-token-length",
             "model": model,
             "input_tokens": args.input_tokens,
             "output_tokens": args.output_tokens,
             "seed": args.seed,
             "token_pool": list(pool),
             "seed_prompt": SEED_PROMPT,
-            "recipe": "Python random.Random(seed + sequence).choice(token_pool) per input token",
+            **(
+                {
+                    "kind": SHARED_PREFIX,
+                    "prefix_tokens": args.prefix_tokens,
+                    "families": args.families,
+                    "recipe": "family prefix from Random(f'{seed}:prefix:{family}'), family and "
+                    "suffix from Random(f'{seed}:{run_seed}:...:{sequence}'); zero families use "
+                    "a run and sequence prefix",
+                }
+                if getattr(args, "prefix_tokens", None)
+                else {
+                    "kind": "synthetic-token-length",
+                    "recipe": "Python random.Random(seed + sequence).choice(token_pool) "
+                    "per input token",
+                }
+            ),
         },
     )
 
@@ -343,7 +397,7 @@ async def run_trial(client, base, args):
     warmup = await request_one(
         client,
         base,
-        body_for(workload, args.requests),
+        body_for(workload, args.requests, getattr(args, "run_seed", 0)),
         f"{run_id}-warmup",
         time.monotonic(),
         args.timeout,
@@ -370,7 +424,7 @@ async def run_trial(client, base, args):
             row = await request_one(
                 client,
                 base,
-                body_for(workload, sequence),
+                body_for(workload, sequence, getattr(args, "run_seed", 0)),
                 f"{run_id}-{sequence}",
                 scheduled,
                 args.timeout,
@@ -430,6 +484,23 @@ def main(argv=None):
     parser.add_argument("--input-tokens", type=int, default=8192)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument(
+        "--prefix-tokens",
+        type=int,
+        help="prepare a shared-prefix workload whose prompts start with this many prefix tokens",
+    )
+    parser.add_argument(
+        "--families",
+        type=int,
+        default=0,
+        help="distinct shared prefixes; 0 makes every prefix unique as a cold control",
+    )
+    parser.add_argument(
+        "--run-seed",
+        type=int,
+        default=0,
+        help="vary suffixes and control prefixes between runs of one shared-prefix workload",
+    )
     parser.add_argument("--rate", type=float, default=0.5)
     parser.add_argument("--requests", type=int, default=200)
     parser.add_argument("--ttft", type=float, default=2.0)
@@ -455,6 +526,10 @@ def main(argv=None):
         parser.error("Require attainment in (0, 1], output tokens >= 1, and seed >= 0")
     if args.command == "run" and args.workload is None:
         parser.error("run requires --workload")
+    if args.prefix_tokens is not None and not 1 <= args.prefix_tokens < args.input_tokens:
+        parser.error("--prefix-tokens must be positive and shorter than --input-tokens")
+    if args.families < 0 or args.run_seed < 0:
+        parser.error("--families and --run-seed must be nonnegative")
     parsed = urlsplit(args.base)
     if (
         parsed.scheme not in ("http", "https")

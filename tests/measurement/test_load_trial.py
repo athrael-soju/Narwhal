@@ -398,3 +398,46 @@ class AccountingTests(unittest.TestCase):
                 trial.load_workload(path)
             with self.assertRaises(FileExistsError):
                 trial.private_json(path, WORKLOAD)
+
+
+class SharedPrefixWorkloadTests(unittest.TestCase):
+    """Repeated-prefix prompts share family prefixes; cold controls share none."""
+
+    def workload(self, families):
+        return {
+            **WORKLOAD,
+            "kind": trial.SHARED_PREFIX,
+            "input_tokens": 32,
+            "prefix_tokens": 24,
+            "families": families,
+            "token_pool": list(range(100)),
+        }
+
+    def test_family_prefixes_repeat_across_runs_while_suffixes_do_not(self):
+        workload = self.workload(2)
+        prompts = [trial.prompt_for(workload, sequence) for sequence in range(12)]
+        self.assertTrue(all(len(prompt) == 32 for prompt in prompts))
+        self.assertEqual(len({tuple(prompt[:24]) for prompt in prompts}), 2)
+        self.assertEqual(len({tuple(prompt[24:]) for prompt in prompts}), 12)
+        rerun = [trial.prompt_for(workload, sequence, run_seed=1) for sequence in range(12)]
+        self.assertEqual({tuple(p[:24]) for p in rerun}, {tuple(p[:24]) for p in prompts})
+        self.assertTrue({tuple(p[24:]) for p in rerun}.isdisjoint({tuple(p[24:]) for p in prompts}))
+
+    def test_cold_control_prefixes_are_unique_per_run_and_sequence(self):
+        workload = self.workload(0)
+        first = [tuple(trial.prompt_for(workload, s)[:24]) for s in range(12)]
+        second = [tuple(trial.prompt_for(workload, s, run_seed=1)[:24]) for s in range(12)]
+        self.assertEqual(len(set(first)), 12)
+        self.assertTrue(set(first).isdisjoint(second))
+        self.assertEqual(trial.body_for(workload, 0)["prompt"], list(trial.prompt_for(workload, 0)))
+
+    def test_shared_prefix_workloads_validate_their_shape(self):
+        for changes in ({"prefix_tokens": 32}, {"prefix_tokens": 0}, {"families": -1}):
+            with (
+                self.subTest(changes=changes),
+                tempfile.TemporaryDirectory() as folder,
+                self.assertRaises(ValueError),
+            ):
+                path = Path(folder) / "workload.json"
+                path.write_text(json.dumps({**self.workload(2), **changes}))
+                trial.load_workload(path)
