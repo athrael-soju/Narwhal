@@ -412,6 +412,21 @@ class CachedPrefillRefitTests(unittest.TestCase):
         self.assertAlmostEqual(evidence["cached_prefill"]["cv_mape"], fit["cv_mape"])
         self.assertTrue(re.fullmatch(r"sha256:a{64}", row["generation_digest"]))
 
+    def test_refit_keeps_an_engine_cold_when_its_live_warm_sweep_stopped(self):
+        # The live sweep stopped early; its saved samples would still form a fit.
+        reason = "case prefix~8192 suffix~700 reused no cached prefix"
+        row, evidence = self.refit({"samples": warm_samples(), "reason": reason}, self.base())
+        self.assertIsNone(row["cached_ttft_a"])
+        self.assertEqual(evidence["cached_prefill"], {"samples": warm_samples(), "reason": reason})
+
+    def test_refit_clears_a_warm_fit_its_samples_no_longer_form(self):
+        fitted, _ = probe.apply_cached_fit(self.base(), warm_samples())
+        grid = warm_samples(prefixes=(2048,), suffixes=(256, 1024, 2048))
+        row, evidence = self.refit({"samples": grid}, fitted)
+        for name in probe.CACHED_PROFILE_FIELDS:
+            self.assertIsNone(row[name], name)
+        self.assertIn("five cases", evidence["cached_prefill"]["reason"])
+
     def test_refit_keeps_an_engine_cold_when_its_samples_form_no_warm_fit(self):
         grid = warm_samples(prefixes=(2048,), suffixes=(256, 1024, 2048))
         row, evidence = self.refit({"samples": grid, "reason": "fit needs five cases"}, self.base())

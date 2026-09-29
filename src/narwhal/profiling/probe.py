@@ -1169,7 +1169,13 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             }
         )
         cached = row.get("cached_prefill") or {}
-        if cached.get("samples"):
+        if cached.get("reason") is not None and cached.get("cv_mape") is None:
+            # The live run kept this engine cold; its samples may stop partway through the sweep.
+            row["cached_prefill"] = {
+                "samples": cached.get("samples", []),
+                "reason": cached["reason"],
+            }
+        elif cached.get("samples"):
             try:
                 refit, fit = apply_cached_fit(updated, cached["samples"])
             except (KeyError, TypeError) as exc:
