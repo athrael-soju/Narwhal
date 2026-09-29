@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tools.measurement import benchmark_runner
+from tools.measurement.benchmark_evidence import counter_deltas
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request
@@ -33,6 +34,28 @@ target.mkdir(exist_ok=True)
 (target / 'requests.jsonl').write_text(''.join(json.dumps(row) + '\\n' for row in rows))
 (target / 'summary.json').write_text(json.dumps({'completed_rps_including_drain': 1.25}))
 """
+
+
+class CounterDeltaTests(unittest.TestCase):
+    def test_a_sample_across_a_router_restart_counts_for_neither_run(self):
+        def sample(run, offered, after=None):
+            return {
+                "at": "t",
+                "state": {"journal_run": run},
+                "router_metrics": f"narwhal_offered_total {offered}\n",
+                "journal_run_after": after or run,
+            }
+
+        deltas, diagnostics = counter_deltas(
+            [
+                sample("run-a", 0),
+                sample("run-a", 1),
+                sample("run-a", 0, "run-b"),
+                sample("run-b", 0),
+            ]
+        )
+        self.assertEqual(deltas["run-a"]["narwhal_offered_total"], 1)
+        self.assertEqual(diagnostics, [])
 
 
 class EvidenceTests(unittest.TestCase):

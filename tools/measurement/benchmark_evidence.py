@@ -92,7 +92,12 @@ def counter_deltas(samples: list[dict]) -> tuple[dict, list[dict]]:
     by_run = defaultdict(list)
     for sample in samples:
         run = sample.get("state", {}).get("journal_run")
-        if run and sample.get("router_metrics") is not None:
+        # A router restart between the state and metrics reads leaves the counters unattributed.
+        if (
+            run
+            and sample.get("router_metrics") is not None
+            and sample.get("journal_run_after", run) == run
+        ):
             by_run[run].append((sample["at"], metric_values(sample["router_metrics"])))
     diagnostics = []
     result = {}
@@ -340,6 +345,12 @@ class EvidenceCollector:
                     item[name] = response.json() if json_body else response.text
                 except (httpx.HTTPError, ValueError) as error:
                     item["errors"][name] = str(error)
+            try:
+                response = client.get(self.base + "/narwhal/state", headers=self.headers)
+                response.raise_for_status()
+                item["journal_run_after"] = response.json().get("journal_run")
+            except (httpx.HTTPError, ValueError) as error:
+                item["errors"]["state_after"] = str(error)
         self.samples.append(item)
 
     def start(self) -> None:
