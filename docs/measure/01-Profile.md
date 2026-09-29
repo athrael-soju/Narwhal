@@ -69,7 +69,7 @@ After the cold sweeps, the profiler measures prefill when part of the prompt com
 
 For each `--cached-prefix-lens` and `--cached-suffix-lens` pair, the profiler repeats three requests:
 
-1. It sends the prefix alone under a fresh cache salt, so the engine caches it.
+1. It sends the prefix and the suffix's first word under a fresh cache salt, so the engine caches the prefix. The extra word matters for a hybrid attention and Mamba engine, which keeps no boundary state for a prompt that ends on a block boundary.
 2. It times the prefix plus the suffix under the same salt. The hit counter's increase is the sample's cached prefix length; the remaining prompt tokens are its uncached suffix.
 3. It times the same prompt under another fresh salt as a cold control.
 

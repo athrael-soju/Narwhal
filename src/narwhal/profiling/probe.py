@@ -507,9 +507,10 @@ async def probe_cached_prefill(
 ) -> list[dict[str, Any]] | None:
     """Measure prefill with a cached prefix and an uncached suffix, plus cold controls.
 
-    Each case caches its prefix under a fresh salt, then times prefix plus suffix
-    under the same salt. The engine's hit counter supplies the cached token count
-    each sample records. A cold control repeats the prompt under another salt.
+    Each case caches its prefix and the suffix's first word under a fresh salt, then
+    times prefix plus suffix under the same salt. The engine's hit counter supplies
+    the cached token count each sample records. A cold control repeats the prompt
+    under another salt.
     Returns None when the engine exports no hit counter or reuses no cached prefix.
     """
     timeout = observation_timeout_s or 30.0
@@ -530,9 +531,12 @@ async def probe_cached_prefill(
         prefix, _ = await make_prompt(client, url, model, prefix_target, dialect, timeout_s=timeout)
         for suffix_target in sweep.cached_suffix_lens:
             full = prefix + " " + "context " * suffix_target
+            # A hybrid engine keeps no boundary state for a prompt that ends on a block
+            # boundary, so the primer runs one word past the prefix.
+            primer = prefix + " context"
             for repeat in range(sweep.cached_repeats):
                 salt = dialect.cold_probe_extras()
-                await _complete(client, url, body(prefix, salt), observation_timeout_s)
+                await _complete(client, url, body(primer, salt), observation_timeout_s)
                 before = await prefix_cache_hits(client, url, timeout)
                 tokens, elapsed = await _complete(
                     client, url, body(full, salt), observation_timeout_s

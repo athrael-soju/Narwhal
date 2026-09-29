@@ -79,9 +79,15 @@ class CachedPrefillFitTests(unittest.TestCase):
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
     """A fake engine caches whole 16-token blocks per salt and counts reused tokens."""
 
-    def engine(self, *, reuse=True):
+    def engine(self, *, reuse=True, hybrid=False):
         cache: dict[str, int] = {}
         hits = [0]
+
+        def cached(tokens):
+            # A hybrid engine keeps boundary state only inside the prompt's final block.
+            if hybrid and tokens % 16 == 0:
+                return 0
+            return tokens // 16 * 16
 
         def handle(request):
             if request.url.path == "/metrics":
@@ -93,17 +99,17 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
             salt = body["cache_salt"]
             if reuse and salt in cache:
                 hits[0] += min(cache[salt], (tokens - 1) // 16 * 16)
-            cache.setdefault(salt, tokens // 16 * 16)
+            cache.setdefault(salt, cached(tokens))
             return httpx.Response(
                 200, json={"usage": {"prompt_tokens": tokens, "completion_tokens": 1}}
             )
 
         return httpx.MockTransport(handle)
 
-    async def run_probe(self, transport):
+    async def run_probe(self, transport, prefix_lens=(100, 400)):
         sweep = replace(
             probe.Sweep(),
-            cached_prefix_lens=(100, 400),
+            cached_prefix_lens=prefix_lens,
             cached_suffix_lens=(20, 60),
             cached_repeats=2,
         )
@@ -134,6 +140,11 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(s["prefix_tokens"] == 0 for s in cold))
         self.assertTrue(all(s["cache_evidence"] == "prefix_cache_hits" for s in samples))
+
+    async def test_a_block_aligned_prefix_stays_reusable_on_a_hybrid_engine(self):
+        samples = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))
+        warm = {s["prefix_tokens"] for s in samples if s["state"] == "warm"}
+        self.assertEqual(warm, {96, 400})
 
     async def test_an_engine_that_reuses_nothing_keeps_cold_pricing(self):
         self.assertIsNone(await self.run_probe(self.engine(reuse=False)))
