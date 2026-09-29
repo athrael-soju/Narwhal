@@ -14,6 +14,7 @@ import httpx
 
 from narwhal.profiling import probe
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
+from narwhal.profiling.model import Profile
 from tests.fixtures import profile
 
 A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
@@ -183,6 +184,12 @@ class ColdSplitStepTests(unittest.TestCase):
                 one_step = [n for n in probe.PREFILL_LENS if not splits_prefill(n, block)]
                 self.assertGreaterEqual(len(one_step), 2)
         self.assertEqual(list(probe.PREFILL_LENS), sorted(probe.PREFILL_LENS))
+        # A 4096-token context still keeps two one-step lengths for the split fit.
+        short = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
+        for block in (16, 512):
+            with self.subTest(block=block, context=4096):
+                one_step = [n for n in short.prefill_lens if not splits_prefill(n, block)]
+                self.assertGreaterEqual(len(one_step), 2)
 
     def test_block_size_comes_from_the_engine_cache_metric(self):
         metrics = 'vllm:cache_config_info{block_size="512",engine="0"} 1.0\n'
@@ -204,9 +211,11 @@ class WarmSweepBoundsTests(unittest.TestCase):
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
     """A fake engine caches whole 16-token blocks per salt and counts reused tokens."""
 
-    def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None):
+    def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None, blind_after_cold=False):
         cache: dict[str, int] = {}
         hits = [0]
+        # `blind_after_cold` loses the hit counter once the first cold control completes.
+        blind, reused = [False], [False]
 
         def cached(tokens):
             # A hybrid engine keeps boundary state only inside the prompt's final block.
@@ -216,6 +225,8 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
         def handle(request):
             if request.url.path == "/metrics":
+                if blind[0]:
+                    return httpx.Response(503)
                 return httpx.Response(
                     200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {hits[0]}\n'
                 )
@@ -226,6 +237,9 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
             if sent is not None:
                 sent.append(tokens)
             salt = body["cache_salt"]
+            if blind_after_cold and reused[0] and salt not in cache:
+                blind[0] = True
+            reused[0] = salt in cache
             if reuse and salt in cache:
                 hits[0] += min(cache[salt], (tokens - 1) // 16 * 16)
             elif leak and cache:
@@ -304,6 +318,11 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         samples, reason = await self.run_probe(self.engine(reuse=False))
         self.assertEqual(samples, [])
         self.assertIn("reused no cached prefix", reason)
+
+    async def test_an_unreadable_counter_after_a_cold_control_ends_the_warm_sweep(self):
+        samples, reason = await self.run_probe(self.engine(blind_after_cold=True))
+        self.assertEqual(reason, "the prefix-cache hit counter became unreadable")
+        self.assertEqual(samples, [])
 
     async def test_a_cold_control_that_hits_the_cache_fails_the_sweep(self):
         with self.assertRaisesRegex(RuntimeError, "cold control reused"):
@@ -395,8 +414,9 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CachedPrefillRefitTests(unittest.TestCase):
-    def refit(self, cached_prefill, base):
-        prefill = [(float(n), 1e-9 * n * n + 2e-5 * n + 0.08) for n in (256, 1024, 4096)]
+    def refit(self, cached_prefill, base, prefill=None, block=None):
+        if prefill is None:
+            prefill = [(float(n), 1e-9 * n * n + 2e-5 * n + 0.08) for n in (256, 1024, 4096)]
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "profiles.samples.json"
             source.write_text(
@@ -408,6 +428,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
                                 "profile": asdict(base),
                                 "generation_evidence": {},
                                 "cached_prefill": cached_prefill,
+                                "prefill_block_tokens": block,
                             }
                         }
                     }
@@ -437,6 +458,37 @@ class CachedPrefillRefitTests(unittest.TestCase):
             self.assertAlmostEqual(row[name], getattr(fitted, name), places=12)
         self.assertAlmostEqual(evidence["cached_prefill"]["cv_mape"], fit["cv_mape"])
         self.assertTrue(re.fullmatch(r"sha256:a{64}", row["generation_digest"]))
+
+    def test_refit_uses_the_saved_block_size_for_cold_and_warm_splits(self):
+        split, block = 0.06, 512
+
+        def cold(n):
+            return 1e-9 * n * n + 2e-5 * n + 0.08 + (split if splits_prefill(n, block) else 0.0)
+
+        prefill = [(float(n), cold(n)) for n in (256, 700, 1024, 1300, 2300, 4096, 4300, 8300)]
+        samples = warm_samples(prefixes=(4096, 8192, 11776), suffixes=(128, 300, 600))
+        for sample in samples:
+            if sample["state"] == "warm" and splits_prefill(sample["suffix_tokens"], block):
+                sample["seconds"] += split
+        row, evidence = self.refit({"samples": samples}, self.base(), prefill, block)
+        self.assertEqual(row["ttft_block_tokens"], block)
+        self.assertAlmostEqual(row["ttft_split"], split, places=6)
+        refit = Profile(**row)
+        self.assertAlmostEqual(refit.prefill_time(4300), cold(4300), places=6)
+        self.assertAlmostEqual(
+            refit.cached_prefill_time(8192, 600), warm_time(8192, 600) + split, places=6
+        )
+        self.assertLess(evidence["cached_prefill"]["cv_mape"], 1e-4)
+
+    def test_malformed_saved_warm_samples_are_reported_as_invalid(self):
+        good = warm_samples()
+        for field, value in (("state", "stale"), ("seconds", "fast")):
+            bad = [dict(good[0], **{field: value}), *good[1:]]
+            with (
+                self.subTest(bad=bad),
+                self.assertRaisesRegex(ValueError, "cached prefill samples are invalid"),
+            ):
+                self.refit({"samples": bad}, self.base())
 
     def test_refit_keeps_an_engine_cold_when_its_live_warm_sweep_stopped(self):
         # The live sweep stopped early; its saved samples would still form a fit.

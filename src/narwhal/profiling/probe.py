@@ -45,7 +45,7 @@ from .store import ProfileStore
 # Candidate lengths are bounded by each live engine's reported context limit.
 # 256 and 4096 end on a block boundary for 16- and 512-token blocks, so the fit measures the
 # one-step regime twice; the rest end between block boundaries, where served prompts usually end.
-PREFILL_LENS = (256, 700, 1300, 2300, 4096, 4300, 8300, 12300, 16300)
+PREFILL_LENS = (256, 700, 1024, 1300, 2300, 4096, 4300, 8300, 12300, 16300)
 DECODE_CONCURRENCY = (1, 4, 16, 48)
 DECODE_INPUT_LENS = (512, 4096, 8192)
 DECODE_TOKENS = 64
@@ -621,7 +621,9 @@ async def probe_cached_prefill(
                         f"case prefix~{prefix_target} suffix~{suffix_target} "
                         "reused no cached prefix",
                     )
-                if cold_after is None or cold_after != cold_before:
+                if cold_after is None:
+                    return samples, "the prefix-cache hit counter became unreadable"
+                if cold_after != cold_before:
                     raise RuntimeError("a cold control reused a cached prefix; reserve the engine")
                 case = {"target_prefix": prefix_target, "target_suffix": suffix_target}
                 samples.append(
@@ -652,6 +654,19 @@ async def probe_cached_prefill(
                 f"-> {statistics.median(warm) * 1000:7.1f} ms median"
             )
     return samples, None if samples else "every warm case exceeds the engine context"
+
+
+def _valid_cached_samples(samples: Any) -> bool:
+    """Return whether saved warm samples have the shape the profiler writes."""
+    return isinstance(samples, list) and all(
+        isinstance(sample, dict)
+        and sample.get("state") in ("warm", "cold")
+        and all(
+            type(sample.get(key)) in (int, float)
+            for key in ("prefix_tokens", "suffix_tokens", "seconds")
+        )
+        for sample in samples
+    )
 
 
 def apply_cached_fit(
@@ -1178,6 +1193,8 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
                 "reason": cached["reason"],
             }
         elif cached.get("samples"):
+            if not _valid_cached_samples(cached["samples"]):
+                raise ValueError(f"{iid}: saved cached prefill samples are invalid")
             try:
                 refit, fit = apply_cached_fit(updated, cached["samples"])
             except (KeyError, TypeError) as exc:

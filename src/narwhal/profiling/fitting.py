@@ -230,7 +230,7 @@ def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> li
 
 def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
     # The suffix attends causally to the cached prefix and to earlier suffix tokens,
-    # and each step reads the cached prefix once.
+    # and prefill reads the cached prefix.
     return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
 
 

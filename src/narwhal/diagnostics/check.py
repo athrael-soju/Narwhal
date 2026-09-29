@@ -666,7 +666,11 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             rep.fail(problem)
         if problems:
             continue
-        quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}"
+        quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
+            f"+{p.ttft_split:.4f} past {p.ttft_block_tokens}-token blocks"
+            if p.ttft_split is not None
+            else ""
+        )
         interval = f"{p.tpot_request_slope:.2e}q+{p.tpot_slope:.2e}b+{p.tpot_intercept:.4f}"
         rep.ok(
             f"{spec.iid} ttft={quadratic} tpot={interval} "

@@ -53,7 +53,7 @@ For each engine, the profiler:
 
 Compare the retained sweep with the serving plan before accepting the result.
 
-The prefill fit is `a*n*n + b*n + c` for `n` prompt tokens. When the engine exports its cache block size in `vllm:cache_config_info`, the fit adds `ttft_split` for a prompt that ends inside a cache block past the first. An engine that prefills such a prompt in two steps measures a positive `ttft_split`. One group holds lengths that end within the first block or on a block boundary. The other holds lengths that end between later block boundaries. The profile keeps `ttft_split` when each group has two lengths and the step halves the plain curve's fit error. Otherwise the profile keeps the plain curve. The defaults 256 and 4096 belong to the first group for 16- and 512-token blocks.
+The prefill fit is `a*n*n + b*n + c` for `n` prompt tokens. When the engine exports its cache block size in `vllm:cache_config_info`, the fit adds `ttft_split` for a prompt that ends inside a cache block past the first. An engine that prefills such a prompt in two steps measures a positive `ttft_split`. One group holds lengths that end within the first block or on a block boundary. The other holds lengths that end between later block boundaries. The profile keeps `ttft_split` when the sweep has five lengths, each group has two, and the step halves the plain curve's fit error. Otherwise the profile keeps the plain curve. The defaults 256, 1024 and 4096 belong to the first group for 16- and 512-token blocks.
 
 ### Decode sweep
 
