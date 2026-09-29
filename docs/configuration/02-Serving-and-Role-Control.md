@@ -110,7 +110,7 @@ If every candidate violates its projected SLO, Narwhal records an unserved place
 
 ### Prefix-cache pricing
 
-For a request sized with exact token IDs, the router asks each engine's [residency view](../http-api/05-Live-State.md#residency) for the leading prompt blocks it can reuse. vLLM computes the final prompt token, so reuse covers the blocks before it. The request keeps the identities of its longest cached prefix, and each prefill placement rechecks them against the current views: a prefix evicted, cleared or lost to a sidecar resync after sizing is priced cold. On an engine that holds a cached prefix, the router prices the request's prefill with that engine's [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). Placement, predictive admission, resident work, pool load, offered demand and role-split scoring all use that price.
+For a request sized with exact token IDs, the router records each engine's cached leading prompt blocks from its [residency view](../http-api/05-Live-State.md#residency). The record stops at the block before the final prompt token. Each prefill placement rechecks those blocks against the current views. An engine that holds a cached prefix prices the request's prefill with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). Placement, predictive admission, resident work, pool load, offered demand and role-split scoring use that price.
 
 The router prices a request on the cold curve of its full input when:
 
@@ -118,9 +118,10 @@ The router prices a request on the cold curve of its full input when:
 - the request carries multimodal content;
 - the fleet config omits `engine_contract`;
 - the engine's residency is unknown;
+- the engine's current view drops the prefix before placement;
 - the engine's profile holds a cold fit only, or the case lies outside the warm fit's measured domain.
 
-Cache pricing sets each engine's prefill estimate, so it decides which engines meet the TTFT budget, their order and whether predictive admission accepts the request. Role pins, health holds, drains, ejection and capacity limits apply unchanged. The request journal records each placement priced with cache evidence in `cache_placement`.
+The prefill estimate decides which engines meet the TTFT budget, their order, and whether predictive admission accepts the request. Role pins, health holds, drains, ejection and capacity limits apply to every placement. The request journal records each placement priced with cache evidence in `cache_placement`.
 
 A live role change affects new placement immediately. Resident requests keep their current engine and reservation until completion or cancellation.
 
