@@ -61,7 +61,7 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | `cached_cv_mape`                               | number, optional  | Nonnegative leave-one-case-out warm prefill error.                                                                 |
 | `cached_min_prefix_tokens`, `cached_max_prefix_tokens`, `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured warm domain with `min <= max`. |
 
-The `cached_` fields are all set or all `null`. When they are `null`, a request with a cached prefix gets cold pricing for its full input. The same applies outside their measured domain.
+The `cached_` fields are all set or all `null`. A request with a cached prefix gets cold pricing for its full input when the `cached_` fields are `null` or the case lies outside their measured domain.
 
 Integer fields reject Boolean, string, and fractional JSON values such as:
 
