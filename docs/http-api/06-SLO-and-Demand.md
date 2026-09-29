@@ -2,7 +2,7 @@
 
 ## SLO attainment
 
-The `attainment` object contains:
+`attainment` reports SLO results per time bucket:
 
 ```text
 bucket_s
@@ -14,13 +14,17 @@ pruned_buckets
 pruned_outcomes
 ```
 
-Narwhal buckets completed, failed, expired, and predictively refused requests by `monitor_interval_s`, recording TTFT-met, TPOT-met, and total counts for each bucket. Pruning advances from the newest recorded bucket, retains four demand windows, and includes the full boundary bucket in window queries.
+Narwhal groups completed, failed, expired, and predictively refused requests into buckets of `monitor_interval_s`. Each bucket counts TTFT-met, TPOT-met, and total requests.
+
+Pruning starts from the newest bucket and keeps four demand windows. Window queries include the whole boundary bucket.
 
 `covered_s` reports the age of the oldest retained bucket, capped at the configured retention span.
 
 ---
 
 ## Demand accounting
+
+Demand history records the work offered to the role controller and the output it observed. One demand window is `controller.reactive.window_s` seconds long.
 
 ### Unsized offers
 
@@ -31,58 +35,27 @@ Narwhal buckets completed, failed, expired, and predictively refused requests by
 
 ### Input-size repricing
 
-Parsed offers enter demand history at a local input-size estimate. When tokenization finishes after admission, Narwhal replaces the estimate at the original arrival timestamp; requests rejected before tokenization keep the local estimate. If repricing moves the last observation defining a bucket boundary into another cohort, Narwhal invalidates that boundary evidence.
+Parsed offers enter demand history at a local input-size estimate. When tokenization finishes after admission, Narwhal replaces the estimate at the original arrival timestamp. Requests rejected before tokenization keep the local estimate. Repricing that removes the last observation defining a bucket boundary invalidates that boundary evidence.
 
 ### Bucketing and retention
 
-Each demand bucket stores:
+Each demand bucket stores at most 128 exact request shapes and one overflow cohort. Narwhal stores unsized offers as one shape per time bucket.
 
-- at most 128 exact request shapes
-- one overflow cohort
+Bucket width is the smallest of one second, the controller step, and the minimum evidence span. Arrival and residency data stay for one demand window. Completed output observations stay for four.
 
-Narwhal stores unsized offers as one shape per time bucket.
+Recording evidence prunes expired buckets whether or not the control loop runs.
 
-Bucket width is the minimum of:
-
-- one second
-- controller step
-- minimum evidence span
-
-Retention differs by evidence type:
-
-- arrival and residency data: one demand window
-- completed output observations: four demand windows
-
-Recording new evidence prunes expired buckets even when the control loop is stopped.
+`demand_history` and the `narwhal_demand_history_*` metrics expose the retained cells, cell limit, counted observations, and overflow observations.
 
 ### Overflow
 
 Overflow retains every request count and prices the cohort from its largest input length and requested output length.
 
-An overflow cohort with a zero requested output length marks decode demand incomplete.
-
-Overflow in output history disables learned discounts until the affected observations expire.
-
-A cohort crossing a window boundary contributes its complete count, adding at most one bucket of history.
-
-`demand_history` and the `narwhal_demand_history_*` metrics expose:
-
-- retained cells
-- cell limit
-- counted observations
-- overflow observations
+An overflow cohort whose requested output length is zero marks decode demand incomplete. Overflow in output history disables learned discounts until the affected observations expire. A cohort crossing a window boundary contributes its full count, which can add up to one bucket of history.
 
 ### Decision snapshots
 
-Every reactive controller decision snapshots the inputs required to score candidate splits:
-
-- profile coefficients
-- offered-work demand
-- observed phase pressure
-- pending output estimates
-- resident work in the old role
-
-Frozen profiles and value-only split inputs prevent later live-state changes from modifying an already computed score.
+Each reactive decision snapshots what it needs to score candidate splits: profile coefficients, demand, phase pressure, output estimates, and resident work. Scores use frozen profiles and copied values, so live state cannot change a score after it is computed.
 
 Output-length estimates and decode correction are built once and reused across both demand horizons.
 
@@ -98,33 +71,24 @@ recovery_prefill_ratio = max(
 )
 ```
 
-Otherwise, it uses observed prefill pressure.
+Without queued prefill, the ratio is the observed prefill pressure.
 
-Incomplete-demand decisions expose `recovery_prefill_ratio` and `queued_prefill_s`, along with both observed phase ratios.
+Incomplete-demand decisions expose both observed phase ratios, `recovery_prefill_ratio`, and `queued_prefill_s`.
 
-Their `decision_basis` is one of:
+The `decision_basis` of these decisions is one of:
 
 ```text
 prefill_pressure_recovery
 decode_pressure_recovery
 ```
 
-See [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control) for movement and confirmation gates.
+Source-pressure and movement-gate checks use full-precision demand. State and journal records store rounded values.
 
-The controller carries full-precision demand into source-pressure and movement-gate checks, then rounds the corresponding values when it writes state and journal records.
-
-Every move is constrained by:
-
-- role floors
-- live availability
-- cooldown
-- dwell
-- profile coverage
-- physical KV limits
+Role floors, cooldown, dwell, and KV limits all constrain a move. For movement and confirmation gates, see [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control).
 
 ### Consolidation evidence
 
-Consolidation evidence counts observations whose timestamps are known to fall after its cutoff.
+Consolidation evidence counts only observations timestamped after the cutoff.
 
 `demand_evidence` exposes:
 

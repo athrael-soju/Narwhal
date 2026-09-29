@@ -8,7 +8,7 @@ An engine URL points to the running vLLM HTTP service, for example:
 http://10.0.0.11:8000
 ```
 
-An engine URL may use an IP address directly when the router can reach that address and port.
+The engine URL can use the engine's IP address and port directly when the router can reach them.
 
 The attestation sidecar has a separate URL, for example:
 
@@ -16,7 +16,7 @@ The attestation sidecar has a separate URL, for example:
 http://10.0.0.11:8010/v1/attestation
 ```
 
-Use the ports actually configured by engine deployment.
+Use the ports your engine deployment configures.
 
 For generated deployment inputs, provide these values in `.env`:
 
@@ -26,15 +26,13 @@ NARWHAL_ENGINE_PORT
 NARWHAL_ATTEST_PORT
 ```
 
-Discovery reads the chosen interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `config/deployment.env`.
+Discovery reads the chosen interface on each engine host. It writes the interface's unique global address to `NARWHAL_NODE_<n>_IP` in `config/deployment.env`. The engine and attestation URLs come from that address, with brackets around IPv6 hosts.
 
-It derives engine and attestation URLs from that address and uses IPv6 host brackets where required.
+If the interface has multiple global addresses, set `NARWHAL_NODE_<n>_IP` explicitly so the value matches an address on the selected fabric interface.
 
-Set `NARWHAL_NODE_<n>_IP` explicitly when the interface has multiple global addresses.
+If an engine or attestation service must use another reachable address, set its full URL in `NARWHAL_NODE_<n>_URL` or `NARWHAL_NODE_<n>_ATTESTATION_URL`. Each URL must use `http` with an explicit port, and an attestation URL must end in `/v1/attestation`.
 
-Set a full engine or attestation URL when that service must use another reachable address.
-
-Changing a port also requires the matching per-node port override.
+If you change a service port, set the matching per-node port override, `NARWHAL_NODE_<n>_ENGINE_PORT` or `NARWHAL_NODE_<n>_ATTEST_PORT`, as well.
 
 The generated fleet uses those derived values:
 
@@ -47,43 +45,25 @@ The generated fleet uses those derived values:
 }
 ```
 
-Discovery adds one fleet record per engine.
+Discovery adds one fleet record per engine. The first engine gets the prefill role and the rest get decode. Discovery needs at least two engines with the same GPU and tensor parallel (TP) shape. `.env.example` shows a shared fabric interface and two engine blocks.
 
-`.env.example` shows the two-engine minimum and the shared fabric interface.
+The fleet schema accepts a single-engine fleet; see [Role floors](02-Serving-and-Role-Control.md#72-role-floors).
 
-Store site-specific fleet files under either ignored path:
+Store site-specific fleet files in a Git-ignored path, as listed in [Configuration provenance and publication](06-Fabric-and-Operations.md#20-configuration-provenance-and-publication).
 
-```text
-config/fleet.json
-config/fleet.*.json
-```
+After loading `.env`, pass `--fleet "$NARWHAL_FLEET"` to the profiling, preflight, and serving commands.
 
-After loading `.env`, invoke profiling, preflight, and serving with:
-
-```bash
---fleet "$NARWHAL_FLEET"
-```
-
-Observability resolves endpoint URLs using the same complete-value substitution rules.
+The monitoring stack's scrape-target generator, `tools/observability/make_targets.py`, resolves endpoint URLs with the same [whole-value substitution rules](01-Fleet-Schema.md#13-environment-loading).
 
 ---
 
 ## 15. Engine launch records
 
-`NARWHAL_LAUNCH_CONFIG` selects the private generated management-workstation file:
+`NARWHAL_LAUNCH_CONFIG` selects the discovery-generated launch-record file on the management workstation, which defaults to `config/engine-launch.local.json`.
 
-```text
-config/engine-launch.local.json
-```
+Discovery builds one launch record per assigned `engine-<n>` role from the detected GPUs, their device paths, the image package versions, and the launch policy chosen in `.env`.
 
-Discovery creates one launch record per assigned `engine-<n>` role from:
-
-- detected GPUs
-- device paths
-- image package versions
-- environment-selected launch policy
-
-Each record identifies its retained inspection and policy inputs under `sources`; `config/engine-launch.sources.json` indexes those references.
+Each record lists its inspection and policy inputs under `sources`. `config/engine-launch.sources.json` indexes them.
 
 The [launch-record example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents allocation, transport, and runtime fields.
 
@@ -104,19 +84,15 @@ To change GPU allocation or runtime policy, change the corresponding `.env` poli
 | `transfer.devices`     | Transport device paths mapped into the container. RDMA requires its character devices. TCP uses an empty list.                       |
 | `sources`              | Allocation, device, and transfer definitions that produced the record.                                                               |
 
-`prepare` validates every assigned engine record before it creates the output directory.
+`prepare` validates every assigned engine record before it creates the output directory. It derives GPU visibility and `UCX_NET_DEVICES` under `environment` and writes `--tensor-parallel-size` under `vllm_args`.
 
-It derives GPU visibility and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
+`install` copies the selected launch record into the engine checkout's `config/` directory, and the role environment points to that file.
 
-`install` copies the selected launch record into the engine checkout's `config/` directory. The role environment points to that file.
+The delivered launcher records the complete container command, combining the recorded arguments and device mappings with the runtime fields.
 
-The delivered launcher combines these recorded arguments and device mappings with runtime fields, then records the complete container command.
+Launch records and their supporting extracts use mode `0600` and live in Git-ignored files matching `config/engine-launch.*.json`.
 
-Launch records and their supporting extracts use mode `0600` and remain in Git-ignored files matching `config/engine-launch.*.json`.
-
-Keep real allocation and runtime evidence in private files.
-
-When preparation reports an invalid `.env` input or a missing remote prerequisite, correct the named input, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
+If preparation reports an invalid `.env` input or a missing remote prerequisite, fix it and prepare a new run. The manifest then records the corrected state.
 
 ---
 
@@ -124,65 +100,34 @@ When preparation reports an invalid `.env` input or a missing remote prerequisit
 
 Every generated engine record contains a `runtime` object consumed by `launch_engine.py`.
 
-Discovery reads:
-
-- package pins from the selected image
-- supported runtime-environment fields from that image
-- model dtype from model config
-- policy from [environment launch policy](../deploy/01-Discover.md#confirm-launch-policy)
+Discovery reads package pins and the supported runtime-environment fields from the selected image, the model dtype from the model config, and the policy from [environment launch policy](../deploy/01-Discover.md#confirm-the-launch-policy).
 
 Preparation transfers both the launch record and a launcher snapshot to the engine host.
 
-| Runtime field       | Operator input                                                                                                                                                                                                                                                                                                                                       |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `expected_packages` | Exact installed versions for `vllm` and `nixl` or `nixl-rocm`; add any image packages whose identity must be checked.                                                                                                                                                                                                                                |
-| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                                                                                                                                             |
-| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                                                                 |
-| `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                                                                                                                                              |
-| `environment`       | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                                                                         |
-| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. They can also turn prefix caching or cache-event publication off; see [section 16.1](#161-prefix-caching-and-cache-events). |
+| Runtime field       | Operator input                                                                                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expected_packages` | Exact installed versions for `vllm` and `nixl` or `nixl-rocm`. Add any image package whose identity `narwhal-engine check` must verify.                                                                                                                                                                 |
+| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                                                                                                |
+| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                    |
+| `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                                                                                                 |
+| `environment`       | Image-local ROCm or CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                         |
+| `extra_args`        | Model-specific vLLM arguments such as context and batching limits, memory utilization, the reasoning parser, and the attention backend. Others cover remote model code, language-only loading, eager execution, async scheduling, and hybrid-cache policy. For the cache opt-outs, see [Prefix caching and cache events](#161-prefix-caching-and-cache-events). |
 
-The launcher takes these values from the role environment:
-
-- model mount
-- served model name
-- bind family
-- HTTP port
-
-It applies the recorded TP size and configures `NixlConnector` with:
-
-- `kv_both`
-- UCX
-- failure propagation
-
-The launcher itself supplies:
-
-- GPU visibility
-- advertised addresses and ports
-- transport selection
-- engine authentication
-
-Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`.
-
-When model metadata identifies convolutional SSM transfer state, discovery sets:
-
-```text
-VLLM_SSM_CONV_STATE_LAYOUT=DS
-```
-
-The launcher retains these derived settings when `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` supplies additional values.
+The launcher takes the model mount, served model name, bind family, and HTTP port from the role environment, applies the recorded TP size, and configures `NixlConnector` with `kv_both`, UCX, and failure propagation. It supplies the GPU visibility, advertised addresses and ports, transport selection, and engine authentication itself.
 
 The launcher rejects `extra_args` that override launcher-managed settings.
 
-Before model startup, the image check:
+Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`. When the model metadata identifies convolutional state-space model (SSM) transfer state, discovery sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`. Both derived settings take precedence over any values supplied by `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV`.
 
-1. verifies `--trust-remote-code` against the mounted checkpoint,
-2. validates image identity,
-3. checks exact distribution versions,
-4. validates connector configuration and import,
-5. constructs the checkpoint tokenizer,
-6. checks the pinned image's convolutional-state layout for SSM models,
-7. resolves the serving arguments into vLLM's engine configuration.
+Before model startup, `narwhal-engine check`:
+
+- verifies `--trust-remote-code` against the mounted checkpoint
+- validates the image identity
+- checks the exact distribution versions
+- validates the connector configuration and import
+- constructs the checkpoint tokenizer
+- checks the pinned image's convolutional-state layout for SSM models
+- resolves the serving arguments into vLLM's engine configuration
 
 The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID.
 
@@ -193,15 +138,13 @@ It also records the cache settings that vLLM resolves for the model, as describe
 | `prefix_caching` | `true` when the resolved engine configuration keeps prefix caching on                        |
 | `kv_events`      | The resolved event and replay endpoints, or `null` when the engine publishes no cache events |
 
-The check fails when the resolved endpoints differ from `launch.json`. When vLLM resolves prefix caching off for the model, the engine caches no prefix blocks and publishes no block events. vLLM can also turn prefix caching off later, during model load, for some attention configurations.
+The check fails when the resolved endpoints differ from `launch.json`. If vLLM resolves prefix caching off for the model, the engine caches no prefix blocks and publishes no block events. For some attention configurations vLLM turns prefix caching off later, during model load.
 
-The HTTP probe compares `/version` with that captured value.
+The [live HTTP process check](../deploy/03-Validate-Engines.md#prove-the-live-http-process) compares the listening engine's `/version` response with that captured value.
 
-Use an image whose NIXL connector implements the fleet's required `kv_both` behaviour. Runtime transfer probes exercise both producer and consumer operations.
+The image's NIXL connector must implement the fleet's required `kv_both` behavior, because runtime transfer probes exercise both producer and consumer operations.
 
-Keep launch directories, environment files, and runtime captures under ignored `runs/`.
-
-Record the application revision, launcher digest, and container ID with the deployment.
+Launch directories, environment files, and runtime captures live under the ignored `runs/`. Record the application revision, launcher digest, and container ID with each deployment.
 
 ### 16.1 Prefix caching and cache events
 
@@ -214,7 +157,7 @@ While prefix caching stays on, the launcher configures vLLM to publish KV cache 
 | `events.sock` | Published event batches, each with a sequence number      |
 | `replay.sock` | Replay requests for batches still in vLLM's replay buffer |
 
-Preparation creates both directories with mode `0700` for the launching user. The check and each engine start recreate them after a host restart clears `/tmp`. They stop when either directory belongs to another user or grants group or other access. Container launches bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory; remove a container engine's directory after removing the container.
+Preparation creates both directories with mode `0700` for the launching user. A host restart clears `/tmp`, so the check and each engine start recreate them. They stop if either directory belongs to another user or grants group or other access. Containers bind-mount the plan directory at `/narwhal-kv-events`. The `kv_events` object in `launch.json` records the host directory and the endpoints vLLM binds. Stopping a native engine removes its directory. For a container engine, remove the directory after removing the container.
 
 To keep prefix caching on without publishing events, add vLLM's own event setting to `extra_args`:
 

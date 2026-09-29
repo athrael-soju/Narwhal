@@ -1,11 +1,11 @@
 # Install the Narwhal dev CUDA runtime
 
-Run these commands in an Ubuntu shell, either on native Ubuntu or Ubuntu under
-WSL2. The installed template uses Qwen3.5-0.8B GGUF and pins the Python
-runtime and GGUF loader. The wheel below targets Linux x86-64; the selected
-NVIDIA GPU and driver must support that CUDA runtime.
+Use an Ubuntu shell, either native or under WSL2. The template installs
+Qwen3.5-0.8B GGUF and pins the Python runtime and the GGUF plugin. The plugin
+wheel targets Linux x86-64, so you need an NVIDIA GPU and driver that support
+the CUDA runtime of the pinned packages.
 
-From a Narwhal checkout on the Linux filesystem:
+Install Narwhal and the pinned packages from a checkout on the Linux filesystem:
 
 ```bash
 python3.12 -m venv .venv-dev
@@ -17,8 +17,8 @@ python -m pip install \
   'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
 ```
 
-Apply the pinned GGUF loader sources over the wheel's Python files while
-keeping its CUDA extension:
+Overwrite the wheel's Python files with the pinned GGUF plugin sources. The CUDA
+extension stays:
 
 ```bash
 mkdir -p runs
@@ -38,9 +38,9 @@ for path in source.rglob('*.py'):
 PY
 ```
 
-`narwhal dev init` checks the installed versions and plugin hashes against
-the selected template. Reapply the pinned sources after reinstalling the
-plugin wheel.
+`narwhal dev init` compares installed package versions and plugin hashes with
+the selected template, so reapply the pinned sources after every plugin wheel
+reinstall.
 
 Download the model and tokenizer into the Hugging Face cache:
 
@@ -53,6 +53,6 @@ hf download Qwen/Qwen3.5-0.8B \
   --include '*.json' '*.txt' '*.jinja'
 ```
 
-The template resolves those revisions in the default cache. For another
-cache location, pass the GGUF file with `--model` and the tokenizer directory
-with `--model-dir` when initializing the instance.
+By default the template looks for these revisions in the standard Hugging Face
+cache. If your cache is elsewhere, run `narwhal dev init` with `--model` set to
+the GGUF file and `--model-dir` set to the tokenizer directory.

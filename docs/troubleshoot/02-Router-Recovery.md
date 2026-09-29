@@ -4,67 +4,25 @@
 
 ### Primary router failed
 
-Query `/ready` and `/narwhal/lifecycle` on both routers, then direct load-balancer traffic to the single lease holder reporting `router.controls_fleet: true` when its `/ready` returns HTTP 200.
+Query `/ready` and `/narwhal/lifecycle` on both routers, then identify the lease holder, whose `/narwhal/lifecycle` reports `router.controls_fleet: true`. Send load-balancer traffic to that router once its `/ready` returns HTTP 200.
 
-Check the active router against the last persisted handoff:
+Check the active router against the last persisted state handoff. Its lease epoch should be higher than the failed primary's last epoch, and its roles and cumulative counters should match the handoff.
 
-- its lease epoch exceeds the failed primary's last epoch;
-- its roles match the last handoff;
-- its cumulative counters match the last handoff.
+Restart the old primary by adding `--standby-of <active-router>` to its launch command, substituting the active router's URL for the placeholder. The recovered process returns HTTP 503 from `/ready`. It refuses direct completion requests.
 
-Restart the old primary as a standby:
+When both routers report HTTP 503 from `/ready`, read the refusal reasons and fix what they name. For lease storage or clock-bound refusals, repair without changing the lease holder or fencing.
 
-```text
---standby-of <active-router>
-```
+### State handoff is stale or incompatible
 
-The recovered process should return HTTP 503 from `/ready` and reject a direct completion request.
+| Cause | Standby `/ready` |
+| --- | --- |
+| The previous lease epoch's state handoff expired, or the previous router exited before persisting one | HTTP 503, reason `no fresh handoff` |
+| Contract version mismatch or wrong epoch in the state handoff | HTTP 503 |
 
-If both routers return HTTP 503, use their refusal reasons to determine the next repair. Lease-storage and clock-bound failures must be repaired while preserving lease ownership and fencing so recovery converges on one active primary.
-
-### Handoff is stale or incompatible
-
-A standby reports `no fresh handoff` when the previous lease epoch's handoff has expired or the previous router exited before persisting one.
-
-The router also keeps `/ready` at HTTP 503 when the handoff has an incompatible contract version or incorrect epoch.
-
-Keep client traffic stopped while restoring a compatible router release and state set.
-
-When handoff recovery fails, start one router from its configured opening roles during a maintenance window.
-
-Before admitting traffic, verify that the previous router process is stopped or fenced.
+Keep client traffic stopped while you restore a compatible router release and the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set). If the handoff cannot be restored, open a maintenance window and set `recovery.resume: false` in the fleet configuration. Start one router from its opening roles by dropping `--resume` and `--standby-of` from the launch command. Admit traffic only after the old router has stopped or fenced itself.
 
 ## Router rollback
 
-Remove the target router from the load balancer.
+Follow [Roll back](../operate/04-Upgrade-and-Validate.md#103-roll-back).
 
-Stop it cleanly where possible so it persists a complete handoff.
-
-Inspect the rollback build's contract support:
-
-```bash
-narwhal-check --print-contract-versions
-```
-
-Restore configuration, profiles, and a handoff version that the rollback build can read.
-
-For a rollback that starts from configured opening roles and resets cumulative counters, configure:
-
-```yaml
-recovery:
-  resume: false
-```
-
-Before serving traffic, verify that fleet control belongs either to the rollback router or to its fenced HA peer.
-
-Start the rollback build and check:
-
-- health;
-- readiness;
-- roles;
-- cumulative counters;
-- one completion request.
-
-Return it to service after those checks pass. Restore its standby after the active router is stable.
-
-Run the [post-recovery drills](../Troubleshoot.md#after-recovery) after the router returns to service.
+When the router returns to service, run the drills in [Validate every release](../operate/04-Upgrade-and-Validate.md#11-validate-every-release).

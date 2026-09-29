@@ -6,38 +6,38 @@ Site automation provisions GPU hosts and engine processes; Narwhal admits reques
 
 | Component         | Responsibility                                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Public ingress    | TLS, client authentication, WAF policy, body limits, public rate limits, model routing, and streaming proxy settings |
-| Load balancer     | Poll `/ready` and route traffic to the router returning HTTP 200                                                     |
-| Narwhal           | Admission, queueing, prefill and decode placement, retry, health ejection, role control, drain, and readmission      |
-| Engine supervisor | Engine and attestation-sidecar start/stop, resource limits, restart policy, and log retention                        |
-| Shared storage    | Provide one coherent lease domain to both router hosts                                                               |
-| Monitoring        | Scrape metrics, retain journals, and page according to site policy                                                   |
+| Public ingress    | TLS, client authentication, rate limits, model routing, streaming proxy settings |
+| Load balancer     | Polls `/ready` and routes to the router that returns HTTP 200 |
+| Narwhal           | Admission, queueing, prefill and decode placement, retry, health ejection, role control, drain, readmission |
+| Engine supervisor | Starts and stops engines and attestation sidecars; sets resource limits, restart policy, log retention |
+| Shared storage    | One lease domain shared by both router hosts                                                                  |
+| Monitoring        | Metric scraping, journal retention, and paging per site policy                                                       |
 
 ## 2. Keep one deployment set
 
-A router pair must run one coherent deployment set under one release identifier:
+Give both routers the same release identifier and these five items:
 
 - the Narwhal release;
 - the fleet configuration;
 - the profile store;
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set;
-- the corresponding [deployment evidence set](../measure/03-Load-Trial.md#7-run-the-synthetic-deployment-trial).
+- the corresponding [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
 
-Install that set on both router hosts. The configured calibration path must be readable from each router's working directory. A missing artifact or an engine-generation mismatch stops startup; after replacing an engine, [recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and distribute the new artifact and fleet configuration before restarting the routers.
+Install that set on both router hosts. The configured calibration path must be readable from each router's working directory.
 
-Before replacing or upgrading either router, inspect the installed build's handoff contracts:
+The router needs a calibration artifact whose process generation matches the live engine. After an engine replacement, [recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and distribute the new artifact and fleet configuration before restarting the routers.
+
+Inspect state handoff contracts before a router change:
 
 ```bash
 narwhal-check --print-contract-versions
 ```
 
-Both routers must implement compatible handoff contracts for a rolling transition. A handoff-version mismatch requires the maintenance procedure in [Upgrade and rollback](04-Upgrade-and-Validate.md#10-upgrade-and-rollback).
+Rolling transitions need matching handoff contract versions on both routers. If they differ, follow [Upgrade across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrade-across-a-handoff-version-change).
 
 ## 3. Configure the client path
 
-Expose the completion routes required by clients.
-
-Keep these interfaces on the private network:
+Expose only the completion routes clients use. Keep these interfaces on the private network:
 
 - `/narwhal/*`
 - `/metrics`
@@ -46,30 +46,26 @@ Keep these interfaces on the private network:
 - `/health`
 - `/ready`
 
-Ingress performs:
+Ingress must remove client-supplied internal credentials and request IDs and insert trusted replacements. It also authenticates clients, applies identity policy and rate limits, and routes each model to its router pair. It forwards streaming chunks as they arrive and enforces connect and idle timeouts derived from the service budget.
 
-- client authentication and public rate limiting;
-- model-to-router-pair routing;
-- streaming chunk forwarding as chunks arrive;
-- connect and idle timeout enforcement derived from the service budget;
-- removal of client-supplied internal credentials and request IDs before trusted replacements are inserted.
-
-Ingress terminates client credentials and applies identity policy. Narwhal propagates the trusted request ID for correlation.
-
-Each engine leg receives:
+Narwhal propagates the trusted request ID. Each engine leg receives:
 
 - its own attempt-specific and phase-specific request ID;
 - the engine credential identified by `engine.engine_api_key_env`.
 
-The load balancer routes against `/ready`. HTTP status on that endpoint represents admission ownership, backend availability, and lifecycle state.
+The load balancer routes by `/ready` status, which reports the admitting router, backend availability, and lifecycle state.
 
 ## 4. Start a router pair
 
-Run the final preflight against the deployment set before either router begins serving production traffic.
+Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set, then start both routers from it.
 
-Start both routers from the same [deployment set](#2-keep-one-deployment-set).
+The shared lease path needs POSIX `flock`, coherent reads, and atomic rename.
 
-Start the first router:
+Keep host clock offset below `--lease-safety-margin`.
+
+Set `--lease-ttl` above the sum of `--lease-renew-interval` and `--lease-safety-margin`; `narwhal-serve` rejects anything lower.
+
+Start the first router on its host, using its private listen address for `--host`:
 
 ```bash
 narwhal-serve \
@@ -79,7 +75,7 @@ narwhal-serve \
   --lease-path /shared/narwhal/router.lease
 ```
 
-Start its peer:
+Start the standby on the second host:
 
 ```bash
 narwhal-serve \
@@ -90,33 +86,16 @@ narwhal-serve \
   --standby-of http://router-a:8000
 ```
 
-The router hosts require one shared lease domain with:
+When the active router's `/ready` returns HTTP 200, send the deployment workload through the intended ingress path before opening client admission.
 
-- POSIX `flock`;
-- coherent reads;
-- atomic rename.
+The shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg) is the load balancer reference.
 
-Keep host clock offset below `--lease-safety-margin`.
+### Lease behavior
 
-Set the lease TTL above:
-
-```text
-renewal interval + lease safety margin
-```
-
-Once the active router reports ready, send the deployment workload through the intended ingress path before opening client admission.
-
-The shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg) is the reference load-balancer configuration.
-
-### Lease behaviour
-
-A router returns HTTP 200 from `/ready` while it owns a valid lease and admits traffic.
-
-During a partition, the active lease holder fences itself before its local lease deadline. The standby may claim the lease after expiry.
-
-Loss of shared storage causes both routers to withdraw readiness.
-
-Shutdown preserves role-dependent handoff state:
-
-- a standby or fenced router retains its saved primary handoff;
-- an active lease holder persists its latest counters before releasing control.
+| Condition | Behavior |
+| --- | --- |
+| A router holds a valid lease and admits traffic | `/ready` returns HTTP 200. |
+| The network partitions | The active lease holder fences itself before its local lease deadline. The standby claims the lease after it expires. |
+| Shared storage becomes unavailable | Both routers withdraw readiness. |
+| A standby or fenced router shuts down | It retains its saved primary state handoff. |
+| The active lease holder shuts down | It persists its latest counters before releasing control. |

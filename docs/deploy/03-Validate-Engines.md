@@ -1,8 +1,10 @@
 # Gate C: Validate and start every engine
 
+Gate C checks the accelerators, devices, and listeners on each engine host and starts every engine from its checked launch plan. It proves each live HTTP endpoint and captures each engine's cache layout for Gate D.
+
 ## Inspect every engine host
 
-Run host inspection concurrently in installed engine-role shells. `NARWHAL_ENGINE_LAUNCH_CONFIG` points to the transferred role-specific launch record.
+Run the host inspection on every engine host in its installed engine-role shell, where `NARWHAL_ENGINE_LAUNCH_CONFIG` points at the transferred role-specific launch record.
 
 Print the allocation and launch policy:
 
@@ -18,9 +20,9 @@ for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
 PY_LAUNCH
 ```
 
-Retain this output. The `sources` object identifies the records used to derive allocation and device configuration.
+Retain this output. The `sources` object in the launch record identifies the records used to derive the allocation and device configuration.
 
-Read physical accelerator identity and count:
+Read the physical accelerator identity and count:
 
 ```bash
 (
@@ -50,11 +52,11 @@ Read physical accelerator identity and count:
 )
 ```
 
-Record accelerator product and visible physical GPU count. On ROCm, count agents with `Device Type` set to `GPU` and use `Marketing Name` for the product.
+Record the accelerator product and the visible physical GPU count. On ROCm, count the agents with `Device Type` set to `GPU` and use the `Marketing Name` for the product.
 
-On the router, compare observations with `hardware.accelerator` in `runs/deployment/fleet.json`. For each replica, set `hardware.accelerators_per_engine` to the number of `gpu_ids`, set `hardware.tensor_parallel` to `tensor_parallel_size`, and confirm every selected index or UUID is visible. Physical GPU count describes available hardware; replica allocation defines the TP shape Narwhal actually uses.
+In the router shell, check the `hardware` fields in `runs/deployment/fleet.json` against what you observed on the hosts. `hardware.accelerator` must match the accelerator product you found, `hardware.accelerators_per_engine` must equal the number of `gpu_ids` in each replica's launch record, and `hardware.tensor_parallel` must equal each replica's `tensor_parallel_size`. Every selected index or UUID must be visible on its engine host. The replica allocation defines the tensor parallel (TP) shape Narwhal uses.
 
-Before launching an engine, verify local artifacts and planned listeners:
+Verify the local artifacts and planned listeners before launch:
 
 ```bash
 test "$(docker image inspect "$NARWHAL_ENGINE_IMAGE" --format '{{.Id}}')" = "$NARWHAL_ENGINE_IMAGE"
@@ -64,7 +66,7 @@ ip address show dev "$NARWHAL_FABRIC_INTERFACE"
 ss -ltnp
 ```
 
-For a registry digest in `NARWHAL_ENGINE_IMAGE`, compare the runtime's resolved digest with the configured digest before launch.
+A passing `test` command exits with status 0 and no output. Free any planned HTTP, attestation, NIXL side-channel, or transfer port that `ss -ltnp` shows in use. When `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest against the configured one before launch.
 
 The private discovery record binds the checkpoint to its complete manifest and matched tree digest. Rerun discovery after changing the provisioned checkpoint.
 
@@ -85,7 +87,7 @@ if missing:
 PY_DEVICES
 ```
 
-ROCm containers require `/dev/kfd` plus the selected DRI devices. Mapping `/dev/dri` exposes all DRI devices on the host, so verify ownership and container-user permissions. Any existing listener on planned HTTP, attestation, NIXL side-channel, or transfer ports blocks launch until ownership is resolved.
+ROCm containers require `/dev/kfd` plus the selected DRI devices. Mapping `/dev/dri` exposes every DRI device on the host. Verify the device files' user, group, and container-user permissions.
 
 ## Derive cache-equivalence groups
 
@@ -119,19 +121,19 @@ for signature, roles in sorted(groups.items()):
 PY_CACHE_GROUPS
 ```
 
-The signature groups engines by image ID, model-config hash, accelerator product, TP size, GPU visibility policy, runtime packages, cache policy, model arguments, image environment, and transport. Start every engine and capture its cache layout; Gate D uses one representative layout per matching group to calculate the fabric budget. GPU indices, addresses, and device paths can differ when accelerator product and TP shape match.
+The signature groups engines by image ID, model-config hash, accelerator product, TP size, GPU visibility policy, runtime packages, cache policy, model arguments, image environment, and transport. Gate D calculates the fabric budget from one representative cache layout per group. Start every engine and capture its live cache layout. Engines in the same group may use different GPU indices, addresses, and device paths when their accelerator product and TP shape match.
 
 ## Prepare, check, and start each engine
 
-The launcher runs:
+The launcher runs `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`. It mounts `NARWHAL_MODEL_DIR` read-only at `/model` and exposes the configured devices with the selected TP allocation. It applies the `NixlConnector` policy with `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`. The side-channel address and port come from the role environment. The transport is TCP or RDMA through `UCX_TLS`. Prefix caching stays on by default, and `runtime.extra_args` can turn it off. While caching is on, vLLM publishes cache events over private IPC sockets under `/tmp/narwhal-<uid>/`. The [prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) section lists the opt-out settings.
 
-```text
-python3 -m vllm.entrypoints.openai.api_server
-```
+For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args` before you prepare the launch plans. Discovery writes `runtime.extra_args` from `NARWHAL_ENGINE_ARGS` ([Gate A](01-Discover.md#confirm-the-launch-policy)).
 
-inside `NARWHAL_ENGINE_IMAGE`, mounting `NARWHAL_MODEL_DIR` read-only at `/model`, exposing configured devices, and applying the selected TP allocation.
+If you add the flag after launch, derive the cache-equivalence groups again, prepare a fresh launch directory, restart each engine, and repeat at least the engine-restart work in the [repeat-work table](../Deploy.md#deployment-sequence).
 
-In every engine-role shell, using disjoint GPU allocations for concurrent launches:
+For a separate tokenizer, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before you prepare the launch plan, replacing `PATH` with the tokenizer path. If you change the image, model, dtype, cache policy, TP allocation, or model arguments, derive the groups and capture the live cache layout again. If you change the workload assumptions, recalculate the fabric budget.
+
+In every engine-role shell, prepare the launch plan:
 
 ```bash
 umask 077
@@ -142,11 +144,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
 python3 -m json.tool "$ENGINE_RUN/launch.json"
 ```
 
-Inspect `launch.json` for the immutable image, complete serving command, mounts, device mappings, endpoint, application revision, and source hashes. Keep `container.env` private because it can contain the engine API key.
-
-The generated connector policy uses `NixlConnector`, `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`. The launcher derives advertised side-channel address and port from the role environment and configures TCP or RDMA via `UCX_TLS`. It keeps vLLM's prefix caching on unless `runtime.extra_args` turns it off. While caching stays on, vLLM publishes cache events over private IPC sockets under `/tmp/narwhal-<uid>/`. See [prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) for the opt-out settings.
-
-Changing image, model, dtype, cache policy, TP allocation, or model arguments requires regrouping and a new serving-layout capture. Changing workload assumptions requires a recalculated fabric budget.
+The launcher prints `Prepared <role>; review launch.json and run the image check.` Inspect `launch.json` for the immutable image, the complete serving command, the mounts, device mappings, endpoint, application revision, and source hashes. Keep `container.env` private because it can contain the engine API key.
 
 Validate the image and plan:
 
@@ -154,15 +152,13 @@ Validate the image and plan:
 python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 ```
 
-The check verifies custom-code requirements, immutable image identity, pinned package versions in a temporary container, connector resolution through `KVConnectorFactory`, tokenizer construction with the plan's `--trust-remote-code` setting, DS convolutional-state layout when required, the plan hash, and `vllm.version.__version__` as `vllm_api_version`. The temporary container exits after inspection.
+With prefix caching off, a passing check confirms the runtime identity, package pins, connector import, and tokenizer, and shows that the engine publishes no cache events. The check also verifies the custom-code requirements, the immutable image identity, and the pinned package versions in a temporary container. It resolves the connector through `KVConnectorFactory` and constructs the tokenizer with the plan's `--trust-remote-code` setting. It confirms the DS convolutional-state layout when required and the plan hash, and records `vllm.version.__version__` as `vllm_api_version`. The temporary container exits after inspection.
 
-`narwhal-engine check --run "$ENGINE_RUN"` appends each inspection's unique identifier, launch-plan hash and subprocess output to `image-check.log` for containers or `runtime-check.log` for native engines, preserving the original `checked.json` when repeated checks succeed. A changed launch-plan hash requires a fresh prepared run; runtime failures report the failing package, tokenizer or identity check while retaining earlier output.
+Each check appends its unique attempt identifier, the launch-plan hash, and the subprocess output to `image-check.log` for containers or `runtime-check.log` for native engines. A repeated pass keeps the first `checked.json`, and a failure reports the failing package, tokenizer, or identity check while retaining the earlier output. If the launch-plan hash changes, prepare a fresh launch directory.
 
-Set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` when the tokenizer lives separately from the model configuration. The check loads the final `--tokenizer` selection from the serving arguments and inspects its custom-code metadata in the selected runtime. Native paths resolve on the host; container paths resolve inside the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. The default tokenizer remains the model directory. A tokenizer load failure stops the check before it writes `checked.json`.
+The tokenizer check loads the final `--tokenizer` selection from the serving arguments, defaulting to the model directory, and inspects its custom-code metadata in the selected runtime. Native paths resolve on the host, and container paths resolve inside the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. If the launcher itself changes, prepare a new deployment run in [Gate B](02-Install.md) so the deployed snapshot and digest match the management checkout.
 
-A changed launcher requires a new prepared run so deployed snapshot and digest match the management checkout.
-
-Before start, inspect planned ports with `ss -ltnp`, then:
+Engines with disjoint GPU allocations can start concurrently. Recheck the planned ports with `ss -ltnp`, then start each engine and follow its log:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" start --run "$ENGINE_RUN"
@@ -170,16 +166,16 @@ export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
 docker logs --follow "$ENGINE_CONTAINER"
 ```
 
-Ctrl-C stops the log follower and leaves the serving container running. If startup fails:
+The launcher reports that the container has started. Watch the logs until the HTTP endpoints come up. Ctrl+C stops the log follower, and the serving container keeps running. If startup fails, inspect the container named by `container.id`:
 
 ```bash
 docker inspect "$ENGINE_CONTAINER"
 docker logs "$ENGINE_CONTAINER"
 ```
 
-Use the recorded container ID. Trace the failure to a device, model, memory, library, or transport input before creating another plan.
+Find the cause of the failure before creating another plan.
 
-If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`:
+If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, work through the recovery in this order:
 
 1. Retain the failed attempt's evidence.
 2. Rerun discovery from the corrected approved revision into fresh outputs.
@@ -187,11 +183,15 @@ If vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT
 4. Install engine 1 into the new checkout.
 5. Validate engine 1 before updating the rest.
 
-Compare old and new image IDs, model-config hashes, accelerator/TP allocations, runtime settings, and transport. A change to hardware, model, image, cache policy, route, or transport invalidates evidence for that gate.
+Then compare the old and new image IDs and model-config hashes, and the old and new accelerator and TP allocations, runtime settings, and transport.
+
+### Docker command deadlines
+
+The engine deployment wrapper bounds each Docker client with the stage budgets, labels the containers it creates with a persisted launch token, and reconciles the daemon resources after a timeout or cancellation. The variables defined in [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery) and [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation) set the execution and cleanup periods. Before you reuse a failed deployment, inspect the retained partial output and follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery).
 
 ## Prove the live HTTP process
 
-Once vLLM listens, run from the same role shell:
+Wait for the engine's `/health` endpoint to return HTTP 200, then run the probe from the same engine-role shell:
 
 ```bash
 python3 - <<'PY_ENGINE'
@@ -235,13 +235,13 @@ print("Engine health, version, model, process identity and completion passed.")
 PY_ENGINE
 ```
 
-The probe binds the running endpoint to the checked image by verifying `/health`, exact `/version`, configured model, `process_start_time_seconds`, and one deterministic completion.
+The probe binds the running endpoint to the checked image by verifying `/health`, the exact `/version`, the configured model, `process_start_time_seconds`, and one deterministic completion. If it reports a different API version, compare the container that serves the endpoint with the recorded image and container ID. The probe writes each response capture once. After a repair, rerun it with new filenames or in a new launch directory.
 
-If the API version differs, first check which container owns the endpoint. Compare it with the recorded image and container ID. Response captures are immutable, so use new filenames or a new launch directory after repair.
+Leave each serving container running through the workload trial. Keep the engines free of other traffic during fabric qualification and profiling so the measurements reflect these processes at idle load.
 
-Leave each serving container running through the workload trial. During fabric qualification and profiling, reserve the engines for the probes so the measurements reflect these processes at idle load.
+## Capture the live cache layout
 
-## Capture actual cache geometry
+In each engine-role shell, capture the cache layout:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" capture-cache --run "$ENGINE_RUN"
@@ -251,14 +251,6 @@ export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 ```
 
-`capture-cache` checks container identity, image, source and plan hashes, and every TP rank before writing `cache-layout.json` from the live process. Compare resolved layout and page geometry within each signature group; a differing layout or page geometry gets its own Gate D budget.
+`capture-cache` verifies the container identity, the image, source and plan hashes, and every TP rank, then writes `cache-layout.json` from the live process. Compare the resolved layouts and page geometry within each signature group. An engine whose layout or page geometry differs gets its own Gate D budget.
 
 Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Qualify-Fabric.md).
-
-### Docker command deadlines
-
-The engine wrapper bounds Docker clients, labels created containers with a
-persisted launch token and reconciles daemon resources after timeout or
-cancellation. Configure execution and cleanup periods, inspect retained partial
-output and follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery)
-before reusing a failed deployment.

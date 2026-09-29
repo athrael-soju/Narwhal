@@ -1,8 +1,8 @@
 # Benchmark evidence bundle
 
-Run the [ordered benchmark runner](05-Benchmark-Runner.md) on a host that can read the router's append-only JSONL request journal and reach the router and every engine metrics endpoint. The journal path must be the same file used by `narwhal-serve --journal`. The journal may contain historical rows. The collector records byte offsets before the client starts and after the final drain, then writes only rows from that interval to the point's `journal-rows.json`.
+Each point gets its own evidence collector, started from the `evidence` object in the plan. Run the [ordered benchmark runner](05-Benchmark-Runner.md) on a host that can read the router's append-only JSONL request journal as a local file. The host also needs to reach the router and every engine metrics endpoint. Point `journal_path` at the file `narwhal-serve --journal` writes. Older rows in that file are fine. The collector records byte offsets before the client starts and after the final drain. Only the rows between them go to the point's `journal-rows.json`.
 
-Add `evidence` to the benchmark plan:
+Put `evidence` at the top level of the plan, next to `schema` and `points`:
 
 ```json
 {
@@ -28,9 +28,9 @@ Add `evidence` to the benchmark plan:
 }
 ```
 
-This object belongs at the plan's top level, alongside `schema` and `points`. The metrics URLs in the example must be replaced with addresses reachable from the runner host. Keep the plan and entire `runs/` directory private.
+Replace the example metrics URLs with addresses the runner host can reach. You declare the identity fields yourself, so check them against the deployment and preflight records before you accept a GPU result. The plan and everything under `runs/` stay private.
 
-The collector computes SHA-256 digests of the fleet and profiles before each point and reports if either file changes during the point. It also hashes retained client records, warmup, and summary files when present. The identity fields are operator-declared; compare them with the deployment and preflight records before accepting a GPU result. The router state exposes `journal_run` so metrics samples can be grouped by process even across restart or standby takeover.
+Before each point the collector takes SHA-256 digests of the fleet file and profiles, and reports a change during the point. It hashes the retained client records, warmup and summary files too. `journal_run` in the router state lets it group metrics samples by process, including across a restart or standby takeover.
 
 For each point, the runner writes these files under `runs/<run>/<point>/`:
 
@@ -40,15 +40,15 @@ For each point, the runner writes these files under `runs/<run>/<point>/`:
 | `evidence.json` | Journal cursors, identity, file digests, counts by terminal class and process run, counter deltas, role timeline, and diagnostics |
 | `samples.json` | Timestamped router state, router `/metrics`, engine metrics, and scrape errors from the load and drain interval |
 | `journal-rows.json` | All JSONL rows between the two byte offsets, including terminal rows, process metadata, and events |
-| `client/requests.jsonl`, `client/warmup.json`, `client/summary.json` | Raw client files when the client writes inside the point directory; `evidence.json` names retained files and hashes them |
+| `client/requests.jsonl`, `client/warmup.json`, `client/summary.json` | Raw client files when the client writes inside the point directory; `evidence.json` names the retained files and records their hashes |
 | `client-*.snapshot.*` | Exact private copies when the configured client files live outside the point directory |
 | `client.stdout`, `client.stderr` | Exact external client output |
-| `summary.shareable.json` | Selected counts, latency and throughput if the client wrote `summary.json`, anonymised role history, configuration digests, and evidence gaps |
+| `summary.shareable.json` | Selected counts, latency and throughput when the client wrote `summary.json`, anonymized role history, configuration digests, and evidence gaps |
 
-The shareable summary repeats selected metrics because it is a redacted publication artifact. It omits URLs, credentials, private file paths, engine IDs, request failure text, and the raw engine image reference. Inspect it before publishing in case an operator-supplied model or revision label itself contains sensitive data. Keep the other files private.
+The shareable summary is a redacted copy meant for publication. It leaves out URLs, credentials, private file paths, engine IDs, request failure text and the raw engine image reference. Read it before you publish, because a model or revision label you supplied could carry sensitive data. Every other file stays private.
 
-The collector joins client offers to journal terminals on `client_rid` when both sides supply IDs, falling back to sent-client and terminal-journal totals otherwise; it compares completed totals separately. For each `journal_run`, it compares terminal classes with router counter deltas calculated from that process's baseline and final sample. `narwhal_offered_total`, `narwhal_expired_total`, and `narwhal_invalid_requests_total` reset at process start, while served, failed, refused, rejected, and cancelled counters may be restored. A process change with an incomplete sample pair produces a counter diagnostic.
+The collector joins client offers to journal terminals on `client_rid` when both sides supply IDs. Without IDs it compares sent-client and terminal-journal totals. Completed totals get their own comparison. For each `journal_run`, it compares terminal classes with router counter deltas calculated from that process's baseline and final sample. The counters `narwhal_offered_total`, `narwhal_expired_total`, and `narwhal_invalid_requests_total` reset at process start. The served, failed, refused, rejected, and cancelled counters may be restored. A process change without a full sample pair raises a counter diagnostic.
 
-The timeline begins with observed role pools and adds newly observed flip records. The collector compares newly observed flips with `narwhal_flips_total` and flags a `role_history_gap` when bounded state history has lost a change. It flags scrape errors and intervals exceeding 2.5 times the declared sample cadence. These diagnostics name the point and, for scrape intervals, the affected time window.
+The role timeline begins with the observed role pools and adds the newly observed flip records. The collector compares those flips with `narwhal_flips_total` and flags a `role_history_gap` when bounded state history has lost a change. It also flags scrape errors and any interval longer than 2.5 times the declared sample cadence. Each diagnostic names its point. Scrape-interval diagnostics also give the time window.
 
-For a mismatch, inspect `evidence.json`, then the bounded `journal-rows.json`, the client files named by `retained_client_files`, and raw `samples.json`. The unscored warmup remains in its own client file. Check whether unrelated clients used the router, a process restarted, a scrape failed, or the client omitted outcomes. Retain the failed bundle. Repair the cause and run a fresh point; a gap cannot be filled by editing the summary.
+For a mismatch, inspect `evidence.json`, then the bounded `journal-rows.json`, the client files named by `retained_client_files`, and the raw `samples.json`. The unscored warmup remains in its own client file. Check whether unrelated clients used the router, a process restarted, a scrape failed, or the client omitted outcomes. Keep the failed bundle, fix the cause, and run the point again. Editing the summary does not close a gap.

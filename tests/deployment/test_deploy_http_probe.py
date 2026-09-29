@@ -4,7 +4,9 @@ import contextlib
 import hashlib
 import io
 import json
+import re
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -15,11 +17,18 @@ import httpx
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 
 
+def heredoc(guide: str, marker: str) -> str:
+    """Return a documented heredoc body, including one indented inside a list step."""
+    body = re.search(rf"<<'{marker}'\n(.*?)\n[ \t]*{marker}\n", guide, re.S)
+    assert body is not None, marker
+    return textwrap.dedent(body.group(1))
+
+
 class DeploymentHTTPProbeTests(unittest.TestCase):
     def test_attestation_capture_checks_live_identity_and_retains_failure(self):
         root = Path(__file__).resolve().parents[2]
         guide = (root / "docs/deploy/05-Attest.md").read_text()
-        script = guide.split("<<'PY_ATTEST_CHECK'\n", 1)[1].split("\nPY_ATTEST_CHECK", 1)[0]
+        script = heredoc(guide, "PY_ATTEST_CHECK")
         document_path = root / "config/engine-attestation.example.json"
         document = AttestationDocument.load(document_path)
         live = EngineIdentity(document.contract.vllm_version, 200.0)
@@ -88,7 +97,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
 
     def test_transfer_mode_capture_uses_resolved_class_and_preserves_evidence(self):
         guide = (Path(__file__).resolve().parents[2] / "docs/deploy/05-Attest.md").read_text()
-        script = guide.split("<<'PY_TRANSFER_MODE'\n", 1)[1].split("\nPY_TRANSFER_MODE", 1)[0]
+        script = heredoc(guide, "PY_TRANSFER_MODE")
         cases = (
             (["NixlPullConnector"], "pull"),
             (["NixlPushConnector"], "push"),
@@ -211,7 +220,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
         guide = (
             Path(__file__).resolve().parents[2] / "docs/deploy/03-Validate-Engines.md"
         ).read_text()
-        script = guide.split("python3 - <<'PY_ENGINE'\n", 1)[1].split("\nPY_ENGINE", 1)[0]
+        script = heredoc(guide, "PY_ENGINE")
         for api_version in ("0.29.0", "0.29.1", "0.29.0+other"):
             with self.subTest(api_version=api_version), tempfile.TemporaryDirectory() as folder:
                 run = Path(folder)

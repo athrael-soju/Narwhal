@@ -2,9 +2,20 @@
 
 ## 7. Run the synthetic deployment trial
 
-Through the [private tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) from the management workstation, send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s. After a passing run and router drain, test 1 request/s. A rate meets the candidate 95% target when at least 190 requests complete with TTFT at or below 2.0 s and TPOT at or below 0.0333 s.
+Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
 
-Before the trial, check that the workload fits the accepted profile domain and engine context limit, and reserve the router for trial traffic so each client record can be reconciled with the journal. This trial measures cold prefill, and both rate tests replay the same workload, so launch every engine with `--no-enable-prefix-caching` in `runtime.extra_args` and retain `checked.json` records showing `"prefix_caching": false`.
+After the 0.5 request/s run passes and the router drains, test 1 request/s.
+
+A rate passes when the client schedule is valid and at least 190 of 200 requests meet both limits:
+
+- time to first token (TTFT) at or below 2.0 s
+- time per output token (TPOT) at or below 0.0333 s
+
+### Prerequisites
+
+- The workload fits the accepted profile domain and the engine context limit.
+- Nothing else sends traffic to the router.
+- Both rates replay one workload to measure cold prefill, so prefix caching must be off; see [Prepare, check, and start each engine](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine). Launch every engine with `--no-enable-prefix-caching` in `runtime.extra_args`. Confirm `checked.json` shows `"prefix_caching": false`.
 
 ### Create the trial directory and workload
 
@@ -28,9 +39,16 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` queries the served model, sends an unscored 32-token completion from a fixed public seed prompt, and writes the returned token IDs to `workload/workload.json`. For request sequence `n`, the sampler draws 8,192 input IDs from that pool using `seed + n`.
+`prepare` writes a token pool to `workload/workload.json`:
 
-Both rate tests reuse the same workload file with:
+| Item           | Value                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------- |
+| Seed request   | One unscored 32-token completion from a fixed public seed prompt |
+| Token pool     | The returned prompt token IDs when they contain two or more distinct IDs, otherwise the 32 generated output IDs |
+| Stop condition | Fewer than two distinct IDs in the pool |
+| Request `n`    | 8,192 input IDs drawn from the pool with `seed + n` |
+
+Both rates reuse the workload with:
 
 ```text
 temperature        = 0
@@ -40,31 +58,22 @@ max_tokens         = 128
 ignore_eos         = true
 ```
 
-Each run manifest records:
+Each run manifest records the workload and helper digests, source revision, command, Python and httpx versions, and limits.
 
-* workload digest;
-* helper digest;
-* workstation hostname;
-* source revision;
-* command;
-* Python version;
-* httpx version;
-* selected limits.
+Before each measured run, the helper drains the router, sends one unscored full-shape warmup, and drains again. Offers go out on a fixed schedule, whatever the responses do.
 
-Before each measured run, the helper:
+| Client limit        | Default |
+| ------------------- | ------- |
+| Concurrent requests | 64      |
+| Scheduling lag      | 50 ms   |
 
-1. waits for empty router admission queues and zero resident work;
-2. sends one unscored warmup request using the complete workload shape;
-3. drains the fleet again;
-4. schedules all 200 offers independently of response completion.
+An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`.
 
-The helper allows 64 concurrent requests and 50 ms scheduling lag by default; exceeding either limit records a terminal `client_schedule_miss` and marks `client_schedule_valid: false`. The client sends each offer once and keeps HTTP refusals, stream errors, and timeouts in the 200-offer denominator.
+The helper sends each offer once. HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
 
-Use CPU, memory, network, and scheduling measurements to establish client saturation before raising its limits.
+Check client CPU and scheduling lag before raising these limits.
 
 ## 8. Measure 0.5 request/s
-
-Run:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -78,20 +87,31 @@ Run:
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
-Inspect the retained records before changing the offered rate.
+Check the exit code before changing the rate:
 
-Interpret the helper exit code as follows:
+| Exit  | Meaning                                                | Required action                                                      |
+| ----- | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| `0`   | Schedule validity and candidate attainment both passed | Drain the router and continue to the next rate                       |
+| `1`   | The helper reported a blocking error                   | Read the error, then check the run directory |
+| `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json`                    |
+| `130` | Interrupted run with partial artifacts                 | Keep the partial output, then rerun                           |
 
-| Exit  | Meaning                                                             | Required action                                                                                                                                                                                                                                                                        |
-| ----- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`   | Schedule validity and candidate attainment both passed              | Drain the router, then continue to the next rate                                                                                                                                                                                                                                       |
-| `2`   | Candidate attainment or client scheduling missed                    | Inspect `client_schedule_valid` in `summary.json`. If true, the rate missed the target: retain the result and end the sweep. If false, inspect `requests.jsonl`, repair client scheduling, and repeat the rate. |
-| `1`   | The helper reported a blocking error                                | Diagnose the reported failure and retained artefacts before retrying                                                                                                                                                                                                                   |
-| `130` | The run was interrupted and partial artefacts were preserved        | Inspect the partial record before retrying                                                                                                                                                                                                                                             |
+For exit code `2`:
+
+- `client_schedule_valid` is `true`: the rate missed the target. Keep the result and stop.
+- `client_schedule_valid` is `false`: inspect `requests.jsonl`, repair client scheduling, and repeat the rate.
 
 ## 9. Measure 1 request/s
 
-After the router has fully drained:
+The router has drained when `/narwhal/state` reports zero for:
+
+- the `inflight`, `queued`, `waiting_prefill`, and `waiting_decode` admission counts
+- `serving.http_retained`
+- resident prefill and decode work on every engine
+
+The helper waits for zero after each run and before warmup, and fails with a drain-deadline error if `--timeout` runs out.
+
+After the router drains, run the second rate:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \

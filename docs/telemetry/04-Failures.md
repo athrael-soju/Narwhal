@@ -1,18 +1,20 @@
-# Monitoring and engine failure diagnosis
+# Engine monitoring and failure diagnosis
 
-## Diagnose monitoring degradation
+## Engine monitoring degradation
 
-| Metric                                          | Meaning                                                                   | Labels  |
-| ----------------------------------------------- | ------------------------------------------------------------------------- | ------- |
-| `narwhal_monitoring_degraded`                   | `1` while repeated monitoring-pass failures block new admissions.         | none    |
-| `narwhal_monitoring_core_consecutive_failures`  | Consecutive failed monitoring passes.                                     | none    |
-| `narwhal_monitoring_core_failures_total`        | Failed monitoring passes during the current process lifetime.             | none    |
-| `narwhal_monitoring_stage_failures_total`       | Failure count for a monitoring stage.                                     | `stage` |
-| `narwhal_monitoring_stage_consecutive_failures` | Consecutive failures for a monitoring stage.                              | `stage` |
-| `narwhal_event_loop_lag_seconds`                | Delay beyond the latest scheduled monitoring deadline.                    | none    |
-| `narwhal_event_loop_lag_high_water_seconds`     | Largest monitoring-deadline delay observed by the current router process. | none    |
+The router checks engine health in a background loop.
 
-The stage label uses one of:
+| Metric                                          | Type    | Labels  | Meaning                                                                   |
+| ----------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
+| `narwhal_monitoring_degraded`                   | gauge   |         | `1` once consecutive failed passes reach `controller.monitor_failure_limit`. |
+| `narwhal_monitoring_core_consecutive_failures`  | gauge   |         | Consecutive failed monitoring passes.                                     |
+| `narwhal_monitoring_core_failures_total`        | counter |         | Failed monitoring passes during the current process lifetime.             |
+| `narwhal_monitoring_stage_failures_total`       | counter | `stage` | Failed passes for one monitoring stage.                                   |
+| `narwhal_monitoring_stage_consecutive_failures` | gauge   | `stage` | Consecutive failures for a monitoring stage.                              |
+| `narwhal_event_loop_lag_seconds`                | gauge   |         | Delay beyond the latest scheduled monitoring deadline.                    |
+| `narwhal_event_loop_lag_high_water_seconds`     | gauge   |         | Largest monitoring-deadline delay observed by the current router process. |
+
+`stage` values:
 
 ```text
 controller
@@ -25,18 +27,18 @@ handoff
 telemetry
 ```
 
-The `telemetry` stage performs floor-state refresh and loop logging.
+While degraded, the router blocks new admissions. The `telemetry` stage refreshes floor state and writes loop logs.
 
-## Diagnose engine breaker state
+## Engine breaker state
 
-Narwhal maintains breaker state separately by engine and failure class.
+Each engine has its own breaker for every failure class.
 
-| Metric                             | Meaning                                                                                    | Labels         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------ | -------------- |
-| `narwhal_engine_breaker_streak`    | Consecutive failures for one engine and failure class. Zero-valued series remain exported. | `iid`, `class` |
-| `narwhal_engine_breaker_verifying` | `1` while an engine verification probe is running.                                         | `iid`, `kind`  |
+| Metric                             | Type  | Labels         | Meaning                                                                                    |
+| ---------------------------------- | ----- | -------------- | ------------------------------------------------------------------------------------------ |
+| `narwhal_engine_breaker_streak`    | gauge | `iid`, `class` | Consecutive failures for one engine and failure class. Zero values are exported. |
+| `narwhal_engine_breaker_verifying` | gauge | `iid`, `kind`  | `1` while an engine verification probe is running.                                         |
 
-Breaker failure classes are:
+`class` values:
 
 ```text
 connection
@@ -48,15 +50,17 @@ stream
 liveness
 ```
 
-Verification probes report one of:
+`kind` values: `verify_health` or `verify_inference`.
 
-```text
-verify_health
-verify_inference
-```
+| Verification probe result                                  | Effect                                                              |
+| ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| Passes, and the engine's profile generation check passes   | The relevant failure streaks clear.                                |
+| Fails                                                      | The engine is ejected and `narwhal_ejected` records it.         |
+| Waits out the control pool                                 | Inconclusive. The verdict waits and streaks stay as they are. |
 
-When a probe completes, Narwhal either clears the relevant failure streaks or ejects the engine. Engine ejection is exported through `narwhal_ejected`.
+`make observe` stages these assets:
 
-`make observe` stages `tools/observability/prometheus-alerts.yml` for Prometheus rule evaluation and `tools/observability/grafana-narwhal.json` for Grafana dashboard provisioning.
+- `tools/observability/prometheus-alerts.yml` holds the Prometheus alert rules.
+- `tools/observability/grafana-narwhal.json` is the Grafana dashboard.
 
-[Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents the panel scope and metric boundaries.
+The [observability asset contracts](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) describe what each dashboard panel shows and which metrics it uses.

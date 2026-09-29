@@ -2,7 +2,7 @@
 
 ## 1. Define the measurement contract
 
-Record router-journal and deployment-client latency separately because they use these request boundaries:
+Record time to first token (TTFT) and time per output token (TPOT) separately for each source:
 
 | Metric | Router journal                                                        | Deployment client                                                                          |
 | ------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -11,7 +11,7 @@ Record router-journal and deployment-client latency separately because they use 
 
 Router TTFT includes token counting, placement wait, prefill queueing, and prefill execution. For a completed request, `first_byte_s - ttft_s` covers KV transfer and decode queueing before the first visible token.
 
-The deployment client must retain, for every scheduled request:
+For every scheduled request, the deployment client must retain:
 
 * scheduled start
 * actual start
@@ -22,15 +22,17 @@ The deployment client must retain, for every scheduled request:
 * TPOT
 * terminal error information
 
-Refused, failed, and cancelled scored requests remain in the SLO denominator.
+The service-level objective (SLO) denominator includes refused, failed, and cancelled scored requests.
 
-Narwhal includes empty-text and reasoning-only token IDs in output length and computes TPOT for requests with at least two identified tokens. Retain the stream-accounting rule with each result set and use the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to compare runs with the same denominator and terminal classes.
+Output length includes empty-text and reasoning-only token IDs. TPOT requires at least two identified tokens.
+
+Keep this stream-accounting rule with each result set so that runs stay comparable under the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
 
 ## 2. Reuse or create an idle-fleet latency profile
 
-[Gate F](../deploy/06-Profile-and-Preflight.md) binds the retained `profiles.json` and `profiles.samples.json` pair to attested engine generations. Measurement runs can reuse the pair while the engine processes and runtime remain unchanged. Retain a passing preflight for the fleet configuration under test.
+[Gate F: Profile idle engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) binds the `profiles.json` and `profiles.samples.json` pair to the attested process generations that produced it. A measurement run can reuse that pair while the engine processes and runtime stay the same.
 
-For a new engine process or runtime, reserve the production engine shape, warm the model, and sweep the input lengths, decode contexts, and active sequence counts expected in serving before selecting deployment SLOs:
+Retain a passing preflight for the fleet configuration under test. Profile every new engine process or runtime before you select deployment SLOs. Reserve the production engine shape and warm the model, then sweep the expected traffic shape:
 
 ```bash
 narwhal-profile \
@@ -44,28 +46,25 @@ narwhal-profile \
 
 Select at least three prefill lengths spanning the production range, including its longest inputs.
 
-For each engine, the profiler:
+The profiler keeps only lengths that fit the live `max_model_len` from `/tokenize` plus one output token. It tokenises each exact prompt before issuing the completion request.
 
-1. reads the live `max_model_len` from `/tokenize`;
-2. keeps candidate lengths with room for the requested output token;
-3. tokenises the exact prompt before issuing the completion request;
-4. retains the effective sweep used for that engine.
-
-Compare the retained sweep with the serving plan before accepting the result.
+The profiler retains each engine's effective sweep. Compare it with the serving plan before accepting the result.
 
 ### Decode sweep
 
-Give the decode sweep at least two input lengths and two concurrency values. For production calibration, use at least three concurrency points, including one stream and the intended operating range.
+Use at least two decode input lengths and two concurrency values. Each input length and concurrency pair is one decode cell.
 
-The profiler keeps decode inputs whose input and requested output fit the live context limit. Extend the sweep for long-context deployments; when that limit leaves too few usable cells to fit the profile, select shorter inputs.
+For production calibration, use at least three concurrency points, including one stream and the intended operating range.
 
-Each probe request sets a unique vLLM `cache_salt` to prevent prefix cache reuse. The profile measures cold prefill regardless of the engine's prefix caching configuration. The profiler checks `vllm:prefix_cache_hits_total` before and after each sweep. If any prompt tokens were served from the prefix cache, the sweep fails and must be rerun.
+Decode inputs plus their requested output must fit the live context limit. Long-context deployments need a broader sweep. The profiler stops when fewer than two input lengths fit; choose shorter inputs.
 
-Each decode probe requests one identified token per SSE event. The profiler validates token identity as events arrive, then checks stream completion and output token counts. It retains the intervals only after all streams pass these checks and enough intervals have been collected.
+Each probe sets a unique vLLM `cache_salt`, which forces a cold prefill even with prefix caching on. Decode probes request one identified token per SSE event. The profiler checks token identity as events arrive, then checks stream completion and output token counts before it keeps the intervals.
+
+The sweep fails and must be rerun if `vllm:prefix_cache_hits_total` rises during the run, because some prompt tokens came from the cache.
 
 ## 3. Retain profile samples and fits
 
-Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the deployment record.
+Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the deployment record.
 
 `profiles.samples.json` contains:
 
@@ -73,23 +72,26 @@ Retain `profiles.json` and `profiles.samples.json` from `narwhal-profile` with t
 * sweep configuration;
 * every prefill repeat;
 * the per-length medians used for the TTFT fit;
-* decode intervals;
-* cell medians;
+* decode intervals and cell medians;
 * fitted profiles;
-* `prefix_cache_hit_tokens`, the prefix-cache hits observed during each engine's sweeps, or `null` when the engine exports no hit counter;
-* the verified attestation response or process identity that binds each fit to its engine generation.
+* `prefix_cache_hit_tokens`: prefix-cache hits per engine sweep, or `null` when engine metrics omit `vllm:prefix_cache_hits_total`;
+* the attestation response or process identity that ties each fit to its process generation.
 
-The sample sidecar retains raw prefill measurements and the fit error when a TTFT fit fails, and keeps completed engine data if a later engine fails. `--overwrite` creates a new output pair for the selected engines.
+| Case                  | Sample sidecar result                               |
+| --------------------- | --------------------------------------------------- |
+| TTFT fit fails        | Keeps the raw prefill measurements and fit error    |
+| A later engine fails  | Keeps the data from completed engines               |
+| `--overwrite`         | Writes a new output pair for the selected engines   |
 
 ### KV capacity source
 
-When vLLM's `cache_config_info` reports `kv_cache_size_tokens`, the profiler writes a physical KV constraint. For builds whose capacity input comes from TPOT measurements, it uses the TPOT-derived limit.
+When vLLM's `cache_config_info` reports `kv_cache_size_tokens`, the profiler writes a physical KV constraint. Otherwise it uses the TPOT-derived limit.
 
 ## 4. Validate the profile before using it
 
 ### Prefill fit
 
-The profiler computes a median latency at each exact input length and fits the TTFT curve against those points. Before decode profiling, it rejects curves whose error exceeds either bound:
+The TTFT curve fits the median latency at each exact input length. The profiler rejects a curve that exceeds either bound:
 
 * mean error above 20%;
 * worst-point error above 50%.
@@ -98,7 +100,7 @@ Measured prefill latency includes the HTTP round trip and one generated token.
 
 ### Repair profiles produced by the earlier raw-repeat fitter
 
-Refit a completed raw-repeat profile set from its saved sample sidecar:
+Refit from the saved sample sidecar:
 
 ```bash
 narwhal-profile \
@@ -107,45 +109,35 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The command requires generation-bound saved samples and profile snapshots for every configured engine. It writes a new output pair with refitted prefill curves and copied measured decode coefficients, preserving the original pair. Earlier sample files require a fresh sweep against the current engine processes.
+The refit requires saved samples and profile snapshots bound to a process generation for every engine. It writes a new pair with refitted prefill curves and copied decode coefficients.
+
+Samples without process-generation evidence need a fresh sweep against the current engine processes.
 
 After refitting:
 
-1. set `profiles.path` in the private fleet document to `runs/profiles-refit.json`;
-2. run the full preflight against that document and the same engine processes;
-3. retain both profile pairs in the deployment record.
+1. Set `profiles.path` in the private fleet file to `runs/profiles-refit.json`.
+2. Run full preflight against that fleet file and the same engines.
+3. Retain both profile pairs in the deployment record.
 
 ### Decode fit
 
-The profiler samples token intervals after every stream emits its first token and before any stream completes, keeping the complete decoding cohort resident.
+The profiler samples token intervals after every stream has emitted its first token and before any stream completes, so the whole decoding cohort is resident. From the client's view it infers the active-request count and resident KV memory. Near scheduler saturation, check those figures against the engine's request and inter-token metrics.
 
-Active-request count and resident KV tokens are inferred from client observations.
+Each profile records the observed range of both fitted axes, which bounds the decode domain the role controller prices.
 
-Near scheduler saturation, compare those inferred values with engine request metrics and inter-token metrics.
+The fitter constrains coefficients to nonnegative values in both the full fit and the leave-one-cell-out validation. Leave-one-cell-out error shows how well the fit interpolates between cells within one run. Repeat the sweep to see run-to-run stability and tail behaviour. Add intermediate cells that match the production workload to cover gaps.
 
-The fitter constrains coefficients to nonnegative values in both the full fit and leave-one-cell-out validation.
-
-Each profile records the observed minimum and maximum of both fitted axes, bounding the decode domain the controller prices.
-
-Leave-one-cell-out error measures interpolation between cells within one run. Repeat the sweep to measure run-to-run stability and tail behaviour, then add intermediate cells resembling the production workload.
-
-Default limits are:
+Default limits:
 
 ```text
 profiles.max_decode_fit_mape = 0.05
 profiles.max_decode_cv_mape  = 0.13
 ```
 
-Keep the fit limit at or below:
+Keep `profiles.max_decode_fit_mape` at or below `controller.reactive.movement_margin`; fleet validation rejects a larger value. Set both limits from measurements covering the expected decode domain.
 
-```text
-controller.reactive.movement_margin
-```
+When a measured error exceeds its limit, `narwhal-check` reports the engine, the measured value, and the configured threshold. The `profile` gate also requires two measured points on each decode axis.
 
-Set both error limits from measurements covering the deployment's expected decode domain.
-
-`narwhal-check` reports the engine, measured value, and configured limit when either threshold is exceeded.
-
-It requires at least two measured points on each decode axis. Run reactive control with the current profile schema and an accepted decode sweep.
+Reactive control needs the current profile schema and a decode sweep that passed the gate.
 
 Continue with [target selection and deployment freeze](02-Targets-and-Freeze.md).

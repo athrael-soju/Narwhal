@@ -2,58 +2,43 @@
 
 ## 5. Set production SLOs
 
-Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured latency distribution.
+| Field        | Target                       |
+| ------------ | ---------------------------- |
+| `slo.ttft_s` | Time to first token (TTFT)   |
+| `slo.tpot_s` | Time per output token (TPOT) |
 
-A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
+1. Run light traffic with accepted profiles.
+2. Set both targets from the service requirement and the latency distribution measured in step 1.
+3. Validate the config:
 
-After changing an SLO, run `narwhal-check` against the edited fleet to test the target with saved profiles and live handoffs:
+    ```bash
+    narwhal-check --fleet config/fleet.production.json
+    ```
 
-```bash
-narwhal-check --fleet config/fleet.production.json
-```
+If the TPOT target is lower than the engine's measured per-token time, no decode capacity is feasible.
+
+`narwhal-check` tests the targets against saved profiles and live handoffs. It also runs the [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate), which compares each engine with the fleet median under a `1.5x` slowdown limit.
 
 ### Pace gate
 
-With at least three successful probes, the pace gate compares each engine with the fleet median under a `1.5x` slowdown limit. For one or two successful probes, it requires a saved prefill profile and exact `usage.prompt_tokens` for each engine to apply the same limit.
+With three or more successful probes, the gate compares each engine with the fleet median. With one or two, each engine also needs a saved prefill profile and exact `usage.prompt_tokens`.
 
 ## 6. Freeze the deployment under test
 
-Before the load test, assign a deployment identifier and attach the exact:
+Assign a deployment identifier before the load test and attach the exact artifacts:
 
-* Narwhal release;
-* source revision;
-* distribution digest;
-* fleet configuration;
-* profile files;
-* sample store;
-* engine image digest;
-* engine launcher;
-* attestation documents;
-* router configuration;
-* engine configuration;
-* preflight output;
-* endpoint captures;
-* deployment-client output;
-* router journal;
-* state snapshots;
-* metrics.
+* the Narwhal release, source revision, and distribution digest;
+* the fleet, router, and engine configuration;
+* the profile files and sample store;
+* the engine image digest, engine launcher, and attestation documents;
+* the preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
 
-Record the workstation host, router host, and SSH tunnel mapping under the same identifier.
+Record the hosts and SSH tunnel mapping with the identifier.
 
-Across the offered-rate sweep, vary the request rate while holding these inputs fixed:
+Vary only the request rate across the offered-rate sweep. Keep the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed.
 
-* source revision;
-* model;
-* runtime;
-* profiles;
-* router targets;
-* workload shape;
-* cache policy;
-* TTFT target;
-* TPOT target.
+Between rates, let resident work finish and release transfer leases.
 
-Between rates, drain resident work and transfer leases.
+Stop the sweep when a run misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial). Also stop once you have tested the intended operating ceiling.
 
-End the sweep when a run with a valid client schedule misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial), or after testing the intended operating ceiling.
-
-Continue with the [synthetic load trial](03-Load-Trial.md).
+Next: [synthetic load trial](03-Load-Trial.md).
