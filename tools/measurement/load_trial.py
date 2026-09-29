@@ -60,8 +60,7 @@ def provenance() -> dict:
 
 
 SHARED_PREFIX = "shared-prefix-token-ids"
-# Distinct pool IDs a shared-prefix workload needs so that two independent prompts
-# share a leading cache block only by negligible chance.
+# Minimum distinct token IDs in a shared-prefix workload's pool.
 MIN_SHARED_POOL = 16
 
 
@@ -103,11 +102,9 @@ def _tokens(seed: str, pool: list[int], count: int) -> list[int]:
 
 
 def prompt_for(workload: dict, sequence: int, run_seed: int = 0) -> list[int]:
-    """Return one request's token IDs.
+    """Return one request's token IDs: a family prefix and a unique suffix.
 
-    A shared-prefix request draws one of `families` prefixes, which repeat across
-    runs, and a suffix unique to the run and sequence. With zero families each
-    prefix is unique to the run and sequence, so the prompt shares no cached prefix.
+    Zero families give each request a unique prefix.
     """
     pool, seed, length = workload["token_pool"], workload["seed"], workload["input_tokens"]
     if workload["kind"] != SHARED_PREFIX:
