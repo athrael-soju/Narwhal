@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license">
-  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 through 3.13">
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python3.11 through 3.13">
   <img src="https://img.shields.io/badge/style-ruff-261230" alt="Lint and format by ruff">
   <img src="https://img.shields.io/badge/types-mypy-blue" alt="Types checked with mypy">
   <a href="https://pypi.org/project/narwhal-inference/"><img src="https://img.shields.io/pypi/v/narwhal-inference" alt="Latest PyPI version"></a>
@@ -20,35 +20,43 @@
 
 ## About
 
-Narwhal is an adaptive disaggregated LLM inference framework, that reassigns prefill and decode roles as demand changes, while keeping model weights loaded during role changes.
+Narwhal is an adaptive disaggregated LLM inference framework that reassigns prefill and decode roles as demand changes while keeping model weights loaded.
 
-Narwhal provides:
+What you get:
 
 - Hot-swap prefill/decode role assignment across a fixed GPU fleet.
 - Separate prefill and decode routing with NIXL key-value (KV) transfer.
-- Latency-aware admission and placement using measured per-engine profiles.
-- Streaming and non-streaming completion and chat APIs, including function tools and reasoning output where supported by the engine and model.
+- Latency-aware admission and placement driven by measured per-engine profiles.
+- Streaming and non-streaming completion and chat APIs, with function tools and reasoning outputwhere the engine and model support them.
 - Request deadlines, disconnect cancellation, bounded queues, and optional retries.
 - Engine health checks, transfer validation, and warm-standby router failover.
 - Prometheus metrics, request journals, and a Grafana dashboard.
 
 ## Architecture
 
-On regular role controller passes, Narwhal estimates prefill and decode pressure against their service-level objectives (SLOs). The estimate covers the current role split and each adjacent split, and it draws on measured engine curves, offered demand, and resident work. The role controller moves an eligible engine when the candidate split improves the worst projected SLO ratio by the configured margin. The candidate split must also pass the role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
+Each role controller pass:
+
+- Estimates prefill and decode pressure against service-level objectives (SLOs) for the current role split and each adjacent split.
+- Uses measured engine curves, offered demand, and resident work.
+- Moves an eligible engine when a candidate split improves the worst projected SLO ratio by the configured margin.
+- Requires the candidate split to pass the role-floor, cooldown, and health checks.
+
+New requests follow the revised split, while resident requests finish on their assigned engines.
 
 ![Narwhal's reactive role controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for role controller settings.
+- [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/): request flow and scheduling.
+- [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/): role controller settings.
 
 ## Benchmark snapshot
 
-AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal, Dynamo Planner, and Ray Serve LLM.
+AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabledacross Narwhal, Dynamo Planner, and Ray Serve LLM.
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
+![Completion rate, SLO-qualified requests, median time to first token, and document answer quality for Narwhal, Dynamo Planner, and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
 
 ## Install from PyPI
 
-Install the Narwhal commands on Linux with Python 3.11 or newer:
+Install on Linux with Python 3.11 or newer:
 
 ```bash
 python3 -m venv .venv
@@ -58,17 +66,30 @@ narwhal-serve --version
 narwhal --help
 ```
 
-The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`.
+
+Record the version that `narwhal-serve --version` prints alongside the fleet configuration, engine image, and profiles, then pin that version on every router host.
+
+The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) lists the engine and profile inputs required for serving.
 
 ## Narwhal dev
 
-[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. Its installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
+[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`.
+
+| Template                      | Target                                                                     |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| Installed two-engine template | GPUs with 8 GB of VRAM or less. Checks available memory at initialization. |
+| RTX 5090 template             | The measured four-engine configuration.                                    |
 
 ## Deploy a fleet
 
-Follow [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. Inspect the target hardware and model, install an approved source revision, and validate the running vLLM processes and KV paths. Then profile and run preflight before routing traffic.
+Run [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation:
 
-The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
+1. Inspect the target hardware and model.
+2. Install an approved source revision.
+3. Validate the running vLLM processes and KV paths.
+4. Profile the engines and run preflight.
+5. Run a capacity trial through an SSH tunnel to the router.
 
 ## Reference
 
@@ -83,10 +104,14 @@ The final gate measures the workload through the private path, reconciles client
 
 ## Contributing
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks, and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
+- [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md): checkout setup, local checks, and the pull request flow.
+- [Code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md): participation rules.
+- [Security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md): vulnerability reports.
 
 ## Attribution and citation
 
-Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
+Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025).
+
+Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
 
 License: [Apache-2.0](https://github.com/athrael-soju/Narwhal/blob/main/LICENSE).
