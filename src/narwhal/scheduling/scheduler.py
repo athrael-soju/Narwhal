@@ -6,6 +6,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from ..profiling.store import ProfileStore
@@ -85,6 +86,7 @@ class GlobalScheduler:
             eject_after=eject_after,
             on_change=self.refresh_floor_state,
             on_eject=self._notify_eject,
+            pinned=pinned,
         )
         self.prefill_floor = PrefillFloor(
             clock,
@@ -333,6 +335,26 @@ class GlobalScheduler:
         if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
             return float("inf")
         return self.cost(request, inst)[1]
+
+    def decode_admits(self, request: Request, *, concurrency: int = 0) -> bool:
+        """Return whether a live decode engine can take `request` within capacity and TPOT.
+
+        Capacity is `concurrency` when positive, otherwise the profile's measured
+        `decode_max_requests`. A fleet without live decode engines, or with an
+        engine lacking a measured decode domain, admits.
+        """
+        engines = self.live_instances(Role.DECODE)
+        if not engines:
+            return True
+        decode = replace(request, phase=Phase.DECODE)
+        for inst in engines:
+            profile = self.profiles.get(inst.iid)
+            limit = concurrency or (profile.decode_max_requests if profile is not None else None)
+            if profile is None or limit is None:
+                return True
+            if len(inst.decode) < limit and self.meets_slo(decode, self.cost(decode, inst)):
+                return True
+        return False
 
     def cheapest_own_prefill(self, request: Request) -> float | None:
         """Return the request's cheapest isolated prefill cost.
@@ -611,7 +633,11 @@ class GlobalScheduler:
         # Profiles assume sequential prefill and batched decode, so prefer the
         # matching role whenever that pool has a live engine.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
-        candidates = [i for i in instances if i.role is want] or instances
+        candidates = [i for i in instances if i.role is want] or [
+            i for i in instances if i.iid not in self.pinned
+        ]
+        if not candidates:
+            raise RuntimeError("no schedulable instances for the pinned roles")
         if request.phase is Phase.PREFILL:
             request.cache_placement = None
             if request.cached_tokens and self.recheck_cache_evidence is not None:

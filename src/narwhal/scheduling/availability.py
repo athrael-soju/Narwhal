@@ -58,8 +58,10 @@ class EngineAvailability:
         eject_after: int,
         on_change: Callable[[], None],
         on_eject: Callable[[str], None],
+        pinned: frozenset[str] = frozenset(),
     ) -> None:
         self.monitor = monitor
+        self.pinned = pinned
         self._clock = clock
         self.eject_after = eject_after
         self.refresh_floor_state = on_change
@@ -172,6 +174,16 @@ class EngineAvailability:
     def _can_hold_out(self, iid: str) -> bool:
         """Return whether another engine can receive aggregate work."""
         return bool(self.live_instances(exclude={iid}))
+
+    def role_covered_without(self, iid: str) -> bool:
+        """Return whether another live engine holds `iid`'s role or is unpinned."""
+        inst = self.monitor.instances.get(iid)
+        if inst is None:
+            return True
+        return any(
+            other.role is inst.role or other.iid not in self.pinned
+            for other in self.live_instances(exclude={iid})
+        )
 
     def record_answer(self, iid: str, evidence: str) -> None:
         """Clear failure streaks for the paths exercised by the answer.

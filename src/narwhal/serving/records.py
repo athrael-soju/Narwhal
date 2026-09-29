@@ -23,6 +23,8 @@ def forward_headers(headers: dict[str, str]) -> dict[str, str]:
 def refuse_request(
     state: RequestLifecycle,
     priced_s: float,
+    *,
+    decode: bool = False,
 ) -> JSONResponse:
     """Record and explain a predictive refusal before engine dispatch."""
     router, req, rid = state.router, state.request, state.rid
@@ -35,7 +37,16 @@ def refuse_request(
         else ""
     )
     headers: dict[str, str]
-    if math.isinf(priced_s):
+    if decode:
+        detail = "refused: every live decode engine is at its decode capacity"
+        message = (
+            "every live decode engine is at its measured decode concurrency or TPOT "
+            "budget; retry as decode work drains"
+        )
+        headers = {"retry-after": "1"}
+        cause = "decode"
+        log.info("refused %s: decode capacity", rid)
+    elif math.isinf(priced_s):
         detail = (
             "refused: aggregate prefill has no calibrated price while every candidate "
             "carries decode work"

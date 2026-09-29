@@ -14,7 +14,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..config import FleetConfig
 from ..contracts import STATE, versioned
-from ..engines.client import EngineClient, EngineError, InferenceProbe, leg_failure_class
+from ..engines.client import (
+    FIRST_OUTPUT_DETAIL,
+    EngineClient,
+    EngineError,
+    InferenceProbe,
+    leg_failure_class,
+)
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.prefix import CacheNamespace, block_identities
@@ -29,7 +35,7 @@ from ..scheduling.controller import ReactiveController
 from ..scheduling.health import DriftTracker
 from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
-from ..types import Instance, Phase, Request, Role
+from ..types import LEG_OVERLOAD, LEG_STREAM, Instance, Phase, Request, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
 from .dispatch import Dispatcher
 from .execution import request_error, serve_request
@@ -475,6 +481,7 @@ class NarwhalRouter:
         *,
         prefill_iid: str | None = None,
         decode_leg: bool = False,
+        busy: bool = False,
     ) -> None:
         """Classify a failed leg and update breaker state.
 
@@ -502,6 +509,14 @@ class NarwhalRouter:
         if klass is None:
             # PoolTimeout and caller-side 4xx legs are handled above.
             return
+        if (
+            klass == LEG_STREAM
+            and busy
+            and isinstance(exc, EngineError)
+            and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
+        ):
+            # A first-token timeout on an engine holding other work is overload.
+            klass = LEG_OVERLOAD
         if klass == "stream":
             self._inference_sources.setdefault(iid, set()).add(prefill_iid or "")
         verdict = self.scheduler.record_failure(iid, klass)
@@ -516,8 +531,13 @@ class NarwhalRouter:
         elif verdict in ("verify_health", "verify_inference"):
             if verdict == "verify_inference":
                 self.scheduler.inference_suspects.add(iid)
-                self.scheduler.quarantined[iid] = math.inf
-                self.scheduler.refresh_floor_state()
+                if self.scheduler.availability.role_covered_without(iid):
+                    self.scheduler.quarantined[iid] = math.inf
+                    self.scheduler.refresh_floor_state()
+                else:
+                    log.warning(
+                        "%s stays live during inference verification: it alone serves its role", iid
+                    )
             # One pending probe per engine and verdict kind; extra failures
             # while it runs only grow the streak it will resolve.
             key = (iid, verdict)
@@ -576,7 +596,7 @@ class NarwhalRouter:
             probe = await self.engines.probe_inference(
                 url,
                 prefill_url=producer.url if producer is not None else None,
-                deadline_s=self.cfg.first_token_timeout_s,
+                deadline_s=max(self.cfg.first_token_timeout_s or 0.0, self.cfg.health_timeout_s),
             )
             if not self._resolve_inference_probe(iid, probe):
                 return
@@ -597,17 +617,30 @@ class NarwhalRouter:
             return False
         legs = {"prefill": probe.prefill, "decode": probe.decode}
         if any(leg.inconclusive for leg in legs.values()):
-            # Control-pool starvation: the probe says nothing about the
-            # engine, and the streak keeps its verdict pending.
-            log.info(
-                "suspect %s inference probe waited out the control pool; verdict deferred",
-                iid,
-            )
+            if probe.decode.inconclusive and probe.prefill.failed is not None:
+                log.info(
+                    "suspect %s inference probe inconclusive: producer leg failed %s, "
+                    "decode leg untested; verdict deferred",
+                    iid,
+                    probe.prefill.failed,
+                )
+            else:
+                log.info(
+                    "suspect %s inference probe waited out the control pool; verdict deferred",
+                    iid,
+                )
             return False
         failed = {name: leg.failed for name, leg in legs.items() if leg.failed is not None}
         if not failed:
             return True
         detail = ", ".join(f"{name} leg failed {klass}" for name, klass in sorted(failed.items()))
+        if not self.scheduler.availability.role_covered_without(iid):
+            log.warning(
+                "%s stays live after a failed inference probe (%s): it alone serves its role",
+                iid,
+                detail,
+            )
+            return False
         if self.scheduler.eject(iid):
             log.warning("ejected %s: inference probe failed (%s)", iid, detail)
         else:

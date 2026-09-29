@@ -94,8 +94,13 @@ def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, deco
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
+    busy = any(rid != state.request.rid for rid in (*inst.prefill, *inst.decode))
     router._leg_failed(
-        inst.iid, exc, prefill_iid=state.prefill_iid if decode else None, decode_leg=decode
+        inst.iid,
+        exc,
+        prefill_iid=state.prefill_iid if decode else None,
+        decode_leg=decode,
+        busy=busy,
     )
     reason = leg_failure_reason(exc)
     if decode and isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
@@ -160,6 +165,10 @@ async def _prepare_once(
             req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
+        if not router.scheduler.decode_admits(
+            req, concurrency=router.cfg.serving.decode_concurrency
+        ):
+            raise PlacementRefused(priced, decode=True)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
@@ -210,7 +219,7 @@ async def prepare_attempt(
 
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     if isinstance(exc, PlacementRefused):
-        return refuse_request(state, exc.predicted_s)
+        return refuse_request(state, exc.predicted_s, decode=exc.decode)
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")

@@ -1,16 +1,27 @@
 """Check breaker probes, recovery decisions and admission cleanup."""
 
 import asyncio
+import math
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.engines.client import EngineError, InferenceProbe, ProbeLeg, Tokenization
+from narwhal.engines.client import (
+    FIRST_OUTPUT_DETAIL,
+    EngineError,
+    InferenceProbe,
+    ProbeLeg,
+    Tokenization,
+)
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
+from narwhal.serving.execution import _failed_leg
+from narwhal.types import Phase, Request
 from tests.fixtures import bind_identity_profiles, fleet
 
 
@@ -245,3 +256,87 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.router.monitor.waiting)
         self.assertEqual(self.router.inflight, 0)
         self.assertEqual(self.router.failed, 1)
+
+
+class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
+    """Overload stays out of inference verification; the only engine of a pinned role stays live."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cfg = fleet(Path(folder.name))
+        self.cfg.engine_contract = None
+        self.cfg.eject_after = 1
+        self.timeout = EngineError(
+            "decode", "http://engine", 504, f"{FIRST_OUTPUT_DETAIL} 1.5s: no frames at all"
+        )
+        self.failed = InferenceProbe(ProbeLeg(), ProbeLeg(failed="stream"))
+
+    def router(self, *, pinned=False):
+        if pinned:
+            self.cfg.engines = [replace(spec, pin=True) for spec in self.cfg.engines]
+        router = create_app(self.cfg).state.router
+        bind_identity_profiles(router)
+        self.addAsyncCleanup(router.engines.aclose)
+        return router
+
+    def test_first_token_timeouts_on_busy_engines_count_as_overload(self):
+        router = self.router()
+        with patch.object(router, "_start_verification") as start:
+            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True, busy=True)
+            start.assert_called_once_with("e3", "verify_health")
+            self.assertNotIn("e3", router.scheduler.inference_suspects)
+            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True, busy=False)
+            start.assert_called_with("e3", "verify_inference")
+        self.assertIn("e3", router.scheduler.inference_suspects)
+
+    def test_failed_legs_report_whether_the_engine_holds_other_work(self):
+        router = self.router()
+        inst = router.monitor.instances["e3"]
+        request = Request("r", 10, phase=Phase.DECODE)
+        other = Request("o", 10, phase=Phase.DECODE)
+        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        router.monitor.dispatched("e3", request)
+        for resident, busy in ((False, False), (True, True)):
+            if resident:
+                router.monitor.dispatched("e3", other)
+            with self.subTest(busy=busy), patch.object(router, "_leg_failed") as leg:
+                _failed_leg(state, inst, self.timeout, decode=True)
+                self.assertIs(leg.call_args.kwargs["busy"], busy)
+
+    def test_the_only_engine_for_a_pinned_role_stays_live(self):
+        router = self.router(pinned=True)
+        with patch.object(router, "_start_verification"):
+            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True)
+        self.assertIn("e3", router.scheduler.inference_suspects)
+        self.assertNotIn("e3", router.scheduler.quarantined)
+        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertNotIn("e3", router.scheduler.ejected)
+
+    def test_unpinned_fleets_hold_and_eject_a_failed_engine(self):
+        router = self.router()
+        with patch.object(router, "_start_verification"):
+            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True)
+        self.assertEqual(router.scheduler.quarantined["e3"], math.inf)
+        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertIn("e3", router.scheduler.ejected)
+
+    async def test_inference_probes_use_the_longer_first_token_or_health_budget(self):
+        router = self.router()
+        router.cfg.first_token_timeout_s = 1.5
+        router.cfg.health_timeout_s = 5.0
+        passed = InferenceProbe(ProbeLeg(), ProbeLeg())
+        with patch.object(
+            router.engines, "probe_inference", new=AsyncMock(return_value=passed)
+        ) as probe:
+            await router._verify_inference("e3", self.cfg.engines[1].url)
+        self.assertEqual(probe.call_args.kwargs["deadline_s"], 5.0)
+
+    def test_a_failed_producer_leg_names_the_deferral(self):
+        router = self.router()
+        probe = InferenceProbe(ProbeLeg(failed="inference_status"), ProbeLeg(inconclusive=True))
+        with self.assertLogs("narwhal", level="INFO") as logs:
+            self.assertFalse(router._resolve_inference_probe("e3", probe))
+        output = "\n".join(logs.output)
+        self.assertIn("producer leg failed inference_status", output)
+        self.assertNotIn("control pool", output)

@@ -14,7 +14,7 @@ from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.router import NarwhalRouter
-from narwhal.types import Role
+from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, invalid_token_choices
 from tests.scheduling.test_cache_evidence import warm
 
@@ -237,6 +237,22 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         for instance in self.router.monitor.instances.values():
             self.assertFalse(instance.prefill)
             self.assertFalse(instance.decode)
+
+    async def test_predictive_admission_refuses_when_decode_is_full(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        decode = next(i for i in self.router.monitor.instances.values() if i.role is Role.DECODE)
+        limit = self.router.scheduler.profiles.get(decode.iid).decode_max_requests
+        for index in range(limit):
+            self.router.monitor.dispatched(decode.iid, Request(f"d{index}", 10, phase=Phase.DECODE))
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(self.terminal_rows()[-1]["refused_cause"], "decode")
+        self.assertEqual(self.calls, [])
+        for index in range(limit):
+            self.router.monitor.finished(decode.iid, f"d{index}")
+        self.assertEqual((await self.post(client)).status_code, 200)
 
     async def test_invalid_output_identity_fails_the_original_request(self):
         """Serving rejects unidentified output before committing a successful response."""
