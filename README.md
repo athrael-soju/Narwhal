@@ -20,42 +20,42 @@
 
 ## About
 
-Narwhal is a disaggregated LLM inference framework, which reallocates prefill and decode roles as demand changes while model weights stay loaded.
+Narwhal is an adaptive disaggregated LLM inference framework, that reassigns prefill and decode roles as demand changes, while keeping model weights loaded during role changes.
 
 Narwhal provides:
 
 - Hot-swap prefill/decode role assignment across a fixed GPU fleet.
-- Separate prefill and decode routing with NIXL KV transfer.
+- Separate prefill and decode routing with NIXL key-value (KV) transfer.
 - Latency-aware admission and placement using measured per-engine profiles.
 - Streaming and non-streaming completion and chat APIs, including function tools and reasoning output where supported by the engine and model.
-- Request deadlines, disconnect cancellation, bounded queues and optional retries.
-- Engine health checks, transfer validation and warm-standby router failover.
-- Prometheus metrics, request journals and a Grafana dashboard.
+- Request deadlines, disconnect cancellation, bounded queues, and optional retries.
+- Engine health checks, transfer validation, and warm-standby router failover.
+- Prometheus metrics, request journals, and a Grafana dashboard.
 
 ## Architecture
 
-On regular controller passes, Narwhal estimates prefill and decode pressure against their SLOs for the current and adjacent role splits, using measured engine curves, offered demand, and resident work. It moves an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
+On regular role controller passes, Narwhal estimates prefill and decode pressure against their service-level objectives (SLOs). The estimate covers the current role split and each adjacent split, and it draws on measured engine curves, offered demand, and resident work. The role controller moves an eligible engine when the candidate split improves the worst projected SLO ratio by the configured margin. The candidate split must also pass the role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
+![Narwhal's reactive role controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
+See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for role controller settings.
 
 ## Benchmark snapshot
 
-AlPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal, Dynamo Planner, and Ray Serve LLM.
+AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal, Dynamo Planner, and Ray Serve LLM.
 
 ![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
 
 ## Install from PyPI
 
-Install the router commands on Linux with Python 3.11 or newer:
+Install the Narwhal commands on Linux with Python 3.11 or newer:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install narwhal-inference
-python -m pip show narwhal-inference
-narwhal-check --help
+narwhal-serve --version
+narwhal --help
 ```
 
 The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
@@ -83,7 +83,7 @@ The final gate measures the workload through the private path, reconciles client
 
 ## Contributing
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
+[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks, and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 

@@ -1,16 +1,8 @@
 # Narwhal CLI reference
 
-`narwhal-inference` installs the commands below. Each executable accepts `-h`, `--help` and `--version`, and resolves relative paths from the process working directory. `narwhal --help` lists all six installed commands.
+`narwhal-inference` installs six executables: `narwhal` and the five `narwhal-*` commands. The table lists the `narwhal config`, `narwhal diagnostics`, and `narwhal dev` subcommands separately. Each executable accepts `-h`, `--help`, and `--version`, and resolves relative paths from the process working directory. `narwhal --help` lists all six executables.
 
-Use the installed `narwhal-*` commands in deployment scripts because internal Python module paths can change between releases. `python -m narwhal.cli` also starts a router.
-
-In default text mode, the deployment and lifecycle commands exit 0 on success,
-2 for invalid arguments or configuration inputs, and 1 when an operation fails,
-such as an engine HTTP request, runtime inspection, listener bind, verification gate or teardown. A
-degraded development instance returns 1 from `narwhal dev status` in that mode.
-Expected failures identify the command, operation and affected path or value on
-stderr; Python tracebacks identify unexpected failures. Engine inspections retain
-subprocess output in the run's diagnostic logs.
+In deployment scripts, use the installed commands, because internal Python module paths can change between releases. `python -m narwhal.cli` also starts a router.
 
 | Command                             | Purpose                                                                 |
 | ----------------------------------- | ----------------------------------------------------------------------- |
