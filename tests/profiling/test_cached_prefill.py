@@ -215,7 +215,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
         return httpx.MockTransport(handle)
 
-    async def run_probe(self, transport, prefix_lens=(100, 400), **kwargs):
+    async def run_probe(self, transport, prefix_lens=(100, 400), short=0, **kwargs):
         sweep = replace(
             probe.Sweep(),
             cached_prefix_lens=prefix_lens,
@@ -224,7 +224,8 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def prompt(client, url, model, target, *args, **kwargs):
-            return ("w " * target).strip(), target
+            # `short` models a tokenizer whose resized prompt misses its target.
+            return ("w " * (target - short)).strip(), target
 
         async with httpx.AsyncClient(transport=transport) as client:
             with (
@@ -255,6 +256,23 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         samples, _ = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))
         warm = {s["prefix_tokens"] for s in samples if s["state"] == "warm"}
         self.assertEqual(warm, {96, 400})
+
+    async def test_a_short_prefix_primer_still_ends_past_its_block_boundary(self):
+        for short in (1, 3):
+            with self.subTest(short=short):
+                samples, reason = await self.run_probe(
+                    self.engine(hybrid=True), prefix_lens=(96, 400), short=short, block_tokens=16
+                )
+                self.assertIsNone(reason)
+                warm = {s["prefix_tokens"] for s in samples if s["state"] == "warm"}
+                self.assertEqual(warm, {96, 400})
+
+    async def test_a_primer_that_stays_on_a_block_boundary_stops_the_sweep(self):
+        samples, reason = await self.run_probe(
+            self.engine(hybrid=True), prefix_lens=(96,), short=20, block_tokens=16
+        )
+        self.assertEqual(samples, [])
+        self.assertIn("block boundary", reason)
 
     async def test_an_engine_that_reuses_nothing_keeps_cold_pricing(self):
         samples, reason = await self.run_probe(self.engine(reuse=False))

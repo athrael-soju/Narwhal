@@ -55,6 +55,8 @@ CACHED_PREFIX_LENS = (2048, 4096, 8192)
 # Suffixes past one cache block, like most served suffixes.
 CACHED_SUFFIX_LENS = (700, 1300, 2600)
 CACHED_REPEATS = 3
+# Words a warm primer may add to end inside the block after its prefix's last full block.
+PRIMER_PAD_WORDS = 8
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
 _BLOCK_TOKENS = re.compile(r'^vllm:cache_config_info\{[^}]*\bblock_size="([0-9]+)"', re.MULTILINE)
 # A warm fit whose held-out error exceeds this leaves the engine priced cold.
@@ -543,13 +545,16 @@ async def probe_cached_prefill(
     *,
     observation_timeout_s: float | None = None,
     max_model_len: int | None = None,
+    block_tokens: int | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Measure prefill with a cached prefix and an uncached suffix, plus cold controls.
 
-    Each case caches its prefix and the suffix's first word under a fresh salt, then
-    times prefix plus suffix under the same salt. The engine's hit counter supplies
-    the cached token count each sample records. A cold control repeats the prompt
-    under another salt. A case longer than `max_model_len` is skipped.
+    Each case caches a primer under a fresh salt, then times prefix plus suffix under
+    the same salt. The primer is the prefix and the suffix's first words; with an
+    exact-count tokenizer and `block_tokens`, it ends inside the block after the
+    prefix's last full block. The engine's hit counter supplies the cached token
+    count each sample records. A cold control repeats the prompt under another salt.
+    A case longer than `max_model_len` is skipped.
     Returns the samples and, when the sweep stopped early or measured no case, why.
     """
     timeout = observation_timeout_s or 30.0
@@ -565,15 +570,28 @@ async def probe_cached_prefill(
             **extras,
         }
 
+    exact = dialect.tokenize_path is not None
     samples: list[dict[str, Any]] = []
     for prefix_target in sweep.cached_prefix_lens:
         prefix, _ = await make_prompt(client, url, model, prefix_target, dialect, timeout_s=timeout)
+        # A hybrid engine keeps boundary state only for a prompt that runs past a block
+        # boundary, so the primer runs at least one word past the prefix.
+        primer = prefix + " context"
+        if exact and block_tokens is not None:
+            boundary = prefix_target // block_tokens * block_tokens
+            for _ in range(PRIMER_PAD_WORDS):
+                count = await _tokenize(client, url, model, primer, dialect, timeout)
+                if count > boundary and count % block_tokens:
+                    break
+                primer += " context"
+            else:
+                return samples, (
+                    f"the primer for prefix~{prefix_target} ends on a {block_tokens}-token "
+                    f"block boundary after {PRIMER_PAD_WORDS} padding words"
+                )
         for suffix_target in sweep.cached_suffix_lens:
             full = prefix + " " + "context " * suffix_target
-            # A hybrid engine keeps no boundary state for a prompt that ends on a block
-            # boundary, so the primer runs one word past the prefix.
-            primer = prefix + " context"
-            if max_model_len is not None and dialect.tokenize_path is not None:
+            if max_model_len is not None and exact:
                 length = await _tokenize(client, url, model, full, dialect, timeout)
                 if length + 1 > max_model_len:
                     print(
@@ -815,6 +833,7 @@ async def profile_instance(
             dialect,
             observation_timeout_s=observation_timeout_s,
             max_model_len=max_model_len,
+            block_tokens=block_tokens,
         )
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
