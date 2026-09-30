@@ -10,31 +10,31 @@ Print the installed contract manifest:
 narwhal-check --print-contract-versions
 ```
 
-The `narwhal.contract-manifest` document lists each interface with these fields:
+The `contracts` object of the `narwhal.contract-manifest` document maps each manifest key to these fields:
 
-| Field    | Meaning                              |
-| -------- | ------------------------------------ |
-| `schema` | Interface schema name.               |
-| `write`  | Version the release writes.          |
-| `read`   | Versions the release accepts.        |
+| Field | Meaning |
+| --- | --- |
+| `schema` | Interface schema name. |
+| `write` | Version the release writes. |
+| `read` | Versions the release accepts. |
 
 Interface versions in this release:
 
-| Interface                     | Schema                        | Version |
-| ----------------------------- | ----------------------------- | ------: |
-| Narwhal fleet configuration   | `narwhal.fleet`               |       1 |
-| Effective fleet configuration | `narwhal.effective-config`    |       1 |
-| Engine profile store          | `narwhal.profiles`            |       1 |
-| Engine attestation            | `narwhal.attestation`         |       1 |
-| Router state handoff          | `narwhal.handoff`             |       1 |
-| Router lease                  | `narwhal.router-lease`        |       1 |
-| Engine lifecycle              | `narwhal.lifecycle`           |       1 |
-| Request journal               | `narwhal.journal`             |       1 |
-| Live state                    | `narwhal.state`               |       1 |
-| Prometheus metrics            | `narwhal.metrics`             |       1 |
-| Command result                | `narwhal.command-result`      |       1 |
-| Contract manifest             | `narwhal.contract-manifest`   |       1 |
-| Diagnostic bundle             | `narwhal.diagnostic-bundle`   |       1 |
+| Interface | Schema | Version | Manifest key |
+| --- | --- | :--: | --- |
+| Narwhal fleet configuration | `narwhal.fleet` | 1 | `fleet` |
+| Effective fleet configuration | `narwhal.effective-config` | 1 | `effective_config` |
+| Engine profile store | `narwhal.profiles` | 1 | `profiles` |
+| Engine attestation | `narwhal.attestation` | 1 | `attestation` |
+| Router state handoff | `narwhal.handoff` | 1 | `handoff` |
+| Router lease | `narwhal.router-lease` | 1 | `lease` |
+| Engine lifecycle | `narwhal.lifecycle` | 1 | `lifecycle` |
+| Request journal | `narwhal.journal` | 1 | `journal` |
+| Live state | `narwhal.state` | 1 | `state` |
+| Prometheus metrics | `narwhal.metrics` | 1 | `metrics` |
+| Command result | `narwhal.command-result` | 1 | `command_result` |
+| Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
+| Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
 
 To compare manifests:
 
@@ -56,7 +56,10 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-roll-back).
 
-A changed `schema` or `write` value can fail validation of installed-release documents on the candidate.
+| `diff` result | Installed-release documents on the candidate |
+| --- | --- |
+| Identical manifests | Pass validation. |
+| Changed `schema` or `write` for an interface | Fail validation for that interface. |
 
 ## Schema version changes
 

@@ -2,13 +2,17 @@
 
 ## Access the dashboard from a workstation
 
-1. Skip the tunnel command when the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards monitoring.
-2. From the management checkout with the workstation `.env` loaded, open a tunnel:
+An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
 
-```bash
-python3 tools/deployment/deploy_hosts.py tunnel --role router \
-  --forward 13000:3000 --forward 19090:9090
-```
+To open a monitoring tunnel:
+
+1. Open a terminal in the management checkout with the workstation `.env` loaded.
+2. Open the tunnel:
+
+    ```bash
+    python3 tools/deployment/deploy_hosts.py tunnel --role router \
+      --forward 13000:3000 --forward 19090:9090
+    ```
 
 3. Keep the tunnel terminal open.
 
@@ -17,10 +21,16 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
 | Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
 | Prometheus | `http://127.0.0.1:19090` |
 
-- Grafana permits anonymous Viewer access through the local tunnel.
-- The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
+Grafana grants anonymous Viewer access through the local tunnel.
+
+The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
 
 ## Isolate a second monitoring stack
+
+| Variable | Default |
+| --- | --- |
+| `NARWHAL_GRAFANA_BIND_ADDRESS` | `127.0.0.1` |
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `127.0.0.1:9090` |
 
 When another monitoring deployment shares the router host, run `make observe` with distinct loopback listeners:
 
@@ -33,7 +43,7 @@ make observe
 | `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus binds | Grafana `Prometheus` datasource and readiness probes use |
 | --- | --- | --- |
 | Specific address | That address | That address |
-| Wildcard | The wildcard | Loopback |
+| Wildcard (`0.0.0.0` or `::`) | The wildcard | Loopback |
 
 Tunnel to the `127.0.0.2` listeners:
 
@@ -43,4 +53,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-Next: [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md).
+[![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)

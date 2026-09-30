@@ -16,15 +16,15 @@
 
 #### Hand off to the upgraded router
 
-8. Stop the old active router gracefully.
-9. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in step 2.
-10. Check that it is the only backend returning HTTP 200 from `/ready`.
+1. Stop the old active router gracefully.
+2. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in [Upgrade the standby](#upgrade-the-standby).
+3. Check that it is the only backend returning HTTP 200 from `/ready`.
 
 #### Upgrade the former active router
 
-11. Install the same deployment set on the stopped router's host.
-12. Start that router as standby.
-13. Wait for its `/ready` to return HTTP 503.
+1. Install the same deployment set on the stopped router's host.
+2. Start that router as standby.
+3. Wait for its `/ready` to return HTTP 503.
 
 ### 10.2 Upgrade across a handoff-version change
 
@@ -49,10 +49,19 @@ Incompatible handoff versions need a maintenance window.
     narwhal-check --print-contract-versions
     ```
 
-4. Restore the code, configuration, profiles, first-token calibration artifact (matching the live process generations), and a state handoff the restored build supports as one unit.
+4. Restore these as one unit:
+    - the code
+    - the configuration
+    - the profiles
+    - the first-token calibration artifact for the live process generations
+    - a state handoff the restored build supports
 5. If process generations changed, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before preflight.
 6. For fresh roles and zeroed counters, set `recovery.resume: false` and drop `--resume`.
-7. Confirm exactly one router holds the lease, either the rollback router or its fenced peer.
-8. Start the rollback build and check that `/health` reports `status: ok`, `/ready` returns HTTP 200, roles and cumulative counters are present, and one completion request succeeds.
-9. Return the router to service when the checks pass.
-10. Restore its standby.
+7. Confirm exactly one router holds the lease: the rollback router or its fenced peer.
+8. Start the rollback build.
+9. Check that `/health` reports `status: ok`.
+10. Check that `/ready` returns HTTP 200.
+11. Check that roles and cumulative counters are present.
+12. Send one completion request and confirm it succeeds.
+13. Return the router to service.
+14. Restore its standby.

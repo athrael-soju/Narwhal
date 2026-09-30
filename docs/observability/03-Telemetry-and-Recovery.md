@@ -6,7 +6,7 @@ Run the deployment's AMD or NVIDIA exporter to feed GPU sensor metrics to the ha
 
 ## Alert evaluation
 
-Alert state from `tools/observability/prometheus-alerts.yml` appears in the Prometheus `ALERTS` series.
+Prometheus publishes the state of the `tools/observability/prometheus-alerts.yml` rules in the `ALERTS` series.
 
 Inspect rules on the router host:
 
@@ -28,15 +28,15 @@ The deployment's alert manager routes `severity="page"` and `severity="warn"` al
 | Symptom | Check or action |
 | --- | --- |
 | Browser connection fails | Check the SSH tunnel and the route to the router host. |
-| `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolate-a-second-monitoring-stack) with `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
+| `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolate-a-second-monitoring-stack). |
 | Startup reports a command deadline | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`. |
-| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana` for the pinned image versions. |
+| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana`. |
 | Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets`. |
 | An engine replica disappears from charts | Check the generated target entry and the engine's `iid` label. |
 | Grafana shows an older dashboard | Rerun `make observe`. |
-| `make observe` fails the [dashboard readiness check](01-Start-and-Verify.md#readiness-contract) | Read the provisioning log. |
+| `make observe` fails the [dashboard readiness check](01-Start-and-Verify.md#readiness-contract) | Read the Grafana provisioning log. |
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid`. |
 
 Verify each fix with a `make observe` rerun that passes the [readiness contract](01-Start-and-Verify.md#readiness-contract).
@@ -53,4 +53,4 @@ Verify each fix with a `make observe` rerun that passes the [readiness contract]
 - Save deployment addresses and captured responses under `runs/`.
 - Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
 
-Fleet-health actions follow [Monitor placement and control](../operate/02-Monitor.md#6-monitor-placement-and-control).
+[![Next: Monitor placement and control](https://img.shields.io/badge/next-Monitor%20placement%20and%20control-0f766e)](../operate/02-Monitor.md#6-monitor-placement-and-control)

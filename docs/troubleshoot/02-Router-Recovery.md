@@ -17,14 +17,14 @@
 
 The recovered standby:
 
-- returns HTTP 503 from `/ready`.
-- rejects direct completion requests.
+- returns HTTP 503 from `/ready`
+- rejects direct completion requests with HTTP 503
 
 When both routers return HTTP 503 from `/ready`, read the refusal reasons:
 
 | Refusal reason | Action |
 | --- | --- |
-| Lease storage or clock bound | Repair the storage or clock, keeping the lease holder and fencing in place. |
+| Lease storage or clock bound | Repair the storage or clock with the lease holder and fencing left in place. |
 | Any other reason | Fix what the reason names. |
 
 ### State handoff is stale or incompatible
@@ -43,8 +43,8 @@ If handoff restoration fails:
 1. Open a maintenance window.
 2. Set `recovery.resume: false` in the fleet configuration.
 3. Drop `--resume` and `--standby-of` from one router's launch command.
-4. Start that router from its opening roles.
-5. Wait until the old router has stopped or fenced itself.
+4. Wait until the old router has stopped or fenced itself and its lease has expired.
+5. Start that router from its opening roles.
 6. Admit traffic.
 
 ## Router rollback

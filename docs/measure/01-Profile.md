@@ -16,19 +16,22 @@ Record time to first token (TTFT) and time per output token (TPOT) separately fo
 
 For every scheduled request, the deployment client must retain:
 
-* scheduled start
-* actual start
-* response status
-* requested output length
-* completed output length
-* TTFT
-* TPOT
-* terminal error information
+- scheduled start
+- actual start
+- response status
+- requested output length
+- completed output length
+- TTFT
+- TPOT
+- terminal error information
 
-The service-level objective (SLO) denominator includes refused, failed, and cancelled scored requests.
+Counting rules:
 
-- Output length includes empty-text and reasoning-only token IDs.
-- TPOT requires at least two identified tokens.
+| Rule | Value |
+| --- | --- |
+| Service-level objective (SLO) denominator | Every scored request, including refused, failed, and cancelled requests |
+| Output length | Every identified token ID, including empty-text and reasoning-only tokens |
+| TPOT | Requires at least two identified tokens |
 
 Record the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) stream-accounting rule with each result set.
 
@@ -43,21 +46,19 @@ Profile every new engine process or runtime before you select deployment SLOs:
 3. Warm the model.
 4. Sweep the expected traffic shape:
 
-```bash
-narwhal-profile \
-  --fleet config/fleet.production.json \
-  --prefill-lens <comma-separated-input-lengths> \
-  --decode-input-lens <comma-separated-input-lengths> \
-  --decode-concurrency <comma-separated-stream-counts>
-```
+    ```bash
+    narwhal-profile \
+      --fleet config/fleet.production.json \
+      --prefill-lens <comma-separated-input-lengths> \
+      --decode-input-lens <comma-separated-input-lengths> \
+      --decode-concurrency <comma-separated-stream-counts>
+    ```
 
 ### Prefill sweep
 
-Select at least three prefill lengths spanning the production range, including its longest inputs.
-
-The effective sweep is each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
-
-Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
+- Select at least three prefill lengths spanning the production range, including its longest inputs.
+- The effective sweep is each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
+- Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 
 ### Decode sweep
 
@@ -65,10 +66,10 @@ A decode cell is one decode input length and concurrency pair.
 
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency points, including one stream and the intended operating range.
-- Long-context deployments need a broader sweep.
+- Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live context limit.
 - When fewer than two decode input lengths fit, choose shorter inputs.
-- Rerun a sweep that fails on a rise in `vllm:prefix_cache_hits_total`.
+- Reserve the engine and rerun a sweep that fails on a rise in `vllm:prefix_cache_hits_total`.
 
 ## 3. Retain profile samples and fits
 
@@ -83,7 +84,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 - decode intervals and cell medians
 - fitted profiles
 - `prefix_cache_hit_tokens`: prefix-cache hits per engine sweep
-  - `null` when `vllm:prefix_cache_hits_total` is absent from engine metrics
+    - `null` when `vllm:prefix_cache_hits_total` is absent from engine metrics or decreases
 - the attestation response or process identity per fit
 
 | Case                  | Sample sidecar result                               |
@@ -105,10 +106,12 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 
 Measured prefill latency covers the HTTP round trip plus one generated token.
 
-TTFT curve rejection bounds:
+The profiler rejects a TTFT curve over the per-length medians at these errors:
 
-- mean error above 20%
-- worst-point error above 50%
+| Error | Rejected above |
+| --- | :---: |
+| Mean error | 20% |
+| Worst-point error | 50% |
 
 ### Repair profiles produced by the earlier raw-repeat fitter
 
@@ -151,12 +154,12 @@ Near scheduler saturation, compare these profiler measurements with the engine's
 
 Fill gaps between cells with intermediate cells that match the production workload.
 
-Set the default limits from measurements covering the expected decode domain:
+Set the decode error limits from measurements covering the expected decode domain:
 
-```text
-profiles.max_decode_fit_mape = 0.05
-profiles.max_decode_cv_mape  = 0.13
-```
+| Field | Default | Caps |
+| --- | :---: | --- |
+| `profiles.max_decode_fit_mape` | `0.05` | In-sample fit error |
+| `profiles.max_decode_cv_mape` | `0.13` | Leave-one-cell-out cross-validation error |
 
 Fleet validation requires `profiles.max_decode_fit_mape` at or below `controller.reactive.movement_margin`.
 

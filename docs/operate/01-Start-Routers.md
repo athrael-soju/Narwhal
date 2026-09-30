@@ -2,15 +2,15 @@
 
 ## 1. Production boundary
 
-| Component         | Responsibility                                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Site automation   | Provisions GPU hosts and engine processes |
-| Public ingress    | TLS, client authentication, rate limits, model routing, streaming proxy settings |
-| Load balancer     | Polls `/ready` and routes to the router that returns HTTP 200 |
-| Narwhal           | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
+| Component | Responsibility |
+| --- | --- |
+| Site automation | Provisions GPU hosts and engine processes |
+| Public ingress | TLS, client authentication, rate limits, model routing, streaming proxy settings |
+| Load balancer | Polls `/ready` and routes to the router that returns HTTP 200 |
+| Narwhal | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
 | Engine supervisor | Engine and attestation sidecar starts and stops, resource limits, restart policy, log retention |
-| Shared storage    | One lease domain shared by both router hosts                                                                  |
-| Monitoring        | Metric scraping, journal retention, and paging per site policy                                                       |
+| Shared storage | One lease domain shared by both router hosts |
+| Monitoring | Metric scraping, journal retention, and paging per site policy |
 
 ## 2. Keep one deployment set
 
@@ -20,9 +20,9 @@ Install on both router hosts, with the same release identifier:
 - the fleet configuration
 - the profile store
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
-- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
+- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test)
 
-After an engine replacement, match the calibration artifact to the live engine's process generation:
+When an engine process is replaced, match the calibration artifact to its process generation:
 
 1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
 2. Distribute the new artifact and fleet configuration.
@@ -41,15 +41,10 @@ narwhal-check --print-contract-versions
 
 ## 3. Configure the client path
 
-| Interface | Network |
+| Network | Interfaces |
 | --- | --- |
-| Completion routes clients use | Public ingress |
-| `/narwhal/*` | Private |
-| `/metrics` | Private |
-| Engine APIs | Private |
-| Attestation endpoints | Private |
-| `/health` | Private |
-| `/ready` | Private |
+| Public ingress | Completion routes clients use |
+| Private | `/narwhal/*`, `/metrics`, `/health`, `/ready`, engine APIs, attestation endpoints |
 
 Ingress must:
 
@@ -59,18 +54,20 @@ Ingress must:
 - apply identity policy and rate limits
 - route each model to its router pair
 - forward streaming chunks as they arrive
-- enforce connect and idle timeouts derived from the service budget.
+- enforce connect and idle timeouts derived from the service budget
 
 Each engine leg receives:
 
 - a request ID per attempt and phase
-- the engine credential identified by `engine.engine_api_key_env`.
+- the engine credential identified by `engine.engine_api_key_env`
 
 Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg).
 
 ## 4. Start a router pair
 
 Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set.
+
+Router pair requirements:
 
 | Item | Requirement |
 | --- | --- |

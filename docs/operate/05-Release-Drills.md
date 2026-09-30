@@ -10,9 +10,10 @@ Run the release drills on an idle fleet with external admission closed:
 
 Keep the release, fleet configuration, profiles, engine build, supervisor commands, and drill results in the private deployment directory.
 
-Earlier drill results count when they meet the pass conditions.
-
-Test the production supervisor when an earlier run used another launcher.
+| Earlier drill run | Status |
+| --- | --- |
+| Meets the pass conditions | Counts for this release |
+| Used a launcher other than the production supervisor | Repeat with the production supervisor |
 
 ### Release drill pass conditions
 
@@ -29,7 +30,9 @@ The whole-wave restart drill passes when:
 - One failed member holds the whole wave.
 - Every member returns together after validation.
 
-The unplanned whole-wave hold drill passes when the drain records current identities for the whole excluded wave before member replacement and readmission.
+The unplanned whole-wave hold drill passes when:
+
+- The drain records current identities for the whole excluded wave before member replacement and readmission.
 
 The router failover drill passes when:
 
@@ -49,7 +52,7 @@ Use `recovery.engine_restart_policy = individual` and the prerequisites in [Rest
 6. [Activate the fresh profiles](03-Restart-Engines.md#activate-replacement-profiles).
 7. Request explicit readmission.
 8. Save the successful response.
-9. Confirm it shows `state = active`, `accepts_new = true`, a newer process start, and every [readmission check](03-Restart-Engines.md) passing.
+9. Confirm it shows `state = active`, `accepts_new = true`, a newer process start, and every [readmission check](03-Restart-Engines.md#73-request-readmission) passing.
 10. Send a routed request.
 11. Confirm its placement includes the returned engine.
 12. Match the client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) and the router's cumulative counters.
@@ -72,10 +75,10 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 
 #### Fail one member
 
-9. Stop one member's attestation sidecar with the recorded supervisor command.
-10. Confirm its engine stays healthy.
-11. Confirm the other sidecars keep running.
-12. Request readmission, saving the failure response:
+1. Stop one member's attestation sidecar with the recorded supervisor command.
+2. Confirm its engine stays healthy.
+3. Confirm the other sidecars keep running.
+4. Request readmission, saving the failure response:
 
     ```bash
     curl -sS -o "$RUN_DIR/wave-failed.json" -w '%{http_code}\n' \
@@ -99,12 +102,13 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     PY
     ```
 
-13. Confirm the stopped sidecar's member reports an attestation failure and every other member reports that another wave engine failed validation.
+5. Confirm the stopped sidecar's member reports an attestation failure.
+6. Confirm every other member reports `another engine in the wave failed validation`.
 
 #### Sample the hold
 
-14. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values.
-15. Start this sampler while the whole-wave hold is active:
+1. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values.
+2. Start this sampler while the whole-wave hold is active:
 
     ```bash
     python3 - "$ROUTER_URL" "$RUN_DIR/wave-samples.jsonl" <<'PY'
@@ -133,24 +137,28 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     PY
     ```
 
-    The sampler exits after complete readmission, fails on partial readmission, and ends early on Ctrl+C.
+    | Lifecycle sample | Sampler result |
+    | --- | --- |
+    | Complete readmission | Prints `complete wave readmitted` and exits |
+    | Partial readmission | Fails its assertion |
+    | Ctrl+C | Stops early |
 
 #### Recover and verify
 
-16. Restart the failed member's sidecar with the attestation inputs from profiling.
-17. Leave the replacement engine running.
-18. Check that its attestation endpoint returns the digest from the new profile.
-19. Check that the whole-wave hold remains active.
-20. [Request and verify whole-wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
-21. Verify that every member passed every [readmission check](03-Restart-Engines.md).
-22. Find the journal's `engine_lifecycle` event with `action = wave_readmitted`.
-23. Send a routed request.
-24. Match its client result to the journal and the router's cumulative counters.
-25. Save the samples, readmission response, and lifecycle events.
+1. Restart the failed member's sidecar with the attestation inputs from profiling.
+2. Leave the replacement engine running.
+3. Check that its attestation endpoint returns the digest from the new profile.
+4. Check that the whole-wave hold remains active.
+5. [Request and verify whole-wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
+6. Verify that every member passed every [readmission check](03-Restart-Engines.md#73-request-readmission).
+7. Find the journal's `engine_lifecycle` event with `action = wave_readmitted`.
+8. Send a routed request.
+9. Match its client result to the journal and the router's cumulative counters.
+10. Save the samples, readmission response, and lifecycle events.
 
 ### Unplanned whole-wave hold drill
 
-`whole_wave` needs a [liveness sweep](03-Restart-Engines.md#9-detect-process-replacement): `recovery.liveness_every` above zero, default `10`.
+`whole_wave` requires a [liveness sweep](03-Restart-Engines.md#9-detect-process-replacement): `recovery.liveness_every` above `0`, default `10`.
 
 1. Set `recovery.engine_restart_policy = whole_wave`.
 2. Wait until every engine is admitted and idle.
@@ -162,7 +170,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 8. Check that the drain recorded identities before member replacement.
 9. Verify full readmission and a routed request.
 
-To test the already-stopped-engine case:
+Already-stopped-engine case:
 
 1. Stop an engine before requesting the drain.
 2. Keep the failed drain response with its missing identity, the process start time from identity collection, and the successful retry.

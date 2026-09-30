@@ -34,7 +34,7 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 | Decode intercepts | 0.2416 to 0.2426 s/token |
 
 | Timeout measurement | Value | Result |
-| --- | --- | --- |
+| --- | :---: | --- |
 | Packaged first-token deadline | 2.5 s | Rejected valid KV handoffs between engines |
 | Wider-window direct probe first-token latency | 0.348 to 5.274 s | Completed on every permitted path |
 | Qualified fleet copy `engine.first_token_timeout_s`, the only changed field | 8.5 s | About 0.6 s of the 10 s TTFT budget remains after prefill |
@@ -49,13 +49,16 @@ Full preflight against the same engine containers and profiled process generatio
 4. Start each engine from its checked launch plan.
 5. Capture each engine's live cache and NIXL contract.
 6. Start each engine's attestation sidecar.
-7. Finalize the fleet on the router host.
-8. Profile the fleet on the router host.
-9. Run preflight on the router host, with the commands for steps 7 to 9:
+7. Finalize the fleet on the router host:
 
     ```bash
     .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet \
       --fleet runs/deployment/fleet.json
+    ```
+
+8. Profile the fleet on the router host:
+
+    ```bash
     .venv/bin/narwhal-profile \
       --fleet runs/deployment/fleet.json \
       --limits runs/deployment/profiling-limits.json \
@@ -64,17 +67,26 @@ Full preflight against the same engine containers and profiled process generatio
       --decode-concurrency 1,2,4 \
       --decode-tokens 64 \
       --prefill-repeats 3
+    ```
+
+9. Run preflight on the router host:
+
+    ```bash
     .venv/bin/narwhal-check --fleet runs/<qualification-run>/fleet-qualified.json
     ```
 
-10. Start the router.
-11. Update the benchmark helper in the router-host checkout to the pinned client revision.
-12. Prepare the workload, with the commands for steps 10 and 12:
+10. Start the router:
 
     ```bash
     .venv/bin/narwhal-serve --fleet runs/<qualification-run>/fleet-qualified.json \
       --host 127.0.0.1 --port 8000 \
       --journal runs/<qualification-run>/router-journal.jsonl
+    ```
+
+11. Update the benchmark helper in the router-host checkout to the pinned client revision.
+12. Prepare the workload:
+
+    ```bash
     .venv/bin/python tools/measurement/load_trial.py prepare \
       --base http://127.0.0.1:8000 \
       --input-tokens 8192 --output-tokens 128 --seed 1729 \
@@ -112,22 +124,13 @@ The private `benchmark-plan-qualified.json` sets:
 | 0.5 request/s | 0.460 request/s | 58.9 tokens/s | 5.258 / 7.298 / 7.407 s | 257.5 / 258.4 / 259.3 ms | 200/200 within limits |
 | 1 request/s | 0.840 request/s | 107.5 tokens/s | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
-- The router shifted capacity toward decode during the 0.5 request/s point.
-- The router held that allocation through the 1 request/s point.
-
-Collector results at both points:
-
-- Scrapes covered the whole run.
-- Client and journal counts matched.
-- The timeline shows every role change.
-
-Collector results at 0.5 request/s:
-
-- One `counter_missing` diagnostic for `narwhal_flips_total`, a series that first appeared at the first role change.
-
-Collector results at 1 request/s:
-
-- All collector checks passed.
+| Observation | 0.5 request/s | 1 request/s |
+| --- | --- | --- |
+| Role allocation | Router shifted capacity toward decode | Router held the allocation from the 0.5 request/s point |
+| Collector scrape coverage | Whole run | Whole run |
+| Collector client and journal counts | Matched | Matched |
+| Collector role timeline | Every role change | Every role change |
+| Collector diagnostics | One `counter_missing` for `narwhal_flips_total`, a series first exported at the first role change | Zero |
 
 Grafana dashboard coverage begins partway through the 0.5 request/s point.
 

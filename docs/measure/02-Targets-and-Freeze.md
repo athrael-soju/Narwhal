@@ -17,14 +17,21 @@
 
 A TPOT target below the engine's measured per-token time gives zero feasible decode capacity.
 
-The `narwhal-check` `slo` gate passes when both targets are feasible against the saved profiles.
+The `narwhal-check` `slo` gate passes each engine when:
+
+| Target | Condition |
+| --- | --- |
+| `slo.tpot_s` | At or above the profile's token interval at the smallest measured decode cohort |
+| `slo.ttft_s` | Above the profile's single-token prefill time |
 
 ### Pace gate
 
-| Successful probes | Each engine passes with |
-| --- | --- |
-| Three or more | Pace within `1.5x` of the fleet median |
-| One or two | A saved prefill profile, exact `usage.prompt_tokens`, and pace within `1.5x` of the profile prediction |
+| Check | Applies to | Passes with |
+| --- | --- | --- |
+| Fleet median | Every engine, when three or more probes succeed | Pace within `1.5x` of the fleet median |
+| Saved profile | Every engine with a saved prefill profile | Exact `usage.prompt_tokens` and pace within `1.5x` of the profile prediction |
+
+With one or two successful probes, the pace gate requires a saved prefill profile for each engine.
 
 ## 6. Freeze the deployment under test
 
@@ -38,18 +45,26 @@ The `narwhal-check` `slo` gate passes when both targets are feasible against the
     | Engine inputs | profile files, sample store, engine image digest, engine launcher |
     | Deployment evidence | attestation documents, preflight output, endpoint captures, deployment-client output |
     | Run evidence | router journal, state snapshots, metrics |
+
 3. Record the hosts and SSH tunnel mapping with the identifier.
 
-The offered-rate sweep holds these fixed: source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets.
+The offered-rate sweep holds these fixed:
+
+- source revision
+- model
+- runtime
+- profiles
+- router targets
+- workload shape
+- cache policy
+- both latency targets
 
 Before the next rate, wait for:
 
-* resident work to finish
-* transfer leases to release
+- resident work to finish
+- transfer leases to release
 
 Stop the sweep at the first of:
 
-* a run that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial)
-* a tested rate at the intended operating ceiling
-
-Next: [synthetic load trial](03-Load-Trial.md).
+- a run that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial)
+- a tested rate at the intended operating ceiling

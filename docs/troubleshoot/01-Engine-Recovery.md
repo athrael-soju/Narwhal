@@ -2,8 +2,8 @@
 
 Prerequisites:
 
-- The management host from [Engine restart and process replacement](../operate/03-Restart-Engines.md) for lifecycle requests
-- A complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) in the fleet configuration
+- the management host from [Engine restart and process replacement](../operate/03-Restart-Engines.md) for lifecycle requests
+- a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) in the fleet configuration
 
 ## Engine failure
 
@@ -36,7 +36,7 @@ Steps for `individual` recovery:
 If the lifecycle state becomes `blocked`:
 
 1. Repair the failure named in `engines.<id>.error`.
-2. Send a `POST` request to `/narwhal/lifecycle/readmit`.
+2. Send `POST /narwhal/lifecycle/readmit` with body `{"engines":["<id>"]}`.
 
 ## Whole-wave recovery
 

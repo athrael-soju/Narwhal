@@ -1,6 +1,14 @@
 # Ordered benchmark points
 
-`benchmark_runner.py` runs the plan's points in order, with `/ready`, `/v1/models`, and idle-router drain checks before and after each point's client.
+`tools/measurement/benchmark_runner.py` runs the plan's points in order, with these steps per point:
+
+1. Check that `/ready` reports `ready`.
+2. Check that `/v1/models` lists exactly the `--model` name.
+3. Wait for an idle router.
+4. Start the [evidence collector](06-Benchmark-Evidence.md) when the plan has an `evidence` object.
+5. Run the point's client.
+6. Wait for an idle router.
+7. Write `result.json`.
 
 Prerequisites:
 
@@ -8,12 +16,12 @@ Prerequisites:
 - A router reserved for this run.
 - A router and engines that stay running through the benchmark.
 
-A plan with an `evidence` object runs on a host that:
+| Plan | Runner host |
+| --- | --- |
+| With an `evidence` object | A host that reads the router's append-only JSONL journal as a local file and reaches the router and every engine metrics endpoint |
+| Other plans | The workstation repository root, through the private router tunnel |
 
-- Reads the router's [journal file](06-Benchmark-Evidence.md).
-- Reaches every engine metrics endpoint.
-
-Other plans run on the workstation repository root through the private router tunnel.
+## Run a plan
 
 1. Prepare the workload with the [load trial helper](03-Load-Trial.md#create-the-trial-directory-and-workload).
 2. Write a private plan at `runs/benchmark-plan.json` with `workload.file` and `--workload` set to the prepared file:
@@ -65,7 +73,20 @@ Other plans run on the workstation repository root through the private router tu
       --out runs/benchmark-001
     ```
 
-`client_argv` is an argument vector that takes these placeholders:
+## Plan fields
+
+| Field | Value |
+| --- | --- |
+| `schema` | `1` |
+| `points` | Ordered array of points |
+| `evidence` | Optional [evidence collector](06-Benchmark-Evidence.md) settings |
+| `points[].id` | Unique name of letters, digits, hyphens, and underscores |
+| `points[].workload` | Nonempty object copied into `result.json` |
+| `points[].client_argv` | Nonempty argument vector that contains `{base}` and `{model}` |
+| `points[].client_timeout_s` | Positive client deadline in seconds |
+| `points[].drain_timeout_s` | Positive drain deadline in seconds for each drain wait |
+
+`client_argv` placeholders:
 
 | Placeholder   | Value                     |
 | ------------- | ------------------------- |
@@ -77,27 +98,33 @@ Other plans run on the workstation repository root through the private router tu
 Bearer-token ingress:
 
 1. Export the token in an environment variable.
-2. Pass the variable name with `--api-key-env NAME` for the runner's probes.
-3. Give the external client separate credentials.
+2. Pass the variable name with `--api-key-env NAME` for the runner's probes, drain checks, and router samples.
+3. Pass client credentials in `client_argv`, such as the load trial helper's `--api-key-env NAME`.
+
+## Output and exit status
 
 The new private `--out` directory holds:
 
 | File                             | Location        | Contents                                                                                        |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
 | `manifest.json`                  | Output root     | Plan, its SHA-256 digest, runner digest, model, URL, and invocation                             |
-| `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot |
+| `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, and evidence diagnostic count |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 
-The runner stops on:
+| Runner exit | Condition |
+| :---: | --- |
+| `0` | Every point reaches `completed` |
+| `1` | The plan fails validation, or a point ends with another `condition` |
 
-- a refused `/ready` check
-- a `/v1/models` model mismatch
-- a nonzero client exit, after a drain attempt
-- a router drain timeout before or after the client
+The runner stops at the first point that ends with one of these `result.json` conditions:
 
-For client exit `2` in the load trial helper's [exit codes](03-Load-Trial.md#8-measure-05-requests), read `summary.json` and `requests.jsonl`:
-
-| `client_schedule_valid` in `summary.json` | Exit `2` means |
+| `condition` | Cause |
 | --- | --- |
-| `true` | A valid measured miss |
-| `false` | A client that needs repair |
+| `readiness_refused` | `/ready` returned a status other than `200` with `ready` |
+| `models_unavailable` | `/v1/models` returned a status other than `200` |
+| `model_mismatch` | `/v1/models` listed models other than exactly `--model` |
+| `probe_error` | A readiness or model probe failed |
+| `initial_drain_timeout`, `initial_drain_state_error` | The drain wait before the client timed out or failed to read `/narwhal/state` |
+| `drain_timeout`, `drain_state_error` | The drain wait after the client timed out or failed to read `/narwhal/state` |
+| `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#8-measure-05-requests) |
+| `evidence_error` | The evidence collector failed |
