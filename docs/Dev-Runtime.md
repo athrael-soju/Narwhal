@@ -131,6 +131,8 @@ curl http://127.0.0.1:18000/metrics
 
 Optional: [forward these metrics to a Prometheus and Grafana host](observability/04-WSL2.md).
 
+Two `narwhal dev` options change the layout and target:
+
 | Option | Effect |
 | --- | --- |
 | `--port-base` on `narwhal dev init` | Selects a different port layout |
@@ -256,9 +258,9 @@ The qualification evidence records:
 - the GPU, driver, model, and runtime versions
 - the free-memory reserve and peak startup memory
 - both directed KV transfers
-- the routed completion.
+- the routed completion
 
 A contribution for a GPU from another vendor includes:
 
 - a measured template
-- optionally discovery, memory accounting, engine launch, and a compatible transfer runtime
+- optionally, discovery, memory accounting, engine launch, and a compatible transfer runtime

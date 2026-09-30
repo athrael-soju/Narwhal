@@ -112,10 +112,10 @@ Contracted resume and automatic takeover require:
 - state handoff schema version 1
 - an accepted process identity for every engine that the saved state counts as available
 
-| Saved state handoff                                          | Startup result                                                   |
-| ------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Unknown schema or version                                    | Startup aborts                                                   |
-| Schema-valid and failing the contracted fleet's resume checks | Whole-wave hold requiring a managed restart of every engine     |
+| Saved state handoff                                           | Startup result                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------- |
+| Unknown schema or version                                     | Startup aborts                                              |
+| Schema-valid and failing the contracted fleet's resume checks | Whole-wave hold requiring a managed restart of every engine |
 
 | State                                                            | On successful resume                                  |
 | ---------------------------------------------------------------- | ----------------------------------------------------- |
@@ -146,8 +146,8 @@ Set the credential variable under `engine`:
 }
 ```
 
-| Field                       | Default | Meaning                                                           |
-| --------------------------- | ------- | ----------------------------------------------------------------- |
+| Field                       | Default | Meaning                                                          |
+| --------------------------- | ------- | ---------------------------------------------------------------- |
 | `engine.engine_api_key_env` | `""`    | Environment variable that must hold the engine Bearer credential |
 
 Serving, profiling, preflight, cache-reset, and lifecycle requests:

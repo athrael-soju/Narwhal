@@ -10,7 +10,7 @@ On the router, confirm that `runs/deployment/fleet.json` lists:
 - The SLO values.
 - The profile path.
 
-Capture inputs:
+Later steps read these inputs:
 
 - The container ID and logs in each engine's Gate C `ENGINE_RUN` directory.
 - `cache-layout.json`.
@@ -290,8 +290,8 @@ Run once from the router shell after every sidecar passes:
 
 | Failure               | Diagnosis                                                               |
 | --------------------- | ----------------------------------------------------------------------- |
-| A sidecar fails       | Error output lists the engine and the failed checks.                       |
-| Two engines disagree  | The differing field identifies the engine with the bad input.            |
+| A sidecar fails       | Error output lists the engine and the failed checks.                    |
+| Two engines disagree  | The differing field identifies the engine with the bad input.           |
 
 Recovery:
 

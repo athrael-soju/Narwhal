@@ -33,7 +33,7 @@ Replace `<served-model>` with the fleet model.
 | `/ready`          | Admission state.                                   |
 | `/narwhal/state`  | Engine inventory and role split.                   |
 | `/metrics`        | Router metrics.                                    |
-| `/v1/completions` | One successful completion that increments `served`.  |
+| `/v1/completions` | One successful completion that increments `served`. |
 
 ## Start the monitoring stack on the router
 
@@ -134,7 +134,7 @@ Candidate thresholds:
 
 The trial passes when steps 4 to 10 succeed.
 
-1. Retain with the private deployment record:
+11. Retain with the private deployment record:
 
     - The service locations.
     - The approved source revision.
@@ -143,7 +143,7 @@ The trial passes when steps 4 to 10 succeed.
     - The router journal.
     - The monitoring endpoints.
 
-2. Stop the client when its records and the post-load KV ring output are saved.
-3. Press Ctrl+C in the tunnel terminal when private access ends.
-4. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
-5. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).
+12. Stop the client when its records and the post-load KV ring output are saved.
+13. Press Ctrl+C in the tunnel terminal when private access ends.
+14. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
+15. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).

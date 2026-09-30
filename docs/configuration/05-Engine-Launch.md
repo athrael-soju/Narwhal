@@ -42,7 +42,7 @@ Per-node overrides:
 | The attestation service uses another reachable address | `NARWHAL_NODE_<n>_ATTESTATION_URL` to the full attestation URL, using `http` and an explicit port and ending in `/v1/attestation` |
 | A service port changes                                 | The matching per-node port override, `NARWHAL_NODE_<n>_ENGINE_PORT` or `NARWHAL_NODE_<n>_ATTEST_PORT`                             |
 
-The generated fleet uses those derived values:
+The generated fleet references the derived variables:
 
 ```json
 {
@@ -134,6 +134,8 @@ Discovery fills the `runtime` object from these sources:
 | Package pins and supported runtime-environment fields | Selected image                                                                  |
 | Model dtype                                           | Model config                                                                    |
 | Launch policy                                         | [Environment launch policy](../deploy/01-Discover.md#confirm-the-launch-policy) |
+
+Operator input for each `runtime` field:
 
 | Runtime field       | Operator input                                                                                                                                                                                                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

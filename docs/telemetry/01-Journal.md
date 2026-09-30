@@ -69,7 +69,7 @@ Each `attempt_failures` entry records:
 | ----------------- | ---------------------------------------------------------------------- |
 | Entry limit       | At most `serving.max_attempts`.                                        |
 | Message length    | Cut at 240 characters.                                                 |
-| Retry decision    | The scheduled action, which a cancellation during backoff interrupts. |
+| Retry decision    | The scheduled action, which a cancellation during backoff interrupts.  |
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 

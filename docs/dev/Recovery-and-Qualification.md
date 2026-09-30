@@ -159,7 +159,7 @@ Prerequisites:
 
 ### Retain the evidence
 
-1. After teardown, confirm the separately identified process's identity.
+1. Confirm the separately identified process's identity after teardown.
 2. Record vLLM, driver, CUDA, and GPU versions with the signal and barrier.
 3. Retain:
     - the `narwhal dev` output and `lifecycle.json`

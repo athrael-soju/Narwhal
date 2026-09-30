@@ -55,7 +55,7 @@ narwhal-profile \
 
 Select at least three prefill lengths spanning the production range, including its longest inputs.
 
-Effective sweep: each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
+The effective sweep is each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
 
 Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 
@@ -151,7 +151,7 @@ Near scheduler saturation, compare these profiler measurements with the engine's
 
 Fill gaps between cells with intermediate cells that match the production workload.
 
-Default limits, set from measurements covering the expected decode domain:
+Set the default limits from measurements covering the expected decode domain:
 
 ```text
 profiles.max_decode_fit_mape = 0.05

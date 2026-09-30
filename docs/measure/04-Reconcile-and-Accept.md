@@ -12,7 +12,7 @@ A scheduling miss records:
 A sent offer records:
 
 - Scheduled and actual starts, HTTP status, and output count.
-- Input count, time to first token (TTFT), time per output token (TPOT), or error detail when available at termination.
+- Input count, time to first token (TTFT), time per output token (TPOT), and error detail when available at termination.
 
 Every token with a token ID counts toward output, including empty-text and reasoning-only tokens.
 
@@ -50,7 +50,7 @@ Deployment attainment is `within_candidate_limits / offered` from the client `su
 
 | Term        | Counts                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------- |
-| Numerator   | Completed responses within the TTFT limit, and within the TPOT limit for outputs over one token |
+| Numerator   | Completed responses within the TTFT limit and, for outputs over one token, the TPOT limit |
 | Denominator | Every scheduled scored offer, including unsent scheduling misses                         |
 
 - A timeout or disconnect after partial output counts as a miss.
@@ -88,8 +88,7 @@ The helper records the management checkout digest and the installed router revis
 
 1. Query the dashboard series.
 2. Run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
-
-Verify correctness across role changes with resident requests by an exact-output comparison.
+3. Compare exact output to verify correctness across role changes with resident requests.
 
 ## 13. Record deployment acceptance
 

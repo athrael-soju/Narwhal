@@ -78,8 +78,6 @@ First-token calibration options:
 
 An engine restart or a config change invalidates recorded evidence.
 
-Record and verify evidence:
-
 ```bash
 narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.json
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json

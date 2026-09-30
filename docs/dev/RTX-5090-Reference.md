@@ -87,11 +87,10 @@ The `role_cycle` in the reference template fixes the token pool, random seeds, a
 
 Replay prerequisites:
 
-- a verified instance that starts with two prefill and two decode engines
-  (2P:2D)
+- a verified instance that starts with two prefill and two decode engines (2P:2D)
 - an active role controller
 - the matching Narwhal checkout as the working directory
-- the instance's virtual environment, active.
+- the instance's virtual environment as the active environment.
 
 Run the replay and stop the instance:
 
@@ -119,7 +118,7 @@ Acceptance criteria:
 | Phase | Accepted outcome |
 | --- | --- |
 | Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
-| Prefill burst | Completed requests and HTTP 429 responses that cite the TTFT budget. |
+| Prefill burst | Every request completes or returns an HTTP 429 response that cites the TTFT budget. |
 
 Replay records go to a `cycle-*` directory beneath the instance, or to the fresh directory passed with `--out`.
 

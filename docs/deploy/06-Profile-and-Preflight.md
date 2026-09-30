@@ -128,10 +128,10 @@ The full preflight runs these gates:
 
 The calibration path sets the first-token evidence check:
 
-| `engine.first_token_calibration_path` | Preflight and router startup                                                           | On failure         |
-| ------------------------------------- | -------------------------------------------------------------------------------------- | ------------------ |
-| Empty                                 | Warning.                                                                               |                    |
-| Set                                   | Require complete evidence for the running engines and a deadline above the candidate.  | The router stops.  |
+| `engine.first_token_calibration_path` | Preflight and router startup                                                                                          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Empty                                 | Warning.                                                                                                              |
+| Set                                   | The router stops when evidence for the running engines is incomplete or the deadline is at or below the candidate.    |
 
 ### Pace gate
 

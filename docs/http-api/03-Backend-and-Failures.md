@@ -44,11 +44,11 @@ Scoped to the original client request:
 
 Durations in the [measurement contract](../measure/01-Profile.md):
 
-| Duration                | Interval                                                                   |
-| ----------------------- | -------------------------------------------------------------------------- |
-| `ttft_s`                | Request arrival at the router to producer HTTP completion                  |
+| Duration                | Interval                                                           |
+| ----------------------- | ------------------------------------------------------------------ |
+| `ttft_s`                | Request arrival at the router to producer HTTP completion          |
 | `first_byte_s`          | Request arrival at the router to the first generated decode output |
-| `first_byte_s - ttft_s` | Producer completion to the first decode output                             |
+| `first_byte_s - ttft_s` | Producer completion to the first decode output                     |
 
 ### Python API
 
@@ -80,9 +80,9 @@ from narwhal.engines.connector import PrefillResult
 data: {"error": ...}
 ```
 
-| Destination                                                                                           | Content                                            |
-| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Client error body                                                                                     | Generic message, such as `Upstream request failed` |
+| Destination                                                                                         | Content                                            |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Client error body                                                                                   | Generic message, such as `Upstream request failed` |
 | `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records) | Engine failure detail                              |
 
 ### Input sizing
@@ -115,12 +115,12 @@ Inference probes apply `engine.first_token_timeout_s` to each leg.
 
 A valid engine stream ends with `data: [DONE]` after generated output.
 
-| Stream                                       | Result                                                                  |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| Closes before `[DONE]`                       | Engine failure                                                          |
-| `[DONE]` before the first generated token    | HTTP `502`                                                              |
-| Upstream HTTP `200` carrying an error object | Engine failure with status `code`, an integer in 400 to 599 |
-| Upstream HTTP `200` carrying any other error object | Engine failure with status `500` |
+| Stream                                              | Result                                                      |
+| --------------------------------------------------- | ----------------------------------------------------------- |
+| Closes before `[DONE]`                              | Engine failure                                              |
+| `[DONE]` before the first generated token           | HTTP `502`                                                  |
+| Upstream HTTP `200` carrying an error object        | Engine failure with status `code`, an integer in 400 to 599 |
+| Upstream HTTP `200` carrying any other error object | Engine failure with status `500`                            |
 
 Journal `error` for an early `[DONE]`:
 
@@ -130,11 +130,11 @@ stream ended with [DONE] before any token arrived
 
 ### Decode timeouts
 
-| Timeout                        | Window                                                                                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine.first_token_timeout_s` | Decode request start to the first generated token, connection and response-header delays included |
-| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token, metadata chunks included |
-| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound |
+| Timeout                           | Window                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `engine.first_token_timeout_s`    | Decode request start to the first generated token, connection and response-header delays included |
+| `engine.decode_read_timeout_s`    | Silence between transport chunks after the first token, metadata chunks included                  |
+| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound                                                     |
 
 `engine.decode_read_timeout_s` expiry returns HTTP `504` with detail beginning:
 

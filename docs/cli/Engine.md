@@ -55,8 +55,6 @@ To start again or capture an output again:
 | `--startup-log`    | optional    | Serving log with one resolved KV layout, read by `cache-registration`. |
 | `--runtime-layout` | optional    | Captured runtime cache-layout JSON, read by `cache-registration`. |
 
-`cache-registration` takes one of `--startup-log` or `--runtime-layout`.
-
 ## Shared-GPU startup
 
 Native shared-GPU example:

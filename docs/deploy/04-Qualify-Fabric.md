@@ -189,6 +189,8 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 ## Measure `ucx_rdma`
 
+The test measures one-way RDMA writes between host-memory buffers.
+
 | Fabric                                    | GID selection                                               |
 | ----------------------------------------- | ----------------------------------------------------------- |
 | RDMA over Converged Ethernet (RoCE)       | A global identifier (GID) index, selected in steps 4 to 7   |
@@ -262,6 +264,7 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 13. Measure the reverse edge against the new source's budget.
 14. For multi-rail deployments, test every selected HCA port.
+15. Retain every report.
 
 ## Complete the matrix and match retained evidence
 
@@ -332,6 +335,7 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
 When `record-edge` or `reuse-edge` exits 1:
 
 1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
-2. Resample the directed edge until `record-edge` exits 0.
+2. Fix the cause.
+3. Resample the directed edge until `record-edge` exits 0.
 
 Next: [Gate E: Attest the live engine processes](05-Attest.md).

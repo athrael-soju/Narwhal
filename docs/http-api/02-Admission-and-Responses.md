@@ -59,7 +59,7 @@ Non-streaming responses assemble the engine stream as follows:
 | Chat `refusal`           | String deltas concatenate under `refusal`                                                                                 |
 | `tool_calls`             | One call per stream index, returned in index order                                                                        |
 | Tool call fields         | ID, function name, and arguments concatenate separately per call |
-| Tool call arguments      | Return as engine-generated strings |
+| Tool call arguments      | Returned as engine-generated strings |
 | Legacy `function_call`   | Function name and argument fragments concatenate into one message field                                                   |
 | Chat logprobs            | Content and refusal arrays concatenate in stream order                                                                    |
 | Text-completion logprobs | Token, logprob, and offset arrays concatenate in stream order                                                             |

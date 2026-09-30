@@ -101,10 +101,14 @@ Readmission checks:
 | 4 | Replacement engine | Health |
 | 5 | All participants | Identities, attestation, and profile bindings |
 
+Process generation checks:
+
 | Check | Process generation test |
 | --- | --- |
 | `profile generation` | A loaded profile for every variant, bound to the verified live process generation |
 | `generation` | A direct completion probe to the engine |
+
+Readmission results:
 
 | Result | Response | Engine `state` |
 | --- | --- | --- |
@@ -129,10 +133,14 @@ print("e0 readmitted:", engine["checks"])
 PY
 ```
 
+Fabric checks by engine role:
+
 | Engine roles | Expected fabric checks |
 | --- | --- |
 | Pinned | `fabric produce to ...` and `fabric consume from ...` match the pinned roles |
 | Unpinned | Both directions pass against eligible peers |
+
+After readmission:
 
 1. Send a routed request.
 2. Verify its engine placement and terminal outcome in the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
@@ -154,7 +162,7 @@ When any other check fails:
 
 ### 7.5 Recover loss of every placement peer
 
-In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract), loss of every placement peer holds the whole wave.
+In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract), one failed member holds the whole wave when every placement peer is lost.
 
 1. Repair the failing check.
 2. Request whole-wave readmission:
@@ -499,6 +507,8 @@ PY
 ```
 
 During an individual hold, when `/ready` returns HTTP 200, confirm the hold from the held engine's `accepts_new` value.
+
+Complete the activation:
 
 1. Request [individual readmission](#73-request-readmission) or [whole-wave readmission](#82-restart-the-fleet).
 2. Verify the readmission checks and a routed request.

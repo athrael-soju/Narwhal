@@ -69,6 +69,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 6. Restart every attestation sidecar from the recorded build through its supervisor.
 7. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activate-replacement-profiles).
 8. Verify that resume preserves every drain identity and the whole-wave hold.
+
 #### Fail one member
 
 9. Stop one member's attestation sidecar with the recorded supervisor command.
@@ -99,6 +100,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     ```
 
 13. Confirm the stopped sidecar's member reports an attestation failure and every other member reports that another wave engine failed validation.
+
 #### Sample the hold
 
 14. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values.

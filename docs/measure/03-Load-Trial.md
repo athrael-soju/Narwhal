@@ -44,12 +44,12 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 
 Contents of `workload/workload.json`:
 
-| Item           | Value                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------- |
-| Seed request   | One unscored 32-token completion from a fixed public seed prompt |
+| Item           | Value                                                                                                           |
+| -------------- | --------------------------------------------------------------------------------------------------------------- |
+| Seed request   | One unscored 32-token completion from a fixed public seed prompt                                                |
 | Token pool     | The returned prompt token IDs when they contain two or more distinct IDs, otherwise the 32 generated output IDs |
-| Stop condition | Fewer than two distinct IDs in the pool |
-| Request `n`    | 8,192 input IDs drawn from the pool with `seed + n` |
+| Stop condition | Fewer than two distinct IDs in the pool                                                                         |
+| Request `n`    | 8,192 input IDs drawn from the pool with `seed + n`                                                             |
 
 Request parameters for both rates:
 
@@ -96,19 +96,19 @@ Check client CPU and scheduling lag before raising either limit.
 
 Exit code actions:
 
-| Exit  | Meaning                                                | Required action                                                      |
-| ----- | ------------------------------------------------------ | -------------------------------------------------------------------- |
-| `0`   | Schedule validity and candidate attainment both passed | Drain the router                                                     |
-| `1`   | The helper reported a blocking error                   | Check the error and the run directory       |
-| `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json`                    |
-| `130` | Interrupted run with partial artifacts                 | Rerun with the partial output kept                           |
+| Exit  | Meaning                                                | Required action                                   |
+| ----- | ------------------------------------------------------ | ------------------------------------------------- |
+| `0`   | Schedule validity and candidate attainment both passed | Drain the router                                  |
+| `1`   | The helper reported a blocking error                   | Check the error and the run directory             |
+| `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json` |
+| `130` | Interrupted run with partial artifacts                 | Rerun with the partial output kept                |
 
 For exit code `2`:
 
-| `client_schedule_valid` | Meaning | Required action |
-| --- | --- | --- |
-| `true` | The rate missed the attainment target | Keep the result and stop |
-| `false` | Client scheduling missed | Follow the steps below |
+| `client_schedule_valid` | Meaning                               | Required action          |
+| ----------------------- | ------------------------------------- | ------------------------ |
+| `true`                  | The rate missed the attainment target | Keep the result and stop |
+| `false`                 | Client scheduling missed              | Follow the steps below   |
 
 Steps for `false`:
 

@@ -84,7 +84,7 @@ The new private `--out` directory holds:
 
 | File                             | Location        | Contents                                                                                        |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
-| `manifest.json`                  | Output root     | Plan, its SHA-256 digest, runner digest, model, URL, and invocation                            |
+| `manifest.json`                  | Output root     | Plan, its SHA-256 digest, runner digest, model, URL, and invocation                             |
 | `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 

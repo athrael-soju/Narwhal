@@ -13,11 +13,13 @@
 5. Start the upgraded router as standby.
 6. Check that `/health` returns HTTP 200 on the new standby.
 7. Check that `/ready` returns HTTP 503 on the new standby.
+
 #### Hand off to the upgraded router
 
 8. Stop the old active router gracefully.
 9. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in step 2.
 10. Check that it is the only backend returning HTTP 200 from `/ready`.
+
 #### Upgrade the former active router
 
 11. Install the same deployment set on the stopped router's host.

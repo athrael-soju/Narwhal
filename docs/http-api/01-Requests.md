@@ -82,11 +82,11 @@ A non-streaming request with an `audio` value or any other value for these optio
 
 ## Request identity and authentication
 
-| ID                 | Scope                               | Where it appears                |
-| ------------------ | ----------------------------------- | ------------------------------- |
-| Router request ID  | One per client request              | `x-request-id` response header  |
-| Backend request ID | One per engine attempt and phase    | Engine requests and the KV handoff |
-| `client_rid`       | Trusted request ID sent by ingress  | Request journal |
+| ID                 | Scope                              | Where it appears                   |
+| ------------------ | ---------------------------------- | ---------------------------------- |
+| Router request ID  | One per client request             | `x-request-id` response header     |
+| Backend request ID | One per engine attempt and phase   | Engine requests and the KV handoff |
+| `client_rid`       | Trusted request ID sent by ingress | Request journal                    |
 
 [Configure ingress](../operate/01-Start-Routers.md#3-configure-the-client-path) to:
 

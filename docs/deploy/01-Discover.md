@@ -86,7 +86,9 @@ python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
 
-`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store, defaulting to `config/ssh.known_hosts` and accepting an existing verified file.
+`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store.
+
+The default store is `config/ssh.known_hosts`, and an existing verified file is accepted.
 
 When a deployment command rejects a changed host key:
 
@@ -194,7 +196,7 @@ Per-engine overrides use `NARWHAL_NODE_<n>_<field>`.
 | Command        | Result                                                                                                                                  |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `plan`         | Prints the host IDs and role assignment.                                                                                                |
-| `check-access` | Logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`. |
+| `check-access` | Logs in once per physical host with the pinned key, saving the `hostname` output under `runs/access-<id>/`. |
 
 Open a role shell with:
 

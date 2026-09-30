@@ -21,7 +21,7 @@ The profiler fails the run when an engine's generation digest changes between th
 | With `engine_contract` | Digest of the verified attestation.                            | The full attestation response.  |
 | Otherwise              | Digest of the process identity from `/version` and `/metrics`. | The process identity.           |
 
-A stored profile variant with missing generation evidence or a digest that differs from the engine's live generation:
+For a stored profile with missing generation evidence or a digest that differs from the engine's live generation:
 
 - Preflight, router startup, readmission, and automatic recovery require a fresh profile.
 - The error names the engine.
@@ -53,7 +53,7 @@ Before preflight or router startup:
 | `ttft_a`, `ttft_b`, `ttft_c`                   | number            | Nonnegative prefill quadratic coefficients.                                                                        |
 | `tpot_slope`                                   | number            | Strictly positive decode interval per resident KV token.                                                           |
 | `tpot_intercept`                               | number            | Nonnegative zero-contention decode interval.                                                                       |
-| `kv_capacity_tokens`                           | integer, optional | Positive, with a minimum of `decode_max_kv_tokens` when both are present.                                          |
+| `kv_capacity_tokens`                           | integer, optional | Positive, and at least `decode_max_kv_tokens` when both are present.                                                |
 | `tpot_request_slope`                           | number            | Nonnegative decode interval per active sequence, default `0`.                                                      |
 | `decode_min_requests`, `decode_max_requests`   | integer           | Positive measured concurrency range with `min <= max`.                                                             |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer           | Positive measured resident-KV range with `min <= max`.                                                             |
@@ -86,5 +86,5 @@ The KV budget is `decode_max_kv_tokens`, or the smaller of `decode_max_kv_tokens
 
 | Condition                                                        | Decode capacity                  |
 | ---------------------------------------------------------------- | -------------------------------- |
-| Positive `context_tokens` and a measured `decode_max_requests`   | Priced from the limits above. |
+| Positive `context_tokens` and a measured `decode_max_requests`   | The smaller of `decode_max_requests` and the KV-budget request count. |
 | `context_tokens <= 0` or `decode_max_requests` is `null`         | Zero.                            |

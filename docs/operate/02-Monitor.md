@@ -69,7 +69,7 @@ Prometheus and Grafana setup: [Set up observability](../Observability.md).
 | Retries, failures, refusals, and rejections    | Which protection path is active?                         |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-Paging thresholds in `tools/observability/prometheus-alerts.yml` for:
+`tools/observability/prometheus-alerts.yml` defines paging thresholds for:
 
 - Router down.
 - Engine down.
@@ -77,6 +77,8 @@ Paging thresholds in `tools/observability/prometheus-alerts.yml` for:
 - Unserved requests.
 - Ejections.
 - Role floors.
+
+Telemetry sources:
 
 | Source | Scope |
 | --- | --- |

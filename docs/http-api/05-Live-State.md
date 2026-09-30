@@ -9,7 +9,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | Counters                                                           | New router process                                     |
 | ------------------------------------------------------------------ | ------------------------------------------------------ |
 | `served`, `failed`, `cancelled`, `unserved`, `rejected`, `refused` | Restored from the state handoff on resume and takeover |
-| Fields marked "current process" below                              | Start at zero                                          |
+| Fields scoped to the current process below                         | Start at zero                                          |
 
 | Field                   | Meaning                                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |

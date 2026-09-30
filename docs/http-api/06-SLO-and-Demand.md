@@ -76,7 +76,7 @@ An overflow cohort:
 
 ### Decision snapshots
 
-Reactive decision snapshot contents:
+A reactive decision snapshot contains:
 
 - profile coefficients
 - demand
@@ -86,7 +86,7 @@ Reactive decision snapshot contents:
 
 ### Prefill recovery ratio
 
-Prefill recovery ratio when `queued_prefill_s > 0` and at least one engine has the prefill role:
+The prefill recovery ratio is computed as follows when `queued_prefill_s > 0` and at least one engine has the prefill role:
 
 ```text
 recovery_prefill_ratio = max(
@@ -111,7 +111,7 @@ prefill_pressure_recovery
 decode_pressure_recovery
 ```
 
-Demand precision:
+Demand precision by consumer:
 
 | Consumer                                 | Precision      |
 | ---------------------------------------- | -------------- |

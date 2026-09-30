@@ -230,6 +230,8 @@ The checked tokenizer is the final `--tokenizer` value in the serving arguments,
 
 Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
+When the launch-plan hash or the launcher changes, take the matching action:
+
 | Change                | Action                                                        |
 | --------------------- | ------------------------------------------------------------- |
 | Launch-plan hash      | Prepare a fresh launch directory.                             |

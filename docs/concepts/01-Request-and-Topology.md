@@ -90,4 +90,4 @@ Hot-swap changes the scheduler role of an eligible dual-capability engine in pla
 - minimum role floors
 - a check on resident work
 - exclusion of unhealthy engines
-- exclusion of engines in a lifecycle event.
+- exclusion of engines in a lifecycle event

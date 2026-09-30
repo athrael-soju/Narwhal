@@ -19,7 +19,7 @@ Fleet requirements:
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Management workstation                 | Git, Bash, Python 3.11 or newer, OpenSSH, the supplied access tooling, and `sshpass` for password-based SSH. |
 | Remote host that runs Narwhal commands | Python 3.11 or newer with `venv`, Git, Make, and curl.                                                       |
-| Engine host                            | The remote host software plus the configured accelerator driver, container runtime, and transfer devices.   |
+| Engine host                            | The remote host software plus the configured accelerator driver, container runtime, and transfer devices.    |
 
 ### Concurrency rules
 
@@ -51,7 +51,7 @@ For every gate, retain:
 - starting state
 - commands executed
 - exit status
-- generated artifacts and paths.
+- generated artifacts and paths
 
 When a gate fails:
 
@@ -89,7 +89,7 @@ Work to repeat by change:
 | Gate                       | Inputs that define the gate                                                                                                | Typical correction path                                                                                                                                                               | Evidence to retain                                                                                                                      |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key.                             | Fix the named environment field, missing host utility, image inspection issue, credential, route, or independently verified changed host key.                                        | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`.                                                |
-| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | 1. Create a new prepared run from corrected input.<br>2. Resume dependency installation once the host cause is fixed.                                                                     | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
+| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | 1. Create a new prepared run from corrected input.<br>2. Resume dependency installation when the host cause is fixed.                                                                     | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports.  | 1. Restore device exposure or artifacts, free the planned ports, or repair the differing checkpoint file.<br>2. Repeat discovery.                                                   | Engine role env, launch record, discovery checkpoint manifests, `model_tree_sha256`, `ENGINE_RUN`, image-check and HTTP captures.       |
 | Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget.                                     | 1. Identify the root cause in route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, or concurrent traffic.<br>2. Re-sample.           | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix.                                       |
 | Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint. | 1. Inspect the bound capture and source.<br>2. Restart only the affected process or sidecar.<br>3. Rerun finalization.                                                                           | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before/after attestation.                                            |

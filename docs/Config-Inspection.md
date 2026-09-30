@@ -28,8 +28,8 @@ narwhal config inspect --fleet config/fleet.json --format json
 | Invocation               | Output                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------ |
 | `inspect` in text mode   | A `narwhal.effective-config` version 1 document.                               |
-| `inspect --format json`  | `narwhal.effective-config` version 1 document in the `data` field of the [command result](Command-Results.md). |
-| `validate --format json` | `narwhal.effective-config` version 1 document in `data`.                       |
+| `inspect --format json`  | A `narwhal.effective-config` version 1 document in the `data` field of the [command result](Command-Results.md). |
+| `validate --format json` | A `narwhal.effective-config` version 1 document in `data`.                       |
 
 Output depends only on the fleet file, environment, working directory, and path bindings.
 

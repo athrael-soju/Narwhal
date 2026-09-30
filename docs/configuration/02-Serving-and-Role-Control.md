@@ -69,6 +69,8 @@ The original request deadline covers:
 - engine work
 - client writes
 
+Tune queueing and retries:
+
 1. Set queue capacity, phase concurrency, and deadlines from measured workload latency and capacity.
 2. Verify that the backend releases abandoned KV handoffs when the lease expires.
 3. Repeat the measurement after changing queueing, concurrency limits, KV handoff expiry, retries, or byte limits.
@@ -152,7 +154,7 @@ An engine process restart makes the calibration artifact stale.
 
 ### 6.3 Decode stream gaps
 
-Set this limit from measured inter-chunk gaps and the service's failure budget.
+Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget.
 
 Disable the gap limit:
 
@@ -233,7 +235,7 @@ predicted prefill work / TTFT target
 
 A load of `1.0` means the phase has reached its target.
 
-`/narwhal/state` fields and decision reasons call this quantity pressure, for example `mixed_pressure` and `source_pressure_safe`.
+`/narwhal/state` fields and decision reasons call load pressure, for example `mixed_pressure` and `source_pressure_safe`.
 
 ### 7.2 Role floors
 

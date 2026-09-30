@@ -40,7 +40,7 @@ The `narwhal-check` `slo` gate passes when both targets are feasible against the
     | Run evidence | router journal, state snapshots, metrics |
 3. Record the hosts and SSH tunnel mapping with the identifier.
 
-Held fixed across the offered-rate sweep: source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets.
+The offered-rate sweep holds these fixed: source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets.
 
 Before the next rate, wait for:
 

@@ -99,7 +99,7 @@ Credential redaction covers the values in:
 
 - recognised credential fields, authorization headers, URL credentials, credential query parameters, and launch arguments
 - `*_env` references in selected JSON sources
-- environment variables whose names identify credentials.
+- environment variables whose names identify credentials
 
 Selected credential files get an `excluded` outcome: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`.
 
