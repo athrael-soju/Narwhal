@@ -15,30 +15,35 @@
     narwhal-check --fleet config/fleet.production.json
     ```
 
-If the TPOT target is lower than the engine's measured per-token time, no decode capacity is feasible.
+A TPOT target below the engine's measured per-token time gives zero feasible decode capacity.
 
-`narwhal-check` tests the targets against saved profiles and live handoffs. It also runs the [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate), which compares each engine with the fleet median under a `1.5x` slowdown limit.
+`narwhal-check` runs the [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate) and tests the targets against saved profiles and live handoffs.
 
 ### Pace gate
 
-With three or more successful probes, the gate compares each engine with the fleet median. With one or two, each engine also needs a saved prefill profile and exact `usage.prompt_tokens`.
+| Successful probes | Each engine passes with |
+| --- | --- |
+| Three or more | Pace within `1.5x` of the fleet median |
+| One or two | A saved prefill profile, exact `usage.prompt_tokens`, and pace within `1.5x` of the profile prediction |
 
 ## 6. Freeze the deployment under test
 
-Assign a deployment identifier before the load test and attach the exact artifacts:
-
-* the Narwhal release, source revision, and distribution digest;
-* the fleet, router, and engine configuration;
-* the profile files and sample store;
-* the engine image digest, engine launcher, and attestation documents;
-* the preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
-
-Record the hosts and SSH tunnel mapping with the identifier.
+1. Assign a deployment identifier before the load test.
+2. Attach the exact artifacts to it:
+    * the Narwhal release, source revision, and distribution digest;
+    * the fleet, router, and engine configuration;
+    * the profile files and sample store;
+    * the engine image digest, engine launcher, and attestation documents;
+    * the preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
+3. Record the hosts and SSH tunnel mapping with the identifier.
 
 Vary only the request rate across the offered-rate sweep. Keep the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed.
 
-Between rates, let resident work finish and release transfer leases.
+Between rates, wait for resident work to finish and transfer leases to release.
 
-Stop the sweep when a run misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial). Also stop once you have tested the intended operating ceiling.
+Stop the sweep at the first of:
+
+* a run that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial)
+* a tested rate at the intended operating ceiling
 
 Next: [synthetic load trial](03-Load-Trial.md).

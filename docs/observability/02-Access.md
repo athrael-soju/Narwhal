@@ -11,16 +11,14 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:9090
 ```
 
-The tunnel closes with the terminal, so leave it open while you browse.
+Keep the tunnel's terminal open while you browse.
 
 | Interface | URL |
 | --- | --- |
 | Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
 | Prometheus | `http://127.0.0.1:19090` |
 
-Grafana permits anonymous Viewer access through the local tunnel.
-
-To switch between router and engine scope, see the [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard).
+Grafana permits anonymous Viewer access through the local tunnel. The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
 
 ## Isolate a second monitoring stack
 
@@ -32,7 +30,10 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-Grafana derives its `Prometheus` datasource URL from the selected listener. A wildcard `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` makes Prometheus bind the wildcard. Grafana and the readiness probes still use loopback.
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus binds | Grafana `Prometheus` datasource and readiness probes use |
+| --- | --- | --- |
+| Specific address | That address | That address |
+| Wildcard | The wildcard | Loopback |
 
 Tunnel to the `127.0.0.2` listeners:
 

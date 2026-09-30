@@ -20,9 +20,12 @@ narwhal --help
 narwhal-inference <version>
 ```
 
-That version comes from the Python environment the shell selects for the `narwhal-serve` executable. Record it with the fleet configuration, engine image, and profiles of the deployment, and pin the approved version on every router host.
+The version is the one installed in the Python environment the shell selects for the `narwhal-serve` executable. For each deployment:
 
-`narwhal --help` lists the six installed commands. Each one accepts `--version` before its operational arguments and exits with status 0.
+1. Record the version with the fleet configuration, engine image, and profiles.
+2. Pin the approved version on every router host.
+
+`narwhal --help` lists the six installed commands. Each command accepts `--version` before its operational arguments and exits with status 0.
 
 ## Before serving requests
 
@@ -39,4 +42,4 @@ Follow [Deploy a fleet](Deploy.md) to qualify these inputs before serving reques
 
 The repository checkout adds deployment helpers and development checks. Run `make setup` in the checkout to install Narwhal and its development dependencies into `.venv`.
 
-If the checkout environment lacks distribution metadata, the `--version` flags print `narwhal-inference unknown (distribution metadata unavailable)`. Run `python -m pip install -e .` to register the version.
+If the `--version` flags print `narwhal-inference unknown (distribution metadata unavailable)`, run `python -m pip install -e .` to register the version.

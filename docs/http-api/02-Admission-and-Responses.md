@@ -26,9 +26,12 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 `/ready` reports the reason whenever the router refuses a request with `503`.
 
-`serving.admission` defaults to `predictive`, which runs both predictive checks. Setting it to `open` turns those checks off. The HTTP retention, queue, and phase-concurrency limits apply in both modes.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) modes:
 
-[Global admission](../configuration/02-Serving-and-Role-Control.md#41-global-admission) covers the details.
+| Mode                   | Enforced                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `predictive` (default) | Both predictive TTFT checks, plus the HTTP retention, queue, and phase-concurrency limits |
+| `open`                 | HTTP retention, queue, and phase-concurrency limits                                       |
 
 ### Admission counters
 
@@ -50,7 +53,7 @@ Narwhal forwards streaming deltas in the engine's response shape, with the [toke
 
 ### Non-streaming assembly
 
-The engine stream is assembled into one response:
+Narwhal assembles the engine stream into one response:
 
 | Engine output            | Assembly behaviour                                                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
@@ -63,11 +66,13 @@ The engine stream is assembled into one response:
 | Chat logprobs            | Content and refusal arrays concatenate in stream order                                                                    |
 | Text-completion logprobs | Token, logprob, and offset arrays concatenate in stream order                                                             |
 
-Tool arguments return as engine-generated strings. Assembly returns HTTP `502` when:
+Tool arguments return as engine-generated strings.
+
+Assembly returns HTTP `502` when:
 
 - an unsupported choice or chat-delta field carries a value, such as audio, annotations, or custom tool output
 - a supported field has a malformed value
-- a tool call lacks an ID or a function name
+- a tool call is missing its ID or function name
 
 ### Metadata and usage
 
@@ -94,11 +99,11 @@ Decode requests to supporting engines include:
 
 Every event with text, reasoning, tool calls, or refusals must carry a list of nonnegative integer token IDs. A missing or malformed list, including a Boolean ID, fails the decode attempt or profiling measurement.
 
-Validated IDs set output length and time per output token (TPOT) timing. Decode correction, drift scoring, and output-length learning use them too.
+Validated IDs feed output length, time per output token (TPOT) timing, decode correction, drift scoring, and output-length learning.
 
 | Engine                   | Router reports                   |
 | ------------------------ | -------------------------------- |
 | Supplies token IDs       | `token_accounting: token_ids`    |
-| Engines without token IDs | `token_accounting: unavailable`  |
+| Omits token IDs          | `token_accounting: unavailable`  |
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses.

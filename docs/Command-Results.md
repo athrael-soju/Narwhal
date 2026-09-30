@@ -4,10 +4,10 @@
 
 | Stream | Content                                                                                    |
 | ------ | ------------------------------------------------------------------------------------------ |
-| stdout | One `narwhal.command-result` version 1 object, covering argument and operational failures. |
+| stdout | One `narwhal.command-result` version 1 object for every outcome.                            |
 | stderr | Live progress and diagnostics.                                                             |
 | stderr | Subprocess stdout and stderr, replayed at completion.                                      |
-| stderr | Help text for `--format json --help`, with a success result on stdout.                     |
+| stderr | Help text for `--format json --help`.                                                      |
 
 Examples:
 
@@ -36,13 +36,11 @@ Result fields:
 | Field                      | Contract                                                                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `schema`, `schema_version` | `narwhal.command-result`, `1`.                                                                                                 |
-| `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`. `operation` is the default operation when argument validation fails first. |
+| `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`.                                                  |
 | `status`, `exit_code`      | Status and matching exit code from the status table.                                                                           |
 | `data`                     | Operation-specific output, listed in the table below.                                                                          |
-| `artifacts`                | References with `kind`, absolute `path`, and `state` (`created`, `updated`, `existing`, or `missing`). After a partial failure, the list holds the files present. |
+| `artifacts`                | References with `kind`, absolute `path`, and `state` (`created`, `updated`, `existing`, or `missing`).                         |
 | `errors`                   | Entries with stable `code`, diagnostic `message`, and `command`; optional `stage`, `engine`, `field`, and `context`.           |
-
-[Judge Comment: The `operation` row carries an edge-case guard ("when argument validation fails first") and the `artifacts` row carries a trailing partial-failure caveat ("After a partial failure, the list holds the files present"); both are defensive add-ons after the row's main fact.]
 
 `data` contents:
 

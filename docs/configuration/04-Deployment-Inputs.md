@@ -2,13 +2,9 @@
 
 ## 12. Deployment inputs and generated artifacts
 
-Discovery reads `.env`, inspects each host, and writes the host inventory, SSH trust store, fleet, launch records, and source index.
+A fresh management checkout starts from `.env`. [Launch policy](../deploy/01-Discover.md#confirm-the-launch-policy) lists the launch-policy defaults and their environment overrides.
 
-See [Launch policy](../deploy/01-Discover.md#confirm-the-launch-policy) for defaults and environment overrides.
-
-A fresh management checkout starts from `.env`. Discovery writes the generated private files with mode 0600.
-
-Keep these files together per fleet:
+Discovery writes the generated private files at mode 0600. Keep these files together per fleet:
 
 ```text
 config/hosts.local.json
@@ -19,33 +15,31 @@ config/fleet.json
 config/deployment.env
 ```
 
-`runs/discovery/<run>/` holds per-engine checkpoint file hashes, a matching tree digest, observations, and command logs.
+| Directory               | Contents                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `runs/discovery/<run>/` | Per-engine checkpoint file hashes, a matching tree digest, observations, and command logs |
+| `runs/deployment-env/`  | Prepared workstation files, Git-ignored                                                   |
+| `runs/deployment/`      | Remote role environments and the effective fleet                                          |
 
 Load `.env` and `config/deployment.env` before reusing saved discovery inputs.
 
-Engine inspection is covered in [Inspect every engine host](../deploy/03-Validate-Engines.md#inspect-every-engine-host).
-
-Prepared workstation files go to the Git-ignored `runs/deployment-env/` directory. Remote role environments and the effective fleet go to `runs/deployment/`.
+[Inspect each engine host](../deploy/03-Validate-Engines.md#inspect-every-engine-host) against its generated launch record.
 
 ### 12.1 Source revision and deployment bundle
 
 `NARWHAL_DEPLOYMENT_REVISION` is the full commit SHA from the management checkout.
 
-Prepare deployment inputs:
+Prepare deployment inputs for [host installation](../deploy/02-Install.md):
 
 ```bash
 python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 ```
 
-`prepare` packages the selected revision as `source.bundle` and verifies it with a fresh local clone.
-
-`deploy_hosts.py install` copies that bundle to each selected host. Each remote checkout clones from it and verifies its revision against the role file before installation.
-
-`prepare` writes `source.bundle` next to the role environments in `runs/deployment-env/`.
-
-`tools/deployment/prepare_host_env.py` writes the role files at mode 0600 and copies shell literals through unchanged.
-
-See [Host installation](../deploy/02-Install.md) for the sequence.
+| Command                                | Output                                                                                                                                    |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `prepare`                              | `source.bundle` with the selected revision, verified with a fresh local clone and written next to the role environments in `runs/deployment-env/` |
+| `tools/deployment/prepare_host_env.py` | Role files at mode 0600, with shell literals copied through unchanged                                                                     |
+| `deploy_hosts.py install`              | The bundle on each selected host, with each remote checkout cloned from it and verified against the role file's revision before installation |
 
 ### 12.2 Generated host-side files
 
@@ -78,11 +72,12 @@ The exporter also sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine
 
 Per-node overrides insert `NODE_<n>_` after `NARWHAL_`. For example, `NARWHAL_NODE_2_ENGINE_PORT` becomes `NARWHAL_ENGINE_PORT` inside `.env.engine-2`.
 
-Export fails when a required field's override is empty.
+Each role file gets its role's fields plus the variables named in fleet endpoint references and `engine.engine_api_key_env`.
 
-Each role file gets its role's fields. Variables named in fleet endpoint references and `engine.engine_api_key_env` are added.
+Export fails when:
 
-Export refuses variables named like SSH access variables, including any name containing `SSH` or matching an access variable from the host inventory.
+- a required field's override is empty
+- a variable name contains `SSH` or matches an access variable from the host inventory
 
 ### 12.3 Profiling limits
 
@@ -104,7 +99,7 @@ deploy_hosts.py shell --run <directory> --role <role>
 
 The command turns off shell tracing while loading the role file.
 
-A host with both roles keeps both files in one checkout, and each role shell loads only its own.
+A host with both roles holds both role files in one checkout. Each role shell loads its own file.
 
 ---
 
@@ -121,15 +116,21 @@ Each `hosts` entry contains:
 - optional `password_env`
 - assigned `roles`
 
-The `router` role appears once. Engine roles use the name pattern `engine-<n>` and map to the numbered deployment variables.
+The `router` role appears once. Each engine role is named `engine-<n>`, where `<n>` matches the numbered deployment variables.
 
 The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.
 
-Keep destination values and credentials in workstation `.env`; the inventory stores variable names only.
+| Value                              | Location           |
+| ---------------------------------- | ------------------ |
+| Destination values and credentials | Workstation `.env` |
+| Variable names                     | Inventory          |
 
 SSH destinations may be aliases or `user@management-host`.
 
-OpenSSH uses key or agent authentication by default. Setting `password_env` selects password authentication and requires a populated named variable.
+| `password_env` | Authentication                                                     |
+| -------------- | ------------------------------------------------------------------ |
+| Omitted        | OpenSSH key or agent authentication                                |
+| Set            | Password authentication from the named variable, which must be populated |
 
 ### 13.1 Inventory validation
 
@@ -139,32 +140,38 @@ Validate the inventory:
 tools/deployment/deploy_hosts.py plan
 ```
 
-`plan` checks for unique host IDs, one host per role, distinct destination entries, and set access variables.
-
-`check-access` verifies one connection per host. `shell --role <role>` resolves the role's host from the inventory.
+| Command               | Action                                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `plan`                | Checks for unique host IDs, one host per role, distinct destination entries, and set access variables |
+| `check-access`        | Verifies one connection per host                                                                |
+| `shell --role <role>` | Resolves the role's host from the inventory                                                     |
 
 ### 13.2 Known-hosts handling
 
-`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file. Discovery uses `config/ssh.known_hosts` when the variable is unset.
+SSH host keys establish server identity. `NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file. Discovery uses `config/ssh.known_hosts` when the variable is unset.
 
-Discovery uses OpenSSH `accept-new`:
+| Command             | Host-key checking                          |
+| ------------------- | ------------------------------------------ |
+| Discovery           | OpenSSH `accept-new`                       |
+| Deployment commands | Strict host-key checking against this file |
+
+Under `accept-new`:
 
 - the first connection records the host key
 - OpenSSH rejects a changed key
 - existing verified stores keep prior entries
 
-Deployment commands use strict host-key checking against this file.
+The workstation needs OpenSSH, plus `sshpass` for password authentication.
 
-The workstation needs OpenSSH. Password authentication also needs `sshpass`, which receives the secret through a private file descriptor.
+For key or agent authentication:
 
-For key or agent authentication, put address, username, identity, and optional `Port` or `ProxyJump` configuration in the workstation's private SSH config. Point `ssh_env` at that alias.
+1. Put the address, username, identity, and optional `Port` or `ProxyJump` configuration under an alias in the workstation's private SSH config.
+2. Point `ssh_env` at that alias.
 
 To replace the key of a changed server:
 
 1. Verify the replacement through the supplied private access source.
 2. Update the checkout-local known-hosts file.
-
-Rely on SSH host keys to establish server identity; `hostname` output is only a label.
 
 ### 13.3 Prepared and remote runs
 
@@ -193,8 +200,12 @@ Each remote run lives under `~/Narwhal-deploy/<id>/`, which contains:
 - installation lock
 - completion marker
 
-A source or configuration mismatch stops the helper at that host and leaves remote content untouched.
+A source or configuration mismatch stops the helper at that host.
 
 Private local logs under the run's `logs/` directory retain executed scripts, exit status, and host output.
 
-A role shell opened with `--run` enters the deployed checkout, loads the matching role environment, and activates its virtual environment.
+A role shell opened with `--run` starts with:
+
+- the deployed checkout as its working directory
+- the matching role environment loaded
+- the checkout's virtual environment active

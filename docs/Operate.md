@@ -1,6 +1,6 @@
 # Operate Narwhal
 
-Each model fleet runs one router pair inside a shared lease domain, where the lease holder admits and places requests while its peer stays on standby.
+Each model fleet runs one router pair in a shared lease domain. The lease holder admits and places requests. Its peer is the standby.
 
 ```text
 clients
@@ -13,10 +13,12 @@ TLS, authentication, WAF, model routing
 
 ## Operator tasks
 
-- [Production boundary and router pair](operate/01-Start-Routers.md) covers component responsibilities, the deployment set, the client path, and how to start a router pair.
-- [Router state and placement monitoring](operate/02-Monitor.md) walks through `/health` and `/ready`, the dashboard, and paging thresholds.
-- [Engine restart and process replacement](operate/03-Restart-Engines.md) shows how to drain, replace, and readmit one engine or a whole wave, and how to activate replacement profiles.
-- [Upgrade, rollback, and release drills](operate/04-Upgrade-and-Validate.md) explains how to upgrade or roll back a router pair and run the release drills.
+- [Production boundary and router pair](operate/01-Start-Routers.md): component responsibilities, the deployment set, the client path, and router pair startup.
+- [Router state and placement monitoring](operate/02-Monitor.md): `/health` and `/ready`, the dashboard, and paging thresholds.
+- [Engine restart and process replacement](operate/03-Restart-Engines.md): draining, replacing, and readmitting one engine or a whole wave, and activating replacement profiles.
+- [Upgrade, rollback, and release drills](operate/04-Upgrade-and-Validate.md): router pair upgrade and rollback, and the release drills.
+- [Troubleshoot a fleet](Troubleshoot.md): failure procedures.
+- [Measure a fleet](Measure.md): production evidence and deployment validation.
 
 ## Production startup checklist
 
@@ -32,8 +34,6 @@ For a new or replaced production deployment:
 8. Verify `/health` on the active router reports `status: ok`.
 9. Run the deployment workload through production ingress.
 10. Verify dashboard collection and paging thresholds.
-11. Run the engine restart drill required by the configured restart policy, as described in [Validate every release](operate/04-Upgrade-and-Validate.md#11-validate-every-release).
+11. Run the [engine restart drill](operate/04-Upgrade-and-Validate.md#11-validate-every-release) for the configured restart policy.
 12. Run the router failover drill through the production load balancer.
 13. Open client admission.
-
-When something goes wrong, turn to [Troubleshoot a fleet](Troubleshoot.md) for failure procedures. For production evidence and deployment validation, see [Measure a fleet](Measure.md).

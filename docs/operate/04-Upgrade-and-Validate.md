@@ -4,17 +4,18 @@
 
 ### 10.1 Rolling upgrade with compatible handoff versions
 
-Check that both releases share a handoff version ([Keep one deployment set](01-Start-Routers.md#2-keep-one-deployment-set)). Note the active router's `ha.epoch` from `/narwhal/state`; step 6 compares against it.
-
-1. Stop the standby.
-2. Install the new deployment set on that host.
-3. Start the upgraded router as standby.
-4. Check that `/health` returns HTTP 200 and `/ready` returns HTTP 503 on the new standby.
-5. Stop the old active router gracefully.
-6. Verify the upgraded router's `ha.epoch` exceeds the recorded epoch.
-7. Check that it is the only backend returning HTTP 200 from `/ready`.
-8. Install the same deployment set on the stopped router's host.
-9. Start that router as standby and wait for its `/ready` to return HTTP 503.
+1. Check that both releases share a [handoff version](01-Start-Routers.md#2-keep-one-deployment-set).
+2. Record the active router's `ha.epoch` from `/narwhal/state`.
+3. Stop the standby.
+4. Install the new deployment set on that host.
+5. Start the upgraded router as standby.
+6. Check that `/health` returns HTTP 200 and `/ready` returns HTTP 503 on the new standby.
+7. Stop the old active router gracefully.
+8. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in step 2.
+9. Check that it is the only backend returning HTTP 200 from `/ready`.
+10. Install the same deployment set on the stopped router's host.
+11. Start that router as standby.
+12. Wait for its `/ready` to return HTTP 503.
 
 ### 10.2 Upgrade across a handoff-version change
 
@@ -23,14 +24,15 @@ Incompatible handoff versions need a maintenance window.
 1. Stop ingress.
 2. Stop both routers.
 3. Install the same deployment set on both hosts.
-4. Start the intended primary, then its standby.
-5. Confirm the primary holds the lease and is the only backend returning HTTP 200 from `/ready`.
-6. Restore ingress.
+4. Start the intended primary.
+5. Start its standby.
+6. Confirm the primary holds the lease and is the only backend returning HTTP 200 from `/ready`.
+7. Restore ingress.
 
 ### 10.3 Roll back
 
 1. Remove the router you are rolling back from the load balancer.
-2. Stop the new router gracefully, then start the previous build.
+2. Stop the new router gracefully.
 3. Inspect the rollback build's contract support:
 
     ```bash
@@ -44,7 +46,9 @@ Incompatible handoff versions need a maintenance window.
     - the first-token calibration artifact, matching the live process generations;
     - a state handoff the restored build supports.
 5. If process generations changed, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before preflight.
-6. To start with fresh roles and zeroed counters, set `recovery.resume: false` and drop `--resume`.
+6. For fresh roles and zeroed counters:
+    - set `recovery.resume: false`;
+    - drop `--resume`.
 7. Confirm exactly one router holds the lease, either the rollback router or its fenced peer.
 8. Start the rollback build and check:
     - `/health` reports `status: ok`;
@@ -52,17 +56,22 @@ Incompatible handoff versions need a maintenance window.
     - roles;
     - cumulative counters;
     - one completion request.
-9. When the checks pass, return the router to service and restore its standby.
+9. Return the router to service when the checks pass.
+10. Restore its standby.
 
 ## 11. Validate every release
 
-Run this on an idle fleet. Run the restart drill for your `recovery.engine_restart_policy`, then test [router failover](../troubleshoot/02-Router-Recovery.md#router-failover) through the production supervisor and load balancer. Keep external admission closed until [service restoration](#restore-service-after-the-drill) finishes.
+Run the release drills on an idle fleet with external admission closed:
+
+1. Run the restart drill for your `recovery.engine_restart_policy`.
+2. Test [router failover](../troubleshoot/02-Router-Recovery.md#router-failover) through the production supervisor and load balancer.
+3. [Restore service](#restore-service-after-the-drill).
 
 Keep the release, fleet configuration, profiles, engine build, supervisor commands, and drill results in the private deployment directory.
 
-Reuse earlier results that meet the pass conditions and run the rest. Test the production supervisor if an earlier run used another launcher.
+Reuse earlier results that meet the pass conditions. Run the remaining drills. Test the production supervisor if an earlier run used another launcher.
 
-Readmission rejects a missing or stale profile. Measure each replacement and [load its fresh profiles while preserving the hold](03-Restart-Engines.md#activate-replacement-profiles) first. The `profile generation` and `generation` checks are defined in [Engine restart and process replacement](03-Restart-Engines.md).
+Before readmission, measure each replacement and [load its fresh profiles while preserving the hold](03-Restart-Engines.md#activate-replacement-profiles).
 
 ### Release drill pass conditions
 
@@ -77,30 +86,35 @@ Readmission rejects a missing or stale profile. Measure each replacement and [lo
 
 Use `recovery.engine_restart_policy = individual` and the prerequisites in [Restart one engine](03-Restart-Engines.md#7-restart-one-engine).
 
-1. Drain the engine and replace it through the production supervisor.
-2. Save the pre-stop drain observation, both process identities, and the supervisor output.
-3. Request readmission while the previous profile is still loaded, and drop `--fail` from `curl` to capture the response body.
-4. Keep the rejection: HTTP 409, the profile generation error, and `accepts_new = false`.
-5. Activate the fresh profiles and request explicit readmission.
-6. Save the successful response, which should show:
+1. Drain the engine.
+2. Replace it through the production supervisor.
+3. Save the pre-stop drain observation, both process identities, and the supervisor output.
+4. Request readmission with the previous profile loaded. Capture the response body: drop `--fail` from `curl`.
+5. Keep the rejection: HTTP 409, the profile generation error, and `accepts_new = false`.
+6. Activate the fresh profiles.
+7. Request explicit readmission.
+8. Save the successful response. Confirm it shows:
     - `state = active` and `accepts_new = true`;
     - a newer process start;
-    - every readmission check passing, as defined in [Engine restart and process replacement](03-Restart-Engines.md).
-7. Send a routed request and confirm its placement includes the returned engine.
-8. Match the client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) and the router's cumulative counters.
-9. Keep state snapshots from before and after the request to separate it from the readmission probes.
+    - every [readmission check](03-Restart-Engines.md) passing.
+9. Send a routed request.
+10. Confirm its placement includes the returned engine.
+11. Match the client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) and the router's cumulative counters.
+12. Keep state snapshots from before and after the routed request.
 
 ### Whole-wave drill
 
-Set `recovery.engine_restart_policy = whole_wave` and follow the setup in [Engine restart and process replacement](03-Restart-Engines.md), including `ROUTER_URL` and `RUN_DIR`.
+Set `recovery.engine_restart_policy = whole_wave`. Use the setup in [Engine restart and process replacement](03-Restart-Engines.md), including `ROUTER_URL` and `RUN_DIR`.
 
 1. [Drain the wave](03-Restart-Engines.md#81-drain-the-wave).
-2. Before stopping anything, save the HTTP 503 readiness reading and the drain identities, and confirm zero resident work and `wave.ready_to_stop = true`.
-3. Restart every engine and attestation sidecar from the recorded build through its supervisor.
-4. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activate-replacement-profiles).
-5. Verify that resume preserves every drain identity and the whole-wave hold.
-6. Stop one member's attestation sidecar with the recorded supervisor command, and confirm its engine stays healthy and the other sidecars keep running.
-7. Request readmission and save its failure response:
+2. Before stopping anything, save the HTTP 503 readiness reading and the drain identities.
+3. Confirm zero resident work and `wave.ready_to_stop = true`.
+4. Restart every engine and attestation sidecar from the recorded build through its supervisor.
+5. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activate-replacement-profiles).
+6. Verify that resume preserves every drain identity and the whole-wave hold.
+7. Stop one member's attestation sidecar with the recorded supervisor command.
+8. Confirm its engine stays healthy and the other sidecars keep running.
+9. Request readmission and save its failure response:
 
     ```bash
     curl -sS -o "$RUN_DIR/wave-failed.json" -w '%{http_code}\n' \
@@ -124,9 +138,11 @@ Set `recovery.engine_restart_policy = whole_wave` and follow the setup in [Engin
     PY
     ```
 
-8. The stopped sidecar's member should report an attestation failure, and every other member should report that another wave engine failed validation.
-9. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values.
-10. Start this sampler while the whole-wave hold is active:
+10. Confirm the reported errors:
+    - the stopped sidecar's member: an attestation failure;
+    - every other member: another wave engine failed validation.
+11. In a second terminal, set the same `ROUTER_URL` and `RUN_DIR` values.
+12. Start this sampler while the whole-wave hold is active:
 
     ```bash
     python3 - "$ROUTER_URL" "$RUN_DIR/wave-samples.jsonl" <<'PY'
@@ -155,19 +171,25 @@ Set `recovery.engine_restart_policy = whole_wave` and follow the setup in [Engin
     PY
     ```
 
-    The sampler fails if readmission is partial. Stop it with Ctrl+C before you readmit.
+    The sampler:
 
-11. Restart the failed member's sidecar with the attestation inputs from profiling. Leave the replacement engine running.
-12. Before readmitting, check that its attestation endpoint returns the digest from the new profile and the whole-wave hold is still active.
-13. Explicitly [request and verify whole-wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
-14. Verify that every member passed all readmission checks, listed in [Engine restart and process replacement](03-Restart-Engines.md).
-15. Find the journal's `engine_lifecycle` event with `action = wave_readmitted`.
-16. Send a routed request and match its client result to the journal and the router's cumulative counters.
-17. Save the samples, readmission response, and lifecycle events.
+    - exits after complete readmission;
+    - fails on partial readmission;
+    - ends early on Ctrl+C.
+
+13. Restart the failed member's sidecar with the attestation inputs from profiling. Leave the replacement engine running.
+14. Check that its attestation endpoint returns the digest from the new profile.
+15. Check that the whole-wave hold remains active.
+16. [Request and verify whole-wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
+17. Verify that every member passed every [readmission check](03-Restart-Engines.md).
+18. Find the journal's `engine_lifecycle` event with `action = wave_readmitted`.
+19. Send a routed request.
+20. Match its client result to the journal and the router's cumulative counters.
+21. Save the samples, readmission response, and lifecycle events.
 
 ### Unplanned whole-wave hold drill
 
-`whole_wave` needs `recovery.liveness_every` above zero (default `10`). See [Detect process replacement](03-Restart-Engines.md#9-detect-process-replacement) for the sweep interval.
+`whole_wave` needs a [liveness sweep](03-Restart-Engines.md#9-detect-process-replacement): `recovery.liveness_every` above zero (default `10`).
 
 Set `recovery.engine_restart_policy = whole_wave`.
 
@@ -176,14 +198,20 @@ Set `recovery.engine_restart_policy = whole_wave`.
 3. Wait until the router withdraws readiness and excludes every member.
 4. Save the `process_excluded` and `restart_required` lifecycle events.
 5. Follow the steps in [Recover an unplanned whole-wave hold](03-Restart-Engines.md#83-recover-an-unplanned-whole-wave-hold).
-6. Check that the drain recorded identities before any replacement, then verify full readmission and a routed request.
+6. Check that the drain recorded identities before any replacement.
+7. Verify full readmission and a routed request.
 
-To test the already-stopped-engine case, stop an engine before requesting the drain. Keep the failed drain response (with its missing identity), the process start time from identity collection, and the successful retry. Replace that process after the drain, and note the trigger and branch tested.
+To test the already-stopped-engine case:
+
+1. Stop an engine before requesting the drain.
+2. Keep the failed drain response with its missing identity, the process start time from identity collection, and the successful retry.
+3. Replace that process after the drain.
+4. Record the trigger and the branch tested.
 
 ### Restore service after the drill
 
 1. Confirm the final profile store covers the serving fleet's current process generations.
-2. Keep the measurements activated for readmission and the evidence for engines that did not change.
+2. Keep the measurements activated for readmission and the evidence for unchanged engines.
 3. If the drill used an isolated subset:
     1. Complete the subset's held readmission.
     2. Assemble the complete serving fleet's profile store.
@@ -191,7 +219,11 @@ To test the already-stopped-engine case, stop an engine before requesting the dr
     4. Stop the temporary routers before starting the serving router.
 4. Confirm the intended router controls the complete fleet.
 5. Confirm `/ready` returns HTTP 200.
-6. Send a routed request and match its result to the journal and the router's counters.
-7. Restore external admission.
+6. Send a routed request.
+7. Match its result to the journal and the router's counters.
+8. Restore external admission.
 
-Replacing another process needs fresh measurements and another activation. To keep an outstanding hold across a router replacement with the same fleet, use [profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles). Keep both journals and the state snapshots.
+| Later change | Procedure |
+| --- | --- |
+| Another process replacement | Fresh measurements and another activation |
+| Router replacement with an outstanding hold on the same fleet | [Profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles). Keep both journals and the state snapshots. |

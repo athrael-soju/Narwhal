@@ -1,12 +1,25 @@
 # Gate E: Attest the live engines
 
-Each running engine needs an attestation document and a sidecar to serve it. You capture the inputs from the live process, generate the document, and start the sidecar. Once every engine has passed, you finalize the fleet contract from the router.
+Each running engine needs an attestation document and a sidecar that serves it.
+
+1. Capture the attestation inputs from each live engine.
+2. Generate each engine's document and start its sidecar.
+3. Finalize the fleet contract from the router.
 
 ## Check the router inventory
 
-On the router, `.env.router` resolves the endpoint references in `runs/deployment/fleet.json`. Open that file and confirm it lists each running engine with its URL and attestation URL, plus the model, initial roles, SLO values, and profile path.
+On the router, `.env.router` resolves the endpoint references in `runs/deployment/fleet.json`. Confirm that `runs/deployment/fleet.json` lists:
 
-Each engine's Gate C `ENGINE_RUN` directory should still hold its container ID and logs. Together with `cache-layout.json`, those files are the inputs for everything below.
+- each running engine with its URL and attestation URL;
+- the model;
+- the initial roles;
+- the SLO values;
+- the profile path.
+
+The capture steps take these inputs:
+
+- the container ID and logs in each engine's Gate C `ENGINE_RUN` directory;
+- `cache-layout.json`.
 
 ## Capture the attestation inputs
 
@@ -26,7 +39,12 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 .venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-The capture is tied to the deployed build through the image ID and container ID. Note that `contract.nixl_connector_version` is the installed connector's `NIXL_CONNECTOR_VERSION`. It is not the pinned `nixl_version` package. Only the connector version goes into the peer compatibility hash.
+The capture records the image ID and container ID of the deployed build.
+
+| Version                           | Source                                         | Peer compatibility hash |
+| --------------------------------- | ---------------------------------------------- | ----------------------- |
+| `contract.nixl_connector_version` | Installed connector's `NIXL_CONNECTOR_VERSION` | Included                |
+| `nixl_version`                    | Pinned NIXL package                            |                         |
 
 ### 3. Capture the model dimensions
 
@@ -36,13 +54,27 @@ umask 077
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-Before it captures anything, the command confirms that the live container's plan and launcher hashes match `launch.json`. The dimensions it records are `head_size`, `kv_heads`, `hidden_layers`, and `model_architecture`. They come from `ModelConfig.get_head_size()`, `get_total_num_kv_heads()`, and `get_total_num_hidden_layers()`, plus the resolved architecture. The record also carries `use_mla` and the identifying hashes. On a DeepSeek-style model with MLA enabled, the head size is derived from `kv_lora_rank + qk_rope_head_dim`.
+The command requires the live container's plan and launcher hashes to match `launch.json`.
+
+| Dimension            | Source                                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `head_size`          | `ModelConfig.get_head_size()`. On a DeepSeek-style model with MLA enabled, `kv_lora_rank + qk_rope_head_dim`.                  |
+| `kv_heads`           | `get_total_num_kv_heads()`                                                                                                     |
+| `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                                |
+| `model_architecture` | Resolved architecture                                                                                                          |
+
+The record also holds `use_mla` and the identifying hashes.
 
 ### 4. Capture the cache grouping
 
-`cache-registration` writes one capture per `ENGINE_RUN` and will not overwrite it, so pick your source deliberately.
+`cache-registration` writes one capture per `ENGINE_RUN`, and that capture is final. Choose the source before you run it.
 
-The startup log is the usual choice. It must name exactly one layout across its `Using <layout> KV cache layout.` lines.
+| Source                          | Requirement                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------- |
+| Startup log (the usual choice)  | Names exactly one layout across its `Using <layout> KV cache layout.` lines.  |
+| `cache-layout.json`             | Holds the resolved layout.                                                    |
+
+From the startup log:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
@@ -50,14 +82,19 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
 cat "$ENGINE_RUN/cache-registration.json"
 ```
 
-If you'd rather use the resolved layout in `cache-layout.json`:
+From the resolved layout in `cache-layout.json`:
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-In vLLM v0.29.0, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`. `LBHNC`, `LBNHC`, and `LHBNC` have it set to `false`. The record stores the layout name and `cross_layers_blocks`, along with the hashes that tie it to the plan and the image.
+| Layouts in vLLM v0.29.0         | Block grouping                    |
+| ------------------------------- | --------------------------------- |
+| `BLHNC`, `BLNHC`, and `BHLNC`   | `is_block_outermost=true`         |
+| `LBHNC`, `LBNHC`, and `LHBNC`   | `is_block_outermost` is `false`   |
+
+The record stores the layout name, `cross_layers_blocks`, and the plan and image hashes.
 
 ### 5. Compare the layout with the representative's
 
@@ -77,7 +114,10 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-If the group signature, resolved layout, and page geometry all match, the engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). If the layout or page geometry differs, that engine needs its own serving capture, budget, and edge comparisons.
+| Comparison with the representative                           | Fabric budget                                                                                                   |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Group signature, resolved layout, and page geometry all match | The engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). |
+| Layout or page geometry differs                              | The engine needs its own serving capture, budget, and edge comparisons.                                        |
 
 ### 6. Capture the transfer direction
 
@@ -129,11 +169,16 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-Two details from the pinned API help here. `NixlConnector` is an alias for `NixlPullConnector`, and `kv_both` means the engine can both produce and consume KV. If the script finds zero or several connector classes in `image-check.log`, rerun the connector resolution with the pinned image check.
+| Pinned API term  | Meaning                                  |
+| ---------------- | ---------------------------------------- |
+| `NixlConnector`  | Alias for `NixlPullConnector`.           |
+| `kv_both`        | The engine produces and consumes KV.     |
+
+If the script finds zero or several connector classes in `image-check.log`, rerun the connector resolution with the pinned image check.
 
 ### 7. Confirm the connector in the startup log
 
-Check that the connector class you just recorded appears in the serving startup log.
+Confirm that the serving startup log names the connector class recorded in step 6.
 
 ### 8. Capture handshake enforcement
 
@@ -142,7 +187,13 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/handshake-policy.json"
 ```
 
-The pinned NIXL worker reads `enforce_handshake_compat` from the transfer config, defaults it to `True`, and stores the result as `self.enforce_compat_hash`. Current launcher plans set the value explicitly. Older plans fall back to the worker default. Either way, the capture only passes if the effective value is Boolean `true`. If it isn't, fix the launch configuration, check a new plan, and restart the engine from it.
+The capture passes when the effective `enforce_handshake_compat` value is Boolean `true`. The effective value is the plan's transfer config setting, or the pinned NIXL worker default of `True`.
+
+When the capture fails:
+
+1. Fix the launch configuration.
+2. Check a new plan.
+3. Restart the engine from the new plan.
 
 ## Generate and serve the attestation
 
@@ -156,7 +207,7 @@ export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 
 ### 2. Confirm which process you're attesting
 
-Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`. You want to be sure the document describes the process that is running right now, not one from before a restart.
+Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`. Confirm the document describes the process that is running now.
 
 ### 3. Start the sidecar
 
@@ -166,11 +217,11 @@ Run it as the engine's user, or as root for container engines.
 .venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
-If `checked.json` shows prefix caching on and cache events published, the sidecar also subscribes to the engine's cache events and serves the [residency routes](../cli/Attest.md#residency). Once it has applied the engine's full event history, `GET /v1/residency` reports `"known": true`.
+When `checked.json` shows prefix caching on and cache events published, the sidecar subscribes to the engine's cache events and serves the [residency routes](../cli/Attest.md#residency). `GET /v1/residency` reports `"known": true` when the sidecar has applied the engine's full event history.
 
 ### 4. Check the sidecar from the router
 
-Discovery already put the role's attestation URL in the fleet file. From the router, hit the sidecar's `/health` and `/v1/attestation` over the trusted control network.
+The fleet file holds the role's attestation URL from discovery. From the router, request the sidecar's `/health` and `/v1/attestation` over the trusted control network.
 
 ### 5. Verify the sidecar against the engine
 
@@ -223,7 +274,7 @@ PY_ATTEST_CHECK
 
 ### 6. Repeat for every engine
 
-Run the capture, generate, and serve steps for each engine before moving on.
+Run the capture, generate, and serve steps for each engine.
 
 ### 7. Finalize the fleet contract
 
@@ -233,9 +284,23 @@ When every sidecar has passed, run this once from the router shell:
 .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
 ```
 
-`finalize-fleet` checks each sidecar's attestation against its engine's live identity and requires every engine to carry the same complete contract. It saves the previous fleet file under `runs/` and writes `engine_contract` into `runs/deployment/fleet.json`.
+`finalize-fleet` requires:
 
-If a sidecar fails, the error names the engine and the checks that failed. If two engines disagree, the differing field points to the engine with the bad input. Fix that engine, restart its sidecar against the checked process, and run the finalization again.
+- each sidecar's attestation to match its engine's live identity;
+- every engine to carry the same complete contract.
+
+It writes `engine_contract` into `runs/deployment/fleet.json` and saves the previous fleet file under `runs/`.
+
+| Failure               | Diagnosis                                                               |
+| --------------------- | ----------------------------------------------------------------------- |
+| A sidecar fails       | The error names the engine and the failed checks.                       |
+| Two engines disagree  | The differing field points to the engine with the bad input.            |
+
+To recover:
+
+1. Fix the failing engine.
+2. Restart its sidecar against the checked process.
+3. Run `finalize-fleet` again.
 
 Leave every engine and sidecar running through profiling, preflight, and the trial.
 

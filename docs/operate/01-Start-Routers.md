@@ -2,14 +2,13 @@
 
 ## 1. Production boundary
 
-Site automation provisions GPU hosts and engine processes; Narwhal admits requests and places them on the running fleet.
-
 | Component         | Responsibility                                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Site automation   | Provisions GPU hosts and engine processes |
 | Public ingress    | TLS, client authentication, rate limits, model routing, streaming proxy settings |
 | Load balancer     | Polls `/ready` and routes to the router that returns HTTP 200 |
-| Narwhal           | Admission, queueing, prefill and decode placement, retry, health ejection, role control, drain, readmission |
-| Engine supervisor | Starts and stops engines and attestation sidecars; sets resource limits, restart policy, log retention |
+| Narwhal           | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
+| Engine supervisor | Starts and stops engines and attestation sidecars. Sets resource limits, restart policy, and log retention |
 | Shared storage    | One lease domain shared by both router hosts                                                                  |
 | Monitoring        | Metric scraping, journal retention, and paging per site policy                                                       |
 
@@ -25,7 +24,11 @@ Give both routers the same release identifier and these five items:
 
 Install that set on both router hosts. The configured calibration path must be readable from each router's working directory.
 
-The router needs a calibration artifact whose process generation matches the live engine. After an engine replacement, [recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and distribute the new artifact and fleet configuration before restarting the routers.
+The calibration artifact's process generation must match the live engine. After an engine replacement:
+
+1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+2. Distribute the new artifact and fleet configuration.
+3. Restart the routers.
 
 Inspect state handoff contracts before a router change:
 
@@ -46,26 +49,34 @@ Expose only the completion routes clients use. Keep these interfaces on the priv
 - `/health`
 - `/ready`
 
-Ingress must remove client-supplied internal credentials and request IDs and insert trusted replacements. It also authenticates clients, applies identity policy and rate limits, and routes each model to its router pair. It forwards streaming chunks as they arrive and enforces connect and idle timeouts derived from the service budget.
+Ingress must:
+
+- remove client-supplied internal credentials and request IDs;
+- insert trusted replacements;
+- authenticate clients;
+- apply identity policy and rate limits;
+- route each model to its router pair;
+- forward streaming chunks as they arrive;
+- enforce connect and idle timeouts derived from the service budget.
 
 Narwhal propagates the trusted request ID. Each engine leg receives:
 
 - its own attempt-specific and phase-specific request ID;
 - the engine credential identified by `engine.engine_api_key_env`.
 
-The load balancer routes by `/ready` status, which reports the admitting router, backend availability, and lifecycle state.
+Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg). It routes by `/ready` status. `/ready` reports the admitting router, backend availability, and lifecycle state.
 
 ## 4. Start a router pair
 
-Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set, then start both routers from it.
+Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set. Start both routers from that set.
 
-The shared lease path needs POSIX `flock`, coherent reads, and atomic rename.
+| Item | Requirement |
+| --- | --- |
+| Shared lease path | POSIX `flock`, coherent reads, and atomic rename |
+| Host clock offset | Below `--lease-safety-margin` |
+| `--lease-ttl` | `narwhal-serve` requires a value above the sum of `--lease-renew-interval` and `--lease-safety-margin` |
 
-Keep host clock offset below `--lease-safety-margin`.
-
-Set `--lease-ttl` above the sum of `--lease-renew-interval` and `--lease-safety-margin`; `narwhal-serve` rejects anything lower.
-
-Start the first router on its host, using its private listen address for `--host`:
+Start the first router on its host, with its private listen address as `--host`:
 
 ```bash
 narwhal-serve \
@@ -86,9 +97,11 @@ narwhal-serve \
   --standby-of http://router-a:8000
 ```
 
-When the active router's `/ready` returns HTTP 200, send the deployment workload through the intended ingress path before opening client admission.
+Admission sequence:
 
-The shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg) is the load balancer reference.
+1. Wait for the active router's `/ready` to return HTTP 200.
+2. Send the deployment workload through the intended ingress path.
+3. Open client admission.
 
 ### Lease behavior
 

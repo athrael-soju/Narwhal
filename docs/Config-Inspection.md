@@ -25,7 +25,7 @@ narwhal config inspect --fleet config/fleet.json --format json
 | Option                | Default  | Description                                                                                                 |
 | --------------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
 | `--fleet PATH`        | required | Fleet file to validate or inspect.                                                                          |
-| `--format text\|json` | `text`   | `text` prints the document; `json` returns a versioned command result wrapping the effective configuration. |
+| `--format text\|json` | `text`   | Output format. `text` prints the document. `json` wraps the effective configuration in a versioned command result. |
 
 | Invocation               | Output                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------ |
@@ -58,7 +58,7 @@ Output is deterministic for a given fleet file, environment, working directory, 
 | `http_retained_limit`           | `serving.max_connections + serving.queue_capacity`                   |
 | `uvicorn_graceful_timeout_s`    | `serving.graceful_timeout_s` as an integer.                          |
 
-`narwhal config` reports the fleet-file layer. `narwhal-serve` flags applied at router construction:
+`narwhal config` reports the fleet-file layer. `narwhal-serve` applies these flags at router construction:
 
 - `--max-concurrent`
 - `--journal`

@@ -1,10 +1,11 @@
 # Narwhal dev recovery and qualification
 
-This page covers recovery after an interrupted `narwhal dev` process or Docker
-command, and the optional GPU checks.
-
-[Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery)
-lists the stage budgets and the procedure after a failed stage.
+| Situation | Procedure |
+| --- | --- |
+| Failed stage | [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery) |
+| Interrupted Docker command | [Docker command reconciliation](#docker-command-reconciliation) |
+| Interrupted `narwhal dev` process | [Interrupted `narwhal dev` process](#interrupted-narwhal-dev-process) |
+| Optional qualification on the reference GPU | [Reference GPU timeout check](#reference-gpu-timeout-check) and [Reference GPU interruption check](#reference-gpu-interruption-check) |
 
 ## Docker command reconciliation
 
@@ -18,17 +19,17 @@ Each Docker create or run carries two labels:
 | `io.narwhal.launch`    | Launch token from `docker-owner.json`   |
 | `io.narwhal.operation` | Unique operation token                  |
 
-After a Docker client timeout or cancellation, the wrapper inspects the daemon
-within `NARWHAL_DOCKER_RECONCILE_SECONDS` (30 seconds). Reconciliation:
+After a Docker client timeout or cancellation, the wrapper reconciles with the
+daemon within `NARWHAL_DOCKER_RECONCILE_SECONDS` (30 seconds):
 
-- removes the containers that the interrupted operation created, or the
-  explicit target of an interrupted start;
-- queries daemon state again;
-- keeps the launch directory's other containers;
-- records their IDs as preserved resources.
+| Resource | Reconciliation result |
+| --- | --- |
+| Containers the interrupted operation created | Removed |
+| Explicit target of an interrupted start | Removed |
+| Other containers in the launch directory | Kept, with their IDs recorded as preserved resources |
 
 Reconciliation clients share the remaining budget and the same termination
-grace periods. Final cleanup can add 15 seconds at default settings.
+grace periods. At default settings, final cleanup adds up to 15 seconds.
 
 Each reconciliation writes a `docker-reconcile-*.json` report with:
 
@@ -38,7 +39,8 @@ Each reconciliation writes a `docker-reconcile-*.json` report with:
 - inspection errors;
 - the observation time.
 
-If the daemon stalls, the report result is `inspection_required`:
+If the daemon stalls, the report result is `inspection_required`. Handle it
+with these steps:
 
 1. Inspect the persisted launch-token label and the recorded IDs before a retry.
 2. After the daemon recovers, inspect it for creates completed after cancellation.
@@ -46,8 +48,8 @@ If the daemon stalls, the report result is `inspection_required`:
 
 ## Interrupted `narwhal dev` process
 
-The Linux recovery suite covers the twelve barrier and signal combinations
-below. Each combination checks for:
+The Linux recovery suite tests twelve barrier and signal combinations. Each
+combination checks for:
 
 - complete committed JSON documents;
 - released locks;
@@ -57,25 +59,21 @@ below. Each combination checks for:
 
 | Interruption barrier | Signals exercised | Cleanup and fresh `down` |
 | --- | --- | --- |
-| Child created, before identity capture | SIGINT | Startup stops the child tree and retains spawn cleanup evidence; `down` reports stopped. |
-| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set; the operator identifies the newly created service from its command and log. |
-| Process record awaiting atomic replacement | SIGKILL | Readers see the previous complete document; operator inspection covers the service described by the pending write. |
-| Process record committed | SIGINT, SIGTERM | SIGINT rolls startup back; SIGTERM ends the `narwhal dev` process, and a fresh `down` terminates the recorded group. |
+| Child created, before identity capture | SIGINT | Startup stops the child tree and retains spawn cleanup evidence. `down` reports stopped. |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set. The operator identifies the newly created service from its command and log. |
+| Process record awaiting atomic replacement | SIGKILL | Readers see the previous complete document. The operator inspects the service described by the pending write. |
+| Process record committed | SIGINT, SIGTERM | SIGINT rolls startup back. SIGTERM ends the `narwhal dev` process, and a fresh `down` terminates the recorded group. |
 | Service readiness wait | SIGKILL | A fresh `status` reports degraded, and `down` terminates the recorded group. |
-| Profiling helper active | SIGINT, SIGTERM, SIGKILL | SIGINT and SIGTERM stop the helper and roll startup back; after SIGKILL, a fresh `down` recovers the helper and service records. |
-| Verification helper active | SIGTERM, SIGKILL | SIGTERM records degraded verification and retains services; SIGKILL leaves interrupted helper evidence. A fresh `down` terminates the helpers and services. |
-| Recorded service leader exited, delayed worker surviving | SIGKILL | `status` lists the surviving group; teardown requests operator inspection of the worker's identity. |
+| Profiling helper active | SIGINT, SIGTERM, SIGKILL | SIGINT and SIGTERM stop the helper and roll startup back. After SIGKILL, a fresh `down` recovers the helper and service records. |
+| Verification helper active | SIGTERM, SIGKILL | SIGTERM records degraded verification and retains services. SIGKILL leaves interrupted helper evidence. A fresh `down` terminates the helpers and services. |
+| Recorded service leader exited, delayed worker surviving | SIGKILL | `status` lists the surviving group. Teardown requests operator inspection of the worker's identity. |
 
 Each helper runs beneath a dedicated Linux subreaper, the helper supervisor.
 The supervisor adopts the workers of exited helpers and runs until cleanup
 finishes.
 
-If the supervisor release after native shared startup fails, `narwhal dev`
-takes the bounded cleanup path and retains the initiating error.
-
 Stage documents record each observed descendant's boot ID and process start
-ticks. If the `narwhal dev` process dies abruptly, the commands behave as
-follows:
+ticks. When the `narwhal dev` process dies abruptly:
 
 | Command  | Behavior                                                                                      |
 | -------- | --------------------------------------------------------------------------------------------- |
@@ -83,8 +81,12 @@ follows:
 | `down`   | Terminates the supervisor's process tree from the stage records and the surviving supervisor. |
 
 Recovery signals a process when its boot ID and start tick match the record.
-It sets the stage record to `recovered`, or to `recovery_required` with the
-surviving PIDs. The stdout, stderr, and command evidence stay in place.
+The stdout, stderr, and command evidence stay in place.
+
+| Recovery outcome | Stage record |
+| --- | --- |
+| Processes stopped | `recovered` |
+| Processes survive | `recovery_required`, with the surviving PIDs |
 
 Supervision begins with a committed process or stage record. A SIGKILL before
 that commit can leave a service whose command log predates its record.
@@ -95,24 +97,25 @@ Recover such a service:
 2. Stop the confirmed process tree.
 3. Repeat `down`.
 
-After `down` reports `stopped`, check the status and teardown documents for a
-surviving worker group when the service leader exited before teardown recorded
-its workers.
+If the service leader exited before teardown recorded its workers:
 
-The helper supervisor also adopts workers when a helper leader exits.
+1. Wait for `down` to report `stopped`.
+2. Check the status and teardown documents for a surviving worker group.
 
 ## Reference GPU timeout check
 
-Run this optional check in the Ubuntu shell on the reference GPU host, with the
-pinned template and an instance you choose. It exercises vLLM workers and CUDA
-cleanup.
+This optional check exercises vLLM workers and CUDA cleanup. Run it in the
+Ubuntu shell on the reference GPU host, with the pinned template and an
+instance you choose.
 
 1. From a successful process generation, retain the startup logs and
    `native-start-shared.log.*.stage.json`.
 2. Run `narwhal dev down`.
 3. Record idle device memory, process IDs, and engine, attestation, and NIXL ports.
-4. Find first CUDA allocation and startup completion times in retained logs.
-5. Set `STARTUP_BUDGET_SECONDS` to expire after the allocation, before startup completes.
+4. Find the first CUDA allocation time and the startup completion time in the
+   retained logs.
+5. Set `STARTUP_BUDGET_SECONDS` to a budget that expires between the first CUDA
+   allocation and startup completion.
 6. Run the timeout cycle with that budget:
 
     ```bash
@@ -123,14 +126,15 @@ cleanup.
     nvidia-smi --query-compute-apps=pid,used_memory --format=csv
     ```
 
-7. Record the pre-expiry allocation, command duration, and worker exit, then
-   compare the duration with budget plus termination grace and rollback time.
-8. Record post-cleanup device memory and port release, and compare the memory
-   with the idle baseline.
-9. Retain `lifecycle.json` and the teardown, startup, memory, and stage
-   artifacts.
-10. Confirm that an unrelated process survives.
-11. Start and verify a fresh process generation with the normal budget.
+7. Record the pre-expiry allocation, command duration, and worker exit.
+8. Compare the duration with the budget plus termination grace and rollback
+   time.
+9. Record post-cleanup device memory and port release.
+10. Compare the device memory with the idle baseline.
+11. Retain `lifecycle.json` and the teardown, startup, memory, and stage
+    artifacts.
+12. Confirm that an unrelated process survives.
+13. Start and verify a fresh process generation with the normal budget.
 
 ## Reference GPU interruption check
 
@@ -173,6 +177,5 @@ Prerequisites:
     - the stage and teardown documents;
     - vLLM logs and GPU process listings;
     - timestamped memory and port observations.
-
-Investigate the PID of any surviving CUDA allocation or engine port before
-starting another process generation.
+4. Investigate the PID of any surviving CUDA allocation or engine port before
+   you start another process generation.

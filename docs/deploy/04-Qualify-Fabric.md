@@ -1,6 +1,6 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Engines with the same Gate C cache-group signature share one fabric budget, taken from the representative engine's resolved cache layout. Keep the fleet idle while you measure each directed host edge against its source group's budget.
+Each Gate C cache group has one fabric budget, calculated from its representative engine's resolved cache layout. Measure each directed host edge against its source group's budget while the fleet is idle.
 
 ## Build the source budget
 
@@ -95,9 +95,9 @@ headroom / 1e9
 
 ## Bind each sample to a directed route
 
-Start with engine 1 as source and engine 2 as destination. The route checks also work as `ip -4 route get` or `ip -6 route get`.
+The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`. Start with engine 1 as source and engine 2 as destination.
 
-1. In both engine-role shells, set the edge variables and check that `TEST_PORT` is free. Pick another port if `ss` shows a listener on either host:
+1. In both engine-role shells, set the edge variables and check `TEST_PORT`:
 
     ```bash
     export SOURCE_NODE=1 DEST_NODE=2 TEST_PORT=5201
@@ -108,22 +108,23 @@ Start with engine 1 as source and engine 2 as destination. The route checks also
     ss -ltnp "sport = :$TEST_PORT"
     ```
 
-2. Allow `TEST_PORT` traffic between the two fabric addresses for the test.
-3. Record the route on the source:
+2. When `ss` shows a listener on either host, pick another `TEST_PORT`.
+3. Allow `TEST_PORT` traffic between the two fabric addresses for the test.
+4. Record the route on the source:
 
     ```bash
     export EDGE_PREFIX="$FABRIC_RUN/engine-${SOURCE_NODE}-to-engine-${DEST_NODE}"
     ip route get "$DEST_IP" from "$SOURCE_IP" | tee "$EDGE_PREFIX.source-route.txt"
     ```
 
-4. Check the reverse route on the destination:
+5. Check the reverse route on the destination:
 
     ```bash
     ip route get "$SOURCE_IP" from "$DEST_IP"
     ```
 
-5. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source.
-6. Before measuring bandwidth, confirm that each route selects `NARWHAL_FABRIC_INTERFACE` and the discovered source address.
+6. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source.
+7. Confirm that each route selects `NARWHAL_FABRIC_INTERFACE` and the discovered source address.
 
 ## Measure `ucx_tcp`
 
@@ -150,7 +151,7 @@ Start with engine 1 as source and engine 2 as destination. The route checks also
       --json > "$EDGE_SAMPLE")
     ```
 
-5. Record the link fingerprint on the source, then check the sample against the source budget:
+5. On the source, record the link fingerprint and check the sample against the source budget:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -168,10 +169,10 @@ Start with engine 1 as source and engine 2 as destination. The route checks also
       --budget "$FABRIC_RUN/budget.json" --out "$EDGE_PREFIX.evidence.json"
     ```
 
-6. After saving the sample and evidence, stop the temporary `iperf3` server.
-7. Swap the source and destination, and repeat against the new source's budget.
+6. Stop the temporary `iperf3` server.
+7. Measure the reverse edge against the new source's budget.
 
-`record-edge` reads the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`. Its exit codes are:
+`record-edge` takes the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`. Its exit codes are:
 
 - 0: the budget is met.
 - 1: the measured rate is below the budget.
@@ -179,7 +180,12 @@ Start with engine 1 as source and engine 2 as destination. The route checks also
 
 ## Measure `ucx_rdma`
 
-This test measures one-way RDMA writes between host-memory buffers. RDMA over Converged Ethernet (RoCE) hosts need a global identifier (GID) index, selected in steps 4 to 7. Native InfiniBand uses the site's active port and GID selection.
+This test measures one-way RDMA writes between host-memory buffers.
+
+| Fabric                                    | GID selection                                               |
+| ----------------------------------------- | ----------------------------------------------------------- |
+| RDMA over Converged Ethernet (RoCE)       | A global identifier (GID) index, selected in steps 4 to 7   |
+| Native InfiniBand                         | The site's active port and GID selection                    |
 
 1. Install `perftest` on each host that is missing it:
 
@@ -228,7 +234,7 @@ This test measures one-way RDMA writes between host-memory buffers. RDMA over Co
     ```
 
 11. Set `MEASURED_GBPS` to the report's `BW average[Gb/sec]` value.
-12. Record the link fingerprint, then check the sample against the source budget:
+12. Record the link fingerprint and check the sample against the source budget:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -247,12 +253,18 @@ This test measures one-way RDMA writes between host-memory buffers. RDMA over Co
       --out "$EDGE_PREFIX.evidence.json"
     ```
 
-13. Swap the source and destination, and repeat against the new source's budget.
-14. For multi-rail deployments, test every selected HCA port and retain every report.
+13. Measure the reverse edge against the new source's budget.
+14. For multi-rail deployments, test every selected HCA port.
+15. Retain every report.
 
 ## Complete the matrix and match retained evidence
 
-This matrix covers KV handoff between engine hosts. The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight) tests same-host handoff. For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs.
+| KV handoff           | Qualified by                                                        |
+| -------------------- | ------------------------------------------------------------------- |
+| Between engine hosts | This matrix                                                         |
+| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight)   |
+
+For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs.
 
 For every edge, retain:
 
@@ -266,7 +278,19 @@ For every edge, retain:
 
 Recalculate the budget from the new `cache-layout.json` when the runtime layout changes.
 
-The link inputs are the host assignment, both routes, the interfaces, the transport, the utility version, and the measurement parameters. If any link input changes, collect a new directed sample. If none changed, reuse the retained sample. Set `CURRENT_EDGE_PREFIX` to the current link record prefix and `RETAINED_EDGE_PREFIX` to the retained evidence prefix. Then recreate the current link fingerprint with `link` and compare the retained sample with the recalculated budget. The `--sample` argument takes the retained `iperf3` JSON for `ucx_tcp` and the retained `.txt` report for `ucx_rdma`.
+The link inputs are the host assignment, both routes, the interfaces, the transport, the utility version, and the measurement parameters.
+
+| Link inputs    | Action                             |
+| -------------- | ---------------------------------- |
+| Any changed    | Collect a new directed sample.     |
+| All unchanged  | Reuse the retained sample.         |
+
+Reuse a retained sample:
+
+1. Set `CURRENT_EDGE_PREFIX` to the current link record prefix.
+2. Set `RETAINED_EDGE_PREFIX` to the retained evidence prefix.
+3. Recreate the current link fingerprint with `link`.
+4. Compare the retained sample with the recalculated budget:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
@@ -277,16 +301,25 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
   --out "$CURRENT_EDGE_PREFIX.comparison.json"
 ```
 
+`--sample` takes the retained sample for the transport:
+
+| Transport  | `--sample` value              |
+| ---------- | ----------------------------- |
+| `ucx_tcp`  | The retained `iperf3` JSON    |
+| `ucx_rdma` | The retained `.txt` report    |
+
 `reuse-edge` exit codes:
 
 - 0: the retained sample meets the recalculated budget.
 - 1: the retained sample is below that budget.
 - 2: the current link fingerprint or the retained sample differs from the recorded evidence.
 
-A legacy sample taken before `record-edge` needs a link record rebuilt from the original routes, interfaces, transport, utility version, and command.
-
 ## Troubleshoot an edge below its budget
 
-An exit code of 1 from `record-edge` or `reuse-edge` means the edge is below budget. Check link speed, MTU, retransmissions (or RDMA counters), CPU load, and other traffic. After fixing the cause, resample the directed edge until `record-edge` exits 0.
+An exit code of 1 from `record-edge` or `reuse-edge` means the edge is below budget.
+
+1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
+2. Fix the cause.
+3. Resample the directed edge until `record-edge` exits 0.
 
 Next: [Gate E: Attest the live engine processes](05-Attest.md).

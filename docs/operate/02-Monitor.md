@@ -4,11 +4,11 @@
 
 ### `/health`
 
-`/health` returns HTTP 200 in every router state, including backend outages. The body has three fields:
+`/health` returns HTTP 200 in every router state. The body has three fields:
 
 - `status`: the current router state, one of `ok`, `degraded`, `maintenance`, `standby`, or `fenced`
 - `instances`: the configured fleet size
-- `available_instances`: the number of engines still eligible for placement. Ejected, draining, and quarantined engines are left out
+- `available_instances`: the number of engines eligible for placement, equal to the configured fleet minus ejected, draining, and quarantined engines
 
 ### Backend exhaustion
 
@@ -22,7 +22,7 @@ When every engine has been excluded from placement, the active router reports:
 
 ### Whole-wave lifecycle hold
 
-A whole-wave lifecycle hold puts the router in `status: maintenance` and pauses background engine monitoring until whole-wave readmission succeeds. The status carries the lifecycle reason. The endpoints respond as follows:
+A whole-wave lifecycle hold pauses background engine monitoring until whole-wave readmission succeeds. During the hold:
 
 | Request | Response |
 | --- | --- |
@@ -32,7 +32,11 @@ A whole-wave lifecycle hold puts the router in `status: maintenance` and pauses 
 
 ### Temporary holds
 
-Performance-drift and temporary-quarantine holds keep the last eligible engine in placement. Failed health or inference probes exclude it.
+| Cause | Last eligible engine |
+| --- | --- |
+| Performance-drift hold | Stays in placement |
+| Temporary-quarantine hold | Stays in placement |
+| Failed health or inference probe | Leaves placement |
 
 ### Router control and replacement
 
@@ -43,7 +47,11 @@ The active router keeps control of the fleet through backend outages and managed
 | HTTP status | Traffic eligibility | Load balancers route client traffic |
 | `control_ready: true` | A valid lease and healthy engine monitoring | Standby routers copy the state handoff |
 
-A replacement router must run the same release, apply the same lifecycle rules. It keeps saved ejections until recovery succeeds.
+A replacement router:
+
+- runs the same release;
+- applies the same lifecycle rules;
+- keeps saved ejections until recovery succeeds.
 
 ## 6. Monitor placement and control
 
@@ -61,4 +69,9 @@ Each dashboard signal answers one question:
 | Retries, failures, refusals, and rejections    | Which protection path is active?                         |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-Set paging thresholds in `tools/observability/prometheus-alerts.yml`. Alert on router down, engine down, error bursts, unserved requests, ejections, and role floors. Use request journals for per-request placement and timing. Metrics give process-level summaries and reset with their counters.
+Set paging thresholds in `tools/observability/prometheus-alerts.yml`. Alert on router down, engine down, error bursts, unserved requests, ejections, and role floors.
+
+| Source | Scope |
+| --- | --- |
+| Request journals | Per-request placement and timing |
+| Metrics | Process-level summaries since the last counter reset |

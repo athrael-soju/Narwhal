@@ -6,7 +6,12 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 
 ### Top-level fields
 
-Current-process counters start at zero in each router process. `served`, `failed`, `cancelled`, `unserved`, `rejected`, and `refused` restore from the state handoff on resume and takeover.
+| Counters                                                           | New router process                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------ |
+| `served`, `failed`, `cancelled`, `unserved`, `rejected`, `refused` | Restored from the state handoff on resume and takeover |
+| Fields marked "current process" below                              | Start at zero                                          |
+
+Fields:
 
 | Field                   | Meaning                                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |
@@ -55,7 +60,13 @@ Current-process counters start at zero in each router process. `served`, `failed
 | `flips_refused`         | The 20 most recent rejected role changes                                                        |
 | `flips`                 | Role changes retained up to `flip_history`                                                      |
 
-See [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle) for `lifecycle`. See [SLO attainment and demand accounting](06-SLO-and-Demand.md) for `attainment`, `demand_history`, and `demand_evidence`. For per-request evidence, see the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
+Related references:
+
+| Topic                                             | Reference                                                                                |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `lifecycle`                                       | [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)             |
+| `attainment`, `demand_history`, `demand_evidence` | [SLO attainment and demand accounting](06-SLO-and-Demand.md)                             |
+| Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal)       |
 
 ### `health`
 
@@ -78,7 +89,7 @@ Confirmed ejection clears the engine's drift-window record.
 | `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` |
 | `verifying` | Engines with a health or inference probe in flight, each as `iid` and probe `kind`                                                                      |
 
-Each class keeps its own streak, and `liveness` counts missed sweeps.
+Each class keeps a separate streak. `liveness` counts missed sweeps.
 
 ### `residency`
 
@@ -99,7 +110,7 @@ Each engine-monitoring pass refreshes one record per engine from its attestation
 | `resident_blocks` | Count of resident blocks per KV cache group                  |
 | `resyncs`         | Snapshots taken since router start                           |
 
-Without a sidecar, or when it answers the residency routes with HTTP 404, `known` is `false`.
+`known` is `false` when the sidecar is absent or answers the residency routes with HTTP 404.
 
 ---
 
@@ -153,13 +164,19 @@ Without a sidecar, or when it answers the residency routes with HTTP 404, `known
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
 
-Each role move must keep `min_prefill` and `min_decode`. Floor counts cover engines eligible for placement.
+Each role move keeps `min_prefill` and `min_decode`. Floor counts cover engines eligible for placement.
 
-Below the prefill floor, the role controller moves healthy decode engines to prefill and keeps `min_decode`. `below_floor.live_prefill` reports eligible prefill engines.
+Below the prefill floor, the role controller moves healthy decode engines to prefill and keeps `min_decode`.
 
-Breach tracking starts after prefill first reaches `min_prefill`. Each later drop sets `below_floor.active` and records process-monotonic time in `below_floor.since`.
+Breach tracking starts when prefill first reaches `min_prefill`.
 
-Once prefill recovers, `active` and `since` clear, while `below_floor.cumulative_s` still counts any open breach.
+| Field                      | Meaning                                                                    |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `below_floor.active`       | `true` during a prefill-floor breach; clears when prefill recovers         |
+| `below_floor.live_prefill` | Eligible prefill engines                                                   |
+| `below_floor.since`        | Process-monotonic time the open breach began; clears when prefill recovers |
+| `below_floor.breaches`     | Breaches since tracking started                                            |
+| `below_floor.cumulative_s` | Total breach seconds, including the open breach                            |
 
 ### Controller decisions
 
@@ -205,8 +222,8 @@ Optional fields, by evaluation stage:
 | `decode_correction`                               | Fleet median of the bounded live-to-profile decode ratio                                                   |
 | `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery` |
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                    |
-| `recovery_prefill_ratio`, `queued_prefill_s`      | Prefill recovery inputs; see [Prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)         |
-| `eligibility_rule`                                | Rule that made a scored proposal eligible; see below                                                       |
+| `recovery_prefill_ratio`, `queued_prefill_s`      | Inputs to the [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)                        |
+| `eligibility_rule`                                | Rule that made a scored proposal eligible                                                                  |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal so far and the number required before the move           |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                              |
@@ -214,7 +231,7 @@ Optional fields, by evaluation stage:
 
 Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens`.
 
-Decode-to-prefill decisions add the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix, plus `risk_kind` and `risk_age_s`.
+Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix.
 
 `eligibility_rule` values:
 
@@ -249,7 +266,17 @@ The candidate split moves one engine from decode to prefill. A scored candidate 
 
 Scored projected-TTFT recovery decisions set `decision_basis=projected_ttft_recovery`.
 
-Blocked and held decisions keep the proposed split and objective change, and name the constraint that stopped them: consolidation evidence, profile coverage, KV capacity, role floors, live availability when fleet health is changing, pins, cooldown, dwell, or the resident guard.
+Blocked and held decisions keep the proposed split and objective change. `reason` names the constraint that stopped the move:
+
+- consolidation evidence
+- profile coverage
+- KV capacity
+- role floors
+- live availability while fleet health is changing
+- pins
+- cooldown
+- dwell
+- the resident guard
 
 With incomplete demand history, or a fleet health change before scoring, `control.last_decision` holds the inputs available at that stage.
 

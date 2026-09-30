@@ -2,7 +2,7 @@
 
 ## Check interface compatibility before deployment
 
-Each Narwhal reader compares a document's schema name and version with the pair it supports. Validation fails on any mismatch.
+Validation fails when a document's schema name or version differs from the pair its Narwhal reader supports.
 
 Print the installed contract manifest:
 
@@ -10,7 +10,13 @@ Print the installed contract manifest:
 narwhal-check --print-contract-versions
 ```
 
-The `narwhal.contract-manifest` document gives each interface a `schema` name, a `write` version, and its accepted `read` versions.
+The `narwhal.contract-manifest` document lists each interface with these fields:
+
+| Field    | Meaning                              |
+| -------- | ------------------------------------ |
+| `schema` | Interface schema name.               |
+| `write`  | Version the release writes.          |
+| `read`   | Versions the release accepts.        |
 
 This release uses version 1 of every interface below.
 
@@ -50,8 +56,8 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-roll-back).
 
-If the `schema` or `write` value changes, documents written by the installed release may fail validation on the candidate. The `read` list shows which versions the candidate still accepts.
+When the `schema` or `write` value changes, documents written by the installed release may fail validation on the candidate. The candidate's `read` list names the versions it accepts.
 
 ## Schema version changes
 
-Renaming or removing a field, or changing its type, needs a new schema version for that interface. The same rule applies to the [command result](../Command-Results.md) envelope.
+Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or changes type.

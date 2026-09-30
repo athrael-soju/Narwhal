@@ -1,6 +1,6 @@
 # Start and verify monitoring
 
-Start Prometheus and Grafana on the router host with `make observe`, then check the router and engine scrape targets.
+`make observe` starts Prometheus and Grafana on the router host and waits for the router and engine scrape targets to report healthy.
 
 ## Prerequisites
 
@@ -12,11 +12,16 @@ Start Prometheus and Grafana on the router host with `make observe`, then check 
 - `curl`;
 - network reachability from the router host to every engine metrics endpoint.
 
-Run the commands from the deployed checkout, inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells). That shell loads `runs/deployment/.env.router` and activates the `.venv` that `make setup` creates.
+Run the commands from the deployed checkout, inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells), with `runs/deployment/.env.router` loaded and the `.venv` from `make setup` active.
 
 ## Configure the monitored deployment
 
-Two variables control what the monitoring stack discovers. `NARWHAL_FLEET` points at the fleet configuration file, which supplies the engine IDs and metrics URLs. `NARWHAL_ROUTER_URL` names the router origin that Prometheus reaches from the router host, either directly or through a stable local tunnel.
+Two variables control what the monitoring stack discovers:
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_FLEET` | The fleet configuration file, the source of the engine IDs and metrics URLs |
+| `NARWHAL_ROUTER_URL` | The router origin that Prometheus reaches from the router host, directly or through a stable local tunnel |
 
 Set both in the router-role shell:
 
@@ -35,9 +40,9 @@ Run:
 make observe
 ```
 
-The command starts Prometheus `3.14.0` and Grafana `13.2.1`. It returns once the [readiness checks](#readiness-contract) pass.
+The command starts Prometheus `3.14.0` and Grafana `13.2.1` and returns when the [readiness checks](#readiness-contract) pass.
 
-Startup stops and names any process outside the monitoring Compose project that holds a monitoring listener. Free the listener or choose another address.
+When a process outside the monitoring Compose project holds a monitoring listener, startup stops and names that process. Free the listener or choose another address.
 
 ### Readiness contract
 
@@ -47,9 +52,9 @@ Startup finishes when these checks pass:
 - every configured engine target is healthy;
 - the `narwhal_router_ready` metric is present;
 - Grafana has selected the expected Prometheus datasource;
-- the `narwhal-router` dashboard is available with its `router` selector defaulting to **All** (regex `.*`).
-
-At least one dashboard query must use `instance=~"$router"`, and every router-scoped query must use that regex form.
+- the `narwhal-router` dashboard is available with its `router` selector defaulting to All (regex `.*`);
+- at least one dashboard query uses `instance=~"$router"`;
+- every router-scoped query uses that regex form.
 
 Each stage of the startup sequence runs under a deadline:
 
@@ -70,7 +75,14 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
   | python3 -m json.tool
 ```
 
-The response returns one series for the router and one for each configured engine. A value of `1` means the scrape succeeded and `0` means it failed. Prometheus `/targets` shows the discovery state and any scrape error for each endpoint.
+The response has one series for the router and one for each configured engine:
+
+| Value | Scrape |
+| --- | --- |
+| `1` | Succeeded |
+| `0` | Failed |
+
+Prometheus `/targets` shows the discovery state and scrape errors for each endpoint.
 
 ## Staged monitoring files
 
@@ -90,4 +102,6 @@ grafana-provisioning
 grafana-dashboards
 ```
 
-Running `make observe` again regenerates the staged files and repairs their permissions. Next, open the [workstation dashboard route](02-Access.md).
+Running `make observe` again regenerates the staged files and repairs their permissions.
+
+Next: [workstation dashboard route](02-Access.md).

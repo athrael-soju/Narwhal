@@ -14,7 +14,15 @@ narwhal diagnostics collect \
   --format json
 ```
 
-Make sure the parent directory exists before you run the collector, and give each router its own `--out` path that doesn't exist yet. The collector creates the bundle directory itself (mode `0700`) and writes its files as `0600`. If the output path is already there, it stops before collecting anything. Relative paths are resolved against the current working directory.
+Output location:
+
+1. Create the parent directory.
+2. Give each router its own fresh `--out` path.
+
+| Path             | Mode   |
+| ---------------- | ------ |
+| Bundle directory | `0700` |
+| Bundle files     | `0600` |
 
 ## Source selection
 
@@ -32,15 +40,48 @@ Make sure the parent directory exists before you run the collector, and give eac
 | `--include-request-content` | `false`           | Include journal and completion artifacts and request fields.                                            |
 | `--format text\|json`       | `text`            | Output format, either a `text` summary or `json` for the [command result contract](Command-Results.md). |
 
-Pass at most one of `--run` and `--instance`. The `--instance` option includes the instance's `instance.json`, `lifecycle.json`, and `fleet.json` along with the run recorded by its lifecycle state, and that run must live inside the instance directory. Selecting a run brings in `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs, and stage stdout/stderr files, plus any JSON, log, or stage output files directly under `engine-*` and `verify-*` directories. Adding `--include-request-content` pulls in `journal.jsonl` and the completion artifacts as well. For supervisor status, ingress logs, or deployment evidence kept elsewhere, pass them with `--artifact`, which requires regular files and rejects symbolic links in the selected path.
+Pass at most one of `--run` and `--instance`.
 
-When a source exceeds the byte limit, the collector retains the first portion up to `--max-source-bytes`, marks the source `truncated`, and carries on within the remaining overall budget. Endpoint deadlines cover response streaming, so a response that stalls after its headers or first bytes still keeps its HTTP status and whatever body has arrived. Local file reads check the deadline between bounded reads, and because filesystem operations inherit their mount's I/O behaviour, local files remain the right choice for incident collection.
+| Source                | Selected by                 | Included files                                                                                                                                                                                                                          |
+| --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dev instance          | `--instance`                | The instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run its lifecycle state records. That run must be inside the instance directory.                                                                          |
+| Run directory         | `--run`                     | `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs, stage stdout/stderr files, and the JSON, log, and stage output files directly under `engine-*` and `verify-*` directories. |
+| Request content       | `--include-request-content` | `journal.jsonl` and the completion artifacts.                                                                                                                                                                                           |
+| Files kept elsewhere  | `--artifact`                | Supervisor status, ingress logs, or deployment evidence. Each must be a regular file on a path free of symbolic links.                                                                                                                  |
+
+Source limits:
+
+| Case                                                | Result                                                                                                                  |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| A source exceeds `--max-source-bytes`               | The first `--max-source-bytes` bytes are kept, the source is marked `truncated`, and collection continues within the overall budget. |
+| An endpoint stalls after its headers or first bytes | The deadline covers response streaming. The row keeps the HTTP status and the body received so far.                     |
+| A local file read                                   | The deadline is checked between bounded reads.                                                                          |
+
+Use local files for incident collection.
 
 ## Manifest and exit status
 
-`manifest.json` uses `narwhal.diagnostic-bundle` version 1 and records the collection start and finish timestamps, elapsed time, package version, package source digest, inclusion policy, and one row per source. Each row identifies the source path or URL, its collection timestamp, outcome, and any error. HTTP rows keep the status and content type, while exported files carry byte counts and SHA-256 hashes. Complete local reads additionally record the original file hash and modification timestamp. Generated filenames combine a four-digit source index with a fixed label, such as `0003-artifact.json` or `0007-metrics.txt`, so that source names and credential values never appear in output paths.
+`manifest.json` uses `narwhal.diagnostic-bundle` version 1.
 
-The manifest's `status` reads `success` when every selected source was collected and `partial` when a source failed, timed out, exceeded its byte limit, or was excluded by policy. A failed artifact write contributes a `write_error` row while collection proceeds to the remaining sources and the manifest itself, whereas a failure to write the manifest returns the command's I/O error status.
+| Scope                | Recorded fields                                                                                                                   |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Manifest             | Collection start and finish timestamps, elapsed time, package version, package source digest, inclusion policy, and one row per source |
+| Every source row     | Source path or URL, collection timestamp, outcome, and error                                                                      |
+| HTTP rows            | Status and content type                                                                                                           |
+| Exported files       | Byte count and SHA-256 hash                                                                                                       |
+| Complete local reads | Original file hash and modification timestamp                                                                                     |
+
+Generated filenames are a four-digit source index plus a fixed label, such as `0003-artifact.json` or `0007-metrics.txt`.
+
+| Manifest `status` | Condition                                                                         |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `success`         | Every selected source was collected.                                              |
+| `partial`         | A source failed, timed out, exceeded its byte limit, or was excluded by policy.   |
+
+| Write failure  | Result                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| Artifact write | A `write_error` row. Collection continues with the remaining sources and the manifest.           |
+| Manifest write | The command's I/O error status.                                                                  |
 
 | Exit status | Operator action                                                   |
 | ----------- | ----------------------------------------------------------------- |
@@ -49,16 +90,34 @@ The manifest's `status` reads `success` when every selected source was collected
 | `3`         | Inspect individual source outcomes in the partial bundle.         |
 | `4`         | Inspect the reported I/O failure and retained output directory.   |
 
-JSON command results report the bundle path, manifest path, collection status, and source count, and their artifact entry tracks whether this invocation created the manifest. Exit `3` maps to command status `degraded` and error code `collection_partial`.
+JSON command results report the bundle path, manifest path, collection status, and source count. The manifest's artifact entry records whether this invocation created it. Exit `3` maps to command status `degraded` and error code `collection_partial`.
 
 ## Content policy
 
-Default exports exclude `journal.jsonl` and `completion.json`, and structured fields named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output` become `[REDACTED]`. Passing `--include-request-content` enables these artifacts and fields while credential redaction stays active in both modes.
+| Content                                                                                                                                              | Default      | With `--include-request-content` |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------- |
+| `journal.jsonl` and `completion.json`                                                                                                                | Excluded     | Included                         |
+| Structured fields named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output`                  | `[REDACTED]` | Included                         |
+| Credentials                                                                                                                                          | Redacted     | Redacted                         |
 
-Credential values are removed from recognised credential fields, authorization headers, URL credentials, credential query parameters, and launch arguments. The collector resolves `*_env` references from selected JSON sources only to strip those values, retaining the reference names in exported JSON, and it also scrubs the values of environment variables whose names identify credentials. Credential files (`.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`) receive an `excluded` outcome when explicitly selected.
+Credential redaction covers the values in:
 
-JSON and JSONL exports preserve their structured fields after redaction. For incomplete JSON or free-text logs, a labelled credential or request field ends the retained text at that point, covering multiline and truncated values, while unlabelled operational lines remain in the export. Site tooling supplies filtered free-text logs when credentials or request content use an application-specific encoding.
+- recognised credential fields, authorization headers, URL credentials, credential query parameters, and launch arguments;
+- `*_env` references in selected JSON sources (exported JSON keeps the reference names);
+- environment variables whose names identify credentials.
+
+Explicitly selected credential files get an `excluded` outcome: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`.
+
+| Export                              | Redaction                                                                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| JSON and JSONL                      | Structured fields stay intact after redaction.                                                                                               |
+| Incomplete JSON and free-text logs  | A labelled credential or request field ends the retained text at that point, including multiline and truncated values. Unlabelled operational lines stay. |
+
+When credentials or request content use an application-specific encoding, supply free-text logs filtered by site tooling.
 
 ## Manual collection
 
-Use the [incident capture commands](Troubleshoot.md#capture-router-and-engine-state) when the collector's installed command is unavailable. Preserve each HTTP status alongside its response and use a separate private directory per router.
+When the collector's installed command is unavailable, use the [incident capture commands](Troubleshoot.md#capture-router-and-engine-state):
+
+- Keep each HTTP status with its response.
+- Use a separate private directory per router.

@@ -2,7 +2,7 @@
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a selected NVIDIA GPU and targets GPUs with 8 GB of VRAM or less.
 
-Templates select the model, runtime, and memory budget; `gpu.product` pins a GPU product when a template requires one. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) records a measured four-engine configuration.
+Templates select the model, runtime, and memory budget. A template's `gpu.product` pins a GPU product. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) records a measured four-engine configuration.
 
 ## Lifecycle
 
@@ -24,13 +24,14 @@ narwhal dev down
 | `up` | Checks the ports and runtime, starts each engine, and captures live attestations. Profiles every role split with at least one prefill and one decode engine, starts the router, and reports `launched`. |
 | `verify` | Runs full preflight across every eligible directed KV path and checks the profiles against current processes. Sends an arithmetic request through the router, retains router and engine metrics, and reports `ready`. |
 | `status` | Reports `launched` while supervised processes pass HTTP health checks. Reports `ready` after successful verification with current transfer evidence. |
-| `down` | Checks the recorded boot ID and start ticks, and waits for the group's workers, including workers that outlive the group leader. Escalates survivors to SIGKILL and reports `stopped`. |
+| `down` | Checks the recorded boot ID and start ticks, and waits for the group's workers. Escalates survivors to SIGKILL and reports `stopped`. |
 
-Running `init` again on an existing instance:
+Running `init` again on an existing instance keeps the existing files, the operator edits, and the saved value of every omitted setting.
 
-- keeps the existing files and operator edits;
-- returns `status: reused` when the explicitly supplied settings match the saved instance; omitted settings keep their saved values;
-- exits 2 and names the differing settings when a flag conflicts with a saved setting.
+| Explicitly supplied settings  | Result                                  |
+| ----------------------------- | --------------------------------------- |
+| Match the saved instance      | `status: reused`                        |
+| Conflict with a saved setting | Exit 2, naming the differing settings   |
 
 To change initialization settings, run `narwhal dev init --instance runs/new-instance` with the desired template and flags.
 
@@ -40,15 +41,20 @@ A failed `verify`:
 
 - saves its reason, evidence directory, and failure time in `lifecycle.json` and the attempt's `failure.json`;
 - makes later `status` calls report `degraded`, with the record as `verification_failure` and its reason in `problems`;
-- remains until a successful verification or a completed `down`. A verification retry retains it while its checks execute.
+- remains until a successful verification or a completed `down`.
 
 A subsequent `up` adds a run directory with fresh profiles beside the earlier runs' logs and measurements.
 
 ## Output and exit codes
 
-Text mode writes the returned state to stdout as one JSON document. Preparation progress, profiling progress, and error diagnostics go to stderr.
+Text mode output:
 
-Redirect stdout to save the state, as in `narwhal dev up > result.json`.
+| Stream | Content                                                         |
+| ------ | --------------------------------------------------------------- |
+| stdout | The returned state, as one JSON document                        |
+| stderr | Preparation progress, profiling progress, and error diagnostics |
+
+Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
 
 `narwhal dev` uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-codes), with these lifecycle cases:
 
@@ -58,11 +64,21 @@ Redirect stdout to save the state, as in `narwhal dev up > result.json`.
 | `degraded`, a failed `verify`, or a later `status` while the instance retains that failure | `1` |
 | An instance configuration error, a runtime package error, or a failed `init` check | `2` |
 
-`--format json` wraps the state in the versioned [command result](../Command-Results.md). In that mode, a `degraded` status returns 3 and an operational error returns 4.
+`--format json` wraps the state in the versioned [command result](../Command-Results.md) and adds these exit codes:
+
+| Case              | Exit code |
+| ----------------- | --------: |
+| `degraded`        |       `3` |
+| Operational error |       `4` |
 
 ## Options
 
-`--instance` and `--format` apply to every subcommand; the other options apply to `init`. Print the installed distribution version with `narwhal --version`.
+| Scope            | Options                    |
+| ---------------- | -------------------------- |
+| Every subcommand | `--instance` and `--format` |
+| `init`           | Every other option below   |
+
+Print the installed distribution version with `narwhal --version`.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -95,11 +111,14 @@ Memory rules:
 - The decimal sum of per-engine fractions must be at most the device allowance. Three engines at `0.1` fit an allowance of `0.3`.
 - The free-memory check reserves the allowance times total device memory, plus the template's `gpu.reserve_mib` (512 MiB in the installed template).
 
-Put model and runtime changes in a custom template, and select it with `--template`. Model overrides require their matching template checksums and serving limits.
+Change the model or runtime:
+
+1. Write a custom template with the changes. A model override needs its matching checksums and serving limits in the template.
+2. Select the template with `--template`.
 
 ## Role-split replay
 
-The RTX 5090 reference also contains `role_cycle`, which holds deterministic workloads for three role splits:
+The RTX 5090 reference's `role_cycle` holds deterministic workloads for three role splits:
 
 - one prefill and three decode engines (1P:3D);
 - two prefill and two decode engines (2P:2D);

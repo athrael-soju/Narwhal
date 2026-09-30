@@ -4,13 +4,27 @@
 
 ### Primary router failed
 
-Query `/ready` and `/narwhal/lifecycle` on both routers, then identify the lease holder, whose `/narwhal/lifecycle` reports `router.controls_fleet: true`. Send load-balancer traffic to that router once its `/ready` returns HTTP 200.
+1. Query `/ready` and `/narwhal/lifecycle` on both routers.
+2. Identify the lease holder: its `/narwhal/lifecycle` reports `router.controls_fleet: true`.
+3. Wait for the lease holder's `/ready` to return HTTP 200.
+4. Send load-balancer traffic to that router.
+5. Check the active router against the last persisted state handoff:
+    - its lease epoch is higher than the failed primary's last epoch;
+    - its roles and cumulative counters match the handoff.
+6. Add `--standby-of <active-router>` to the old primary's launch command, with the active router's URL as `<active-router>`.
+7. Restart the old primary.
 
-Check the active router against the last persisted state handoff. Its lease epoch should be higher than the failed primary's last epoch, and its roles and cumulative counters should match the handoff.
+The recovered standby:
 
-Restart the old primary by adding `--standby-of <active-router>` to its launch command, substituting the active router's URL for the placeholder. The recovered process returns HTTP 503 from `/ready`. It refuses direct completion requests.
+- returns HTTP 503 from `/ready`;
+- refuses direct completion requests.
 
-When both routers report HTTP 503 from `/ready`, read the refusal reasons and fix what they name. For lease storage or clock-bound refusals, repair without changing the lease holder or fencing.
+When both routers return HTTP 503 from `/ready`, read the refusal reasons:
+
+| Refusal reason | Action |
+| --- | --- |
+| Lease storage or clock bound | Repair the storage or clock. Leave the lease holder and fencing as they are. |
+| Any other reason | Fix what the reason names. |
 
 ### State handoff is stale or incompatible
 
@@ -19,7 +33,16 @@ When both routers report HTTP 503 from `/ready`, read the refusal reasons and fi
 | The previous lease epoch's state handoff expired, or the previous router exited before persisting one | HTTP 503, reason `no fresh handoff` |
 | Contract version mismatch or wrong epoch in the state handoff | HTTP 503 |
 
-Keep client traffic stopped while you restore a compatible router release and the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set). If the handoff cannot be restored, open a maintenance window and set `recovery.resume: false` in the fleet configuration. Start one router from its opening roles by dropping `--resume` and `--standby-of` from the launch command. Admit traffic only after the old router has stopped or fenced itself.
+Keep client traffic stopped while you restore a compatible router release and the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set).
+
+If handoff restoration fails:
+
+1. Open a maintenance window.
+2. Set `recovery.resume: false` in the fleet configuration.
+3. Drop `--resume` and `--standby-of` from one router's launch command.
+4. Start that router from its opening roles.
+5. Wait until the old router has stopped or fenced itself.
+6. Admit traffic.
 
 ## Router rollback
 

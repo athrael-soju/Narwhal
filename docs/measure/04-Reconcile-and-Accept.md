@@ -2,7 +2,7 @@
 
 ## 10. Join client offers to the router journal
 
-`requests.jsonl` holds one terminal record per scheduled offer, identified by request sequence and `client_rid`. A scheduling miss carries `sent: false` and outcome `client_schedule_miss`.
+`requests.jsonl` holds one terminal record per scheduled offer, identified by request sequence and `client_rid`.
 
 | Record                                    | Contents                                                                              |
 | ----------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -10,7 +10,7 @@
 | Sent offer                                | Scheduled and actual starts, HTTP status, and output count                            |
 | Sent offer, when available at termination | Input count, time to first token (TTFT), time per output token (TPOT), or error detail |
 
-Tokens with empty text and tokens emitted only as reasoning output still count, as long as they carry token IDs.
+Every token with a token ID counts toward output, including empty-text and reasoning-only tokens.
 
 A response is complete when:
 
@@ -19,7 +19,7 @@ A response is complete when:
 - The completed output length equals the requested output length.
 - Final usage matches the observed token counts.
 
-The helper requests `stream_interval: 1` and counts multi-token events in `batched_token_events`.
+The helper requests `stream_interval: 1`. `batched_token_events` counts multi-token events.
 
 Client TTFT runs from HTTP dispatch to the first identified output token. Client TPOT is:
 
@@ -29,9 +29,16 @@ time(first identified token -> last identified token)
           completed_output_tokens - 1
 ```
 
-Both metrics use the deployment-client boundaries defined in [Define the measurement contract](01-Profile.md#1-define-the-measurement-contract). Compute latency percentiles from complete responses.
+Both metrics use the deployment-client boundaries from [Define the measurement contract](01-Profile.md#1-define-the-measurement-contract). Compute latency percentiles from complete responses.
 
-The helper sends each offer's `client_rid` as its `x-request-id` header, and the router journal stores that value as `client_rid`. Join client records to the journal on `client_rid`. Each sent offer gets one terminal class. For runner points, the [benchmark evidence collector](06-Benchmark-Evidence.md) compares the two sides.
+Each sent offer has one terminal class. Join client records to the router journal on `client_rid`:
+
+| Side | `client_rid` |
+| --- | --- |
+| Client | Sent as the offer's `x-request-id` header |
+| Router journal | Stored from `x-request-id` |
+
+For runner points, the [benchmark evidence collector](06-Benchmark-Evidence.md) runs this join.
 
 Deployment attainment is `within_candidate_limits / offered` from the client `summary.json`:
 
@@ -40,11 +47,11 @@ Deployment attainment is `within_candidate_limits / offered` from the client `su
 | Numerator   | Completed responses within the TTFT limit, and within the TPOT limit for outputs over one token |
 | Denominator | Every scheduled scored offer, including unsent scheduling misses                         |
 
-A timeout or disconnect after partial output counts as a miss. The helper scores only measured offers; `warmup.json` is excluded. Joined journal rows explain sent offers.
+A timeout or disconnect after partial output counts as a miss. The warmup in `warmup.json` is unscored.
 
 ## 11. Check throughput denominators and client limits
 
-`summary.json` reports throughput by dividing completed requests, output tokens, and SLO-qualified requests by elapsed time through the final response drain.
+`summary.json` reports three throughputs: completed requests, output tokens, and SLO-qualified requests, each divided by the elapsed time through the final response drain.
 
 Before assigning a serving throughput ceiling, compare:
 
@@ -56,14 +63,22 @@ Check admission queues and resident work in `state-before.json`, `state-after-wa
 
 ## 12. Preserve run integrity
 
-Each trial goes to a new directory (mode `0700`) with files at `0600`. The helper records the management checkout digest apart from the installed router revision.
+Each trial writes to a new directory:
+
+| Path | Mode |
+| --- | --- |
+| Trial directory | `0700` |
+| Files in the trial directory | `0600` |
+
+The helper records the management checkout digest and the installed router revision separately.
 
 ### Confirm KV transfer after load
 
-After reconciling the client and router records, query the dashboard series and run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
+1. Query the dashboard series.
+2. Run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
 
-Preflight and the post-load ring show that the tested paths transfer KV and produce tokens. To accept correctness across role changes with resident requests, compare exact output.
+Correctness across role changes with resident requests requires an exact-output comparison.
 
 ## 13. Record deployment acceptance
 
-Record the highest tested offered rate that met the candidate client target. Record with it the request shape, SSH route, preflight revision, and artifact paths.
+Record the highest tested offered rate that met the candidate client target, with its request shape, SSH route, preflight revision, and artifact paths.

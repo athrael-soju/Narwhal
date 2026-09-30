@@ -25,10 +25,10 @@
 | Exit code | Outcome                                                                                                               |
 | --------: | --------------------------------------------------------------------------------------------------------------------- |
 |       `0` | Success.                                                                                                              |
-|       `1` | Operation failure, such as an engine HTTP request, runtime inspection, listener bind, verification gate, or teardown. |
+|       `1` | Operation failure, such as a failed engine HTTP request, runtime inspection, listener bind, verification, or teardown. |
 |       `2` | Invalid arguments or configuration inputs.                                                                            |
 
-Command-specific cases:
+Command-specific cases, listed in full under [`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-codes) and [`narwhal diagnostics` exit statuses](Diagnostic-Bundles.md#manifest-and-exit-status):
 
 | Command                       | Exit code | Case                               |
 | ----------------------------- | --------: | ---------------------------------- |
@@ -38,8 +38,6 @@ Command-specific cases:
 | `narwhal-engine prepare`      |       `1` | An output artifact already exists. |
 | `narwhal diagnostics collect` |       `3` | Partial bundle.                    |
 | `narwhal diagnostics collect` |       `4` | I/O failure.                       |
-
-Full lists: [`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-codes) and [`narwhal diagnostics` exit statuses](Diagnostic-Bundles.md#manifest-and-exit-status).
 
 ## Failure diagnostics
 

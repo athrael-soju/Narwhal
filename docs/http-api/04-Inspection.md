@@ -71,17 +71,17 @@ It returns HTTP `503` with `Retry-After: 1` in any of these cases:
 | `holder`        | Lease-holder token                                                                                  |
 | `reason`        | Cause of `not_ready`; empty when `status` is `ready`                                                |
 
-Engine monitoring degrades after `controller.monitor_failure_limit` consecutive failed passes. One fully successful pass clears it.
+`control_ready` stays `true` through backend loss or managed maintenance while the router holds the lease and monitoring is healthy.
 
-A degraded monitoring state reports this `reason`:
+Engine monitoring degrades after `controller.monitor_failure_limit` consecutive failed passes and clears after one fully successful pass. A degraded monitoring state reports this `reason`:
 
 ```text
 monitoring degraded: <stage> <class>
 ```
 
-A standby router polls the active router's `/ready`. Each poll that returns `control_ready: false` counts as a missed takeover probe.
+A standby router polls the active router's `/ready` and counts each `control_ready: false` response as a missed takeover probe.
 
-When no engine is eligible, the response is:
+With zero eligible engines, the response is:
 
 ```json
 {
@@ -101,10 +101,6 @@ During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-
 - `/ready` reports the lifecycle reason
 - completion requests return HTTP `503` with error code `standby`
 
-`control_ready` stays `true` through backend loss or managed maintenance as long as the router holds the lease and monitoring is healthy.
-
 ## `GET /metrics`
 
-Returns Prometheus exposition format `0.0.4`.
-
-Metric names and labels are listed in [Metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus).
+Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.

@@ -2,7 +2,7 @@
 
 ## GPU telemetry
 
-Run the AMD or NVIDIA exporter. It finds the GPUs and collects sensor metrics, and its hardware dashboard displays them.
+Run the deployment's AMD or NVIDIA exporter. It collects GPU sensor metrics for its hardware dashboard.
 
 ## Alert evaluation
 
@@ -14,12 +14,14 @@ Inspect rules on the router host:
 curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 ```
 
+Alert rules select targets by these labels:
+
 | Target | Labels |
 | --- | --- |
 | Router | `job="narwhal-router"` |
 | Engine | `job="engines"`, `iid=<engine identity>` |
 
-Alert rules select targets by these labels. Production uses the same rules file. The deployment's alert manager routes `severity="page"` and `severity="warn"` alerts.
+Production uses the same rules file. The deployment's alert manager routes `severity="page"` and `severity="warn"` alerts.
 
 ## Troubleshooting
 
@@ -33,10 +35,10 @@ Alert rules select targets by these labels. Production uses the same rules file.
 | Grafana returns dashboard 404 | See [Mount permission failures](#mount-permission-failures). |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets`. |
 | An engine replica disappears from charts | Check the generated target entry and the engine's `iid` label. |
-| Grafana shows an older dashboard | Rerun `make observe` to replace the staged dashboard. If the [dashboard readiness checks](01-Start-and-Verify.md#readiness-contract) still fail, read the provisioning log. |
+| Grafana shows an older dashboard | Rerun `make observe`. For a failed [dashboard readiness check](01-Start-and-Verify.md#readiness-contract), read the provisioning log. |
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid`. |
 
-Rerun `make observe`. Success means the [readiness contract](01-Start-and-Verify.md#readiness-contract) passes.
+Verify each fix with a `make observe` rerun that passes the [readiness contract](01-Start-and-Verify.md#readiness-contract).
 
 ### Mount permission failures
 
@@ -47,6 +49,7 @@ Rerun `make observe`. Success means the [readiness contract](01-Start-and-Verify
 
 ## Retain monitoring captures
 
-Save deployment addresses and captured responses under `runs/`. Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
+- Save deployment addresses and captured responses under `runs/`.
+- Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
 
 For fleet-health actions, follow [Monitor placement and control](../operate/02-Monitor.md#6-monitor-placement-and-control).

@@ -1,16 +1,16 @@
 # Ordered benchmark points
 
-`benchmark_runner.py` runs the plan's points in order. Before and after each point's client it checks `/ready` and `/v1/models` and waits for the router to go idle and drain.
+`benchmark_runner.py` runs the plan's points in order, with `/ready`, `/v1/models`, and idle-router drain checks before and after each point's client.
 
 Prerequisites:
 
 - A passing preflight against the current fleet.
 - A router reserved for this run.
-- Leave the router and engines running after the benchmark so you can inspect them.
+- The router and engines stay running after the benchmark.
 
 | Plan                    | Runner host                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| With an `evidence` object | A host that reads the router's journal file and reaches every engine metrics endpoint; see [Benchmark evidence bundle](06-Benchmark-Evidence.md) |
+| With an `evidence` object | A host that reads the router's [journal file](06-Benchmark-Evidence.md) and reaches every engine metrics endpoint |
 | Other plans             | The workstation repository root, through the private router tunnel                                                                          |
 
 1. Prepare the workload with the [load trial helper](03-Load-Trial.md#create-the-trial-directory-and-workload).
@@ -63,11 +63,13 @@ Prerequisites:
       --out runs/benchmark-001
     ```
 
-The runner executes `client_argv` directly as an argument vector. It substitutes `{base}`, `{model}`, `{point_id}`, and `{point_dir}`.
+The runner executes `client_argv` directly as an argument vector, with `{base}`, `{model}`, `{point_id}`, and `{point_dir}` substituted.
 
-Put credentials in an environment variable.
+For bearer-token ingress, the token authenticates the runner's probes:
 
-For bearer-token ingress, export the token and pass its variable name with `--api-key-env NAME`. The token authenticates the runner's probes. Give the external client its own credentials.
+1. Export the token in an environment variable.
+2. Pass the variable name with `--api-key-env NAME`.
+3. Give the external client separate credentials.
 
 The runner writes a fresh private output directory:
 
@@ -77,6 +79,16 @@ The runner writes a fresh private output directory:
 | `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 
-The runner stops on a refused readiness check, a model mismatch, a nonzero client exit, or a drain timeout. After a nonzero client exit it tries to drain first.
+The runner stops on:
 
-Load trial helper exit `2` (see [Measure 0.5 request/s](03-Load-Trial.md#8-measure-05-requests) for the exit codes) means candidate attainment or scheduling validity failed. The runner records it and stops. Read `summary.json` and `requests.jsonl` to tell a valid measured miss from a client that needs repair.
+- a refused readiness check
+- a model mismatch
+- a nonzero client exit, after a drain attempt
+- a drain timeout
+
+In the load trial helper's [exit codes](03-Load-Trial.md#8-measure-05-requests), exit `2` means candidate attainment or scheduling validity failed. Read `summary.json` and `requests.jsonl`:
+
+| `client_schedule_valid` in `summary.json` | Exit `2` means |
+| --- | --- |
+| `true` | A valid measured miss |
+| `false` | A client that needs repair |

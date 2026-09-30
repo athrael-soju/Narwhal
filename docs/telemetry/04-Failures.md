@@ -27,7 +27,9 @@ handoff
 telemetry
 ```
 
-While degraded, the router blocks new admissions. The `telemetry` stage refreshes floor state and writes loop logs.
+The `telemetry` stage refreshes floor state and writes loop logs.
+
+While monitoring is degraded, the router blocks new admissions.
 
 ## Engine breaker state
 
@@ -56,11 +58,11 @@ liveness
 | ---------------------------------------------------------- | ------------------------------------------------------------------- |
 | Passes, and the engine's profile generation check passes   | The relevant failure streaks clear.                                |
 | Fails                                                      | The engine is ejected and `narwhal_ejected` records it.         |
-| Waits out the control pool                                 | Inconclusive. The verdict waits and streaks stay as they are. |
+| Waits out the control pool                                 | Inconclusive. The verdict is deferred and streaks keep their values. |
 
 `make observe` stages these assets:
 
-- `tools/observability/prometheus-alerts.yml` holds the Prometheus alert rules.
-- `tools/observability/grafana-narwhal.json` is the Grafana dashboard.
-
-The [observability asset contracts](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) describe what each dashboard panel shows and which metrics it uses.
+| Path                                        | Contents                                                                                                                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tools/observability/prometheus-alerts.yml` | Prometheus alert rules.                                                                                                                                                   |
+| `tools/observability/grafana-narwhal.json`  | Grafana dashboard. The [observability asset contracts](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) list each panel and its metrics. |

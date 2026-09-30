@@ -2,13 +2,16 @@
 
 ## 17. Fabric workload qualification
 
-`deploy_hosts.py prepare` snapshots `tools/deployment/fabric_budget.py` on every engine host and records its SHA-256 in the manifest and engine role environment. It also packages the selected application revision in `source.bundle`. `install` verifies the transferred snapshot before copying it to `runs/deployment-tools/`.
+| Command                   | Fabric helper result                                                                                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_hosts.py prepare` | Packages the selected application revision in `source.bundle`. Snapshots `tools/deployment/fabric_budget.py` on every engine host and records its SHA-256 in the manifest and engine role environment. |
+| `install`                 | Verifies the transferred snapshot and copies it to `runs/deployment-tools/`.                                                                                                 |
 
 If the helper changes, start a new preparation directory.
 
 ### 17.1 Calculate the workload budget
 
-Fabric qualification ([Prove the transfer fabric against the serving cache](../deploy/04-Qualify-Fabric.md)) groups engine roles by:
+[Fabric qualification](../deploy/04-Qualify-Fabric.md) groups engine roles by:
 
 - discovered image
 - model
@@ -25,41 +28,58 @@ Engines in a group whose captured cache layouts match share one source budget, d
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
     ```
 
-3. Compare each directed host edge with its group budget as described in [Link evidence](#174-link-evidence).
+3. Compare each directed host edge with its group budget using the [link evidence](#174-link-evidence).
 
 `calculate` accepts these options:
 
 | Option                        | Default  | Description                                                                                                  |
 | ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
-| `--model-config PATH`         | required | Model configuration file. Hash must match the runtime layout.                                            |
-| `--launch-config PATH`        | required | Engine launch record. Supplies the TP size. Hash must match the runtime layout.                      |
-| `--runtime-layout PATH`       | one of three cache sources | Captured `cache-layout.json`.                                                                |
+| `--model-config PATH`         | required | Model configuration file. Hash must match the runtime layout.                                                |
+| `--launch-config PATH`        | required | Engine launch record. Supplies the TP size. Hash must match the runtime layout.                              |
+| `--runtime-layout PATH`       | one of three cache sources | Captured `cache-layout.json`.                                                              |
 | `--prompt-tokens N`           | required | Prompt length, in tokens.                                                                                    |
 | `--handoffs-per-s RATE`       | required | Peak remote KV handoff rate, in handoffs per second.                                                         |
 | `--burst N`                   | required | Number of KV handoffs in a burst.                                                                            |
 | `--transfer-budget-s SECONDS` | required | Time budget for transferring one burst.                                                                      |
-| `--headroom FACTOR`           | required | Multiplier applied to the required rate.                                                                     |
+| `--headroom FACTOR`           | required | Multiplier applied to the required rate. At least 1.                                                         |
 | `--out PATH`                  | required | Fresh private output path for the budget.                                                                    |
 
-Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--bytes-per-token`. `--headroom` must be at least 1.
-
-`calculate` checks the model and launch-record hashes, sums the padded cache-page bounds across TP ranks, and derives the link rate the workload needs.
+Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--bytes-per-token`.
 
 ### 17.2 Retained budget evidence
 
-`calculate` writes the mode-0600 budget file `runs/fabric-*/budget.json` on the representative engine host, which holds the input and runtime-layout hashes, the prompt length, the padded-page payload bound, the sizing assumptions, and the required decimal Gbit/s.
+`calculate` writes the budget file `runs/fabric-*/budget.json` at mode 0600 on the representative engine host. The budget file holds:
 
-A budget fixes the rate one directed host edge must carry at the recorded workload, summed over all TP ranks. One budget covers every directed edge in its group. Each matching source role records the budget rate and hash in its private comparison file.
+- the input and runtime-layout hashes
+- the prompt length
+- the padded-page payload bound
+- the sizing assumptions
+- the required decimal Gbit/s
 
-The captured layout retains per-rank page bytes, per-layer page bytes, token block size, state allowance, boundary allowance, image identity, package versions, application revision, and the launch-plan hash.
+A budget fixes the total rate, summed over all TP ranks, that one directed host edge must carry at the recorded workload. One budget covers every directed edge in its group. Each matching source role records the budget rate and hash in its private comparison file.
 
-The representative captures its cache pages after model loading and memory profiling, then continues to HTTP startup. Attestation and workload trials run against that model and geometry.
+The captured layout holds:
+
+- per-rank page bytes
+- per-layer page bytes
+- token block size
+- state allowance
+- boundary allowance
+- image identity
+- package versions
+- application revision
+- launch-plan hash
+
+Attestation and workload trials run against the model and cache geometry that the representative engine captured.
 
 ### 17.3 Uniform-cache options
 
-`--uniform-cache` selects an analytical attention or multi-head latent attention (MLA) estimate. `--bytes-per-token` supplies a measured override. Both require `--element-bytes` and `--block-tokens`.
+Deployments use the runtime page record for every model. These options serve offline estimates:
 
-Deployments use the runtime page record for every model, so these options serve offline estimates.
+| Option              | Cache source                                                       | Requires                               |
+| ------------------- | ------------------------------------------------------------------ | -------------------------------------- |
+| `--uniform-cache`   | Analytical attention or multi-head latent attention (MLA) estimate | `--element-bytes` and `--block-tokens` |
+| `--bytes-per-token` | Measured override                                                  | `--element-bytes` and `--block-tokens` |
 
 ### 17.4 Link evidence
 
@@ -68,17 +88,28 @@ Deployments use the runtime page record for every model, so these options serve 
 | TCP       | Aggregate received bitrate that the iperf3 receiver reports |
 | RDMA      | Average Gbit/s from the retained perftest report          |
 
-`fabric_budget.py link` records these fields for each directed pair and prints their SHA-256 fingerprint: roles, addresses, interfaces, routes, transport, utility version, and test parameters.
+`fabric_budget.py link` records these fields for each directed pair and prints their SHA-256 fingerprint:
 
-`record-edge` binds the sample and source budget to that fingerprint and records whether the rate meets the budget. `reuse-edge` applies when the link fingerprint still matches: it compares the retained sample against a corrected budget and writes a new private comparison.
+- roles
+- addresses
+- interfaces
+- routes
+- transport
+- utility version
+- test parameters
 
-Running-engine KV probes and concurrent-capacity tests supply the later acceptance evidence.
+| Command       | Result                                                                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `record-edge` | Binds the sample and source budget to the link fingerprint and records whether the rate meets the budget.               |
+| `reuse-edge`  | For a matching link fingerprint, compares the retained sample against a corrected budget and writes a new private comparison. |
 
 ---
 
 ## 18. CLI precedence
 
-`narwhal-serve` applies these options after it loads the fleet configuration. Each default comes from the field named in the table.
+`narwhal-serve` options take precedence over fleet fields. The [CLI reference](../CLI-Reference.md) covers `--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options.
+
+Options that default to a fleet field:
 
 | Option                       | Default                      | Description                                              |
 | ---------------------------- | ---------------------------- | -------------------------------------------------------- |
@@ -88,23 +119,23 @@ Running-engine KV probes and concurrent-capacity tests supply the later acceptan
 
 To turn resume off, set `recovery.resume` to `false`.
 
-See the [CLI reference](../CLI-Reference.md) for `--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options.
-
 ---
 
 ## 19. Request journal
 
-Narwhal writes request timing records to `journal.jsonl` beside `profiles.path`. Use `narwhal-serve --journal PATH` to select another location. See [Paths](01-Fleet-Schema.md#12-paths).
-
-The record format is in the [request-journal reference](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
+Narwhal writes [request timing records](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to `journal.jsonl` beside [`profiles.path`](01-Fleet-Schema.md#12-paths). Use `narwhal-serve --journal PATH` to select another location.
 
 ---
 
 ## 20. Configuration provenance and publication
 
-Keep the exact fleet configuration beside every scored run. Replace the engine URLs inside it before publishing an artifact.
+- Keep the exact fleet configuration beside every scored run.
+- Replace the engine URLs in that configuration before publishing an artifact.
 
-Store live fleet files in a Git-ignored path such as `runs/`, or `config/fleet.json`. Real host allocations, credentials, runtime evidence, and launch records also stay in ignored private paths.
+| Data                                                                   | Location                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- |
+| Live fleet files                                                       | A Git-ignored path, such as `runs/` or `config/fleet.json` |
+| Real host allocations, credentials, runtime evidence, launch records   | Ignored private paths                                     |
 
 ---
 

@@ -4,7 +4,7 @@
 
 ### Prefill
 
-Narwhal sends the producer a non-streaming, one-token completion request and discards the generated token after capturing the KV handoff descriptor.
+The prefill leg is a non-streaming, one-token completion request to the producer. Narwhal keeps the resulting KV handoff descriptor and discards the generated token.
 
 `PrefillResult` holds the KV handoff descriptor, producer URL, endpoint, and backend request ID.
 
@@ -23,36 +23,33 @@ Same-engine decode strips transfer parameters, including client-provided values,
 
 ### Descriptor validation
 
-Narwhal validates the KV handoff descriptor before the decode HTTP request and rejects:
+[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
+
+Narwhal validates the KV handoff descriptor before each decode HTTP request. It keeps opaque runtime fields and rejects a descriptor with:
 
 - missing engine identity
 - malformed block IDs
 - a connector mismatch
 - an endpoint mismatch
 
-Narwhal retains opaque runtime fields.
+### Request scope and timing
 
-[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
-
-### Ownership and timing
-
-The original client request owns:
+These are scoped to the original client request:
 
 - handoff-age enforcement
 - phase reservations
 - retries
 - cleanup
 
-Handoff age begins when the producer HTTP leg starts.
+Handoff age begins when the producer HTTP leg starts. Each retry gets fresh backend request IDs and a new KV handoff.
 
-Each retry gets fresh backend request IDs and a new KV handoff.
+Durations in the [measurement contract](../measure/01-Profile.md):
 
-Durations from the request's arrival at the router:
-
-- `ttft_s`: time to producer HTTP completion.
-- `first_byte_s`: time to the first generated decode output observed by the router.
-
-`first_byte_s - ttft_s` measures the time from producer completion to the first decode output. See [Measurement contract and profiling](../measure/01-Profile.md).
+| Duration                | Interval                                                                   |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `ttft_s`                | Request arrival at the router to producer HTTP completion                  |
+| `first_byte_s`          | Request arrival at the router to the first generated decode output it observes |
+| `first_byte_s - ttft_s` | Producer completion to the first decode output                             |
 
 ### Python API
 
@@ -69,15 +66,20 @@ Pass the `EngineClient.prefill()` result to `EngineClient.decode()`. `result.par
 
 ## Engine failure handling
 
-Timeout-shaped engine faults map to HTTP `504`. Other engine faults map to HTTP `502`.
+Engine faults map to HTTP status codes:
+
+| Engine fault   | HTTP  |
+| -------------- | ----- |
+| Timeout-shaped | `504` |
+| Other          | `502` |
+
+A streaming response commits HTTP `200` before decode starts.
 
 | Failure                                                     | Client response                                     |
 | ----------------------------------------------------------- | --------------------------------------------------- |
 | Prefill, streaming or non-streaming                         | HTTP error status                                   |
 | Decode, non-streaming                                       | HTTP error status                                   |
 | Decode, streaming, outside the [retry conditions](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
-
-A streaming response commits HTTP `200` before decode starts.
 
 Terminal SSE event:
 
@@ -87,7 +89,12 @@ data: {"error": ...}
 
 The decode status codes below apply to non-streaming requests.
 
-The client error body carries a generic message, such as `Upstream request failed` and the engine's failure detail goes to the `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records).
+Failure detail by destination:
+
+| Destination                                                                                           | Content                                            |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Client error body                                                                                     | Generic message, such as `Upstream request failed` |
+| `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records) | Engine failure detail                              |
 
 ### Input sizing
 
@@ -101,20 +108,18 @@ A tokenization timeout returns HTTP `504` before placement. Other tokenization f
 
 ### Breaker readmission
 
-After `recovery.eject_after` consecutive stream failures, Narwhal ejects the engine until an inference probe succeeds. Stream failures:
+Narwhal ejects an engine at `recovery.eject_after` consecutive stream failures and readmits it when an inference probe succeeds. Stream failures are:
 
 - first-token timeout
 - mid-stream silence
 - stream closed before `[DONE]`
 - `[DONE]` before any token
 
-After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
+Inference probes:
 
-Each probe leg uses `engine.first_token_timeout_s`.
-
-Inconclusive probes return to the normal readmission cadence.
-
-Whole-wave restart policy continues to apply.
+- use a new handoff from the original producer for a crossed-decode failure
+- apply `engine.first_token_timeout_s` to each leg
+- return to the normal readmission cadence when inconclusive
 
 ### Successful stream termination
 
@@ -132,21 +137,18 @@ Journal `error` for an early `[DONE]`:
 stream ended with [DONE] before any token arrived
 ```
 
-An error object carried inside an upstream HTTP `200` stream propagates with the error object's own status.
-
 ### Decode timeouts
 
-`engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends at the first generated token. Connection and response-header delays consume the same budget.
+| Timeout                        | Window                                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.first_token_timeout_s` | Starts before the decode HTTP stream opens and ends at the first generated token; connection and response-header delays count against it |
+| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token; metadata chunks reset the timer; a zero value uses the original request deadline as the stream bound |
 
-After the first token, `engine.decode_read_timeout_s` bounds silence between transport chunks; metadata chunks reset the timer.
-
-Expiry returns HTTP `504` with detail beginning:
+`engine.decode_read_timeout_s` expiry returns HTTP `504` with detail beginning:
 
 ```text
 engine went silent between tokens
 ```
-
-A zero `engine.decode_read_timeout_s` uses the original request deadline as the stream bound.
 
 ### Retries
 
@@ -154,12 +156,12 @@ Each admitted request receives one prefill/decode attempt by default.
 
 Before visible output, Narwhal may start a fresh attempt for a transient fault when both conditions hold:
 
-- the original request deadline still permits it
+- the original request deadline permits it
 - retry budget remains
 
-When `recovery.failure_quarantine_s > 0`, the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
+With `recovery.failure_quarantine_s > 0`, Narwhal excludes the failed engine from new placement for that many seconds.
 
-A decode failure after HTTP `200` has already been committed emits a terminal SSE event:
+A decode failure after HTTP `200` is committed emits a terminal SSE event:
 
 ```text
 data: {"error": ...}

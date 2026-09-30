@@ -2,7 +2,7 @@
 
 Narwhal served `moonshotai/Kimi-K3` on AMD Instinct MI355X engines at 0.5 and 1 request/s. All 200 requests at each rate stayed within the 10 s time to first token (TTFT) and 0.3 s time per output token (TPOT) limits.
 
-A private run bundle holds the deployment inputs and the raw evidence from each stage. The bundle sits in `runs/<qualification-run>/`.
+The private run bundle in `runs/<qualification-run>/` holds the deployment inputs and the raw evidence from each stage.
 
 ## Pinned inputs
 
@@ -27,13 +27,16 @@ A private run bundle holds the deployment inputs and the raw evidence from each 
 
 The checkpoint manifests and the live launch check agree on every shard and the model config hash on every selected host.
 
-Live prefill for 8,192 tokens took about 0.92 s at the median. Decode intercepts ran 0.2416 to 0.2426 s/token.
+| Profile measurement | Value |
+| --- | --- |
+| Median live prefill, 8,192 tokens | About 0.92 s |
+| Decode intercepts | 0.2416 to 0.2426 s/token |
 
 The packaged 2.5 s first-token deadline rejected valid KV handoffs between engines. Wider-window direct probes completed on every permitted path, with first-token latency from 0.348 to 5.274 s.
 
 The qualified fleet copy changes only `engine.first_token_timeout_s`, to 8.5 s. That leaves about 0.6 s of the 10 s TTFT budget after prefill.
 
-Full preflight passed all nine gates, run against the same engine containers and profiled process generations that served the benchmark.
+Full preflight against the same engine containers and profiled process generations that served the benchmark passed all nine gates.
 
 ## Procedure
 
@@ -58,7 +61,7 @@ Full preflight passed all nine gates, run against the same engine containers and
     .venv/bin/narwhal-check --fleet runs/<qualification-run>/fleet-qualified.json
     ```
 
-7. Start the router, then update the benchmark helper in the router-host checkout to the pinned client revision and prepare the workload:
+7. Start the router, update the benchmark helper in the router-host checkout to the pinned client revision, and prepare the workload:
 
     ```bash
     .venv/bin/narwhal-serve --fleet runs/<qualification-run>/fleet-qualified.json \
@@ -92,7 +95,7 @@ Full preflight passed all nine gates, run against the same engine containers and
 
 ## Measured points
 
-Each point started with a ready, idle router and ended idle. Each also ran one warmup request, which the table excludes, so the client and journal both logged 201 terminal requests.
+Each point started with a ready, idle router and ended idle. The client and journal each logged 201 terminal requests per point: 200 measured requests and one unscored warmup.
 
 | Offered rate | Completed rate including drain | Output throughput including drain | TTFT p50 / p95 / p99 | TPOT p50 / p95 / p99 | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -100,14 +103,15 @@ Each point started with a ready, idle router and ended idle. Each also ran one w
 | 1 request/s | 0.840 request/s | 107.5 tokens/s | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
 The router shifted capacity toward decode during the lower-rate point and held that allocation through the higher-rate point.
+
 | Point | Collector result |
 | --- | --- |
 | Both | Scrapes covered the whole run, client and journal counts matched, and the timeline shows every role change |
-| 0.5 request/s | One `counter_missing` diagnostic for `narwhal_flips_total`; the series appeared only after the first role change |
+| 0.5 request/s | One `counter_missing` diagnostic for `narwhal_flips_total`, a series that first appeared at the first role change |
 | 1 request/s | All collector checks passed |
 
 Grafana dashboard coverage begins partway through the lower-rate point.
 
-After the second drain, a post-load KV ring check with [`narwhal-check`](../cli/Check.md) passed for role-permitted transfers between engines.
+A post-load KV ring check with [`narwhal-check`](../cli/Check.md) passed for role-permitted transfers between engines on the drained router.
 
-The private artifact bundle at `runs/<qualification-run>/qualification-artifacts.tgz` has SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`. It holds the client records, router journal, per-point evidence, and the qualified inputs. The deployment and monitoring services stayed running for inspection.
+The private artifact bundle `runs/<qualification-run>/qualification-artifacts.tgz` (SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`) holds the client records, router journal, per-point evidence, and qualified inputs.

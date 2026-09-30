@@ -31,7 +31,8 @@ Compare each engine allocation with the GPU inventory collected on that engine h
 
 ### Concurrency rules
 
-- After installation, keep one shell per physical engine host and inspect hosts concurrently.
+- Keep one installed role shell per physical engine host.
+- Inspect engine hosts concurrently.
 - Start engines with disjoint GPU allocations concurrently.
 - Start engines that share GPUs one at a time.
 - Capture each engine's live cache layout.
@@ -49,13 +50,17 @@ Create a private deployment record before the first command. For every gate, ret
 - exit status;
 - generated artifacts and paths.
 
-When a gate blocks, record the blocked state before you change it. During recovery, retain the failed attempt's evidence and remove only the files and processes it created.
+When a gate fails:
+
+1. Record the failed state before you change it.
+2. Retain the failed attempt's evidence.
+3. Remove only the files and processes the failed attempt created.
 
 Before you export evidence from the private environment, replace private addresses, paths, and credentials with stable aliases.
 
 ## Deployment sequence
 
-Run the gates in order and record each gate's result before proceeding to the next gate.
+Run the gates in order. Record each gate's result before you start the next gate.
 
 1. [Gate A: Freeze inputs and discover the real deployment](deploy/01-Discover.md)
 2. [Gate B: Package and install the approved revision](deploy/02-Install.md)
@@ -70,9 +75,10 @@ When a measured input changes, repeat the work listed for that change:
 | Change                                                           | Work to repeat                                                                                                                                                                                                                                                                              |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Offered rate or request count within the profiled workload range | Run the next trial point after router drain. Keep the engine profiles, fabric samples, and full preflight.                                                                                                                                                                                  |
-| SLO or first-token deadline                                      | Run `narwhal-check`, which tests the revised limits against the saved profiles and live handoffs, before the router loads the edited fleet.                                                                                                                                                 |
-| Router restart with the same fleet configuration                 | Restart the router after Narwhal checks the saved profiles and the configured first-token calibration against the live engine generations.                                                                                                                                                  |
-| Engine restart with the same launch plan                         | Capture its live cache layout and attestation, profile the new process generation, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and run full preflight. Recalculate its fabric budget when the captured geometry changes. |
+| SLO or first-token deadline                                      | Run `narwhal-check` with the revised limits against the saved profiles and live handoffs before the router loads the edited fleet.                                                                                                                                                          |
+| Router restart with the same fleet configuration                 | Restart the router. Router startup verifies the saved profiles and the configured first-token calibration against the live engine generations.                                                                                                                                              |
+| Engine restart with the same launch plan                         | Capture its live cache layout and attestation, profile the new process generation, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and run full preflight.                                                                  |
+| Cache geometry change after an engine restart                    | Recalculate the engine's fabric budget from the new `cache-layout.json`.                                                                                                                                                                                                                    |
 | Fabric route, host assignment, or transport                      | Measure the affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and exercise the live KV paths in preflight.                                                                  |
 
 ## Evidence and recovery index

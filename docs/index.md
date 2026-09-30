@@ -22,7 +22,7 @@ Narwhal runs disaggregated LLM inference and [reassigns prefill and decode roles
 
 - [Core concepts](Core-Concepts.md): the contracts that govern engines, request placement, role control, and fleet state.
 - [Configuration](Configuration.md): fleet configuration fields, environment inputs, and their defaults.
-- [CLI reference](CLI-Reference.md): available commands and options, including command exit behaviour.
+- [CLI reference](CLI-Reference.md): commands, options, and exit behaviour.
 - [HTTP API reference](HTTP-API.md): completion, inspection, and lifecycle endpoints.
 - [Telemetry and artifact reference](Telemetry-and-Artifacts.md): journals, profiles, metrics, and persisted contract versions.
 

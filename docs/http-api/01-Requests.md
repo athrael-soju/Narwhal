@@ -16,11 +16,11 @@ Non-streaming calls return `object: "chat.completion"` and the assistant message
 
 ## Request contract
 
-The body is a JSON object. Every other field goes to the engine as sent.
+The body is a JSON object. The router passes fields outside the validated set to the engine as sent.
 
 ### Validated field types
 
-Non-null values of these fields are type-checked before admission:
+The router type-checks non-null values of these fields before admission:
 
 | Field        | Required type                 |
 | ------------ | ----------------------------- |
@@ -32,9 +32,13 @@ Non-null values of these fields are type-checked before admission:
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 
-Bad JSON, a non-object body, or a wrongly typed field returns HTTP `400` in an OpenAI error envelope. The journal gets one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
+These requests return HTTP `400` in an OpenAI error envelope and write one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`:
 
-A rejected `max_tokens` looks like this:
+- malformed JSON
+- a JSON array or scalar body
+- a field of the wrong type
+
+A rejected `max_tokens` returns:
 
 ```json
 {
@@ -49,7 +53,10 @@ A rejected `max_tokens` looks like this:
 
 ### Model handling
 
-A request for a different model gets HTTP `404` with `model_not_found`. Requests for the configured model are forwarded with that name.
+| Requested `model` | Result                            |
+| ----------------- | --------------------------------- |
+| Configured model  | Forwarded with that name          |
+| Any other model   | HTTP `404` with `model_not_found` |
 
 ### Sampling width
 
@@ -57,9 +64,13 @@ A request for a different model gets HTTP `404` with `model_not_found`. Requests
 
 ### Output and tool restrictions
 
-Non-streaming requests accept `modalities: ["text"]`, `tools` as an array of objects, and tools of type `function`. `audio` and anything else returns HTTP `400` with `invalid_request_error` before engine dispatch.
+Streaming requests pass these options to the engine as sent. Non-streaming requests accept:
 
-`param` names the rejected option. Streaming requests skip these checks.
+- `modalities: ["text"]`
+- `tools` as an array of objects
+- tools of type `function`
+
+A non-streaming request with an `audio` value, or any other value for these options, returns HTTP `400` with `invalid_request_error` before engine dispatch. `param` names the rejected option.
 
 ---
 
@@ -71,8 +82,10 @@ Non-streaming requests accept `modalities: ["text"]`, `tools` as an array of obj
 | Backend request ID | One per engine attempt and phase    | Engine requests and the KV handoff |
 | `client_rid`       | Trusted request ID sent by ingress  | Request journal                 |
 
-Ingress authenticates the client and strips its credentials and any internal IDs it sent. It then sets the trusted identity values.
+[Configure ingress](../operate/01-Start-Routers.md#3-configure-the-client-path) to:
 
-Set `engine.engine_api_key_env` and Narwhal sends that credential on serving and control requests to the engine.
+1. Authenticate the client.
+2. Strip the client's credentials and any internal IDs it sent.
+3. Set the trusted identity values.
 
-Engine credential setup is in [Engine authentication and protocol adapters](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters). Client-side setup is in [Configure the client path](../operate/01-Start-Routers.md#3-configure-the-client-path).
+With [`engine.engine_api_key_env`](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) set, Narwhal sends that credential on serving and control requests to the engine.

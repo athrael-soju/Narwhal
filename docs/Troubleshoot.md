@@ -2,7 +2,11 @@
 
 ## Capture router and engine state
 
-Before changing router or engine state, collect one bundle per incident router. Use a fresh output path and that router's fleet configuration and run directory.
+Before changing router or engine state, collect one bundle per incident router. Each bundle uses:
+
+- a fresh output path;
+- that router's fleet configuration;
+- that router's run directory.
 
 Collect a bundle:
 
@@ -15,14 +19,14 @@ narwhal diagnostics collect \
   --out runs/diagnostics/router-incident-001
 ```
 
-The [diagnostic bundle manifest](Diagnostic-Bundles.md) records HTTP status, retained response bodies, collection errors, source paths, and artifact hashes. Exit status `3` means a partial bundle; inspect its source rows before retrying individual reads.
+The [diagnostic bundle manifest](Diagnostic-Bundles.md) records HTTP status, retained response bodies, collection errors, source paths, and artifact hashes. Exit status `3` means a partial bundle. Inspect its source rows before retrying individual reads.
 
 | Option | Adds |
 | --- | --- |
 | `--artifact PATH` | Ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run |
 | `--include-request-content` | Journal and completion content |
 
-On a release that does not yet ship `narwhal diagnostics collect`, capture the endpoints manually:
+On a release that predates `narwhal diagnostics collect`, capture the endpoints manually:
 
 ```bash
 umask 077
@@ -37,7 +41,10 @@ for endpoint in health ready narwhal/state narwhal/lifecycle metrics; do
 done
 ```
 
-Once site tooling has filtered the local artifacts per the [Content policy](Diagnostic-Bundles.md#content-policy), place them beside these snapshots.
+For local artifacts:
+
+1. Filter them with site tooling per the [Content policy](Diagnostic-Bundles.md#content-policy).
+2. Place them beside these snapshots.
 
 Before stopping an engine, capture the evidence required by its planned lifecycle restart or unplanned-failure procedure.
 
@@ -49,12 +56,12 @@ Before stopping an engine, capture the evidence required by its planned lifecycl
 | `/health` reports `standby` | Send traffic and lifecycle actions to the active lease holder. |
 | `/health` reports `fenced` | Identify the current lease holder and remove the fenced router from the load balancer. |
 | `/health` reports `maintenance` | Follow `/narwhal/lifecycle` through the engine wave until readiness returns. |
-| Both routers return HTTP 503 from `/ready` | Compare refusal reasons, then inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness. |
+| Both routers return HTTP 503 from `/ready` | Compare refusal reasons. Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness. |
 | HTTP 429 increases | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity. |
 | HTTP 502 increases | Inspect engine failures, ejection, quarantine, and in-flight work. |
 | HTTP 504 increases | Separate queue and request expiry from engine timeouts with the response error and terminal journal row. |
 | A stream ends with an error frame after the HTTP 200 response starts | Inspect failed attempts, final outcome, and participating engines. |
-| Lifecycle state is `blocked` | Repair the failed drain identity capture or readmission check, then retry that operation. |
+| Lifecycle state is `blocked` | Repair the failed drain identity capture or readmission check. Retry that operation. |
 
 Procedures by path:
 
@@ -63,8 +70,6 @@ Procedures by path:
 - [Router failover and rollback](troubleshoot/02-Router-Recovery.md): the primary router failed, or a standby reports a stale or incompatible state handoff.
 
 ## Fleet overload with healthy engines
-
-This section covers the case where HTTP 429 or 504 responses increase while the engines remain healthy.
 
 1. Classify the overload from `admission`, `serving`, `resident`, and pool load in `/narwhal/state`:
     - immediate concurrency rejection;

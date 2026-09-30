@@ -35,13 +35,11 @@ Serve the route on the trusted control network.
 | `age_s`  | Seconds since that event       |
 | `events` | Risk-event counts by kind      |
 
-A receiving router reanchors `age_s` to its own clock and starts gathering new arrival evidence.
-
-The request-journal header carries package and Git provenance.
+A receiving router reanchors `age_s` to its local clock and starts gathering new arrival evidence.
 
 ### Restored and process-local state
 
-Resume and takeover restore the `counters` totals from the state handoff. The new process starts fresh on:
+Resume and takeover restore the `counters` totals from the state handoff. The new process resets:
 
 - resident tracking
 - flip history
@@ -51,9 +49,12 @@ Resume and takeover restore the `counters` totals from the state handoff. The ne
 - floor history
 - monitoring-failure counters
 
-Narwhal writes the state handoff to `recovery.state_path`, and `narwhal-serve --resume` loads it after a process restart.
+State handoff sources:
 
-A warm standby applies the latest polled, lease-validated state handoff when it takes over.
+| Recovery                                         | State handoff source                                   |
+| ------------------------------------------------ | ------------------------------------------------------ |
+| `narwhal-serve --resume` after a process restart | `recovery.state_path`, written by the running router   |
+| Warm standby takeover                            | Latest polled, lease-validated state handoff           |
 
 ---
 
@@ -99,9 +100,7 @@ Engine record fields:
 
 ### `POST /narwhal/lifecycle/drain`
 
-`POST /narwhal/lifecycle/drain` drains one engine or every configured engine as a whole wave. Each target leaves placement first, then Narwhal records its process identity.
-
-A whole-wave drain also withdraws router `/ready`.
+`POST /narwhal/lifecycle/drain` drains one engine or every configured engine as a whole wave. Each target leaves placement before Narwhal records its process identity. A whole-wave drain also withdraws router `/ready`.
 
 | Field        | Type                | Default | Meaning                                     |
 | ------------ | ------------------- | ------- | ------------------------------------------- |
@@ -159,7 +158,7 @@ Request body:
 | Active whole wave    | Set `wave: true` and name the wave's complete engine set          |
 | `wave: true`         | An empty `engines` list names every configured engine             |
 
-Before releasing the hold, these checks run and appear in the engine record's `checks`:
+These checks run before the hold releases. Each passed check appears in the engine record's `checks`:
 
 1. `health`: the engine health endpoint answers HTTP 200.
 2. `attestation <fingerprint>`: process-bound attestation matches the engine contract.
@@ -172,9 +171,9 @@ Before releasing the hold, these checks run and appear in the engine record's `c
 
 Checks 1 to 4 also run on the candidate's role-permitted peers. `profile generation` covers every loaded profile variant.
 
-The candidate stays excluded when profiles or generation evidence are missing or a digest mismatches, and the error names the engine to reprofile.
+Missing profiles or generation evidence, or a digest mismatch, keeps the candidate excluded. The error names the engine to reprofile.
 
-An engine ejected transiently by the breaker can be readmitted without a restart.
+Readmission accepts the current process of an engine that the breaker ejected transiently.
 
 |  HTTP | Meaning                                                  |
 | ----: | -------------------------------------------------------- |
@@ -188,8 +187,8 @@ To load updated profiles:
 
 ### Whole-wave restart policy
 
-With `recovery.engine_restart_policy: whole_wave`, drain and lifecycle readmission cover the whole wave of every configured engine. The drain records each member's process start.
+With `recovery.engine_restart_policy: whole_wave`, drain and lifecycle readmission cover every configured engine as one wave:
 
-When `wave.ready_to_stop` turns `true`, restart the wave through its supervisor. Readmission returns it to service once every replacement passes validation with a newer process start.
-
-See [Restart an engine wave](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) for the supervisor sequence.
+1. Drain the wave. The drain records each member's process start.
+2. When `wave.ready_to_stop` is `true`, restart the wave through its supervisor ([supervisor sequence](../operate/03-Restart-Engines.md#8-restart-an-engine-wave)).
+3. Readmit the wave. It returns to service when every replacement passes validation with a newer process start.

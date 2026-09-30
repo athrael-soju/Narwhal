@@ -1,9 +1,9 @@
 # Install the Narwhal dev CUDA runtime
 
-Use an Ubuntu shell, either native or under WSL2. The template installs
+Use an Ubuntu shell, native or under WSL2. The template installs
 Qwen3.5-0.8B GGUF and pins the Python runtime and the GGUF plugin. The plugin
-wheel targets Linux x86-64, so you need an NVIDIA GPU and driver that support
-the CUDA runtime of the pinned packages.
+wheel targets Linux x86-64. The NVIDIA GPU and driver must support the CUDA
+runtime of the pinned packages.
 
 Install Narwhal and the pinned packages from a checkout on the Linux filesystem:
 
@@ -17,8 +17,7 @@ python -m pip install \
   'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
 ```
 
-Overwrite the wheel's Python files with the pinned GGUF plugin sources. The CUDA
-extension stays:
+Overwrite the wheel's Python files with the pinned GGUF plugin sources:
 
 ```bash
 mkdir -p runs
@@ -38,8 +37,8 @@ for path in source.rglob('*.py'):
 PY
 ```
 
-`narwhal dev init` compares installed package versions and plugin hashes with
-the selected template, so reapply the pinned sources after every plugin wheel
+`narwhal dev init` checks installed package versions and plugin hashes against
+the selected template. Reapply the pinned sources after every plugin wheel
 reinstall.
 
 Download the model and tokenizer into the Hugging Face cache:
@@ -53,6 +52,11 @@ hf download Qwen/Qwen3.5-0.8B \
   --include '*.json' '*.txt' '*.jinja'
 ```
 
-By default the template looks for these revisions in the standard Hugging Face
-cache. If your cache is elsewhere, run `narwhal dev init` with `--model` set to
-the GGUF file and `--model-dir` set to the tokenizer directory.
+The template reads these revisions from the standard Hugging Face cache by
+default. For a cache in another location, pass these options to
+`narwhal dev init`:
+
+| Option | Value |
+| --- | --- |
+| `--model` | The GGUF file |
+| `--model-dir` | The tokenizer directory |

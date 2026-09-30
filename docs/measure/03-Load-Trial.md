@@ -2,9 +2,8 @@
 
 ## 7. Run the synthetic deployment trial
 
-Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
-
-After the 0.5 request/s run passes and the router drains, test 1 request/s.
+1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
+2. When that rate passes and the router drains, repeat at 1 request/s.
 
 A rate passes when the client schedule is valid and at least 190 of 200 requests meet both limits:
 
@@ -14,12 +13,13 @@ A rate passes when the client schedule is valid and at least 190 of 200 requests
 ### Prerequisites
 
 - The workload fits the accepted profile domain and the engine context limit.
-- Nothing else sends traffic to the router.
-- Both rates replay one workload to measure cold prefill, so prefix caching must be off; see [Prepare, check, and start each engine](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine). Launch every engine with `--no-enable-prefix-caching` in `runtime.extra_args`. Confirm `checked.json` shows `"prefix_caching": false`.
+- The router receives trial traffic only.
+- Each engine is [launched](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
+- `checked.json` shows `"prefix_caching": false`.
 
 ### Create the trial directory and workload
 
-Install the helper dependencies and create a private run directory:
+On the management workstation:
 
 ```bash
 make setup
@@ -60,18 +60,16 @@ ignore_eos         = true
 
 Each run manifest records the workload and helper digests, source revision, command, Python and httpx versions, and limits.
 
-Before each measured run, the helper drains the router, sends one unscored full-shape warmup, and drains again. Offers go out on a fixed schedule, whatever the responses do.
+The helper precedes each measured run with a router drain, one unscored full-shape warmup, and a second drain. Offers go out on a fixed, response-independent schedule.
 
 | Client limit        | Default |
 | ------------------- | ------- |
 | Concurrent requests | 64      |
 | Scheduling lag      | 50 ms   |
 
-An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`.
+An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`. Check client CPU and scheduling lag before you raise either limit.
 
 The helper sends each offer once. HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
-
-Check client CPU and scheduling lag before raising these limits.
 
 ## 8. Measure 0.5 request/s
 
@@ -109,9 +107,9 @@ The router has drained when `/narwhal/state` reports zero for:
 - `serving.http_retained`
 - resident prefill and decode work on every engine
 
-The helper waits for zero after each run and before warmup, and fails with a drain-deadline error if `--timeout` runs out.
+A drain wait that outlasts `--timeout` fails with a drain-deadline error.
 
-After the router drains, run the second rate:
+Run the second rate on the drained router:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -125,4 +123,4 @@ After the router drains, run the second rate:
   --out "$TRIAL_DIR/rate-1"
 ```
 
-Continue with [client and router reconciliation](04-Reconcile-and-Accept.md).
+Next: [client and router reconciliation](04-Reconcile-and-Accept.md).

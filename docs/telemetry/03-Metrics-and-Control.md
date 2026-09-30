@@ -13,7 +13,9 @@ narwhal_rejected_total
 narwhal_cancelled_total
 ```
 
-A new router process starts every other counter, the retry quota and all histograms at zero. That covers the offered, unsized, expired, attempt, role controller decision, role-change, floor and invalid-request counters. The journal's `run` field marks the process boundary when you compare restored outcomes with offered counts.
+A new router process starts the retry quota, all histograms, and every other counter at zero. The zeroed counters include the offered, unsized, expired, attempt, role controller decision, role-change, floor and invalid-request counters.
+
+Split journal rows by `run` when you compare restored outcome counts with offered counts.
 
 ### Metric families
 
@@ -38,11 +40,11 @@ A new router process starts every other counter, the retry quota and all histogr
 
 ## Inspect scheduling and role control
 
-`narwhal_flip_reversals_total` counts a move whose target role differs from the target of the engine's previous recorded move, starting with the engine's second move.
-
-`narwhal_flips_refused_total` counts role changes blocked by timing, availability, role pins, role floors, the resident guard or advisory mode.
-
-`narwhal_pool_load` uses the phase-specific normalization in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), and `1.0` is the phase target.
+| Metric                         | Meaning                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `narwhal_flip_reversals_total` | Moves, from an engine's second move on, whose target role differs from the target of that engine's previous recorded move.      |
+| `narwhal_flips_refused_total`  | Role changes blocked by timing, availability, role pins, role floors, the resident guard, or advisory mode.                     |
+| `narwhal_pool_load`            | Pool load under the phase-specific normalization in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control). `1.0` is the phase target. |
 
 ## Read latency histograms
 
@@ -54,13 +56,13 @@ The bucket boundaries for `narwhal_ttft_seconds` and `narwhal_tpot_seconds` are 
 0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0, +Inf
 ```
 
-Queue-wait and seat-time histograms use the configured request-lifecycle bounds, and seat time is how long a request holds an admission seat.
+Seat time is how long a request holds an admission seat. Queue-wait and seat-time histograms use the configured request-lifecycle bounds.
 
-Compute histogram quantiles from bucket rates grouped by `instance` and `le`. Routers with different bucket edges cannot be summed.
+Compute histogram quantiles from bucket rates grouped by `instance` and `le`. Sum buckets only across routers with identical bucket edges.
 
 ## Inspect retained attainment evidence
 
-`narwhal_attainment_evidence_pruned_total` first appears once buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment), and its `kind` label is `buckets` or `outcomes`.
+`narwhal_attainment_evidence_pruned_total` appears when the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is `buckets` or `outcomes`.
 
 ## Inspect demand history and decode floor
 
@@ -84,6 +86,6 @@ Router restart clears the demand histories and resets `narwhal_decode_floor` to 
 | `narwhal_demand_evidence_risk_age_seconds` | gauge |      | Age of the newest risk event in seconds. |
 | `narwhal_demand_evidence_short_decode_engines` | gauge |      | Short-horizon decode demand in engine equivalents. |
 | `narwhal_demand_evidence_envelope_decode_engines` | gauge |      | Conservative decode-demand envelope in engine equivalents. |
-| `narwhal_demand_evidence_trend_ratio` | gauge |      | Short-horizon demand over long-horizon demand; absent until a long-horizon estimate exists. |
+| `narwhal_demand_evidence_trend_ratio` | gauge |      | Short-horizon demand over long-horizon demand. Exported once a long-horizon estimate exists. |
 | `narwhal_demand_evidence_refused` | gauge | `gate`: `risk`, `evidence`, `trend` | `1` when the gate blocks consolidation. |
 | `narwhal_demand_evidence_risk_events_total` | counter | `kind` | Risk-event count. |
