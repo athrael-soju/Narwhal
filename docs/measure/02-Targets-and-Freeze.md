@@ -17,7 +17,7 @@
 
 A TPOT target below the engine's measured per-token time gives zero feasible decode capacity.
 
-`narwhal-check` runs the [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate) and tests the targets against saved profiles and live handoffs.
+The `narwhal-check` `slo` gate passes when both targets are feasible against the saved profiles.
 
 ### Pace gate
 
@@ -37,7 +37,7 @@ A TPOT target below the engine's measured per-token time gives zero feasible dec
     * the preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
 3. Record the hosts and SSH tunnel mapping with the identifier.
 
-Vary only the request rate across the offered-rate sweep. Keep the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed.
+Keep the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed across the offered-rate sweep.
 
 Between rates, wait for resident work to finish and transfer leases to release.
 

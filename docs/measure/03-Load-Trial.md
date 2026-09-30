@@ -60,16 +60,16 @@ ignore_eos         = true
 
 Each run manifest records the workload and helper digests, source revision, command, Python and httpx versions, and limits.
 
-The helper precedes each measured run with a router drain, one unscored full-shape warmup, and a second drain. Offers go out on a fixed, response-independent schedule.
-
 | Client limit        | Default |
 | ------------------- | ------- |
 | Concurrent requests | 64      |
 | Scheduling lag      | 50 ms   |
 
-An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`. Check client CPU and scheduling lag before you raise either limit.
+An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`.
 
-The helper sends each offer once. HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
+Check client CPU and scheduling lag before you raise either limit.
+
+HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
 
 ## 8. Measure 0.5 request/s
 
@@ -96,8 +96,10 @@ Check the exit code before changing the rate:
 
 For exit code `2`:
 
-- `client_schedule_valid` is `true`: the rate missed the target. Keep the result and stop.
-- `client_schedule_valid` is `false`: inspect `requests.jsonl`, repair client scheduling, and repeat the rate.
+| `client_schedule_valid` | Meaning | Required action |
+| --- | --- | --- |
+| `true` | The rate missed the attainment target | Keep the result and stop |
+| `false` | Client scheduling missed | Inspect `requests.jsonl`, repair client scheduling, and repeat the rate |
 
 ## 9. Measure 1 request/s
 

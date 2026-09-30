@@ -1,6 +1,9 @@
 # Engine and whole-wave recovery
 
-Lifecycle requests come from the management host described in [Engine restart and process replacement](../operate/03-Restart-Engines.md). The fleet needs a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract).
+Prerequisites:
+
+- the management host from [Engine restart and process replacement](../operate/03-Restart-Engines.md) for lifecycle requests;
+- a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) in the fleet configuration.
 
 ## Engine failure
 
@@ -24,7 +27,7 @@ For `individual` recovery:
 2. Verify its endpoints per [Replace the process](../operate/03-Restart-Engines.md#72-replace-the-process).
 3. Restart its attestation sidecar through the configured process manager.
 4. Read the sidecar log.
-5. Repair any named endpoint or contract failure.
+5. Repair each named endpoint or contract failure.
 6. If the engine process changed:
     1. [Activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activate-replacement-profiles).
     2. Request readmission.
@@ -38,7 +41,7 @@ If the lifecycle state becomes `blocked`:
 
 ## Whole-wave recovery
 
-Use whole-wave recovery when `recovery.engine_restart_policy` is `whole_wave`, or after any of these events:
+Use whole-wave recovery when `recovery.engine_restart_policy` is `whole_wave`, or after one of these events:
 
 - a stale-peer assertion;
 - a transfer stall that kills a peer;

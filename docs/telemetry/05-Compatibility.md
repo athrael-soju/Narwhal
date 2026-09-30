@@ -18,7 +18,7 @@ The `narwhal.contract-manifest` document lists each interface with these fields:
 | `write`  | Version the release writes.          |
 | `read`   | Versions the release accepts.        |
 
-This release uses version 1 of every interface below.
+Interface versions in this release:
 
 | Interface                     | Schema                        | Version |
 | ----------------------------- | ----------------------------- | ------: |
@@ -56,7 +56,7 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-roll-back).
 
-When the `schema` or `write` value changes, documents written by the installed release may fail validation on the candidate. The candidate's `read` list names the versions it accepts.
+When the `schema` or `write` value changes, documents written by the installed release may fail validation on the candidate.
 
 ## Schema version changes
 

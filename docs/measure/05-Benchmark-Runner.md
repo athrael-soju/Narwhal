@@ -63,7 +63,7 @@ Prerequisites:
       --out runs/benchmark-001
     ```
 
-The runner executes `client_argv` directly as an argument vector, with `{base}`, `{model}`, `{point_id}`, and `{point_dir}` substituted.
+`client_argv` is an argument vector that takes the `{base}`, `{model}`, `{point_id}`, and `{point_dir}` placeholders.
 
 For bearer-token ingress, the token authenticates the runner's probes:
 
@@ -86,7 +86,7 @@ The runner stops on:
 - a nonzero client exit, after a drain attempt
 - a drain timeout
 
-In the load trial helper's [exit codes](03-Load-Trial.md#8-measure-05-requests), exit `2` means candidate attainment or scheduling validity failed. Read `summary.json` and `requests.jsonl`:
+For client exit `2` in the load trial helper's [exit codes](03-Load-Trial.md#8-measure-05-requests), read `summary.json` and `requests.jsonl`:
 
 | `client_schedule_valid` in `summary.json` | Exit `2` means |
 | --- | --- |

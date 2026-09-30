@@ -23,7 +23,7 @@ When both routers return HTTP 503 from `/ready`, read the refusal reasons:
 
 | Refusal reason | Action |
 | --- | --- |
-| Lease storage or clock bound | Repair the storage or clock. Leave the lease holder and fencing as they are. |
+| Lease storage or clock bound | Repair the storage or clock, leaving the lease holder and fencing in place. |
 | Any other reason | Fix what the reason names. |
 
 ### State handoff is stale or incompatible

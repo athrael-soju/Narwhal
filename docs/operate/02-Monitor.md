@@ -4,9 +4,9 @@
 
 ### `/health`
 
-`/health` returns HTTP 200 in every router state. The body has three fields:
+`/health` returns HTTP 200 in every router state with this body:
 
-- `status`: the current router state, one of `ok`, `degraded`, `maintenance`, `standby`, or `fenced`
+- `status`: the router state, one of `ok`, `degraded`, `maintenance`, `standby`, or `fenced`
 - `instances`: the configured fleet size
 - `available_instances`: the number of engines eligible for placement, equal to the configured fleet minus ejected, draining, and quarantined engines
 
@@ -22,7 +22,7 @@ When every engine has been excluded from placement, the active router reports:
 
 ### Whole-wave lifecycle hold
 
-A whole-wave lifecycle hold pauses background engine monitoring until whole-wave readmission succeeds. During the hold:
+Until whole-wave readmission succeeds, the active router reports:
 
 | Request | Response |
 | --- | --- |
@@ -40,7 +40,7 @@ A whole-wave lifecycle hold pauses background engine monitoring until whole-wave
 
 ### Router control and replacement
 
-The active router keeps control of the fleet through backend outages and managed maintenance. `/ready` gives two signals:
+`/ready` gives two signals:
 
 | Signal | Meaning | Use |
 | --- | --- | --- |
@@ -55,9 +55,9 @@ A replacement router:
 
 ## 6. Monitor placement and control
 
-Set up Prometheus and Grafana with [Set up observability](../Observability.md). The [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) lists the router and engine scopes.
+Set up Prometheus and Grafana with [Set up observability](../Observability.md).
 
-Each dashboard signal answers one question:
+Each [dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) signal answers one question:
 
 | Signal                                         | Operational question                                     |
 | ---------------------------------------------- | -------------------------------------------------------- |
@@ -69,7 +69,14 @@ Each dashboard signal answers one question:
 | Retries, failures, refusals, and rejections    | Which protection path is active?                         |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-Set paging thresholds in `tools/observability/prometheus-alerts.yml`. Alert on router down, engine down, error bursts, unserved requests, ejections, and role floors.
+Set paging thresholds in `tools/observability/prometheus-alerts.yml` for:
+
+- router down;
+- engine down;
+- error bursts;
+- unserved requests;
+- ejections;
+- role floors.
 
 | Source | Scope |
 | --- | --- |

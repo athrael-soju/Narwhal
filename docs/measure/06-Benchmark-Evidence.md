@@ -7,7 +7,7 @@ Run the [ordered benchmark runner](05-Benchmark-Runner.md) on a host that:
 - reads the router's append-only JSONL request journal as a local file
 - reaches the router and every engine metrics endpoint
 
-Point `journal_path` at the file `narwhal-serve --journal` writes. The point's `journal-rows.json` holds the rows between two byte offsets, recorded before the client starts and after the final drain.
+Point `journal_path` at the file `narwhal-serve --journal` writes.
 
 Put `evidence` at the top level of the plan, next to `schema` and `points`:
 
@@ -43,7 +43,7 @@ The collector records:
 
 | Input | Collector record |
 | --- | --- |
-| Fleet file and profiles | SHA-256 digests before each point, and a report of any change during the point |
+| Fleet file and profiles | SHA-256 digests before each point, and a report of changes during the point |
 | Retained client records, warmup, and summary files | SHA-256 digests |
 | `journal_run` in the router state | Metrics samples grouped by process, across restarts and standby takeovers |
 
@@ -54,13 +54,17 @@ For each point, the runner writes these files under `runs/<run>/<point>/`:
 | `result.json` | Readiness, client exit status, drain result, timestamps, and evidence diagnostic count |
 | `evidence.json` | Journal cursors, identity, file digests, counts by terminal class and process run, counter deltas, role timeline, and diagnostics |
 | `samples.json` | Timestamped router state, router `/metrics`, engine metrics, and scrape errors from the load and drain interval |
-| `journal-rows.json` | All JSONL rows between the two byte offsets, including terminal rows, process metadata, and events |
+| `journal-rows.json` | All JSONL rows between the byte offsets recorded before the client starts and after the final drain, including terminal rows, process metadata, and events |
 | `client/requests.jsonl`, `client/warmup.json`, `client/summary.json` | Raw client files when the client writes inside the point directory |
 | `client-*.snapshot.*` | Exact private copies when the configured client files live outside the point directory |
 | `client.stdout`, `client.stderr` | Exact external client output |
 | `summary.shareable.json` | Selected counts, latency and throughput when the client wrote `summary.json`, anonymized role history, configuration digests, and evidence gaps |
 
-`summary.shareable.json` is the redacted copy for publication. Every other file stays private. Redaction removes URLs, credentials, private file paths, engine IDs, request failure text, and the raw engine image reference. Before you publish, check the model and revision labels you supplied for sensitive data.
+`summary.shareable.json` is the redacted copy for publication.
+
+The redacted copy excludes URLs, credentials, private file paths, engine IDs, request failure text, and the raw engine image reference.
+
+Before you publish, check the model and revision labels you supplied for sensitive data.
 
 The collector runs these comparisons:
 

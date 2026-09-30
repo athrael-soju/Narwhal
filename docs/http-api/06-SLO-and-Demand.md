@@ -14,9 +14,13 @@ pruned_buckets
 pruned_outcomes
 ```
 
-Narwhal groups completed, failed, expired, and predictively refused requests into buckets of `monitor_interval_s`. Each bucket counts TTFT-met, TPOT-met, and total requests.
-
-Pruning keeps four demand windows, counted back from the newest bucket. Window queries include the whole boundary bucket.
+| Property          | Value                                                    |
+| ----------------- | -------------------------------------------------------- |
+| Bucket width      | `monitor_interval_s`                                     |
+| Counted requests  | Completed, failed, expired, and predictively refused     |
+| Counts per bucket | TTFT-met, TPOT-met, and total requests                   |
+| Retention         | Four demand windows, counted back from the newest bucket |
+| Window queries    | Include the whole boundary bucket                        |
 
 `covered_s` reports the age of the oldest retained bucket, capped at the configured retention span.
 
@@ -24,7 +28,7 @@ Pruning keeps four demand windows, counted back from the newest bucket. Window q
 
 ## Demand accounting
 
-Demand history records the work offered to the role controller and the output it observed. One demand window is `controller.reactive.window_s` seconds long.
+One demand window is `controller.reactive.window_s` seconds long.
 
 ### Unsized offers
 
@@ -51,7 +55,7 @@ Demand history records the work offered to the role controller and the output it
 | Unsized offers                      | One shape per time bucket                                                   |
 | Arrival and residency data          | Kept for one demand window                                                  |
 | Completed output observations       | Kept for four demand windows                                                |
-| Pruning                             | Each evidence write prunes expired buckets                                  |
+| Pruning                             | On each evidence write                                                      |
 
 `demand_history` and the `narwhal_demand_history_*` metrics expose the retained cells, cell limit, counted observations, and overflow observations.
 
@@ -67,9 +71,13 @@ An overflow cohort:
 
 ### Decision snapshots
 
-Each reactive decision scores candidate splits from a snapshot of profile coefficients, demand, phase pressure, output estimates, and resident work. The snapshot holds frozen profiles and copied values.
+Each reactive decision scores candidate splits from a snapshot of:
 
-Output-length estimates and decode correction are built once and reused across both demand horizons.
+- profile coefficients
+- demand
+- phase pressure
+- output estimates
+- resident work
 
 ### Prefill recovery ratio
 
@@ -85,7 +93,9 @@ recovery_prefill_ratio = max(
 
 Otherwise, the ratio is the observed prefill pressure.
 
-Incomplete-demand decisions expose both observed phase ratios, `recovery_prefill_ratio`, and `queued_prefill_s`. Their `decision_basis` is one of:
+Incomplete-demand decisions expose both observed phase ratios, `recovery_prefill_ratio`, and `queued_prefill_s`.
+
+Their `decision_basis` is one of:
 
 ```text
 prefill_pressure_recovery
@@ -103,7 +113,7 @@ Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gate
 
 ### Consolidation evidence
 
-Narwhal captures `demand_evidence` for every decode-to-prefill gate. Consolidation evidence counts only observations timestamped after the cutoff.
+For each decode-to-prefill gate, `demand_evidence` counts arrivals from the last `max_span_s` seconds that follow the latest risk event.
 
 `demand_evidence` exposes:
 

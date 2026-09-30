@@ -8,13 +8,13 @@
 | Public ingress    | TLS, client authentication, rate limits, model routing, streaming proxy settings |
 | Load balancer     | Polls `/ready` and routes to the router that returns HTTP 200 |
 | Narwhal           | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
-| Engine supervisor | Starts and stops engines and attestation sidecars. Sets resource limits, restart policy, and log retention |
+| Engine supervisor | Engine and attestation sidecar starts and stops, resource limits, restart policy, log retention |
 | Shared storage    | One lease domain shared by both router hosts                                                                  |
 | Monitoring        | Metric scraping, journal retention, and paging per site policy                                                       |
 
 ## 2. Keep one deployment set
 
-Give both routers the same release identifier and these five items:
+Install one deployment set on both router hosts, with the same release identifier and these five items:
 
 - the Narwhal release;
 - the fleet configuration;
@@ -22,9 +22,9 @@ Give both routers the same release identifier and these five items:
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set;
 - the corresponding [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
 
-Install that set on both router hosts. The configured calibration path must be readable from each router's working directory.
+The configured calibration path must be readable from each router's working directory.
 
-The calibration artifact's process generation must match the live engine. After an engine replacement:
+After an engine replacement, match the calibration artifact to the live engine's process generation:
 
 1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
 2. Distribute the new artifact and fleet configuration.
@@ -36,18 +36,22 @@ Inspect state handoff contracts before a router change:
 narwhal-check --print-contract-versions
 ```
 
-Rolling transitions need matching handoff contract versions on both routers. If they differ, follow [Upgrade across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrade-across-a-handoff-version-change).
+| Handoff contract versions on both routers | Procedure |
+| --- | --- |
+| Match | [Rolling upgrade](04-Upgrade-and-Validate.md#101-rolling-upgrade-with-compatible-handoff-versions) |
+| Differ | [Upgrade across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrade-across-a-handoff-version-change) |
 
 ## 3. Configure the client path
 
-Expose only the completion routes clients use. Keep these interfaces on the private network:
-
-- `/narwhal/*`
-- `/metrics`
-- engine APIs
-- attestation endpoints
-- `/health`
-- `/ready`
+| Interface | Network |
+| --- | --- |
+| Completion routes clients use | Public ingress |
+| `/narwhal/*` | Private |
+| `/metrics` | Private |
+| Engine APIs | Private |
+| Attestation endpoints | Private |
+| `/health` | Private |
+| `/ready` | Private |
 
 Ingress must:
 
@@ -59,16 +63,16 @@ Ingress must:
 - forward streaming chunks as they arrive;
 - enforce connect and idle timeouts derived from the service budget.
 
-Narwhal propagates the trusted request ID. Each engine leg receives:
+Each engine leg receives:
 
-- its own attempt-specific and phase-specific request ID;
+- a request ID per attempt and phase;
 - the engine credential identified by `engine.engine_api_key_env`.
 
-Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg). It routes by `/ready` status. `/ready` reports the admitting router, backend availability, and lifecycle state.
+Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg).
 
 ## 4. Start a router pair
 
-Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set. Start both routers from that set.
+Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set.
 
 | Item | Requirement |
 | --- | --- |
@@ -108,7 +112,8 @@ Admission sequence:
 | Condition | Behavior |
 | --- | --- |
 | A router holds a valid lease and admits traffic | `/ready` returns HTTP 200. |
-| The network partitions | The active lease holder fences itself before its local lease deadline. The standby claims the lease after it expires. |
+| The network partitions | The active lease holder fences itself before its local lease deadline. |
+| The lease expires during a partition | The standby claims the lease. |
 | Shared storage becomes unavailable | Both routers withdraw readiness. |
 | A standby or fenced router shuts down | It retains its saved primary state handoff. |
 | The active lease holder shuts down | It persists its latest counters before releasing control. |

@@ -2,11 +2,11 @@
 
 ## GPU telemetry
 
-Run the deployment's AMD or NVIDIA exporter. It collects GPU sensor metrics for its hardware dashboard.
+Run the deployment's AMD or NVIDIA exporter for GPU sensor metrics on its hardware dashboard.
 
 ## Alert evaluation
 
-Prometheus evaluates `tools/observability/prometheus-alerts.yml`. Its alert state appears in the `ALERTS` series.
+Alert state from `tools/observability/prometheus-alerts.yml` appears in the Prometheus `ALERTS` series.
 
 Inspect rules on the router host:
 
@@ -21,7 +21,7 @@ Alert rules select targets by these labels:
 | Router | `job="narwhal-router"` |
 | Engine | `job="engines"`, `iid=<engine identity>` |
 
-Production uses the same rules file. The deployment's alert manager routes `severity="page"` and `severity="warn"` alerts.
+In production, the deployment's alert manager routes the same rules file's `severity="page"` and `severity="warn"` alerts.
 
 ## Troubleshooting
 
@@ -31,11 +31,12 @@ Production uses the same rules file. The deployment's alert manager routes `seve
 | `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolate-a-second-monitoring-stack) with `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | Startup reports a command deadline | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`. |
 | Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana` and confirm the pinned image versions. |
-| Prometheus reports `config permission denied` | See [Mount permission failures](#mount-permission-failures). |
-| Grafana returns dashboard 404 | See [Mount permission failures](#mount-permission-failures). |
+| Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps. |
+| Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets`. |
 | An engine replica disappears from charts | Check the generated target entry and the engine's `iid` label. |
-| Grafana shows an older dashboard | Rerun `make observe`. For a failed [dashboard readiness check](01-Start-and-Verify.md#readiness-contract), read the provisioning log. |
+| Grafana shows an older dashboard | Rerun `make observe`. |
+| `make observe` fails the [dashboard readiness check](01-Start-and-Verify.md#readiness-contract) | Read the provisioning log. |
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid`. |
 
 Verify each fix with a `make observe` rerun that passes the [readiness contract](01-Start-and-Verify.md#readiness-contract).

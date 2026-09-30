@@ -19,9 +19,11 @@ A response is complete when:
 - The completed output length equals the requested output length.
 - Final usage matches the observed token counts.
 
-The helper requests `stream_interval: 1`. `batched_token_events` counts multi-token events.
+`batched_token_events` counts stream events that carry more than one token under the helper's `stream_interval: 1`.
 
-Client TTFT runs from HTTP dispatch to the first identified output token. Client TPOT is:
+[Client TTFT](01-Profile.md#1-define-the-measurement-contract) runs from HTTP dispatch to the first identified output token.
+
+Client TPOT is:
 
 ```text
 time(first identified token -> last identified token)
@@ -29,9 +31,9 @@ time(first identified token -> last identified token)
           completed_output_tokens - 1
 ```
 
-Both metrics use the deployment-client boundaries from [Define the measurement contract](01-Profile.md#1-define-the-measurement-contract). Compute latency percentiles from complete responses.
+Compute latency percentiles from complete responses.
 
-Each sent offer has one terminal class. Join client records to the router journal on `client_rid`:
+Join client records to the router journal on `client_rid`:
 
 | Side | `client_rid` |
 | --- | --- |
@@ -47,7 +49,8 @@ Deployment attainment is `within_candidate_limits / offered` from the client `su
 | Numerator   | Completed responses within the TTFT limit, and within the TPOT limit for outputs over one token |
 | Denominator | Every scheduled scored offer, including unsent scheduling misses                         |
 
-A timeout or disconnect after partial output counts as a miss. The warmup in `warmup.json` is unscored.
+- A timeout or disconnect after partial output counts as a miss.
+- The warmup in `warmup.json` is unscored.
 
 ## 11. Check throughput denominators and client limits
 

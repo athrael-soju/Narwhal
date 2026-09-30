@@ -2,9 +2,13 @@
 
 ## Access the dashboard from a workstation
 
-Keep Grafana and Prometheus on router-side listeners. Reach them through an SSH tunnel to the router host.
+Reach the router-side Grafana and Prometheus listeners through an SSH tunnel to the router host.
 
-Run the tunnel from the management checkout with the workstation `.env` loaded. If the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards monitoring, reuse it. Otherwise open a tunnel:
+Run the tunnel from the management checkout with the workstation `.env` loaded.
+
+Reuse the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) when it already forwards monitoring.
+
+Otherwise, open a tunnel:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \
@@ -18,7 +22,9 @@ Keep the tunnel's terminal open while you browse.
 | Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
 | Prometheus | `http://127.0.0.1:19090` |
 
-Grafana permits anonymous Viewer access through the local tunnel. The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
+Grafana permits anonymous Viewer access through the local tunnel.
+
+The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
 
 ## Isolate a second monitoring stack
 
