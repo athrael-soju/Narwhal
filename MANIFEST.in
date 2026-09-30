@@ -8,6 +8,7 @@ include config/engine-attestation.example.json config/engine-launch.example.json
 include config/fleet.example.json config/hosts.example.json
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
+recursive-include overrides *.html *.py
 recursive-include deploy *.cfg
 recursive-include tools *.py *.json *.yml *.md
 recursive-include tests *.py
