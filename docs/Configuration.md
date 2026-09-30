@@ -1,6 +1,9 @@
 # Narwhal fleet configuration and deployment reference
 
-Each router process serves one model from one engine fleet. Multi-model serving uses one fleet and one router per model, with the model selected at ingress.
+| Models  | Deployment                                                             |
+| ------- | ---------------------------------------------------------------------- |
+| One     | One router process and one engine fleet                                |
+| Several | One router and one fleet per model, with the model selected at ingress |
 
 A fleet JSON file configures:
 
@@ -33,7 +36,7 @@ Every fleet file declares its schema identity and version:
 }
 ```
 
-Narwhal validates the declared schema and version against the [supported interface versions](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment) before it reads any other fleet field.
+The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment).
 
 Fleet schema version 1:
 

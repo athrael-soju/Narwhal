@@ -20,7 +20,9 @@ narwhal dev status --instance runs/dev --format json >status-result.json
 
 `narwhal-serve` and `narwhal-attest` report through logs, exit status, HTTP endpoints, and persisted artifacts.
 
-Exit codes in text mode: [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes). Exit codes with `--format json`:
+Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes).
+
+Exit codes with `--format json`:
 
 | Status          | Exit code | Operation state                                                                                                        |
 | --------------- | --------: | ---------------------------------------------------------------------------------------------------------------------- |
@@ -38,9 +40,9 @@ Result fields:
 | `schema`, `schema_version` | `narwhal.command-result`, `1`.                                                                                                 |
 | `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`.                                                  |
 | `status`, `exit_code`      | Status and matching exit code from the status table.                                                                           |
-| `data`                     | Operation-specific output, listed in the table below.                                                                          |
-| `artifacts`                | References with `kind`, absolute `path`, and `state` (`created`, `updated`, `existing`, or `missing`).                         |
-| `errors`                   | Entries with stable `code`, diagnostic `message`, and `command`; optional `stage`, `engine`, `field`, and `context`.           |
+| `data`                     | Operation-specific output.                                                                                                     |
+| `artifacts`                | References with `kind`, absolute `path`, and a `state` of `created`, `updated`, `existing`, or `missing`.                      |
+| `errors`                   | Entries with stable `code`, diagnostic `message`, `command`, and optional `stage`, `engine`, `field`, and `context`.            |
 
 `data` contents:
 
@@ -63,7 +65,7 @@ Error codes:
 | `collection_partial`      | `engine_http_error`       | `operation_failed`       |
 | `stage_timeout`           | `stage_cancelled`         | `interrupted`            |
 
-Branch on `code`, `status`, and `context`. Stage failures put recovery data in `context`.
+Branch on `status`, `code`, and the recovery data that stage failures put in `context`.
 
 JSON results and diagnostics redact:
 

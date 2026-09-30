@@ -3,7 +3,7 @@
 `narwhal-inference` installs `narwhal` and the five `narwhal-*` commands.
 
 - Each executable accepts `-h`, `--help`, and `--version`.
-- `narwhal --help` lists all six executables.
+- `narwhal --help` lists the six executables.
 - Relative paths resolve from the process working directory.
 - `python -m narwhal.cli` starts a router.
 

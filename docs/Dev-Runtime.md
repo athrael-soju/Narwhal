@@ -1,10 +1,14 @@
 # Narwhal dev
 
-Narwhal dev runs several independent inference engines on one GPU. The `narwhal dev` commands start, profile, verify, and stop them. The native backend uses NVIDIA CUDA on Ubuntu, natively or under WSL2.
+Narwhal dev runs several independent inference engines on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2.
 
-An instance directory holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. The default instance directory is `runs/dev`. Engines load model files from the Hugging Face cache or from paths passed to `narwhal dev init`.
+An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities.
 
-The shipped template starts two engines, one prefill and one decode, running the Qwen3.5-0.8B GGUF model. It targets NVIDIA GPUs with 8 GB of VRAM or less. The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on an RTX 5090 and pinned to that card.
+Engines load model files from the Hugging Face cache or from paths passed to `narwhal dev init`.
+
+For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefill and one decode engine running the Qwen3.5-0.8B GGUF model.
+
+The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on and pinned to the RTX 5090.
 
 ## Prepare Ubuntu or WSL2
 
@@ -28,7 +32,7 @@ nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
 ip -brief -4 address
 ```
 
-Narwhal dev runs NIXL/UCX over `eth0` by default. Choose an interface that has exactly one IPv4 address and record its name.
+Record the name of an interface with exactly one IPv4 address for NIXL/UCX, which uses `eth0` by default.
 
 ## Install the runtime and model
 
@@ -41,7 +45,7 @@ Two `init` flags set the GPU memory allocation:
 | `--gpu-memory-utilization` | 0.35 | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
 | `--device-allowance` | 0.8 | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
 
-`init` requires free VRAM to cover the device allowance plus the template's 512 MiB reserve. Size both flags to the card's free VRAM when you create an instance.
+`init` requires free VRAM to cover the device allowance plus the template's 512 MiB reserve.
 
 The shipped template sets development SLO targets:
 
@@ -50,13 +54,15 @@ The shipped template sets development SLO targets:
 | Time to first token (TTFT) | 5 seconds |
 | Time per output token (TPOT) | 500 ms |
 
-These targets are placeholders. Set your own from measurements on your card.
+Replace these placeholder targets with values measured on your card.
 
-A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Two template fields pin the hardware:
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve.
+
+Two template fields pin the hardware:
 
 | Field | Effect |
 | --- | --- |
-| `gpu.product` | Pins a specific card |
+| `gpu.product` | Pins the GPU product name |
 | `gpu.minimum_total_mib` | Sets the minimum total VRAM |
 
 Export the installed template as a starting recipe:
@@ -91,7 +97,7 @@ narwhal dev status
 | `up` | Checks that the ports are free, starts and profiles the engines, captures attestations, and starts the router. |
 | `verify` | Runs preflight over every eligible directed KV path, sends a routed arithmetic request, and reports `ready` when every check passes. |
 
-The instance records the Python interpreter that ran `init`. Run every later lifecycle command in that environment.
+Run every later lifecycle command in the Python environment that ran `init`.
 
 Each command writes to two streams:
 
@@ -102,9 +108,7 @@ Each command writes to two streams:
 
 For scripts, `--format json` returns [versioned command results and automation exit codes](Command-Results.md).
 
-The router listens at `http://127.0.0.1:18000` by default.
-
-Read its state and metrics:
+Read the router's state and metrics at its default address:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
@@ -120,7 +124,7 @@ The optional [WSL2 monitoring example](observability/04-WSL2.md) forwards these 
 
 ## Inspect and stop the instance
 
-`status` prints the current run directory. The run directory holds the routed response, memory samples, the request journal, `teardown.json`, and these logs:
+The run directory that `status` prints holds the routed response, memory samples, the request journal, `teardown.json`, and these logs:
 
 | Log | Content |
 | --- | --- |
@@ -135,9 +139,11 @@ narwhal dev down
 narwhal dev status
 ```
 
-`down` stops the process groups that match the recorded boot ID and start ticks, then reports `stopped`. The next `up` starts and profiles a new set of processes in a new run directory.
+`down` reports `stopped` after it stops the recorded process groups.
 
-After any runtime change or engine restart:
+Each `up` writes a new run directory.
+
+After a runtime change or engine restart:
 
 1. Run `down`.
 2. Run `up`.
@@ -150,7 +156,7 @@ After any runtime change or engine restart:
 | Variable | Default | Scope |
 | --- | --- | --- |
 | `NARWHAL_STAGE_TIMEOUT_SECONDS` | 300 seconds | Every stage |
-| `NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` | | One stage. `<NAME>` is the stage name in uppercase, with hyphens replaced by underscores. |
+| `NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` | | One stage, with `<NAME>` as the stage name in uppercase and hyphens replaced by underscores |
 
 Stage names:
 
@@ -180,7 +186,7 @@ Budgets and fixed limits:
 | HTTP health request | 2-second timeout per request |
 | Routed verification request | 30-second timeout |
 
-When a budget expires, or a helper stage receives SIGINT (Ctrl-C) or SIGTERM, `narwhal dev` stops that stage's supervised processes:
+When a budget expires, or a helper stage receives SIGINT from Ctrl-C or a SIGTERM, `narwhal dev` stops that stage's supervised processes:
 
 | Step | Signal | Wait | Variable |
 | --- | --- | --- | --- |
@@ -199,10 +205,10 @@ Every stage writes evidence next to its log:
 
 A failed command leaves this state:
 
-| Failed command | Result |
-| --- | --- |
-| `up` | Startup rolls back. `lifecycle.json` records the original failure and any teardown errors. |
-| `verify` | The attempt directory stays. `status` reports `degraded` with the reason until a later `verify` succeeds. |
+| Failed command | Result | Report |
+| --- | --- | --- |
+| `up` | Startup rolls back. | `lifecycle.json` records the original failure and teardown errors. |
+| `verify` | The attempt directory stays. | `status` reports `degraded` with the reason until a later `verify` succeeds. |
 
 Recover from a failed stage, with `PATH` as the instance directory:
 
