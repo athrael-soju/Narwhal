@@ -1,10 +1,36 @@
 # Narwhal documentation
 
-Narwhal runs disaggregated LLM inference and [reassigns prefill and decode roles](Core-Concepts.md) among engines with loaded model weights.
+Narwhal serves LLM inference from a fixed GPU fleet and [shifts engines between prefill and decode roles](Core-Concepts.md) as demand changes, with model weights already loaded.
 
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark">
 </div>
+
+## What Narwhal provides
+
+| Capability | Behavior | Guide |
+| --- | --- | --- |
+| Role hot-swap | Reassigns prefill and decode roles across a fixed GPU fleet. | [Core concepts](Core-Concepts.md) |
+| Split routing | Routes prefill and decode separately with NIXL key-value (KV) transfer. | [Core concepts](Core-Concepts.md) |
+| Latency-aware admission | Admits and places requests from measured per-engine profiles. | [Measure a fleet](Measure.md) |
+| Completion APIs | Serves streaming and buffered completion and chat requests. | [HTTP API reference](HTTP-API.md) |
+| Router failover | Promotes a warm-standby router. | [Operate Narwhal](Operate.md) |
+| Observability | Exports Prometheus metrics and request journals to a Grafana dashboard. | [Set up observability](Observability.md) |
+| Generation-bound readmission | Readmits an engine only against its live process generation. | [Restart engines](operate/03-Restart-Engines.md) |
+| Offline validation | Validates fleet files and collects diagnostic bundles. | [`narwhal config`](Config-Inspection.md), [`narwhal diagnostics`](Diagnostic-Bundles.md) |
+| Benchmark runs | Runs ordered benchmark points with retained evidence. | [Ordered benchmark points](measure/05-Benchmark-Runner.md) |
+| Development mode | Runs four engines on one NVIDIA CUDA GPU under Ubuntu or WSL2. | [Narwhal dev](Dev-Runtime.md) |
+
+## Get started
+
+Install the commands in a virtual environment on Linux with Python 3.11 or newer:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install narwhal-inference
+narwhal --help
+```
 
 ## Tasks
 
