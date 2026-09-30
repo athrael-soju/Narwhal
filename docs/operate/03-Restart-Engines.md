@@ -80,7 +80,7 @@ Stop the engine when the check passes.
 3. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
-6. [Activate replacement profiles](#activate-replacement-profiles) while the engine stays excluded.
+6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only, [activate replacement profiles](#activate-replacement-profiles) while the engine stays excluded.
 
 ### 7.3 Request readmission
 
@@ -107,7 +107,7 @@ Readmission checks, in order:
 | 4 | Replacement engine | `/health` returns HTTP 200 | `final health` |
 | 5 | All participants | Identities, attestation, and profile bindings match step 1 | |
 
-An engine restarted from an identical attested launch keeps its profiles.
+An engine restarted from an identical attested launch keeps its profiles and first-token calibration.
 
 Readmission results:
 
@@ -153,7 +153,7 @@ Verify placement:
 | Condition | Procedure |
 | --- | --- |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
-| The process changed | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
+| The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
 
 ### 7.5 Recover loss of every placement peer
@@ -224,7 +224,7 @@ Issue the first supervisor stop command when the check passes.
 1. Restart every engine and attestation sidecar from one immutable build with the recorded process manager commands.
 2. Retain old and new identities.
 3. Repeat the [Replace the process](#72-replace-the-process) checks for every member.
-4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activate-replacement-profiles) for the whole wave.
+4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activate-replacement-profiles) for each engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
 
 Request whole-wave readmission:
 

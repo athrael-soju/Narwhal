@@ -322,7 +322,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
                                                 "legendFormat": "Successful/s",
                                                 "range": true
@@ -343,7 +343,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "expr": "sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_invalid_requests_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
                                                 "legendFormat": "Unsuccessful/s",
                                                 "range": true
@@ -385,7 +385,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "expr": "sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_invalid_requests_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
                                                 "instant": false,
                                                 "legendFormat": "Unsuccessful total",
                                                 "range": true
@@ -1352,8 +1352,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 11,
-                    "title": "Arrivals and completions",
-                    "description": "Original arrivals and successful completions per second on the selected router.",
+                    "title": "Request outcomes",
+                    "description": "Offered requests per second and the rate of each terminal outcome, plotted from zero.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -1366,7 +1366,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
                                                 "legendFormat": "offered",
                                                 "range": true
@@ -1387,7 +1387,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
                                                 "legendFormat": "completed",
                                                 "range": true
@@ -1400,91 +1400,7 @@
                                         "refId": "B",
                                         "hidden": false
                                     }
-                                }
-                            ],
-                            "transformations": [],
-                            "queryOptions": {}
-                        }
-                    },
-                    "vizConfig": {
-                        "kind": "timeseries",
-                        "spec": {
-                            "pluginVersion": "",
-                            "options": {
-                                "legend": {
-                                    "displayMode": "list",
-                                    "placement": "bottom",
-                                    "showLegend": true
                                 },
-                                "tooltip": {
-                                    "mode": "multi",
-                                    "sort": "desc"
-                                }
-                            },
-                            "fieldConfig": {
-                                "defaults": {
-                                    "unit": "reqps",
-                                    "min": 0,
-                                    "color": {
-                                        "mode": "palette-classic-by-name"
-                                    },
-                                    "noValue": "No data",
-                                    "custom": {
-                                        "fillOpacity": 9,
-                                        "gradientMode": "opacity",
-                                        "lineWidth": 2,
-                                        "showPoints": "never",
-                                        "spanNulls": false
-                                    }
-                                },
-                                "overrides": [
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "offered"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "fixedColor": "#607FA8",
-                                                    "mode": "fixed"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "completed"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "fixedColor": "#279B98",
-                                                    "mode": "fixed"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                }
-            },
-            "panel-12": {
-                "kind": "Panel",
-                "spec": {
-                    "id": 12,
-                    "title": "Request exceptions",
-                    "description": "Request exceptions by type. A request can contribute to multiple counters.",
-                    "links": [],
-                    "data": {
-                        "kind": "QueryGroup",
-                        "spec": {
-                            "queries": [
                                 {
                                     "kind": "PanelQuery",
                                     "spec": {
@@ -1492,51 +1408,9 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
                                                 "legendFormat": "failed",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "A",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
-                                                "instant": false,
-                                                "legendFormat": "predictively refused",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "B",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
-                                                "instant": false,
-                                                "legendFormat": "auth / capacity rejected",
                                                 "range": true
                                             }
                                         },
@@ -1555,9 +1429,9 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
-                                                "legendFormat": "deadline expired",
+                                                "legendFormat": "refused (predictive)",
                                                 "range": true
                                             }
                                         },
@@ -1576,9 +1450,9 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
-                                                "legendFormat": "cancelled",
+                                                "legendFormat": "rejected (capacity)",
                                                 "range": true
                                             }
                                         },
@@ -1597,9 +1471,9 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "rate(narwhal_retry_attempts_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])",
+                                                "expr": "sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
-                                                "legendFormat": "retry attempts",
+                                                "legendFormat": "expired",
                                                 "range": true
                                             }
                                         },
@@ -1608,6 +1482,48 @@
                                             "uid": "${DS_PROMETHEUS}"
                                         },
                                         "refId": "F",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "cancelled",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "G",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_invalid_requests_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "invalid",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "H",
                                         "hidden": false
                                     }
                                 }
@@ -1644,80 +1560,47 @@
                                         "gradientMode": "opacity",
                                         "lineWidth": 2,
                                         "showPoints": "never",
-                                        "spanNulls": false
+                                        "spanNulls": false,
+                                        "stacking": {
+                                            "mode": "none",
+                                            "group": "A"
+                                        }
                                     }
                                 },
                                 "overrides": [
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "failed"
+                                            "options": "offered"
                                         },
                                         "properties": [
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "#EF8585",
+                                                    "fixedColor": "#607FA8",
                                                     "mode": "fixed"
                                                 }
+                                            },
+                                            {
+                                                "id": "custom.fillOpacity",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "custom.lineWidth",
+                                                "value": 2
                                             }
                                         ]
                                     },
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "predictively refused"
+                                            "options": "completed"
                                         },
                                         "properties": [
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "#E9B96E",
-                                                    "mode": "fixed"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "auth / capacity rejected"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "fixedColor": "#E9B96E",
-                                                    "mode": "fixed"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "deadline expired"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "fixedColor": "purple",
-                                                    "mode": "fixed"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "cancelled"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "fixedColor": "gray",
+                                                    "fixedColor": "#279B98",
                                                     "mode": "fixed"
                                                 }
                                             }
@@ -1741,13 +1624,13 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "predictively refused"
+                                            "options": "refused (predictive)"
                                         },
                                         "properties": [
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "#E9B96E",
+                                                    "fixedColor": "#F2A94E",
                                                     "mode": "fixed"
                                                 }
                                             }
@@ -1756,13 +1639,13 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "auth / capacity rejected"
+                                            "options": "rejected (capacity)"
                                         },
                                         "properties": [
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "#E9B96E",
+                                                    "fixedColor": "#E6C84C",
                                                     "mode": "fixed"
                                                 }
                                             }
@@ -1771,13 +1654,13 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "deadline expired"
+                                            "options": "expired"
                                         },
                                         "properties": [
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "purple",
+                                                    "fixedColor": "#B77FD1",
                                                     "mode": "fixed"
                                                 }
                                             }
@@ -1792,13 +1675,123 @@
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "fixedColor": "gray",
+                                                    "fixedColor": "#9AA0A6",
+                                                    "mode": "fixed"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "invalid"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "fixedColor": "#A0785A",
                                                     "mode": "fixed"
                                                 }
                                             }
                                         ]
                                     }
                                 ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-12": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 12,
+                    "title": "Retries and early exits",
+                    "description": "Retry attempts per second, and requests per second that ended before input sizing.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_retry_attempts_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "retry attempts",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_unsized_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "ended before sizing",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "timeseries",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
+                                },
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "ops",
+                                    "min": 0,
+                                    "color": {
+                                        "mode": "palette-classic-by-name"
+                                    },
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    }
+                                },
+                                "overrides": []
                             }
                         }
                     }
@@ -2684,7 +2677,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 24,
+                            "y": 32,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2697,7 +2690,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 8,
-                            "y": 24,
+                            "y": 32,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2710,7 +2703,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 16,
-                            "y": 24,
+                            "y": 32,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2723,8 +2716,8 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 32,
-                            "width": 12,
+                            "y": 24,
+                            "width": 24,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
@@ -2736,7 +2729,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 12,
-                            "y": 32,
+                            "y": 40,
                             "width": 12,
                             "height": 8,
                             "element": {
@@ -2750,7 +2743,7 @@
                         "spec": {
                             "x": 0,
                             "y": 40,
-                            "width": 24,
+                            "width": 12,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",

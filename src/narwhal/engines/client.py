@@ -250,17 +250,24 @@ class EngineClient:
         budget; both are inconclusive and say nothing about the engine.
         """
         loop = asyncio.get_running_loop()
-        started = loop.time()
+        # Lateness counts from the first connection event, after any wait for the pool.
+        started = [loop.time()]
+
+        async def trace(event: str, info: dict[str, Any]) -> None:
+            if len(started) == 1:
+                started.append(loop.time())
+
         try:
             r = await self._control.get(
                 f"{url}{self.dialect.health_path}",
                 timeout=self._phase_timeout(self._health_timeout),
                 headers=self._auth(None),
+                extensions={"trace": trace},
             )
         except httpx.PoolTimeout:
             return None
         except httpx.TimeoutException:
-            if loop.time() - started > self._health_timeout * LATE_TIMEOUT_FACTOR:
+            if loop.time() - started[-1] > self._health_timeout * LATE_TIMEOUT_FACTOR:
                 return None
             return False
         except httpx.HTTPError:

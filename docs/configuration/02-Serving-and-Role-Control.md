@@ -36,6 +36,11 @@ Measure sustained healthy inflight load before increasing `serving.max_connectio
 
 The decode check covers the request's decode window, from its predicted prefill completion to its projected last token.
 
+The decode check admits the request outright in either case:
+
+- zero live decode engines
+- a live decode engine whose profile or profiled `decode_max_requests` is unset
+
 | Request                           | Holds decode                                                         |
 | --------------------------------- | -------------------------------------------------------------------- |
 | The checked request               | From its predicted prefill completion                                |
@@ -61,7 +66,9 @@ The decode check covers the request's decode window, from its predicted prefill 
 
 An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode KV token bound, times the [decode correction](#71-load-definitions).
 
-The capacity check passes when peak projected work over the window fits both budgets:
+The capacity check applies when peak projected work over the window exceeds 1 slot.
+
+The capacity check passes when that peak fits both budgets:
 
 | Budget    | Per request                                | Fleet capacity                                                                                                     |
 | --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
@@ -84,7 +91,9 @@ The TPOT check passes in either case:
 | Capped, with fewer finished requests in its bucket         | Output cap                                                                               |
 | Uncapped                                                   | Median delivered output for its prompt bucket, or the fleet-wide median delivered output |
 
-A shape overflow in the completion history suspends the fractions and medians until the overflow ages out.
+A shape overflow in the completion history keeps the bucket fractions and prompt-bucket medians last learned before the overflow until the overflow ages out.
+
+The fleet-wide median delivered output is unknown while a shape overflow remains in the completion history.
 
 ### 4.2 Waiting, phase concurrency, and retries
 
@@ -106,7 +115,9 @@ A shape overflow in the completion history suspends the fractions and medians un
 With a positive `serving.decode_concurrency`, role control:
 
 - prices each engine's decode capacity at that limit
-- counts requests waiting for a decode slot toward decode load
+- prices a limit below the profile's smallest measured batch at that batch's token interval
+- floors decode load at decode residents on decode-role engines plus requests waiting for a decode slot, divided by decode engines times `serving.decode_concurrency`
+- scores a smaller candidate decode pool with each departing engine's residents on that engine
 
 Retained completion requests:
 
@@ -140,15 +151,17 @@ Tune queueing and retries:
 
 ### 4.3 Streaming failure semantics
 
-Streaming responses commit HTTP 200 before decode starts.
+A streaming response holds its HTTP status and headers until the first output frame.
 
-| Failure                                                                  | Client receives                                  |
-| ------------------------------------------------------------------------ | ------------------------------------------------ |
-| Prefill failure                                                          | HTTP error                                       |
-| Non-streaming decode failure                                             | HTTP error                                       |
-| Streaming decode failure, including one before the first generated token | Terminal stream error event                      |
-| Request deadline expiry during a stream                                  | Terminal stream error event with `code: expired` |
-| Request deadline expiry while client writes are blocked                  | Immediate connection drop                        |
+| Failure                                                  | Client receives                                  |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| Prefill failure                                          | HTTP error                                       |
+| Non-streaming decode failure                             | HTTP error                                       |
+| Streaming decode failure before the first output frame   | HTTP error                                       |
+| Streaming decode failure after the first output frame    | Terminal stream error event                      |
+| Request deadline expiry before the first output frame    | HTTP 504                                         |
+| Request deadline expiry after the first output frame     | Terminal stream error event with `code: expired` |
+| Request deadline expiry while client writes are blocked  | Immediate connection drop                        |
 
 Treat an error event, or a stream that ends before the success terminator, as a failed response.
 
@@ -174,6 +187,8 @@ For a request sized with exact token IDs, the router records each engine's cache
 
 Each prefill placement rechecks those blocks against the engine's current view.
 
+Projected-TTFT evaluations and role-split scoring reuse a waiting request's cache evidence checked within the last 0.25 s while every engine behind that evidence keeps a known residency view.
+
 An engine that holds a cached prefix prices the request's prefill with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix).
 
 Decisions that use the warm price:
@@ -185,11 +200,20 @@ Decisions that use the warm price:
 - offered demand
 - role-split scoring
 
+Offered demand takes warm prices from engines that run prefill:
+
+| Pricing            | Warm-price engines                      |
+| ------------------ | --------------------------------------- |
+| Demand estimate    | Live prefill-role engines               |
+| Role-split scoring | Prefill engines of each candidate split |
+
 The router prices a request on the cold curve of its full input in these cases:
 
 - the router used its local length estimate
 - the request carries multimodal content
+- the request sets `truncate_prompt_tokens`, `documents`, or `reasoning_effort`
 - the fleet config leaves `engine_contract` unset
+- the fleet's `engine_contract` enables speculative decoding
 - the engine's residency is unknown
 - the engine's current view drops the prefix before placement
 - the engine's profile holds a cold fit only
@@ -238,7 +262,17 @@ Configure the first-token deadline:
 2. Set `engine.first_token_timeout_s` above the candidate it prints.
 3. Set `engine.first_token_calibration_path` to its artifact.
 
-A change to the engine's [`launch_digest`](01-Fleet-Schema.md#33-attestation) makes the calibration artifact stale.
+The calibration artifact binds each engine to a generation digest:
+
+| Engine evidence                             | Generation digest                                        |
+| ------------------------------------------- | -------------------------------------------------------- |
+| Attestation response with launch evidence   | Its [`launch_digest`](01-Fleet-Schema.md#33-attestation) |
+| Other attestation response                  | Its `attestation_digest`                                 |
+| Fleet config leaves `engine_contract` unset | Digest of the engine's process identity                  |
+
+A change to an engine's generation digest makes the calibration artifact stale.
+
+An engine relaunch during calibration makes the calibration artifact insufficient.
 
 | Calibration artifact  | Preflight      | Router startup |
 | --------------------- | -------------- | -------------- |
@@ -280,18 +314,26 @@ Set these timeouts from latency measured under the intended load:
 | `engine.pool_timeout_s`    | Pool waits                   |
 | `engine.health_timeout_s`  | Health and identity requests |
 
-| Timeout                                                                                            | Result                                  |
-| -------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection       | Engine keeps its current health verdict |
-| Health probe exceeds `engine.health_timeout_s`                                                     | Failed liveness probe                   |
-| Health probe timeout surfaces more than 1.5 times `engine.health_timeout_s` after the probe starts | Engine keeps its current health verdict |
+| Timeout                                                                                                              | Result             |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection                         | Inconclusive probe |
+| Health probe exceeds `engine.health_timeout_s`                                                                       | Failed probe       |
+| Health probe timeout surfaces more than 1.5 times `engine.health_timeout_s` after the probe's first connection event | Inconclusive probe |
+
+| Caller                 | Inconclusive probe                      |
+| ---------------------- | --------------------------------------- |
+| Breaker verification   | Engine keeps its current health verdict |
+| Liveness probe         | Engine keeps its current health verdict |
+| Preflight reach        | Failed `/health` check                  |
+| Readmission probe      | Engine stays ejected                    |
+| Readmission validation | Failed `/health` check                  |
 
 ## 7. Role control
 
 | Field                                       | Default | Meaning                                                                                               | Values                               |
 | ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | `controller.advisory`                       | `false` | Holds current roles and records proposed role splits with reasons.                                    |                                      |
-| `controller.monitor_interval_s`             | `1.0`   | Delay between engine monitoring passes.                                                               | Positive                             |
+| `controller.monitor_interval_s`             | `1.0`   | Delay between engine monitoring passes and between residency refreshes.                               | Positive                             |
 | `controller.monitor_failure_limit`          | `5`     | Consecutive passes with an engine monitoring stage failure before degraded state stops new admission. | At least 1                           |
 | `controller.min_prefill`                    | `1`     | Minimum live prefill engines preserved by role-controller moves.                                      | At least 1                           |
 | `controller.min_decode`                     | `1`     | Minimum live decode engines preserved by role-controller moves.                                       | At least 1                           |

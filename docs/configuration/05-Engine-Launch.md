@@ -112,6 +112,7 @@ To change GPU allocation or runtime policy:
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                       |
 | `transfer.net_devices` | Ethernet interface names for TCP, or HCA:port names for RDMA.                                                  |
 | `transfer.devices`     | Transport device paths mapped into the container, required for RDMA.                                           |
+| `transfer.gpu_tls`     | UCX GPU transport, `cuda` (default) or `cuda_copy` on CUDA, and `rocm` on ROCm.                                |
 | `sources`              | Allocation, device, transfer, and runtime definitions that produced the record.                                |
 
 `deploy_hosts.py prepare` derives these record values:
@@ -127,11 +128,13 @@ To change GPU allocation or runtime policy:
 | Shared-device engine                                      | Its single GPU                                                |
 | Every other engine                                        | Its `gpu_ids`                                                 |
 
-Colocated CUDA engines:
+Colocated CUDA engines with dedicated GPUs:
 
-- run on their allocated GPUs
-- transfer KV to each other through CUDA IPC
-- run in containers that share the host PID namespace
+| Behavior                                            | Condition                     |
+| --------------------------------------------------- | ----------------------------- |
+| Run on their allocated GPUs                         | Container and native backends |
+| Transfer KV to each other through CUDA IPC          | `transfer.gpu_tls` is `cuda`  |
+| Run in containers that share the host PID namespace | Container backend             |
 
 `install` copies the selected launch record into the engine checkout's `config/` directory.
 

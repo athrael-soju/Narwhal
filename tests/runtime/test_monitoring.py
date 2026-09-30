@@ -281,3 +281,22 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         healthy.assert_not_awaited()
         self.assertEqual(self.router.scheduler.draining, {"e0", "e3"})
         self.assertTrue(self.router.lifecycle_blocked)
+
+    async def test_residency_refreshes_on_its_own_interval(self):
+        """Monitoring passes leave residency to its own loop at the monitor interval."""
+        self.router.cfg.monitor_interval_s = 0.02
+        refreshed = []
+
+        async def refresh(client):
+            refreshed.append(self.router._clock())
+
+        with patch.object(self.router.residency, "refresh", new=refresh):
+            await monitor_once(self.router)
+            self.assertEqual(refreshed, [])
+            follow = asyncio.create_task(monitoring.residency_loop(self.router))
+            await asyncio.sleep(0.15)
+            follow.cancel()
+            with suppress(asyncio.CancelledError):
+                await follow
+        self.assertGreaterEqual(len(refreshed), 3)
+        self.assertLessEqual(len(refreshed), 8)

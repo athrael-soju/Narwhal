@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -22,6 +23,8 @@ from tests.fixtures import fleet
 class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
     """Real lifecycle and scheduler state use local identity and engine responses."""
 
+    launch: ClassVar[dict | None] = None
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -38,7 +41,9 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.engines.prefill = AsyncMock(return_value="descriptor")
         self.router.engines.decode = self.decode
         self.document = AttestationDocument(
-            self.cfg.engine_contract, dict.fromkeys(self.cfg.engine_contract.fields(), "fixture")
+            self.cfg.engine_contract,
+            dict.fromkeys(self.cfg.engine_contract.fields(), "fixture"),
+            launch=self.launch,
         )
         self.bind_profiles()
         self.transport = httpx.MockTransport(self.http)
@@ -47,15 +52,14 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.drain("e0")
 
     def bind_profiles(self):
-        """Measure the fixture's current process-bound attestation for each engine."""
+        """Bind each engine's profile to its current generation, as the profiler does."""
         for iid, start in self.starts.items():
             payload = make_attestation(
                 self.document, EngineIdentity(self.cfg.engine_contract.vllm_version, start)
             )
+            digest = payload.get("launch_digest") or payload["attestation_digest"]
             self.router.profiles.put(
-                replace(
-                    self.router.profiles.get(iid), generation_digest=payload["attestation_digest"]
-                )
+                replace(self.router.profiles.get(iid), generation_digest=digest)
             )
 
     async def identity(self, url, **kwargs):
@@ -331,6 +335,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.document = AttestationDocument(
                     self.cfg.engine_contract,
                     dict.fromkeys(self.cfg.engine_contract.fields(), "changed source evidence"),
+                    launch=None if self.launch is None else {"args": ["--changed"]},
                 )
             return True
 
@@ -535,3 +540,9 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             self.identities.reset_mock()
             self.assertEqual(await lifecycle.check_process_identities(self.router), [])
             self.identities.assert_not_awaited()
+
+
+class LaunchBoundLifecycleValidationTests(LifecycleValidationTests):
+    """The same gates with attestations that carry launch evidence, as deployed engines do."""
+
+    launch: ClassVar[dict | None] = {"args": ["--max-num-seqs", "64"]}

@@ -32,8 +32,8 @@ KV transfer across the configured ring or mesh is allowed for a vLLM engine with
 | Stage | Behavior |
 | --- | --- |
 | Admission | The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| Pricing | Each eligible prefill engine is priced from the prompt token count, its measured performance curves, and its resident work. |
-| Predictive check | With the default `serving.admission` of `predictive`, a projected time to first token (TTFT) above the TTFT budget on the cheapest available prefill path rejects the request. |
+| Pricing | Each eligible prefill engine is priced from its profile over the prompt and its resident requests, each on the engine's warm fit when its known residency holds that request's prefix and on its cold curve otherwise. |
+| Predictive check | With the default `serving.admission` of `predictive`, the request is rejected when its projected time to first token (TTFT) on the cheapest available prefill path exceeds the TTFT budget or when it fails the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check). |
 | Prefill | The chosen engine holds the prompt KV as the producer and returns a typed KV handoff. |
 | Decode | An eligible engine consumes the handoff and runs decode. |
 | Streaming | Tokens stream to the client. |

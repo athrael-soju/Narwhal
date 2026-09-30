@@ -252,6 +252,7 @@ class ControllerDecisionOut(BaseModel):
     observed_prefill_ratio: float | None = None
     recovery_prefill_ratio: float | None = None
     observed_decode_ratio: float | None = None
+    recovery_decode_ratio: float | None = None
     eligibility_rule: str | None = None
     confirmations: int | None = None
     required_confirmations: int | None = None

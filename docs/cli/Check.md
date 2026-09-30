@@ -126,12 +126,13 @@ The artifact is valid evidence when all of these hold:
 - every group has at least 100 completed attempts
 - the attempt numbers are distinct
 - the attempt numbers cover the configured sample count
-- the process generations are unchanged
+- with `engine_contract`, each engine's attestation digest matches its value at the start of the run
+- for other fleets, each engine's vLLM version and process start time match their values at the start of the run
 - the final checks passed
 - the candidate deadline is strictly below `serving.request_timeout_s`
 - `engine.first_token_timeout_s` is above the candidate deadline
 
-The artifact is incomplete when an attempt fails, a generation changes, or a generation check errors.
+The artifact is incomplete when an attempt fails, an engine's attestation digest, vLLM version or process start time changes during the run, or reading or verifying an engine's identity fails.
 
 ## The `slo` gate
 

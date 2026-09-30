@@ -206,7 +206,7 @@ class AttestationContractTests(unittest.TestCase):
             [],
         )
 
-    def engine_evidence(self, root: Path) -> tuple[Path, Path]:
+    def engine_evidence(self, root: Path, extra_args: tuple[str, ...] = ()) -> tuple[Path, Path]:
         run = root / "run"
         run.mkdir()
         model = root / "model"
@@ -230,6 +230,7 @@ class AttestationContractTests(unittest.TestCase):
                 "bfloat16",
                 "--kv-cache-dtype",
                 "auto",
+                *extra_args,
             ],
             "env_sha256": "e" * 64,
             "launcher_sha256": "f" * 64,
@@ -574,6 +575,19 @@ class AttestationContractTests(unittest.TestCase):
                 save(run / "transfer-mode.json", stale)
                 with self.assertRaisesRegex(ValueError, "Transfer mode plan_sha256"):
                     engine_document(run, log)
+
+    def test_contract_records_the_launched_speculative_decoding(self):
+        for extra, expected in (
+            ((), "disabled"),
+            (("--speculative-config", '{"method": "eagle"}'), '{"method": "eagle"}'),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as folder:
+                run, log = self.engine_evidence(Path(folder), extra)
+                with patch(
+                    "tools.deployment.attestation_contract.live_container", return_value="b" * 64
+                ):
+                    document = engine_document(run, log)
+                self.assertEqual(document["contract"]["speculative_config"], expected)
 
     def test_sidecar_uses_derived_role_url_and_current_document(self):
         with tempfile.TemporaryDirectory() as folder:

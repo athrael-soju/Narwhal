@@ -62,6 +62,15 @@ class ProfileStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "zero tpot_slope requires measured decode bounds"):
             profile(tpot_slope=0, decode_max_requests=None)
 
+    def test_a_capped_batch_below_the_measured_domain_prices_at_its_smallest_batch(self):
+        """A decode cap under the smallest measured batch keeps a conservative capacity."""
+        row = replace(profile(), decode_min_kv_tokens=600)
+        capped = row.decode_rps(1.0, 80, 64, request_cap=4)
+        self.assertAlmostEqual(capped, 4 / (64 * row.token_interval(600, 4)))
+        self.assertLess(capped, 4 / (64 * row.token_interval(320, 4)))
+        uncapped = row.decode_rps(1.0, 80, 64)
+        self.assertAlmostEqual(uncapped, 16 / (64 * row.token_interval(16 * 80, 16)))
+
     def test_store_rejects_duplicate_unknown_and_incomplete_rows(self):
         """A current profile store names malformed rows before exposing any profile."""
         base = asdict(profile())

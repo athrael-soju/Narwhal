@@ -38,13 +38,16 @@ Active router responses until whole-wave readmission succeeds:
 
 ### Temporary holds
 
-Hold behavior for the last eligible engine:
+Hold behavior for an engine that [alone places one of its roles](../concepts/03-Failure-and-State.md#last-engine-protection):
 
 | Cause | Result |
 | --- | --- |
 | Performance-drift hold | Remains in placement |
 | Temporary-quarantine hold | Remains in placement |
-| Failed health or inference probe | Removed from placement |
+| Inference-probe hold | Remains in placement |
+| Temporary-quarantine or inference-probe hold after another engine's ejection or drain | Returns to placement |
+| Failed health or inference probe | Remains in placement |
+| Connection-error or liveness ejection | Leaves placement |
 
 ### Router control and replacement
 

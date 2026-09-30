@@ -31,7 +31,7 @@ from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing, sse_token_count
 from ..engines.validation import can_consume, can_produce, validation_pairs
 from ..profiling.calibration import calibrate, verify_calibration
-from ..profiling.generation import generation_problem, read_generation
+from ..profiling.generation import binding_digest, generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
 from ..profiling.probe import engine_context_limit, make_prompt
 from ..profiling.store import ProfileStore
@@ -956,7 +956,7 @@ async def run(
                         problem = generation_problem(
                             iid,
                             profile.generation_digest,
-                            str(current.get("launch_digest") or current["attestation_digest"]),
+                            binding_digest(current),
                         )
                         if problem:
                             generation_failures.add(problem)

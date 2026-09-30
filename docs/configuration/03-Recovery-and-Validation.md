@@ -43,13 +43,12 @@ Breaker action at `recovery.eject_after` consecutive failures of one [failure cl
 
 An inconclusive inference probe:
 
-- keeps the engine out of placement while another live engine serves its role
+- keeps the placement hold that the breaker set when other live engines placed every role the engine places
 - repeats every `recovery.readmit_every` monitor intervals
 
-The state handoff carries:
+The state handoff carries the producer IDs of failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
 
-- the placement hold
-- the producer IDs of failed KV-transfer paths, in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields)
+Restoring the state handoff ejects each `inference_sources` suspect whose roles other live engines place, with a readmission probe due at once.
 
 ### 8.2 Decode drift evidence
 

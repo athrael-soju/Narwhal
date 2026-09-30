@@ -56,6 +56,6 @@ liveness
 | Verification probe result | Effect |
 | --- | --- |
 | Passes with a passing profile generation check | The relevant failure streaks clear. |
-| Fails while another live engine serves its role or accepts role changes | `narwhal_ejected` records the engine as ejected. |
-| Fails when its removal leaves its role unserved | The engine stays in placement with its hold lifted. |
+| Fails on a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence) | `narwhal_ejected` records the engine as ejected. |
+| Fails on an uncovered engine | The engine stays in placement with its hold lifted. |
 | Waits out the local control pool | Inconclusive, with streaks unchanged. |

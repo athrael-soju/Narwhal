@@ -10,6 +10,8 @@ MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
 # Lengths each side of the block rule needs for a split fit.
 SPLIT_REGIME_LENGTHS = 2
+# Lengths a split fit needs: its four terms and two residual degrees of freedom.
+SPLIT_MIN_LENGTHS = 6
 # Share of the plain curve's error a split fit must stay below.
 SPLIT_ERROR_RATIO = 0.5
 
@@ -86,8 +88,9 @@ def fit_prefill_samples(
     """Fit `a*n*n + b*n + c + split*s` to each input length's median; raise on a poor fit.
 
     `s` marks a prompt that ends inside a cache block past the first. `split` is None
-    unless both sides of that rule have `SPLIT_REGIME_LENGTHS` lengths and the step
-    brings the error below `SPLIT_ERROR_RATIO` of the plain curve's.
+    unless the sweep has `SPLIT_MIN_LENGTHS` lengths, both sides of that rule have
+    `SPLIT_REGIME_LENGTHS` lengths, and the step brings the error below
+    `SPLIT_ERROR_RATIO` of the plain curve's.
     """
     if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
         raise ValueError("prefill samples must be finite and nonnegative")
@@ -109,7 +112,7 @@ def fit_prefill_samples(
     split: float | None = None
     errors = point_errors(a, b, c, 0.0)
     if (
-        len(representatives) > 4
+        len(representatives) >= SPLIT_MIN_LENGTHS
         and flags.count(True) >= SPLIT_REGIME_LENGTHS
         and flags.count(False) >= SPLIT_REGIME_LENGTHS
     ):

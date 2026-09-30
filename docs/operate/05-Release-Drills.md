@@ -49,7 +49,7 @@ The router failover drill passes when:
 Use `recovery.engine_restart_policy = individual` and the prerequisites in [Restart one engine](03-Restart-Engines.md#7-restart-one-engine).
 
 1. Drain the engine.
-2. Replace it through the production supervisor.
+2. Replace it through the production supervisor with a launch that changes its attested [`launch_digest`](../configuration/01-Fleet-Schema.md#33-attestation), or with any relaunch when its sidecar reports an attestation digest only.
 3. Save the pre-stop drain observation, both process identities, and the supervisor output.
 4. Request readmission with the previous profile loaded, through `curl` with `--fail` removed.
 5. Keep the rejection: HTTP 409, the profile generation error, and `accepts_new = false`.
@@ -74,8 +74,8 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 4. Confirm zero resident work and `wave.ready_to_stop = true`.
 5. Restart every engine from the recorded build through its supervisor.
 6. Restart every attestation sidecar from the recorded build through its supervisor.
-7. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activate-replacement-profiles).
-8. Verify that resume preserves every drain identity and the whole-wave hold.
+7. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activate-replacement-profiles) for each member whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
+8. If step 7 activated profiles, verify that resume preserves every drain identity and the whole-wave hold.
 
 #### Fail one member
 
@@ -151,7 +151,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 
 1. Restart the failed member's sidecar with the attestation inputs from profiling.
 2. Leave the replacement engine running.
-3. Check that its attestation endpoint returns the digest from the new profile.
+3. Check that its attestation endpoint returns the digest from its loaded profile.
 4. Check that the whole-wave hold remains active.
 5. [Request and verify whole-wave readmission](03-Restart-Engines.md#82-restart-the-fleet).
 6. Verify that every member passed every [readmission check](03-Restart-Engines.md#73-request-readmission).
@@ -199,5 +199,5 @@ Already-stopped-engine case:
 
 | Later change | Procedure | Evidence to keep |
 | --- | --- | --- |
-| Another process replacement | Fresh measurements, another activation | |
+| Another process replacement with a changed attested `launch_digest` or a sidecar that reports an attestation digest only | Fresh measurements, another activation | |
 | Router replacement with an outstanding hold on the same fleet | [Profile activation with resume](03-Restart-Engines.md#activate-replacement-profiles) | Both journals and the state snapshots |

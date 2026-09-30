@@ -406,12 +406,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         else:
             router.monitoring.ok("liveness")
     try:
-        await router.residency.refresh(router.residency_client)
-    except Exception as exc:
-        router.monitoring.fail("residency", exc)
-    else:
-        router.monitoring.ok("residency")
-    try:
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
         ld = router.scheduler.pool_load(Role.DECODE)
@@ -443,6 +437,21 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     router.dispatcher.notify()
     router.admission_queue.notify()
     return flipped
+
+
+async def residency_loop(router: NarwhalRouter) -> None:
+    """Refresh residency views every monitor interval, apart from monitoring passes."""
+    interval = router.cfg.monitor_interval_s
+    while True:
+        await asyncio.sleep(interval)
+        if router.standby:
+            continue
+        try:
+            await router.residency.refresh(router.residency_client)
+        except Exception as exc:
+            router.monitoring.fail("residency", exc)
+        else:
+            router.monitoring.ok("residency")
 
 
 async def monitor_loop(router: NarwhalRouter) -> None:

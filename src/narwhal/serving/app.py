@@ -32,7 +32,7 @@ from ..runtime.lifecycle import (
     check_process_identities,
     validate_readmission,
 )
-from ..runtime.monitoring import monitor_loop
+from ..runtime.monitoring import monitor_loop, residency_loop
 from ..runtime.standby import (
     MAX_HANDOFF_AGE_S,
     PROBE_INTERVAL_S,
@@ -210,6 +210,7 @@ def create_app(
             await check_process_identities(router)
         loop = asyncio.create_task(monitor_loop(router))
         lag = asyncio.create_task(measure_loop_lag(router))
+        follow = asyncio.create_task(residency_loop(router))
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
@@ -227,10 +228,13 @@ def create_app(
             router.standby = True
             loop.cancel()
             lag.cancel()
+            follow.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
             with contextlib.suppress(asyncio.CancelledError):
                 await lag
+            with contextlib.suppress(asyncio.CancelledError):
+                await follow
             if watch is not None:
                 watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

@@ -59,8 +59,8 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
-        # Refreshes a request's cache evidence from current residency.
-        self.recheck_cache_evidence: Callable[[Request], None] | None = None
+        # Refreshes a request's cache evidence older than the given seconds from current residency.
+        self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
         # Apply cooldown to the opening P-to-D change as well.
         self._last_p2d_flip = clock()
         self.panic_bypasses = 0
@@ -744,7 +744,7 @@ class GlobalScheduler:
         if request.phase is Phase.PREFILL:
             request.cache_placement = None
             if request.cached_tokens and self.recheck_cache_evidence is not None:
-                self.recheck_cache_evidence(request)
+                self.recheck_cache_evidence(request, 0.0)
         costs = {i.iid: self.cost(request, i) for i in candidates}
 
         # 2. Lowest-cost instance that also meets the SLO.

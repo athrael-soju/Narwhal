@@ -449,6 +449,13 @@ class SharedPrefixWorkloadTests(unittest.TestCase):
         self.assertTrue(set(first).isdisjoint(second))
         self.assertEqual(trial.body_for(workload, 0)["prompt"], list(trial.prompt_for(workload, 0)))
 
+    def test_the_warmup_prefix_belongs_to_no_family(self):
+        workload = self.workload(2)
+        families = {tuple(trial.prompt_for(workload, s)[:24]) for s in range(12)}
+        warmup = trial.warmup_body(workload, 12, 0)["prompt"]
+        self.assertEqual(len(warmup), 32)
+        self.assertNotIn(tuple(warmup[:24]), families)
+
     def test_shared_prefix_workloads_validate_their_shape(self):
         for changes in ({"prefix_tokens": 32}, {"prefix_tokens": 0}, {"families": -1}):
             with (
@@ -498,9 +505,13 @@ class SharedPrefixCliTests(unittest.TestCase):
             second = prompts[len(first) :]
         self.assertEqual(len(first), 9)
         self.assertEqual(len(second), 9)
-        self.assertEqual(len({p[:24] for p in first + second}), 2)
+        # Each run's first prompt is its warm-up, whose prefix belongs to no family.
+        (warm_first, *first), (warm_second, *second) = first, second
+        families = {p[:24] for p in first + second}
+        self.assertEqual(len(families), 2)
         self.assertEqual({p[:24] for p in first}, {p[:24] for p in second})
         self.assertTrue({p[24:] for p in first}.isdisjoint({p[24:] for p in second}))
+        self.assertTrue({warm_first[:24], warm_second[:24]}.isdisjoint(families))
 
     def test_cold_control_shares_no_prefix_between_requests_or_runs(self):
         with local_router() as (base, prompts), tempfile.TemporaryDirectory() as folder:

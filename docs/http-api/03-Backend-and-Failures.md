@@ -98,19 +98,25 @@ data: {"error": ...}
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
-Each exact count goes to the live engine that holds the fewest requests.
+A failed count puts its engine in a count backoff of 1 s that doubles with each consecutive failure up to 30 s.
 
-A failed count excludes its engine from later counts until another count succeeds.
+The engine's next successful count resets its backoff.
+
+| Live engines outside count backoff | Exact count goes to                                             |
+| ---------------------------------- | --------------------------------------------------------------- |
+| One or more                        | The engine outside count backoff that holds the fewest requests |
+| Zero                               | The live engine that holds the fewest requests                  |
 
 Tokenization failures return the [engine-fault mapping](#engine-failure-handling) status before placement.
 
 ### Breaker ejection and readmission
 
-| Event                                              | Breaker action                                           |
-| -------------------------------------------------- | -------------------------------------------------------- |
-| `recovery.eject_after` consecutive stream failures | Starts an inference probe                                |
-| Failed inference probe                             | Ejects the engine                                        |
-| Successful inference probe                         | Readmits the engine                                      |
+| Event                                                                                                | Breaker action                             |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `recovery.eject_after` consecutive stream failures                                                   | Starts an inference probe                  |
+| Failed inference probe while every role the engine places stays placeable through other live engines | Ejects the engine                          |
+| Other failed inference probe                                                                         | Keeps the engine live with its hold lifted |
+| Successful inference probe                                                                           | Readmits the engine                        |
 
 Decode-leg failures by breaker class:
 
@@ -124,10 +130,11 @@ Decode-leg failures by breaker class:
 
 Inference-probe suspect placement:
 
-| Suspect                                                     | Placement during the probe |
-| ----------------------------------------------------------- | -------------------------- |
-| Another live engine serves its role or accepts role changes | Held out                   |
-| Its removal leaves its role unserved                        | Kept                       |
+| Suspect                                                                                              | Placement during the probe |
+| ---------------------------------------------------------------------------------------------------- | -------------------------- |
+| Every role the engine places stays placeable through other live engines                              | Held out                   |
+| Held out when another engine's ejection or drain leaves zero other live engines for a role it places | Returned to placement      |
+| Any other suspect                                                                                    | Kept                       |
 
 Inference probes apply the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s` to each leg.
 
@@ -171,7 +178,8 @@ Each retry receives:
 
 With `recovery.failure_quarantine_s > 0`, a failed engine's placement depends on its role coverage:
 
-| Failed engine                                               | Placement after the failure                          |
-| ----------------------------------------------------------- | ---------------------------------------------------- |
-| Another live engine serves its role or accepts role changes | Held out for `recovery.failure_quarantine_s` seconds |
-| Its removal leaves its role unserved                        | Kept                                                 |
+| Failed engine                                                                                        | Placement after the failure                          |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Every role the engine places stays placeable through other live engines                              | Held out for `recovery.failure_quarantine_s` seconds |
+| Held out when another engine's ejection or drain leaves zero other live engines for a role it places | Returned to placement                                |
+| Any other failed engine                                                                              | Kept                                                 |

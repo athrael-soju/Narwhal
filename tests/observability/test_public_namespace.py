@@ -126,6 +126,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "role_floors_safe": True,
             "source_pressure_safe": True,
             "recovery_prefill_ratio": 1.2,
+            "recovery_decode_ratio": 0.5,
             "evidence_span_s": 60.0,
             "evidence_arrivals": 12,
             "evidence_required_span_s": 60.0,
@@ -222,6 +223,47 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "narwhal_retry_attempts_total",
             " ".join(query["spec"]["query"]["spec"]["expr"] for query in exceptions),
+        )
+
+    def test_request_outcomes_plot_every_terminal_counter_from_zero(self):
+        """Each terminal counter has its own unstacked series beside offered."""
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        panel = dashboard["spec"]["elements"]["panel-11"]["spec"]
+        expressions = {
+            query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
+            for query in panel["data"]["spec"]["queries"]
+        }
+        terminals = {
+            re.search(r"(narwhal_\w+_total)", expr).group(1)
+            for legend, expr in expressions.items()
+            if legend != "offered"
+        }
+        self.assertEqual(
+            terminals,
+            {
+                f"narwhal_{name}_total"
+                for name in (
+                    "served",
+                    "failed",
+                    "refused",
+                    "rejected",
+                    "expired",
+                    "cancelled",
+                    "invalid_requests",
+                )
+            },
+        )
+        self.assertIn("narwhal_offered_total", expressions["offered"])
+        self.assertTrue(all(expr.startswith("sum(rate(") for expr in expressions.values()))
+        field_config = panel["vizConfig"]["spec"]["fieldConfig"]
+        self.assertEqual(field_config["defaults"]["custom"]["stacking"]["mode"], "none")
+        self.assertFalse(
+            [
+                prop
+                for override in field_config["overrides"]
+                for prop in override["properties"]
+                if prop["id"] == "custom.stacking"
+            ]
         )
 
     async def test_flip_metrics_outlive_history_and_reset_with_scheduler(self):

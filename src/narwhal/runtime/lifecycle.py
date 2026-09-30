@@ -17,7 +17,7 @@ from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_
 from ..engines.client import EngineError
 from ..engines.stream import sse_token_count
 from ..engines.validation import recovery_pairs, validation_pairs
-from ..profiling.generation import profile_generation_problems, read_generation
+from ..profiling.generation import binding_digest, profile_generation_problems, read_generation
 
 if TYPE_CHECKING:
     from ..serving.router import NarwhalRouter
@@ -525,7 +525,7 @@ async def check_process_identities(
                 if failures:
                     return None, "attestation: " + "; ".join(failures)
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 if problems:
                     return None, "; ".join(problems)
@@ -733,7 +733,7 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
@@ -812,7 +812,7 @@ async def validate_readmission(
                 if verify_attestation(payload, contract, live):
                     raise ValueError("attestation changed during validation")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)

@@ -19,7 +19,7 @@ Profile store document:
 }
 ```
 
-The profiler fails the run when an engine's generation digest changes between the start and end of its sweep.
+The profiler fails the run when an engine's process digest changes between the start and end of its sweep.
 
 | Fleet | Saved digest | `.samples.json` sidecar keeps |
 | --- | --- | --- |
@@ -30,11 +30,11 @@ The profiler fails the run when an engine's generation digest changes between th
 The attested launch digest covers:
 
 - the contract fields
-- engine arguments with addresses and endpoints removed
+- engine arguments with the values of `--host`, `--port`, `--served-model-name`, and `--kv-events-config` removed
 - image
 - packages
 - model configuration and revision
-- launcher and launch-record hashes
+- launcher, launch-record, and cache-capture hook hashes
 
 An engine restarted from an identical launch keeps its launch digest.
 
@@ -118,9 +118,11 @@ Narwhal caps decode concurrency for each fitted engine at the priced context len
 | Condition | Decode request limit |
 | --- | --- |
 | `context_tokens <= 0` or `decode_max_requests` is `null` | Zero. |
-| Otherwise | The smaller of `decode_max_requests` and the KV budget divided by `context_tokens`, at least `1`. |
+| Otherwise | The smallest of `decode_max_requests`, a positive `serving.decode_concurrency`, and the KV budget divided by `context_tokens`, at least `1`. |
 
 | Profile | KV budget |
 | --- | --- |
 | With `kv_capacity_tokens` | The smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. |
 | Otherwise | `decode_max_kv_tokens`. |
+
+Decode request capacity prices a batch at its token interval with requests raised to at least `decode_min_requests` and resident KV tokens raised to at least `decode_min_kv_tokens`.

@@ -96,7 +96,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 10)
         urls = [call.args[0] for call in count.call_args_list]
         self.assertNotEqual(urls[0], urls[1])
-        self.assertIsNone(self.router._tokenize_failed)
+        self.assertEqual(urls[1], urls[2])
         self.assertEqual(self.router.estimate_length({"prompt": [1, 2, 3]}), 3)
         self.assertGreaterEqual(
             self.router.estimate_length({"messages": [{"content": "hello"}]}), 1
@@ -106,6 +106,42 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
             self.assertEqual(await self.router.input_length({"prompt": ""}), 1)
             count.assert_not_awaited()
+
+    async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
+        """A failed engine's backoff doubles per failure and survives other engines' success."""
+        self.cfg.tokenize = True
+        now = [100.0]
+        self.router._clock = lambda: now[0]
+        bad = self.cfg.engines[0].url
+
+        async def tokenize(url, *args, **kwargs):
+            if url == bad and not healed:
+                raise EngineError("tokenize", url, 500, "broken tokenizer")
+            return Tokenization(9, None)
+
+        healed = False
+        with patch.object(self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)):
+            failures = 0
+            for step in range(24):
+                now[0] += 0.1
+                try:
+                    await self.router.input_length({"prompt": f"hello {step}"})
+                except EngineError:
+                    failures += 1
+            self.assertEqual(failures, 2)
+            now[0] += 60.0
+            healed = True
+            for _ in range(4):
+                await self.router.input_length({"prompt": "hello"})
+            now[0] += 0.1
+            urls = []
+            with patch.object(
+                self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)
+            ) as count:
+                for _ in range(4):
+                    await self.router.input_length({"prompt": "hello"})
+                urls = [call.args[0] for call in count.call_args_list]
+        self.assertIn(bad, urls)
 
     async def test_exact_counts_spread_across_the_least_occupied_engines(self):
         """Idle engines share the counts in turn; an occupied engine is left out."""

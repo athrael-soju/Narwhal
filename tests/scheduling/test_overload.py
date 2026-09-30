@@ -6,11 +6,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.config import FleetConfig
+from narwhal.profiling.store import ProfileStore
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.types import Phase, Request, Role
-from tests.fixtures import fleet
+from tests.fixtures import ROOT, fleet, profile
 
 
 class PinnedPlacementTests(unittest.TestCase):
@@ -40,6 +42,48 @@ class PinnedPlacementTests(unittest.TestCase):
         router = self.router(pinned=False)
         router.scheduler.eject("e3")
         self.assertEqual(router.scheduler.schedule(Request("r", 10, phase=Phase.DECODE)).iid, "e0")
+
+    def test_holds_keep_every_role_placeable_through_fallback_engines(self):
+        """An unpinned engine covering another role's legs stays while it alone covers them."""
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
+        e0, e1, e3 = cfg.engines[0], cfg.engines[1], cfg.engines[3]
+        cfg.engines = [e0, replace(e1, pin=True), replace(e3, pin=True)]
+        cfg.profiles_path = Path(folder.name) / "profiles.json"
+        store = ProfileStore(cfg.profiles_path)
+        for spec in cfg.engines:
+            store.put(profile(spec.iid))
+        scheduler = create_app(cfg).state.router.scheduler
+        self.assertTrue(scheduler.quarantine("e3", 30.0))
+        self.assertEqual(scheduler.schedule(Request("a", 10, phase=Phase.DECODE)).iid, "e0")
+        self.assertFalse(scheduler.quarantine("e0", 30.0))
+        self.assertTrue(scheduler.role_placeable(Role.DECODE))
+        self.assertTrue(scheduler.role_placeable(Role.PREFILL))
+
+    def test_removing_a_covering_engine_releases_holds_that_lose_coverage(self):
+        """An ejection or drain returns held engines whose roles lost their other engines."""
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for remove in ("eject", "drain"):
+            with self.subTest(remove=remove):
+                cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
+                cfg.engines = [
+                    replace(spec, pin=True)
+                    for spec in cfg.engines
+                    if spec.iid in ("e0", "e3", "e4", "e5")
+                ]
+                cfg.profiles_path = Path(folder.name) / f"profiles-{remove}.json"
+                store = ProfileStore(cfg.profiles_path)
+                for spec in cfg.engines:
+                    store.put(profile(spec.iid))
+                scheduler = create_app(cfg).state.router.scheduler
+                self.assertTrue(scheduler.quarantine("e3", 30.0))
+                getattr(scheduler, remove)("e4")
+                self.assertIn("e3", scheduler.quarantined)
+                getattr(scheduler, remove)("e5")
+                self.assertNotIn("e3", scheduler.quarantined)
+                self.assertTrue(scheduler.role_placeable(Role.DECODE))
 
     def test_a_role_is_placeable_through_its_engines_or_unpinned_engines(self):
         for pinned, placeable in ((True, False), (False, True)):
@@ -300,6 +344,21 @@ class DecodeAdmissionTests(unittest.TestCase):
         estimate = demand.output_estimator()
         self.assertEqual(estimate(Request("r", 5_000)), 50)
         self.assertEqual(estimate(Request("r", 5_000, wanted_len=64)), 64)
+
+    def test_output_estimates_outlast_a_completion_history_overflow(self):
+        """A burst of distinct completion shapes keeps the last learned estimates."""
+        demand = self.router.controller.demand
+        now = self.router._clock()
+        for _ in range(20):
+            demand.saw_completion(500, 8192, 200, at=now)
+        demand.refresh_output_estimates()
+        request = Request("r", 500, wanted_len=8192)
+        self.assertEqual(demand.output_estimator()(request), 200)
+        for index in range(129):
+            demand.saw_completion(100 + index, 64, 10 + index % 7, at=now)
+        demand.refresh_output_estimates()
+        self.assertTrue(any(row.overflow for row in demand.observed_decode.rows()))
+        self.assertEqual(demand.output_estimator()(request), 200)
 
     def test_requests_waiting_for_a_decode_slot_count_as_committed(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1)

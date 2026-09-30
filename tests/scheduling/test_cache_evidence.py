@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.costs import prefill_seconds
+from narwhal.scheduling.scoring import CACHE_RECHECK_S
 from narwhal.serving import router as router_module
 from narwhal.serving.app import create_app
 from narwhal.types import Request, Role
@@ -87,6 +88,27 @@ class CacheEvidenceTests(unittest.TestCase):
         self.router.cfg.engine_contract = None
         self.router.residency.view(self.first).known = True
         self.assertEqual(self.router.prefix_cache_tokens({"cache_salt": "salt"}, prompt), {})
+
+    def test_fields_that_change_the_prefilled_tokens_carry_no_evidence(self):
+        """Truncation and template inputs outside token counting leave the request cold."""
+        prompt = list(range(16))
+        self.hold(self.first, prompt)
+        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {self.first: 12})
+        for field, value in (
+            ("truncate_prompt_tokens", 8),
+            ("documents", [{"text": "doc"}]),
+            ("reasoning_effort", "low"),
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(self.router.prefix_cache_tokens({field: value}, prompt), {})
+
+    def test_a_speculative_decoding_contract_prices_cold(self):
+        prompt = list(range(16))
+        contract = replace(self.cfg.engine_contract, speculative_config='{"method": "eagle"}')
+        self.router.cfg.engine_contract = contract
+        self.namespace = CacheNamespace(self.cfg.model, contract.fingerprint())
+        self.hold(self.first, prompt)
+        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {})
 
     def test_boundary_state_must_sit_at_the_reusable_prefix_end(self):
         """A block-aligned prompt reuses at most the blocks before its final token."""
@@ -267,6 +289,39 @@ class PlacementRecheckTests(unittest.TestCase):
         self.assertAlmostEqual(captured().queued_prefill_s, cold_price)
         self.assertEqual(request.cached_tokens, {})
 
+    def test_projections_recheck_waiting_evidence_once_per_interval(self):
+        """Projections reuse fresh evidence; placement and unknown views recheck at once."""
+        clock = [1000.0]
+        self.router._clock = lambda: clock[0]
+        scorer = self.router.controller.scorer
+        warm_price = self.scheduler.profiles.get(self.warm_iid).cached_prefill_time(36, 4)
+        cold_price = self.scheduler.profiles.get(self.warm_iid).prefill_time(40)
+        request = self.sized()
+        request.arrived_at = request.cache_checked_at = clock[0]
+        self.scheduler.monitor.waiting[request.rid] = request
+        self.view.groups["0"][2].clear()
+        self.assertAlmostEqual(scorer.project_prefill(clock[0]).queued_prefill_s, warm_price)
+        clock[0] += CACHE_RECHECK_S
+        self.assertAlmostEqual(scorer.project_prefill(clock[0]).queued_prefill_s, cold_price)
+        self.assertEqual(request.cached_tokens, {})
+
+        self.setUp()
+        clock = [1000.0]
+        self.router._clock = lambda: clock[0]
+        request = self.sized()
+        request.arrived_at = request.cache_checked_at = clock[0]
+        self.scheduler.monitor.waiting[request.rid] = request
+        self.view.forget("engine restarted")
+        scorer = self.router.controller.scorer
+        self.assertAlmostEqual(scorer.project_prefill(clock[0]).queued_prefill_s, cold_price)
+
+        self.setUp()
+        request = self.sized()
+        request.cache_checked_at = self.router._clock()
+        self.view.groups["0"][2].clear()
+        self.scheduler.schedule(request)
+        self.assertEqual(request.cached_tokens, {})
+
     def test_projections_price_resident_work_with_its_placement_evidence(self):
         now = self.router._clock()
         request = self.sized()
@@ -348,6 +403,33 @@ class SharedCostContractTests(unittest.TestCase):
             prefill_seconds(profiles[0], Request("r", 40, cached_tokens={profiles[0].iid: 32}))
             / (sum(p.prefill_time(40) for p in profiles) / len(profiles)),
         )
+
+    def test_demand_takes_warm_prices_only_from_engines_that_run_the_prefill(self):
+        """A prefix cached on a decode engine leaves offered prefill demand at the cold price."""
+        demand = self.router.controller.demand
+        instances = self.scheduler.monitor.instances
+        decode_iid = next(iid for iid in instances if iid != self.iid)
+        instances[decode_iid].role = Role.DECODE
+        instances[self.iid].role = Role.PREFILL
+        now = self.router._clock()
+        observation = demand.saw_arrival(40, wanted_len=4, at=now)
+        demand.resize_arrival(observation, 40, 4, at=now, cached_tokens={decode_iid: 32})
+        cached_on_decode = demand.estimate(now, window_s=60.0, step_s=1.0)[0]
+        demand.resize_arrival(
+            demand.saw_arrival(40, wanted_len=4, at=now), 40, 4, at=now, cached_tokens={}
+        )
+        both = demand.estimate(now, window_s=60.0, step_s=1.0)[0]
+        self.assertAlmostEqual(both, 2 * cached_on_decode)
+        split = self.router.controller.scorer.capture(
+            now,
+            demand.last_demand,
+            utilization={},
+            observed_load=(0.0, 0.0),
+            window_s=60.0,
+            step_s=1.0,
+        )
+        priced = dict(split.demand_options)
+        self.assertAlmostEqual(priced[1].prefill_engines, both)
 
     def test_demand_keeps_cold_pricing_for_evidence_without_a_warm_price(self):
         """Evidence on an engine without a warm fit, or outside its domain, leaves demand cold."""

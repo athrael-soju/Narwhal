@@ -268,3 +268,25 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.requests[-1], "/slow")
                 finally:
                     await client.aclose()
+
+
+class HealthProbeLatenessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_silent_engine_fails_a_probe_that_queued_for_the_control_pool(self):
+        """Lateness counts from the request reaching a connection, not from pool entry."""
+
+        async def silent(reader, writer):
+            await reader.read()
+            writer.close()
+
+        server = await asyncio.start_server(silent, "127.0.0.1", 0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        client = EngineClient(control_connections=1, health_timeout_s=0.3, pool_timeout_s=5.0)
+        self.addAsyncCleanup(client.aclose)
+
+        async def probe(delay):
+            await asyncio.sleep(delay)
+            return await client.healthy(url)
+
+        self.assertEqual(await asyncio.gather(probe(0.0), probe(0.1)), [False, False])

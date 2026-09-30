@@ -74,7 +74,7 @@ The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
 
 The profile sets `ttft_split` when all of these hold:
 
-- The sweep has at least five lengths.
+- The sweep has at least six lengths.
 - At least two lengths end within the first block or on a block boundary.
 - At least two lengths end between later block boundaries.
 - The split term halves the fit error.
@@ -135,6 +135,8 @@ The warm sweep runs on an engine when all of these hold:
 An engine keeps cold pricing when any of these hold:
 
 - The engine fails a warm sweep condition.
+- A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words.
+- `vllm:prefix_cache_hits_total` becomes unreadable during the warm sweep.
 - A warm case reuses zero cached tokens.
 - The warm samples fall short of a warm fit.
 - The held-out error exceeds 20%.
@@ -144,9 +146,10 @@ The profiler prints the reason and records it in `cached_prefill.reason`.
 Roll out the warm fit:
 
 1. Record a held-out error threshold in the private execution record.
-2. Profile one engine with `--only <iid>`.
-3. Compare its held-out error with the recorded threshold.
-4. Profile every engine with `--overwrite`.
+2. Set `profiles.path` in a copy of the private fleet file to a new path.
+3. Profile one engine with `--only <iid>` against the fleet copy.
+4. Compare its held-out error with the recorded threshold.
+5. Profile every engine with `--overwrite` against the private fleet file.
 
 ## 3. Retain profile samples and fits
 

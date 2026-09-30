@@ -6,15 +6,18 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
+from narwhal.serving import execution
+from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.router import NarwhalRouter
-from narwhal.serving.saturation import RecentDelays
+from narwhal.serving.saturation import SIZING_MIN_SAMPLES, RecentDelays
 from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, invalid_token_choices
 from tests.scheduling.test_cache_evidence import warm
@@ -35,6 +38,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.decode_frames = [
             {"choices": [{"index": 0, "text": "x", "token_ids": [1], "finish_reason": "length"}]},
         ]
+        self.decode_statuses = []
         self.blocked = None
         self.started = asyncio.Event()
 
@@ -51,6 +55,8 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                 status,
                 json={"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
             )
+        if self.decode_statuses:
+            return httpx.Response(self.decode_statuses.pop(0), text="engine busy")
         wire = "".join("data: " + json.dumps(frame) + "\n\n" for frame in self.decode_frames)
         return httpx.Response(200, text=wire + "data: [DONE]\n\n")
 
@@ -156,12 +162,48 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.rejected, 1)
         self.router.loop_lag_s = 0.0
         self.router.sizing_delays.add(self.router.scheduler.slo.ttft_s)
+        self.assertEqual((await self.post(client)).status_code, 200)
+        calls = len(self.calls)
+        for _ in range(SIZING_MIN_SAMPLES):
+            self.router.sizing_delays.add(self.router.scheduler.slo.ttft_s)
         self.assertEqual((await self.post(client)).status_code, 429)
-        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.calls), calls)
         self.router.sizing_delays = RecentDelays(60.0, self.router._clock)
         self.assertEqual((await self.post(client)).status_code, 200)
         self.assertEqual(len(self.router.sizing_delays), 1)
         self.assert_released()
+
+    async def test_a_refusal_on_a_retry_returns_the_refusal(self):
+        """A retry that admission refuses answers 429 with its Retry-After, streamed or not."""
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=2, handoff_timeout_s=5.0)
+        client = self.client()
+        real = execution.prepare_attempt
+        attempts = []
+
+        async def prepare(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) % 2 == 0:
+                raise PlacementRefused(2.0, decode=True)
+            return await real(*args, **kwargs)
+
+        with patch.object(execution, "prepare_attempt", side_effect=prepare):
+            for stream in (False, True):
+                with self.subTest(stream=stream):
+                    self.decode_statuses = [503]
+                    response = await client.post(
+                        "/v1/completions",
+                        json={
+                            "model": self.cfg.model,
+                            "prompt": "hello",
+                            "max_tokens": 1,
+                            "stream": stream,
+                        },
+                    )
+                    self.assertEqual(response.status_code, 429)
+                    self.assertEqual(response.headers["retry-after"], "1")
+                    self.assertEqual(response.json()["error"]["type"], "server_overloaded_error")
+                    self.assert_released()
+        self.assertEqual(self.router.refused, 2)
 
     async def test_a_stream_that_fails_before_output_returns_an_http_error(self):
         client = self.client()
@@ -398,3 +440,24 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.failed, 1)
         self.assertEqual(len(self.terminal_rows()), 1)
         self.assert_released()
+
+
+class HeldStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_closing_a_held_stream_before_iteration_closes_the_upstream_decode(self):
+        closed = []
+
+        async def decode():
+            try:
+                yield "data: one\n\n"
+                yield "data: two\n\n"
+            finally:
+                closed.append(True)
+
+        stream = decode()
+        first = await anext(stream)
+        finished = []
+        state = SimpleNamespace(finish=lambda terminal: finished.append(terminal))
+        response = execution.held_stream(first, stream, state)
+        await response.aclose()
+        self.assertEqual(closed, [True])
+        self.assertEqual(finished, ["cancelled"])

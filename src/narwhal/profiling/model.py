@@ -383,7 +383,10 @@ class Profile:
         correction: float = 1.0,
         request_cap: int = 0,
     ) -> float:
-        """Return measured-domain request capacity for one decode engine."""
+        """Return measured-domain request capacity for one decode engine.
+
+        A batch below the smallest measured batch takes that batch's token interval.
+        """
         if (
             context_tokens <= 0
             or output_tokens <= 0
@@ -394,24 +397,25 @@ class Profile:
         hi = self.decode_request_limit(context_tokens, request_cap)
         if hi <= 0:
             return 0.0
-        lo = 1
-        if self.decode_min_requests is not None:
-            lo = max(lo, self.decode_min_requests)
-        if self.decode_min_kv_tokens is not None:
-            lo = max(lo, math.ceil(self.decode_min_kv_tokens / context_tokens))
-        if lo > hi:
-            return 0.0
         budget = tpot_slo_s / correction
         increment = self.tpot_request_slope + self.tpot_slope * context_tokens
         if increment > 0:
             best = min(hi, math.floor((budget - self.tpot_intercept) / increment))
         else:
             best = hi
-        if best < lo:
+        if best < 1:
             return 0.0
         batch_tokens = best * context_tokens
-        interval = self.token_interval(batch_tokens, best) * correction
-        if interval <= 0 or interval > tpot_slo_s or not self.covers_decode(best, batch_tokens):
+        if not self.covers_decode(best, batch_tokens):
+            return 0.0
+        interval = (
+            self.token_interval(
+                max(batch_tokens, self.decode_min_kv_tokens or 0),
+                max(best, self.decode_min_requests or 1),
+            )
+            * correction
+        )
+        if interval <= 0 or interval > tpot_slo_s:
             return 0.0
         return best / (output_tokens * interval)
 

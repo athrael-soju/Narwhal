@@ -141,8 +141,15 @@ class ResidencyFeed:
 
     def _receive(self, sequence: int, payload: bytes) -> None:
         last = self.index.sequence
-        if last is not None and sequence > last + 1:
-            self._catch_up(last + 1, until=sequence)
+        start = 0 if last is None else last + 1
+        if sequence > start:
+            # The pre-gap state is stale until the missed batches are applied.
+            current = self.index.current
+            self.index.set_current(False)
+            try:
+                self._catch_up(start, until=sequence)
+            finally:
+                self.index.set_current(current)
         self.index.apply(sequence, _decoded(payload))
 
     def _run(self) -> None:

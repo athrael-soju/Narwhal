@@ -42,7 +42,7 @@ from .dispatch import Dispatcher
 from .execution import request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
 from .retry import RetryBudget
-from .saturation import SATURATED_TTFT_SHARE, SIZING_WINDOW_S, RecentDelays
+from .saturation import SATURATED_TTFT_SHARE, SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
 
 if TYPE_CHECKING:
     from ..runtime.lease import FileLease
@@ -52,6 +52,11 @@ log = logging.getLogger("narwhal.server")
 
 # Prompts at least this long hash their block identities in a worker thread.
 HASH_THREAD_TOKENS = 8192
+# First and longest skip of an engine after a failed exact count; each failure doubles it.
+TOKENIZE_BACKOFF_S = 1.0
+TOKENIZE_BACKOFF_MAX_S = 30.0
+# Request fields that change the prefilled tokens outside the counted render.
+UNCOUNTED_RENDER_FIELDS = ("truncate_prompt_tokens", "documents", "reasoning_effort")
 
 
 def _hash_prompt(
@@ -215,7 +220,7 @@ class NarwhalRouter:
         self.ingress_inflight = 0
         self.ingress_high_water = 0
         self.loop_lag_s = 0.0
-        self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock)
+        self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
         self.unsized_offered = 0
         self.expired = 0
         self.prefill_attempts = 0
@@ -242,7 +247,8 @@ class NarwhalRouter:
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
         self._tokenize_turn = 0
-        self._tokenize_failed: str | None = None
+        # Engine ID to consecutive failed exact counts and the time it may count again.
+        self._tokenize_backoff: dict[str, tuple[int, float]] = {}
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](
@@ -283,7 +289,8 @@ class NarwhalRouter:
         Already-tokenized prompts supply their exact count locally. Other
         requests query the live engine with the fewest resident requests. A
         failed exact-count call fails the request, and later requests skip that
-        engine until a count succeeds. Disabled or unavailable token counting
+        engine for a backoff that doubles with each consecutive failure and ends
+        at its next successful count. Disabled or unavailable token counting
         uses the local estimate and no cache evidence.
         """
         prompt = body.get("prompt")
@@ -303,10 +310,12 @@ class NarwhalRouter:
                         engine.url, body, self.cfg.tokenize_timeout_s, strict=True
                     )
                 except EngineError:
-                    self._tokenize_failed = engine.iid
+                    failures = self._tokenize_backoff.get(engine.iid, (0, 0.0))[0] + 1
+                    delay = min(TOKENIZE_BACKOFF_S * 2 ** (failures - 1), TOKENIZE_BACKOFF_MAX_S)
+                    self._tokenize_backoff[engine.iid] = (failures, self._clock() + delay)
                     raise
                 if got is not None:
-                    self._tokenize_failed = None
+                    self._tokenize_backoff.pop(engine.iid, None)
                     ids = got.token_ids
                     if ids is None:
                         return got.count, {}, {}, {}
@@ -314,13 +323,16 @@ class NarwhalRouter:
         return self.estimate_length(body), {}, {}, {}
 
     def saturated(self) -> bool:
-        """Return whether loop lag or recent token counting takes a quarter of the TTFT budget."""
+        """Return whether loop lag or recent request sizing takes a quarter of the TTFT budget."""
         budget = SATURATED_TTFT_SHARE * self.scheduler.slo.ttft_s
         return self.loop_lag_s >= budget or self.sizing_delays.median() >= budget
 
     def _tokenize_engine(self, live: list[Instance]) -> Instance:
-        """Pick the least-occupied live engine, rotating among ties."""
-        candidates = [i for i in live if i.iid != self._tokenize_failed] or live
+        """Pick the least-occupied live engine outside its count backoff, rotating among ties."""
+        now = self._clock()
+        candidates = [
+            i for i in live if self._tokenize_backoff.get(i.iid, (0, 0.0))[1] <= now
+        ] or live
         self._tokenize_turn += 1
         start = self._tokenize_turn % len(candidates)
         ordered = candidates[start:] + candidates[:start]
@@ -335,8 +347,9 @@ class NarwhalRouter:
     ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         """Return cached tokens and residency sequence per engine, and the matched block identities.
 
-        Identities cover the prompt minus its final token. Multimodal requests, fleets
-        without an engine contract and out-of-range token IDs return empty evidence.
+        Identities cover the prompt minus its final token. Multimodal requests, requests
+        with an uncounted render field, fleets without an engine contract and out-of-range
+        token IDs return empty evidence.
         """
         return self._match_evidence(_hash_prompt(*self._evidence_inputs(body, token_ids)))
 
@@ -353,7 +366,14 @@ class NarwhalRouter:
         self, body: dict[str, Any], token_ids: Sequence[int]
     ) -> tuple[CacheNamespace | None, Sequence[int], set[int]]:
         contract = self.cfg.engine_contract
-        if contract is None or len(token_ids) < 2 or _multimodal(body):
+        if (
+            contract is None
+            or len(token_ids) < 2
+            or _multimodal(body)
+            or any(body.get(field) is not None for field in UNCOUNTED_RENDER_FIELDS)
+            # Speculative decoding shortens vLLM's prefix hits by a block.
+            or contract.speculative_config not in ("", "disabled")
+        ):
             return None, (), set()
         salt = body.get("cache_salt")
         namespace = CacheNamespace(
@@ -380,8 +400,23 @@ class NarwhalRouter:
                     sequences[iid] = view.sequence
         return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
 
-    def recheck_cache_evidence(self, request: Request) -> None:
-        """Refresh the request's cache evidence from current residency."""
+    def recheck_cache_evidence(self, request: Request, fresh_s: float = 0.0) -> None:
+        """Refresh the request's cache evidence from current residency.
+
+        Evidence checked within `fresh_s` stays while every engine behind it keeps a known view.
+        """
+        now = self._clock()
+        checked = request.cache_checked_at
+        if (
+            checked is not None
+            and 0.0 <= now - checked < fresh_s
+            and all(
+                (view := self.residency.views.get(iid)) is not None and view.known
+                for iid in request.cached_tokens
+            )
+        ):
+            return
+        request.cache_checked_at = now
         for iid in list(request.cached_tokens):
             view = self.residency.views.get(iid)
             if view is not None and view.block_size:

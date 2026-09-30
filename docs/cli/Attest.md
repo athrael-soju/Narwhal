@@ -98,7 +98,9 @@ Residency becomes unknown when any of these happens:
 
 A snapshot with unknown residency has an empty `groups` list.
 
-During a replay of buffered history, including after a sidecar restart, a snapshot reports `"known": false` with the reason `replaying buffered history`.
+During a replay of buffered history, including after a sidecar restart or a gap in the live event stream, a snapshot reports `"known": false` with the reason `replaying buffered history`.
+
+A sidecar that receives a live batch before applying any batch replays the history from sequence 0.
 
 Residency recovery:
 

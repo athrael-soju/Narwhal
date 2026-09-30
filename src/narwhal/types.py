@@ -61,6 +61,8 @@ class Request:
     cache_sequences: dict[str, int] = field(default_factory=dict)
     # Matched prompt block identities by block size, for the placement recheck.
     cache_identities: dict[int, list[bytes]] = field(default_factory=dict)
+    # Router clock time of the last sizing or recheck of the cache evidence.
+    cache_checked_at: float | None = None
     # Journal record of the cache-priced placement.
     cache_placement: dict[str, Any] | None = None
 

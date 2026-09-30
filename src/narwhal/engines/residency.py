@@ -363,12 +363,22 @@ def cached_prefix_blocks(
         if kind in WINDOW_KINDS and window and block_size
     ]
     boundary = [blocks for kind, _, blocks in groups if kind in BOUNDARY_KINDS]
+    # Leading blocks every full-attention group holds.
+    limit = len(identities)
+    for blocks in full:
+        count = 0
+        while count < limit and identities[count] in blocks:
+            count += 1
+        limit = count
+    if not windows:
+        for count in range(limit, 0, -1):
+            if all(identities[count - 1] in blocks for blocks in boundary):
+                return count
+        return 0
     # Consecutive resident blocks ending at the current block, per window group.
     runs = [0] * len(windows)
     best = 0
-    for count, identity in enumerate(identities, start=1):
-        if any(identity not in blocks for blocks in full):
-            break
+    for count, identity in enumerate(identities[:limit], start=1):
         for index, (blocks, _) in enumerate(windows):
             runs[index] = runs[index] + 1 if identity in blocks else 0
         if all(identity in blocks for blocks in boundary) and all(

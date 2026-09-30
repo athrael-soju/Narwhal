@@ -13,7 +13,9 @@ Run these steps from the router shell.
 3. Load the private engine URLs and credentials from the router environment.
 4. Warm the model.
 5. Pick input lengths and concurrency points that match production traffic.
-6. Place two prefill lengths on cache block boundaries and the rest between boundaries.
+6. Place at least six prefill lengths:
+    - at least two that end within the first cache block or on a block boundary
+    - at least two that end between later block boundaries
 7. Run the profiler:
 
     ```bash

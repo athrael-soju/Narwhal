@@ -16,9 +16,17 @@ from .lifecycle import RequestLifecycle
 class RequestStreamResponse(StreamingResponse):
     """Own the upstream iterator and deadline through ASGI response teardown."""
 
-    def __init__(self, stream: AsyncGenerator[str, None], lifecycle: RequestLifecycle) -> None:
+    def __init__(
+        self,
+        stream: AsyncGenerator[str, None],
+        lifecycle: RequestLifecycle,
+        *,
+        owned: AsyncGenerator[str, None] | None = None,
+    ) -> None:
         self.lifecycle = lifecycle
         self.upstream = stream
+        # A started generator that `stream` wraps and closes only once iteration begins.
+        self.owned = owned
         self.closed = False
         self.iterator = self._iterate()
         super().__init__(self.iterator, media_type="text/event-stream")
@@ -36,7 +44,11 @@ class RequestStreamResponse(StreamingResponse):
         self.closed = True
         try:
             with anyio.CancelScope(shield=True):
-                await self.upstream.aclose()
+                try:
+                    await self.upstream.aclose()
+                finally:
+                    if self.owned is not None:
+                        await self.owned.aclose()
         finally:
             self.lifecycle.finish("cancelled")
 

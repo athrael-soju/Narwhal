@@ -151,6 +151,7 @@ class EngineAvailability:
         if self.on_eject is not None:
             self.on_eject(iid)
         self.quarantined.pop(iid, None)
+        self._release_uncovered_holds()
         self.refresh_floor_state()
         return True
 
@@ -160,7 +161,15 @@ class EngineAvailability:
             raise KeyError(iid)
         self.draining.add(iid)
         self.quarantined.pop(iid, None)
+        self._release_uncovered_holds()
         self.refresh_floor_state()
+
+    def _release_uncovered_holds(self) -> None:
+        """Return held engines whose roles no other live engine places."""
+        for iid in list(self.quarantined):
+            if not self.role_covered_without(iid):
+                del self.quarantined[iid]
+                log.warning("released hold on %s: no other live engine places its roles", iid)
 
     def finish_drain(self, iid: str) -> None:
         """Return a validated engine to placement."""
@@ -176,13 +185,18 @@ class EngineAvailability:
         return bool(self.live_instances(exclude={iid}))
 
     def role_covered_without(self, iid: str) -> bool:
-        """Return whether another live engine holds `iid`'s role or is unpinned."""
+        """Return whether another live engine places every role that `iid` places.
+
+        An engine places a role's legs when it holds that role or is unpinned.
+        """
         inst = self.monitor.instances.get(iid)
         if inst is None:
             return True
-        return any(
-            other.role is inst.role or other.iid not in self.pinned
-            for other in self.live_instances(exclude={iid})
+        others = self.live_instances(exclude={iid})
+        return all(
+            any(other.role is role or other.iid not in self.pinned for other in others)
+            for role in Role
+            if inst.role is role or iid not in self.pinned
         )
 
     def record_answer(self, iid: str, evidence: str) -> None:

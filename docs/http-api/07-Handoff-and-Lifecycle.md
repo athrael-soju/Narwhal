@@ -41,14 +41,14 @@ The high-availability (HA) standby router polls this route before takeover.
 
 ### Restored and process-local state
 
-| State                                                              | New router process                                       |
-| ------------------------------------------------------------------ | -------------------------------------------------------- |
-| `roles`                                                            | Restored for unpinned engines                            |
-| `ejected`                                                          | Restored, with a readmission probe due at once           |
-| `inference_sources` suspect whose role another live engine covers  | Ejected, with a readmission probe due at once            |
-| `inference_sources` suspect whose removal leaves its role unserved | Live suspect                                             |
-| `counters`, `lifecycle`                                            | Restored                                                 |
-| `demand_risk`                                                      | Restored, with its age measured on the new process clock |
+| State                                                                                    | New router process                                       |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `roles`                                                                                  | Restored for unpinned engines                            |
+| `ejected`                                                                                | Restored, with a readmission probe due at once           |
+| `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
+| Other `inference_sources` suspect outside `ejected`                                      | Live suspect                                             |
+| `counters`, `lifecycle`                                                                  | Restored                                                 |
+| `demand_risk`                                                                            | Restored, with its age measured on the new process clock |
 
 The new process resets:
 

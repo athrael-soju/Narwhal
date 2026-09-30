@@ -16,9 +16,10 @@ Monitor pass stages:
 | `rollover` | Interval rollover |
 | `readmission` | Readmission |
 | `liveness` | Liveness probes |
-| `residency` | Prefix residency refresh from attestation sidecars |
 | `handoff` | State handoff persistence |
 | `telemetry` | Floor-state refresh and loop logging |
+
+Prefix residency refresh from attestation sidecars runs on its own `residency` loop every `controller.monitor_interval_s`, and its failures count toward the monitor-failure streak.
 
 Each pass with a failed stage extends the monitor-failure streak.
 
@@ -57,10 +58,17 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 | Connection error | `connection` | Eject the engine |
 | Transport timeout | `timeout` | Run a health probe |
 | First-token deadline while the engine emits other output | `overload` | Run a health probe |
-| First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Pause new requests and run an inference probe |
+| First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Pause new requests on a covered engine and run an inference probe |
 | HTTP 408 or 429 | `overload` | Run a health probe |
-| Other HTTP 5xx response | `inference_status` | Pause new requests and run an inference probe |
-| Unreadable KV handoff from prefill | `kv_handoff` | Pause new requests and run an inference probe |
+| Other HTTP 5xx response | `inference_status` | Pause new requests on a covered engine and run an inference probe |
+| Unreadable KV handoff from prefill | `kv_handoff` | Pause new requests on a covered engine and run an inference probe |
+
+The role-coverage rule counts an engine as covered when every role it places stays placeable through other live engines:
+
+| Engine | Covered when |
+| --- | --- |
+| Pinned | Another live engine holds its role or is unpinned. |
+| Unpinned | Prefill and decode each have another live engine that holds that role or is unpinned. |
 
 The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
@@ -69,8 +77,8 @@ The inference probe runs a prefill leg and a decode leg:
 | Probe result | Effect |
 | --- | --- |
 | Inconclusive leg | Engine monitoring keeps the hold and schedules another probe. |
-| Failed leg on an engine whose role another live engine serves | Narwhal ejects the engine. |
-| Failed leg on an engine whose removal leaves its role unserved | The engine stays in placement. |
+| Failed leg on a covered engine | Narwhal ejects the engine. |
+| Failed leg on an uncovered engine | The engine stays in placement. |
 | Success | Clears recorded inference failures and the hold, under the profile-match rule. |
 
 ### Liveness
@@ -83,9 +91,10 @@ The inference probe runs a prefill leg and a decode leg:
 
 ### Last-engine protection
 
-| Last eligible engine | Placement |
+| Uncovered engine | Placement |
 | --- | --- |
 | Performance-drift, temporary-quarantine, or inference-probe hold | Stays in placement |
+| Temporary-quarantine or inference-probe hold after another engine's ejection or drain | Returns to placement |
 | Failed health or inference probe | Stays in placement |
 | Connection-error or liveness ejection | Leaves placement |
 
@@ -106,13 +115,14 @@ With `recovery.failure_quarantine_s` above `0`, a failed engine's placement depe
 
 | Failed engine | Placement |
 | --- | --- |
-| Another live engine serves its role or accepts role changes | Quarantined until the deadline |
-| Its removal leaves its role unserved | Stays in placement |
+| Covered | Quarantined until the deadline |
+| Uncovered | Stays in placement |
 
 | Event | Result |
 | --- | --- |
 | Successful health or inference probe that meets the profile-match rule | Quarantine ends early. |
 | Deadline passes | Candidate selection releases the engine. |
+| Another engine's ejection or drain leaves the engine uncovered | The quarantine or inference-probe hold ends and the engine returns to placement. |
 
 ## Readmission and drains
 
@@ -133,7 +143,7 @@ Profile checks cover every loaded variant:
 
 | Fleet configuration | Profile check |
 | --- | --- |
-| `engine_contract` set | Profile digests match verified attestation. |
+| `engine_contract` set | Profile digests match the verified attestation's `launch_digest` when the sidecar reports one, otherwise its `attestation_digest`. |
 | `engine_contract` unset | Automatic recovery checks health or inference and matches profiles to the live process identity. |
 
 A profile mismatch excludes an engine from recovery, readmission, and takeover.

@@ -101,14 +101,18 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 `known: false` cases:
 
-| Case                                                       | `reason`                            |
-| ---------------------------------------------------------- | ----------------------------------- |
-| Engine has an empty `attestation_url`                      | `engine has no attestation sidecar` |
-| Sidecar answers the residency snapshot route with HTTP 404 | `engine publishes no cache events`  |
-| Residency refresh fails                                    | `residency refresh failed: <error>` |
-| Sidecar snapshot reports `known: false`                    | Sidecar's reason                    |
+| Case                                                          | `reason`                                     |
+| ------------------------------------------------------------- | -------------------------------------------- |
+| Router awaits its first residency refresh of the engine       | `not yet synchronised`                       |
+| Engine has an empty `attestation_url`                         | `engine has no attestation sidecar`          |
+| Sidecar answers the residency snapshot route with HTTP 404    | `engine publishes no cache events`           |
+| Sidecar answers a residency refresh with an HTTP error status | `residency refresh failed: HTTP <status>`    |
+| Residency refresh fails with another error                    | `residency refresh failed: <ExceptionClass>` |
+| Sidecar snapshot reports `known: false`                       | Sidecar's reason                             |
 
 The router prices prefill cold on an engine with `known: false`.
+
+The router refreshes every engine's residency view every `controller.monitor_interval_s`.
 
 The router takes a new snapshot when:
 
@@ -220,6 +224,7 @@ Optional fields, by evaluation stage:
 | `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery` |
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                    |
 | `recovery_prefill_ratio`, `queued_prefill_s`      | Inputs to the [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)                        |
+| `recovery_decode_ratio`                           | Decode recovery pressure including capped decode slots                                                     |
 | `eligibility_rule`                                | Rule that made a scored proposal eligible                                                                  |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                   |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |

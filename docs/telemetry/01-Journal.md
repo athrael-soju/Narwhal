@@ -55,7 +55,7 @@ Each original completion request and its retries share one terminal row.
 | `decode_tpot_s` | Time from first to last observed output token divided by `output_len - 1`. |
 | `prefill_iid`, `decode_iid` | Engines of the final attempt's prefill and decode legs. |
 | `crossed` | `true` when `decode_iid` differs from `prefill_iid`. |
-| `cached_tokens` | Prompt tokens each engine can serve from its prefix cache at the last prefill-placement recheck, by engine ID, for engines that reuse at least one leading prompt block before the final prompt token. |
+| `cached_tokens` | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
 | `cache_placement` | The prefill placement priced with [cache evidence](#cache-placement). |
 | `token_accounting` | `token_ids` for exact per-token identity, `unavailable` when the engine dialect omits token IDs. |
 | `refused`, `refused_cause` | `true` on a predictive refusal, with its [refusal cause](#refusal-causes). |
@@ -79,6 +79,13 @@ Each original completion request and its retries share one terminal row.
 | Prefill incomplete | `ttft_s` and `tpot_s` are null. |
 | Zero visible output | `first_byte_s` is null. |
 | `terminal` is `completed` or `cancelled` | `error` is null. |
+| Input sizing finds an engine holding at least one leading prompt block before the final prompt token | `cached_tokens` lists that engine. |
+| A prefill-placement recheck finds zero matching blocks on a listed engine | `cached_tokens` drops that engine. |
+| The request sets `truncate_prompt_tokens`, `documents`, or `reasoning_effort` | `cached_tokens` is empty. |
+| A chat message carries a multimodal content part | `cached_tokens` is empty. |
+| `engine_contract.speculative_config` names a speculative-decoding setup | `cached_tokens` is empty. |
+| The fleet leaves `engine_contract` unset | `cached_tokens` is empty. |
+| Input sizing uses the local estimate or a count-only tokenization response | `cached_tokens` is empty. |
 | `cached_tokens` is empty | `cache_placement` is null. |
 | The placed engine is outside the profile store | `cache_placement` is null. |
 

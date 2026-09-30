@@ -384,6 +384,51 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
         self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
 
+    def test_a_live_gap_serves_nothing_until_its_replay_catches_up(self):
+        """A batch missed on the live socket leaves the index unknown during its replay."""
+        publisher = FakePublisher(self.directory, replay_gap_s=0.3)
+        self.addCleanup(publisher.close)
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.run_feed(publisher, index)
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+        publisher.publish(batch())
+        self.assertTrue(wait_for(lambda: index.sequence == 0))
+        publisher.publish(batch(), deliver=False)
+        publisher.publish(batch(), deliver=False)
+        publisher.publish(batch())
+        self.assertTrue(
+            wait_for(
+                lambda: index.snapshot()["reason"] == "replaying buffered history",
+                timeout=2,
+            )
+        )
+        self.assertTrue(wait_for(lambda: index.sequence == 3 and index.snapshot()["known"]))
+
+    def test_a_batch_before_the_first_live_read_replays_the_missed_history(self):
+        """Batches published after an empty replay and before the first live read are recovered."""
+        publisher = FakePublisher(self.directory)
+        self.addCleanup(publisher.close)
+
+        class Racing(ResidencyFeed):
+            first = True
+
+            def _catch_up(self, start, until=None):
+                result = super()._catch_up(start, until)
+                if self.first:
+                    self.first = False
+                    publisher.publish(batch(stored([b"a"], [1, 2, 3, 4])), deliver=False)
+                    publisher.publish(batch(stored([b"b"], [5, 6, 7, 8], parent=b"a")))
+                    time.sleep(0.3)
+                return result
+
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        feed = Racing(index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.5)
+        feed.start()
+        self.addCleanup(feed.stop)
+        self.assertTrue(wait_for(lambda: index.sequence == 1))
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+        self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(1, 9)))), 2)
+
     def test_residency_stays_unknown_until_replay_rounds_reach_the_stream(self):
         """Between replay rounds the index is consistent but stale, so it serves nothing."""
         publisher = FakePublisher(self.directory, replay_limit=2, replay_gap_s=0.1)
@@ -496,3 +541,56 @@ class CachedPrefixBlockWindowTests(unittest.TestCase):
             self.assertEqual(
                 cached_prefix_blocks(groups, ids, 4), rescan(full, window, needed, boundary)
             )
+
+    def test_group_mixes_match_a_block_by_block_scan(self):
+        """Every mix of group kinds, windows and holes matches a block-by-block scan."""
+        rng = random.Random(11)
+        kinds = ("full_attention", "mla_attention", None, "sliding_window", "mamba", "chunked")
+        for _ in range(3000):
+            ids = [bytes([rng.randrange(256), n]) for n in range(rng.randrange(0, 24))]
+            groups = []
+            for _ in range(rng.randrange(0, 4)):
+                kind = rng.choice(kinds)
+                window = rng.choice((None, 1, 5, 9, 17)) if kind == "sliding_window" else None
+                held = {i for i in ids if rng.random() < rng.choice((0.5, 0.9, 1.0))}
+                groups.append((kind, window, held))
+            block_size = rng.choice((None, 4))
+            with self.subTest(ids=len(ids), groups=[(k, w) for k, w, _ in groups]):
+                self.assertEqual(
+                    cached_prefix_blocks(groups, ids, block_size),
+                    scanned_prefix_blocks(groups, ids, block_size),
+                )
+
+
+def scanned_prefix_blocks(groups, identities, block_size):
+    """Scan every block for every group rule, as vLLM checks a prefix hit."""
+    full_kinds = {None, "full_attention", "mla_attention", "sink_full_attention"}
+    window_kinds = {"sliding_window", "sliding_window_mla"}
+    if not groups or any(
+        kind not in full_kinds | window_kinds | {"mamba"}
+        or (kind in window_kinds and (not window or not block_size))
+        for kind, window, _ in groups
+    ):
+        return 0
+    best = 0
+    for count in range(1, len(identities) + 1):
+        prefix = identities[:count]
+        fits = True
+        for kind, window, blocks in groups:
+            if kind in full_kinds:
+                fits = fits and all(identity in blocks for identity in prefix)
+            elif kind in window_kinds:
+                needed = min(count, -(-(window - 1) // block_size))
+                fits = fits and all(identity in blocks for identity in prefix[count - needed :])
+            else:
+                fits = fits and prefix[-1] in blocks
+        if not all(
+            identity in blocks
+            for kind, _, blocks in groups
+            if kind in full_kinds
+            for identity in prefix
+        ):
+            break
+        if fits:
+            best = count
+    return best

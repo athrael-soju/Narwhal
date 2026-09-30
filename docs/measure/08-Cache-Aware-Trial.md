@@ -124,7 +124,7 @@ Give the second pass's repeated-prefix workload, `repeated-2`, a distinct `--see
 
 1. In the cache-aware arm, run one short, unscored point with a repeated-prefix workload.
 2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Join client offers to the router journal](04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal).
-3. Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#cache-placement) record of each row after each family's first request.
+3. Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#cache-placement) record of each row with `placed_cached_tokens` above 0.
 
 | `predicted_prefill_s` against `cold_prefill_s` | Next step |
 | --- | --- |
@@ -221,5 +221,5 @@ The trial passes when the cache-aware arm meets both thresholds at both rates:
 
 | Case | Result |
 | --- | --- |
-| A sidecar starts after vLLM's replay buffer drops the engine's early event batches | [Residency unknown](../cli/Attest.md#residency-limits) until an engine restart |
+| A sidecar starts after vLLM's replay buffer drops the engine's early event batches | [Residency unknown](../cli/Attest.md#residency-limits) until an engine restart or, on vLLM in development mode, a prefix-cache reset |
 | A hybrid attention and Mamba model | The prefill engine that computed a prompt is the one engine that can reuse its prefix |

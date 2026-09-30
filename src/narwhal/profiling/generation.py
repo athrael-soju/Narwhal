@@ -68,8 +68,12 @@ async def read_generation(
     failures = verify_attestation(payload, contract, identity)
     if failures:
         raise ValueError(f"{spec.iid}: attestation: {'; '.join(failures)}")
-    process = payload["attestation_digest"]
-    return GenerationEvidence(payload.get("launch_digest") or process, payload, process)
+    return GenerationEvidence(binding_digest(payload), payload, payload["attestation_digest"])
+
+
+def binding_digest(payload: dict[str, Any]) -> str:
+    """Return the digest profiles bind to in a verified attestation response."""
+    return str(payload.get("launch_digest") or payload["attestation_digest"])
 
 
 def generation_problem(iid: str, saved: str | None, live: str) -> str | None:

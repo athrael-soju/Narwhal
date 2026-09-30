@@ -483,6 +483,24 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(fleet.confirm())
         self.assertEqual(sum(i.role is Role.PREFILL for i in fleet.monitor.instances.values()), 2)
 
+    def test_streams_draining_on_a_former_decode_engine_leave_decode_slots(self) -> None:
+        """Only decode-role residents and waiting decode work fill the capped slots."""
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.scheduler.decode_concurrency = 2
+        for iid in ("e2", "e3"):
+            for index in range(2):
+                request = Request(f"{iid}-{index}", 100, wanted_len=10)
+                request.phase = Phase.DECODE
+                fleet.monitor.dispatched(iid, request)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.1, 0.1)
+        )
+        self.assertEqual(snapshot.current_decode, 3)
+        self.assertAlmostEqual(snapshot.decode_recovery_ratio, 2 / (3 * 2))
+        self.assertAlmostEqual(snapshot._decode_slots(2), 2 / (3 * 2))
+
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
         fleet.profiles._by_id.pop("e5")

@@ -31,7 +31,7 @@ Steps for `individual` recovery:
 3. Restart its attestation sidecar through the configured process manager.
 4. Read the sidecar log.
 5. Repair each named endpoint or contract failure.
-6. If the engine process changed:
+6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only:
     1. [Activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activate-replacement-profiles).
     2. Request readmission.
 7. Follow `/narwhal/lifecycle` until readmission completes.
@@ -59,7 +59,7 @@ Triggers for whole-wave recovery:
 6. Verify that only the intended worker processes hold accelerator memory.
 7. Launch every engine from the same immutable image and launch contract.
 8. Start a fresh attestation sidecar for each engine.
-9. [Activate the replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles) while the wave is held.
+9. While the wave is held, [activate one replacement profile store](../operate/03-Restart-Engines.md#activate-replacement-profiles) covering every engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
 10. Request whole-wave readmission.
 11. Wait for fabric validation to pass.
 12. Confirm `/ready` returns HTTP 200.

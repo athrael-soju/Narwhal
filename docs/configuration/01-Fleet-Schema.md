@@ -165,7 +165,7 @@ The optional `hardware` block needs all three fields when present.
 | `connector`                | `"NixlConnector"` | Nonempty engine-side connector name.                                                           |
 | `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
-| `speculative_config`       | `""`              | A stable name for your speculative-decoding setup, or `disabled`.                              |
+| `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
 
 Capture every contract value from the deployed engine in [Gate E: capture attestation inputs](../deploy/05-Attest.md#capture-the-attestation-inputs).
@@ -236,7 +236,7 @@ A document with launch evidence adds two fields to each response:
 
 An engine restarted from an identical launch keeps its `launch_digest`.
 
-Saved profiles and first-token calibrations bind to the engine's `launch_digest`.
+Saved profiles and first-token calibrations bind to the engine's `launch_digest` when the response carries launch evidence, otherwise to its `attestation_digest`.
 
 Treat an HTTP 503 as a changed engine process:
 

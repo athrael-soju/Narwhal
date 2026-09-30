@@ -137,6 +137,13 @@ def body_for(workload: dict, sequence: int, run_seed: int = 0) -> dict:
     }
 
 
+def warmup_body(workload: dict, sequence: int, run_seed: int = 0) -> dict:
+    """Return a warm-up request whose prefix belongs to no family."""
+    if workload["kind"] == SHARED_PREFIX:
+        workload = {**workload, "families": 0}
+    return body_for(workload, sequence, run_seed)
+
+
 async def request_one(client, base, body, rid, scheduled, timeout, clock=time.monotonic):
     started = clock()
     row = {
@@ -409,7 +416,7 @@ async def run_trial(client, base, args):
     warmup = await request_one(
         client,
         base,
-        body_for(workload, args.requests, args.run_seed),
+        warmup_body(workload, args.requests, args.run_seed),
         f"{run_id}-warmup",
         time.monotonic(),
         args.timeout,

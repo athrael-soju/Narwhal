@@ -4,7 +4,7 @@ The pinned Compose project starts Prometheus and Grafana with Narwhal alert rule
 
 ## Dashboard
 
-**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports admission, controller mode, engine reachability, terminal request rates, token rates and firing Narwhal alerts. The engine table shows current role, drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by request flow, exceptions and pool pressure.
+**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports admission, controller mode, engine reachability, terminal request rates, token rates and firing Narwhal alerts. The engine table shows current role, drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by request outcomes, retries and pool pressure.
 
 The dashboard selects every router target in the data source when it opens. The shipped scrape configuration binds one router and one fleet to each data source, so the bare dashboard URL immediately populates router totals and pool pressure. **Engine detail** filters the engine table and role timeline.
 

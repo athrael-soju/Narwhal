@@ -1,6 +1,8 @@
 """Check the router's event-loop lag measurement."""
 
 import asyncio
+import random
+import statistics
 import time
 import unittest
 from types import SimpleNamespace
@@ -37,3 +39,28 @@ class RecentDelayTests(unittest.TestCase):
         self.assertEqual(delays.median(), 0.2)
         now[0] = 10.0
         self.assertEqual(delays.median(), 0.0)
+
+    def test_the_median_waits_for_its_minimum_sample_count(self):
+        now = [0.0]
+        delays = RecentDelays(2.0, lambda: now[0], min_samples=3)
+        delays.add(5.0)
+        delays.add(5.0)
+        self.assertEqual(delays.median(), 0.0)
+        delays.add(0.1)
+        self.assertEqual(delays.median(), 5.0)
+        now[0] = 3.0
+        delays.add(5.0)
+        self.assertEqual(delays.median(), 0.0)
+
+    def test_the_median_matches_a_full_recomputation_as_rows_expire(self):
+        rng = random.Random(7)
+        now = [0.0]
+        delays = RecentDelays(2.0, lambda: now[0])
+        rows: list[tuple[float, float]] = []
+        for _ in range(2000):
+            now[0] += rng.uniform(0.0, 0.05)
+            delay = rng.choice((rng.uniform(0.0, 1.0), 0.5))
+            delays.add(delay)
+            rows.append((now[0], delay))
+            window = [d for at, d in rows if at >= now[0] - 2.0]
+            self.assertEqual(delays.median(), statistics.median(window))

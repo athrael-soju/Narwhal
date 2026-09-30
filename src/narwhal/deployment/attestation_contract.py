@@ -542,7 +542,11 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "connector": plan["connector"]["kv_connector"],
         "kv_role": plan["connector"]["kv_role"],
         "transfer_mode": transfer["transfer_mode"],
-        "speculative_config": "disabled",
+        "speculative_config": (
+            option(plan["args"], "--speculative-config")
+            if "--speculative-config" in plan["args"]
+            else "disabled"
+        ),
         "enforce_handshake_compat": handshake["enforce_handshake_compat"],
     }
     if set(contract) != set(EngineContract().fields()):

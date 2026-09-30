@@ -11,6 +11,9 @@ from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
 from .prefill import prefill_seconds
 
+# Projections reuse a waiting request's cache evidence checked within this many seconds.
+CACHE_RECHECK_S = 0.25
+
 
 @dataclass(frozen=True)
 class SplitScore:
@@ -99,6 +102,8 @@ class SplitSnapshot:
     offered_outputs: tuple[int, ...] = ()
     decode_concurrency: int = 0
     waiting_decode_requests: int = 0
+    # Decode residents on engines that currently hold the decode role.
+    decode_role_requests: int = 0
 
     @property
     def decode_recovery_ratio(self) -> float:
@@ -106,10 +111,15 @@ class SplitSnapshot:
         return max(self.decode_pressure, self._decode_slots(self.current_decode))
 
     def _decode_slots(self, decode: int) -> float:
+        """Return the capped decode slots that decode-role residents and waiting work fill.
+
+        A smaller decode pool keeps each departing engine's residents on that engine.
+        """
         cap = self.decode_concurrency
+        engines = max(decode, self.current_decode)
         if cap <= 0 or decode <= 0:
             return 0.0
-        return (self.resident_decode_requests + self.waiting_decode_requests) / (decode * cap)
+        return (self.decode_role_requests + self.waiting_decode_requests) / (engines * cap)
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -297,7 +307,7 @@ class SplitScorer:
         if recheck is not None:
             for row in waiting:
                 if row.phase is Phase.PREFILL and row.cached_tokens:
-                    recheck(row)
+                    recheck(row, CACHE_RECHECK_S)
 
     def project_prefill(
         self,
@@ -436,6 +446,8 @@ class SplitScorer:
         )
         current_prefill = sum(inst.role is Role.PREFILL for inst in instances)
         profile_options_list: list[tuple[int, tuple[Profile, ...]]] = []
+        # Engines that run prefill under each split.
+        prefill_iids: dict[int, set[str]] = {}
         for prefill in range(1, len(instances)):
             roles = {inst.iid: inst.role for inst in instances}
             rows: tuple[Profile, ...]
@@ -451,6 +463,7 @@ class SplitScorer:
                     self.monitor.instances, prefill, len(instances) - prefill, roles
                 )
             profile_options_list.append((prefill, rows))
+            prefill_iids[prefill] = {iid for iid, role in roles.items() if role is Role.PREFILL}
         profile_options = tuple(profile_options_list)
         demand_options = (
             tuple(
@@ -463,6 +476,7 @@ class SplitScorer:
                         profiles=rows,
                         estimates=estimates,
                         correction=correction,
+                        prefill_iids=prefill_iids[prefill],
                     ),
                 )
                 for prefill, rows in profile_options
@@ -487,6 +501,7 @@ class SplitScorer:
             resident_decode_requests=sum(len(i.decode) for i in instances),
             decode_concurrency=self.scheduler.decode_concurrency,
             waiting_decode_requests=sum(r.phase is Phase.DECODE for r in waiting),
+            decode_role_requests=sum(len(i.decode) for i in instances if i.role is Role.DECODE),
             pending_decode_tokens=sum(
                 input_len + output / 2.0 for input_len, output in pending_shapes
             ),

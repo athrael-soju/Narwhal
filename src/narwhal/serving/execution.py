@@ -225,8 +225,17 @@ async def prepare_attempt(
 
 
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
-    if isinstance(exc, PlacementRefused):
-        return refuse_request(state, exc.predicted_s, decode=exc.decode)
+    """Settle the request and keep its error response for streamed and buffered replies."""
+    response = (
+        refuse_request(state, exc.predicted_s, decode=exc.decode)
+        if isinstance(exc, PlacementRefused)
+        else _failure(state, exc)
+    )
+    state.outcome["response"] = response
+    return response
+
+
+def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
@@ -244,7 +253,6 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     else:
         public_detail = "Upstream request failed"
     state.finish("expired" if expired else "failed", error=detail, status=status)
-    state.outcome["public_error"] = public_detail
     return JSONResponse(
         status_code=status,
         headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
@@ -253,10 +261,13 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
 
 
 def _failure_response(state: RequestLifecycle) -> JSONResponse:
-    return JSONResponse(
-        status_code=state.outcome["status"],
-        content={"error": {"message": state.outcome["public_error"], "type": state.phase}},
-    )
+    response: JSONResponse = state.outcome["response"]
+    return response
+
+
+def _public_error(state: RequestLifecycle) -> str:
+    message: str = json.loads(bytes(state.outcome["response"].body))["error"]["message"]
+    return message
 
 
 async def _resume(first: str | None, rest: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
@@ -268,6 +279,13 @@ async def _resume(first: str | None, rest: AsyncGenerator[str, None]) -> AsyncGe
             yield frame
     finally:
         await rest.aclose()
+
+
+def held_stream(
+    first: str | None, stream: AsyncGenerator[str, None], state: RequestLifecycle
+) -> RequestStreamResponse:
+    """Stream the committed first frame and the rest of the decode stream."""
+    return RequestStreamResponse(_resume(first, stream), state, owned=stream)
 
 
 async def serve_request(
@@ -306,6 +324,7 @@ async def serve_request(
                 req.cache_sequences,
                 req.cache_identities,
             ) = await state.wait(lambda: router.size(body))
+            req.cache_checked_at = router._clock()
         finally:
             router.sizing_delays.add(router._clock() - sizing)
         if state.demand_observation is not None:
@@ -336,7 +355,7 @@ async def serve_request(
         if not state.output_started and state.outcome["error"] is not None:
             await stream.aclose()
             return _failure_response(state)
-        return RequestStreamResponse(_resume(first, stream), state)
+        return held_stream(first, stream, state)
     chunks = [line async for line in stream]
     if state.outcome["error"] is not None:
         return _failure_response(state)
@@ -501,7 +520,7 @@ async def run_decode(
                 + json.dumps(
                     {
                         "error": {
-                            "message": state.outcome["public_error"],
+                            "message": _public_error(state),
                             "type": state.phase,
                             "code": state.terminal,
                         }

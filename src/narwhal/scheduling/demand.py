@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from statistics import median
 
@@ -62,6 +62,8 @@ class DemandModel:
         self._clock = clock
         self.window_s = window_s
         self._estimates: tuple[float, OutputEstimates, int] | None = None
+        # Output estimates from the last history without shape overflow.
+        self._learned: OutputEstimates = ({}, {})
         self.started_at = clock()
         self.unsized_pending = 0
         self.unsized = DemandWindow[bool](
@@ -203,6 +205,7 @@ class DemandModel:
             horizon_s=window,
             estimates=estimates,
             correction=correction,
+            prefill_iids={inst.iid for inst in self.scheduler.live_instances(Role.PREFILL)},
         )
         if horizon_s is None:
             self.last_demand = priced
@@ -224,44 +227,54 @@ class DemandModel:
         horizon_s: float | None = None,
         estimates: OutputEstimates | None = None,
         correction: float | None = None,
+        prefill_iids: Collection[str] | None = None,
     ) -> Demand:
-        """Price one window against a particular measured role-mix profile set."""
+        """Price one window against a particular measured role-mix profile set.
+
+        Cached arrivals take warm prices from engines in `prefill_iids`, or every engine.
+        """
         window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
         h0 = now - window
         prefill = 0.0
         demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
+        # Price per arrival shape; None marks a length outside a profile's domain.
+        prices: dict[tuple[int, tuple[tuple[str, int], ...]], float | None] = {}
         for row in self.arrivals.rows(h0):
-            length = row.value.input_len
-            if profiles and all(p.covers_prefill(length) for p in profiles):
-                # Mean cold price across engines, or the cheapest warm price.
-                cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
-                cached = dict(row.value.cached)
-                for p in profiles:
-                    tokens = cached.get(p.iid, 0)
-                    warm = p.cached_prefill_time(tokens, length - tokens) if tokens else None
-                    if warm is not None:
-                        cost = min(cost, warm)
-                prefill += cost * row.count / span
-            else:
+            shape = (row.value.input_len, row.value.cached)
+            if shape not in prices:
+                prices[shape] = self._arrival_price(profiles, *shape, prefill_iids)
+            cost = prices[shape]
+            if cost is None:
                 demand_complete = False
+            else:
+                prefill += cost * row.count / span
         expected_decode = 0.0
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
         capacities: dict[tuple[int, int], float | None] = {}
+        # Capacity bucket per expected shape; None marks an unknown expected output.
+        buckets: dict[tuple[int, int, bool], tuple[int, int] | None] = {}
         for expected_row in self.expected_decode.rows(h0):
             input_len, wanted_len = expected_row.value
-            # A merged shape may contain several output buckets. Price its full
-            # cap; no learned ratio can safely stand for all of those requests.
-            output_len = (
-                wanted_len
-                if expected_row.overflow
-                else self._expected_output(input_len, wanted_len, estimates)
-            )
-            if output_len == 0:
+            expected_shape = (input_len, wanted_len, expected_row.overflow)
+            if expected_shape not in buckets:
+                # A merged shape may contain several output buckets. Price its full
+                # cap; no learned ratio can safely stand for all of those requests.
+                output_len = (
+                    wanted_len
+                    if expected_row.overflow
+                    else self._expected_output(input_len, wanted_len, estimates)
+                )
+                buckets[expected_shape] = (
+                    (self._capacity_bucket(input_len), self._capacity_bucket(output_len))
+                    if output_len
+                    else None
+                )
+            key = buckets[expected_shape]
+            if key is None:
                 demand_complete = False
                 continue
-            key = (self._capacity_bucket(input_len), self._capacity_bucket(output_len))
             if key not in capacities:
                 bucket_input, bucket_output = key
                 context = bucket_input + bucket_output / 2.0
@@ -290,6 +303,27 @@ class DemandModel:
         )
 
     @staticmethod
+    def _arrival_price(
+        profiles: tuple[Profile, ...],
+        length: int,
+        cached: tuple[tuple[str, int], ...],
+        prefill_iids: Collection[str] | None,
+    ) -> float | None:
+        """Return the mean cold prefill price, or the cheapest warm price, for one arrival."""
+        if not profiles or not all(p.covers_prefill(length) for p in profiles):
+            return None
+        cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+        tokens_by_iid = dict(cached)
+        for p in profiles:
+            if prefill_iids is not None and p.iid not in prefill_iids:
+                continue
+            tokens = tokens_by_iid.get(p.iid, 0)
+            warm = p.cached_prefill_time(tokens, length - tokens) if tokens else None
+            if warm is not None:
+                cost = min(cost, warm)
+        return cost
+
+    @staticmethod
     def _shape_bucket(tokens: int) -> int:
         """Place a token length in a power-of-two bucket."""
         return 1 if tokens <= 1 else 1 << (tokens - 1).bit_length()
@@ -307,9 +341,9 @@ class DemandModel:
     ) -> OutputEstimates:
         rows = list(self.observed_decode.rows())
         # Keeping only the unsaturated subset would bias learned output lengths.
-        # Fall back to requested caps until all overflow leaves the history.
+        # Keep the last estimates learned without overflow until all overflow leaves the history.
         if any(row.overflow for row in rows):
-            return {}, {}
+            return self._learned
         ratios: defaultdict[tuple[int, int], list[tuple[float, int]]] = defaultdict(list)
         outputs: defaultdict[int, list[tuple[float, int]]] = defaultdict(list)
         for row in rows:
@@ -320,7 +354,7 @@ class DemandModel:
                 ratios[key].append((observed_len / wanted_len, row.count))
             if observed_len > 0:
                 outputs[input_bucket].append((observed_len, row.count))
-        return (
+        self._learned = (
             {
                 key: weighted_median(values)
                 for key, values in ratios.items()
@@ -328,6 +362,7 @@ class DemandModel:
             },
             {key: weighted_median(values) for key, values in outputs.items()},
         )
+        return self._learned
 
     def history_summary(self) -> dict[str, dict[str, int | float]]:
         """Expose bounded storage and shape overflow to operators."""
