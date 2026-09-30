@@ -20,7 +20,7 @@
 
 ## What is Narwhal?
 
-Narwhal is an adaptive LLM inference framework that moves engines between prefill and decode roles as demand changes, on a fixed GPU fleet with model weights already loaded.
+Narwhal is the first open-source LLM inference framework that automatically hot-swaps prefill and decode roles on both NVIDIA and AMD GPUs. It moves engines between roles as demand changes, on a fixed GPU fleet with model weights already loaded. It scales from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [distributed multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
 <table width="100%" align="center">
   <thead>
