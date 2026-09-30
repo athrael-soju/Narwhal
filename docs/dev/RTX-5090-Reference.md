@@ -1,7 +1,6 @@
 # RTX 5090 reference for Narwhal dev
 
-This recipe runs four Qwen3.5-0.8B GGUF engines on one RTX 5090, on Ubuntu or
-Ubuntu under WSL2.
+Four Qwen3.5-0.8B GGUF engines run on one RTX 5090, on Ubuntu or Ubuntu under WSL2.
 
 Prerequisites:
 
@@ -30,7 +29,7 @@ PYTHON
 
 The template pins:
 
-- the GPU product;
+- the GPU product, NVIDIA GeForce RTX 5090;
 - a minimum of 30,000 MiB total VRAM;
 - the same runtime and model hashes as the installed small-GPU template.
 
@@ -49,8 +48,8 @@ narwhal dev status
 
 | Command | Result |
 | --- | --- |
-| `up` | Profiles the engines and starts the router. |
-| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, then reports `ready`. |
+| `up` | Profiles the engines and starts the router |
+| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, then reports `ready` |
 
 Run later lifecycle commands in the virtual environment that ran `init`.
 
@@ -80,13 +79,11 @@ curl http://127.0.0.1:18000/v1/chat/completions \
 
 The expected response content is `5`.
 
-The [WSL2 monitoring example](../observability/04-WSL2.md) forwards the local
-metrics to a separate Prometheus and Grafana host.
+Forward metrics to Prometheus and Grafana with the [WSL2 monitoring example](../observability/04-WSL2.md).
 
 ## Replay all three role splits
 
-The `role_cycle` in the reference template fixes the token pool, random
-seeds, and workload order.
+The `role_cycle` in the reference template fixes the token pool, random seeds, and workload order.
 
 Replay prerequisites:
 
@@ -112,10 +109,10 @@ Replay phases:
 | Prefill steady | 3,840 / 1 | 35 | 1 | 8 |
 | Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
 
-The role controller moves through the splits 2P:2D, 1P:3D, 2P:2D, 3P:1D, and
-2P:2D.
-
-The workload takes about two minutes after `up` and `verify`.
+| Item | Value |
+| --- | --- |
+| Split sequence | 2P:2D, 1P:3D, 2P:2D, 3P:1D, 2P:2D |
+| Duration | About two minutes after `up` and `verify` |
 
 Acceptance criteria:
 
@@ -124,8 +121,7 @@ Acceptance criteria:
 | Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
 | Prefill burst | Completed requests and HTTP 429 responses that cite the TTFT budget. |
 
-Each replay writes a `cycle-*` directory beneath the instance, or the fresh
-directory passed with `--out`.
+Replay records go to a `cycle-*` directory beneath the instance, or to the fresh directory passed with `--out`.
 
 | Content | Holds |
 | --- | --- |
@@ -136,23 +132,21 @@ directory passed with `--out`.
 Exit codes:
 
 - 0: the cycle and steady-phase budgets passed.
-- 2: a completed replay failed those checks.
 - 1: setup or execution failed.
+- 2: a completed replay failed the cycle or steady-phase budgets.
 
 ## Reference operating limits
 
-The router serves state and metrics locally:
+State and metrics endpoints:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-Reference settings:
-
 | Setting | Value |
 | --- | --- |
-| Initial split | Two prefill and two decode engines (2P:2D) |
+| Initial split | 2P:2D |
 | Profiled splits at startup | 1P:3D, 2P:2D, and 3P:1D |
 | Prefill and decode sweep input | 128 to 3,840 tokens |
 | Decode sweep concurrency | 1 and 2 |
@@ -165,8 +159,7 @@ Reference settings:
 | Demand window for ordinary moves | 30 seconds |
 | Confirmations for ordinary moves | 3 |
 
-Fill one demand window with representative traffic after `verify` and before
-assessing role changes.
+Fill one 30-second demand window with representative traffic after `verify` and before assessing role changes.
 
 To change the engine count, model, context length, or memory fractions:
 

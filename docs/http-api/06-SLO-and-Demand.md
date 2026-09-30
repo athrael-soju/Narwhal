@@ -22,7 +22,7 @@ pruned_outcomes
 | Retention         | Four demand windows, counted back from the newest bucket |
 | Window queries    | Include the whole boundary bucket                        |
 
-`covered_s` reports the age of the oldest retained bucket, capped at the configured retention span.
+`covered_s` is the age of the oldest retained bucket, capped at the retention span.
 
 ---
 
@@ -57,7 +57,12 @@ One demand window is `controller.reactive.window_s` seconds long.
 | Completed output observations       | Kept for four demand windows                                                |
 | Pruning                             | On each evidence write                                                      |
 
-`demand_history` and the `narwhal_demand_history_*` metrics expose the retained cells, cell limit, counted observations, and overflow observations.
+`demand_history` and the `narwhal_demand_history_*` metrics expose these quantities:
+
+- retained cells
+- cell limit
+- counted observations
+- overflow observations
 
 ### Overflow
 
@@ -66,12 +71,12 @@ An overflow cohort:
 - keeps every request count
 - is priced from its largest input length and requested output length
 - marks decode demand incomplete when its requested output length is zero
-- in output history, disables learned discounts until the affected observations expire
+- disables learned discounts in output history until the affected observations expire
 - contributes its full count when it crosses a window boundary
 
 ### Decision snapshots
 
-Each reactive decision scores candidate splits from a snapshot of:
+Reactive decision snapshot contents:
 
 - profile coefficients
 - demand
@@ -81,7 +86,7 @@ Each reactive decision scores candidate splits from a snapshot of:
 
 ### Prefill recovery ratio
 
-When `queued_prefill_s > 0` and at least one engine has the prefill role, Narwhal calculates:
+Prefill recovery ratio when `queued_prefill_s > 0` and at least one engine has the prefill role:
 
 ```text
 recovery_prefill_ratio = max(
@@ -91,11 +96,15 @@ recovery_prefill_ratio = max(
 )
 ```
 
-Otherwise, the ratio is the observed prefill pressure.
+In any other state, `recovery_prefill_ratio` equals the observed prefill pressure.
 
-Incomplete-demand decisions expose both observed phase ratios, `recovery_prefill_ratio`, and `queued_prefill_s`.
+Incomplete-demand decisions expose:
 
-Their `decision_basis` is one of:
+- both observed phase ratios
+- `recovery_prefill_ratio`
+- `queued_prefill_s`
+
+`decision_basis` in incomplete-demand decisions is one of:
 
 ```text
 prefill_pressure_recovery
@@ -113,7 +122,7 @@ Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gate
 
 ### Consolidation evidence
 
-For each decode-to-prefill gate, `demand_evidence` counts arrivals from the last `max_span_s` seconds that follow the latest risk event.
+`arrivals` counts arrivals within the last `max_span_s` seconds after the latest risk event, per decode-to-prefill gate.
 
 `demand_evidence` exposes:
 

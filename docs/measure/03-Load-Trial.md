@@ -3,23 +3,26 @@
 ## 7. Run the synthetic deployment trial
 
 1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
-2. When that rate passes and the router drains, repeat at 1 request/s.
+2. Repeat at 1 request/s after the 0.5 request/s rate passes and the router drains.
 
-A rate passes when the client schedule is valid and at least 190 of 200 requests meet both limits:
+A rate passes when:
 
-- time to first token (TTFT) at or below 2.0 s
-- time per output token (TPOT) at or below 0.0333 s
+- the client schedule is valid
+- at least 190 of 200 requests meet both limits:
+  - time to first token (TTFT) at or below 2.0 s
+  - time per output token (TPOT) at or below 0.0333 s
+
+HTTP refusals, stream errors, and timeouts count in the 200-offer denominator.
 
 ### Prerequisites
 
-- The workload fits the accepted profile domain and the engine context limit.
-- The router receives trial traffic only.
+- The workload fits the accepted profile domain.
+- The workload fits the engine context limit.
+- All router traffic is trial traffic.
 - Each engine is [launched](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
 - `checked.json` shows `"prefix_caching": false`.
 
 ### Create the trial directory and workload
-
-On the management workstation:
 
 ```bash
 make setup
@@ -39,7 +42,7 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` writes a token pool to `workload/workload.json`:
+Contents of `workload/workload.json`:
 
 | Item           | Value                                                                                 |
 | -------------- | ------------------------------------------------------------------------------------- |
@@ -48,7 +51,7 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 | Stop condition | Fewer than two distinct IDs in the pool |
 | Request `n`    | 8,192 input IDs drawn from the pool with `seed + n` |
 
-Both rates reuse the workload with:
+Request parameters for both rates:
 
 ```text
 temperature        = 0
@@ -58,7 +61,15 @@ max_tokens         = 128
 ignore_eos         = true
 ```
 
-Each run manifest records the workload and helper digests, source revision, command, Python and httpx versions, and limits.
+Each run manifest records:
+
+- workload digest
+- helper digest
+- source revision
+- command
+- Python version
+- httpx version
+- limits
 
 | Client limit        | Default |
 | ------------------- | ------- |
@@ -67,9 +78,7 @@ Each run manifest records the workload and helper digests, source revision, comm
 
 An offer over either limit records a terminal `client_schedule_miss` and sets `client_schedule_valid: false`.
 
-Check client CPU and scheduling lag before you raise either limit.
-
-HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
+Check client CPU and scheduling lag before raising either limit.
 
 ## 8. Measure 0.5 request/s
 
@@ -85,21 +94,27 @@ HTTP refusals, stream errors, and timeouts stay in the 200-offer denominator.
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
-Check the exit code before changing the rate:
+Exit code actions:
 
 | Exit  | Meaning                                                | Required action                                                      |
 | ----- | ------------------------------------------------------ | -------------------------------------------------------------------- |
-| `0`   | Schedule validity and candidate attainment both passed | Drain the router and continue to the next rate                       |
-| `1`   | The helper reported a blocking error                   | Read the error, then check the run directory |
+| `0`   | Schedule validity and candidate attainment both passed | Drain the router                                                     |
+| `1`   | The helper reported a blocking error                   | Check the error and the run directory       |
 | `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json`                    |
-| `130` | Interrupted run with partial artifacts                 | Keep the partial output, then rerun                           |
+| `130` | Interrupted run with partial artifacts                 | Rerun with the partial output kept                           |
 
 For exit code `2`:
 
 | `client_schedule_valid` | Meaning | Required action |
 | --- | --- | --- |
 | `true` | The rate missed the attainment target | Keep the result and stop |
-| `false` | Client scheduling missed | Inspect `requests.jsonl`, repair client scheduling, and repeat the rate |
+| `false` | Client scheduling missed | Follow the steps below |
+
+Steps for `false`:
+
+1. Inspect `requests.jsonl`.
+2. Repair client scheduling.
+3. Repeat the rate.
 
 ## 9. Measure 1 request/s
 
@@ -111,7 +126,7 @@ The router has drained when `/narwhal/state` reports zero for:
 
 A drain wait that outlasts `--timeout` fails with a drain-deadline error.
 
-Run the second rate on the drained router:
+Second rate:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -125,4 +140,4 @@ Run the second rate on the drained router:
   --out "$TRIAL_DIR/rate-1"
 ```
 
-Next: [client and router reconciliation](04-Reconcile-and-Accept.md).
+[Client and router reconciliation](04-Reconcile-and-Accept.md).

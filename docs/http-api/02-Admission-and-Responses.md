@@ -15,20 +15,20 @@ The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_ma
 | Admission queue is full                                                           | `429` | `server_overloaded_error`                        | `1`                                          |
 | Admission wait expires before response headers                                    | `504` | `queue_expired`                                  |                                              |
 | Original request deadline expires before response headers                         | `504` | `request_expired` or `expired`                   |                                              |
-| Projected TTFT exceeds the budget; the prompt alone fits                          | `429` | `server_overloaded_error`                        | Budget overrun in seconds, rounded up, minimum `1` |
+| Projected TTFT exceeds the budget for a prompt that fits alone                          | `429` | `server_overloaded_error`                        | Budget overrun in seconds, rounded up, minimum `1` |
 | Prompt alone exceeds the TTFT budget                                              | `429` | `server_overloaded_error`                        |                                              |
 | Zero engines are eligible for placement                                           | `503` | `backend_unavailable`                            | `1`                                          |
 | Router is standby, fenced, in whole-wave maintenance, awaiting engine identity validation, or in degraded engine monitoring | `503` | `standby` | `1` |
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
-`/ready` reports the reason whenever the router refuses a request with `503`.
+`/ready` reports the reason for each `503` refusal.
 
 [`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) modes:
 
 | Mode                   | Enforced                                                                                  |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
-| `predictive` (default) | Both predictive TTFT checks, plus the HTTP retention, queue, and phase-concurrency limits |
+| `predictive` (default) | Predictive TTFT checks and the HTTP retention, queue, and phase-concurrency limits |
 | `open`                 | HTTP retention, queue, and phase-concurrency limits                                       |
 
 ### Admission counters
@@ -41,17 +41,15 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 | `refused`          | Global predictive refusal                  |
 | `invalid_requests` | Malformed request body                     |
 
----
-
 ## Streaming and response assembly
 
 ### Streaming responses
 
-Narwhal forwards streaming deltas in the engine's response shape, with the [token-ID rules](#token-identity-and-output-accounting) applied.
+Streaming deltas use the engine's response shape under the [token-ID rules](#token-identity-and-output-accounting).
 
 ### Non-streaming assembly
 
-Narwhal assembles the engine stream into one response:
+Non-streaming responses assemble the engine stream as follows:
 
 | Engine output            | Assembly behaviour                                                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
@@ -60,12 +58,11 @@ Narwhal assembles the engine stream into one response:
 | Chat `reasoning_content` | String deltas concatenate under `reasoning_content`                                                                       |
 | Chat `refusal`           | String deltas concatenate under `refusal`                                                                                 |
 | `tool_calls`             | One call per stream index, returned in index order                                                                        |
-| Tool call fields         | ID, function name, and arguments concatenate separately per call                                                          |
+| Tool call fields         | ID, function name, and arguments concatenate separately per call |
+| Tool call arguments      | Return as engine-generated strings |
 | Legacy `function_call`   | Function name and argument fragments concatenate into one message field                                                   |
 | Chat logprobs            | Content and refusal arrays concatenate in stream order                                                                    |
 | Text-completion logprobs | Token, logprob, and offset arrays concatenate in stream order                                                             |
-
-Tool arguments return as engine-generated strings.
 
 Assembly returns HTTP `502` when:
 
@@ -75,15 +72,13 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembled responses carry the engine's response metadata plus these derived fields:
+Assembled responses carry the engine's response metadata and these derived fields:
 
 | Field                              | Source                                                                                  |
 | ---------------------------------- | --------------------------------------------------------------------------------------- |
 | `finish_reason`, `stop_reason`     | Last choice that reports each                                                           |
 | `usage`                            | Non-null engine `usage`, including a later usage-only frame                             |
 | `usage`, when the engine omits it  | Computed from input length and measured output token count                              |
-
----
 
 ## Token identity and output accounting
 

@@ -6,15 +6,17 @@ Prerequisites:
 
 - A passing preflight against the current fleet.
 - A router reserved for this run.
-- The router and engines stay running after the benchmark.
+- A router and engines that stay running through the benchmark.
 
-| Plan                    | Runner host                                                                                                                                  |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| With an `evidence` object | A host that reads the router's [journal file](06-Benchmark-Evidence.md) and reaches every engine metrics endpoint |
-| Other plans             | The workstation repository root, through the private router tunnel                                                                          |
+A plan with an `evidence` object runs on a host that:
+
+- Reads the router's [journal file](06-Benchmark-Evidence.md).
+- Reaches every engine metrics endpoint.
+
+Other plans run on the workstation repository root through the private router tunnel.
 
 1. Prepare the workload with the [load trial helper](03-Load-Trial.md#create-the-trial-directory-and-workload).
-2. Write a private plan that points `workload.file` and `--workload` at the prepared file, for example `runs/benchmark-plan.json`:
+2. Write a private plan at `runs/benchmark-plan.json` with `workload.file` and `--workload` set to the prepared file:
 
     ```json
     {
@@ -63,15 +65,22 @@ Prerequisites:
       --out runs/benchmark-001
     ```
 
-`client_argv` is an argument vector that takes the `{base}`, `{model}`, `{point_id}`, and `{point_dir}` placeholders.
+`client_argv` is an argument vector that takes these placeholders:
 
-For bearer-token ingress, the token authenticates the runner's probes:
+| Placeholder   | Value                     |
+| ------------- | ------------------------- |
+| `{base}`      | The `--base` URL          |
+| `{model}`     | The `--model` served name |
+| `{point_id}`  | The point's `id`          |
+| `{point_dir}` | The point's directory     |
+
+Bearer-token ingress:
 
 1. Export the token in an environment variable.
-2. Pass the variable name with `--api-key-env NAME`.
+2. Pass the variable name with `--api-key-env NAME` for the runner's probes.
 3. Give the external client separate credentials.
 
-The runner writes a fresh private output directory:
+The new private `--out` directory holds:
 
 | File                             | Location        | Contents                                                                                        |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
@@ -81,10 +90,10 @@ The runner writes a fresh private output directory:
 
 The runner stops on:
 
-- a refused readiness check
-- a model mismatch
+- a refused `/ready` check
+- a `/v1/models` model mismatch
 - a nonzero client exit, after a drain attempt
-- a drain timeout
+- a router drain timeout before or after the client
 
 For client exit `2` in the load trial helper's [exit codes](03-Load-Trial.md#8-measure-05-requests), read `summary.json` and `requests.jsonl`:
 

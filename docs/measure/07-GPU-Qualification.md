@@ -11,7 +11,8 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 | Narwhal router source | `6c6c7da4c879101d4f353da1590aa32ce2bf7c10` |
 | Benchmark client (load trial helper) source | `31b0b78e0d8b1438b212ae56b9fbba32832b53a2` |
 | Model | `moonshotai/Kimi-K3` |
-| Engine | vLLM `0.29.0+rocm100`, image `sha256:9eacf87e93ecffcb910802d0d0505ef3c9b753a66fb09bec304d72d8dac1dbc2` |
+| Engine | vLLM `0.29.0+rocm100` |
+| Engine image | `sha256:9eacf87e93ecffcb910802d0d0505ef3c9b753a66fb09bec304d72d8dac1dbc2` |
 | Accelerator per engine | AMD Instinct MI355X, eight GPUs, tensor parallelism 8 |
 | Checkpoint weights | 96 safetensors shards |
 | Sorted `path:sha256` shard manifest SHA-256 | `6cd00d6ba5817a868738202c91b977534668c42d89fce3b317340de88ea9d2ed` |
@@ -25,29 +26,32 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 | Qualified fleet SHA-256 | `7a4e4583933bff496d11a608a2544deac48d2d8843402861ce8015568d5e3d72` |
 | Benchmark plan SHA-256 | `43a8755d37383687f5ef639c5c16a095f5cc0feaf02b3d0821b1297f319f79b3` |
 | Workload SHA-256 | `55885dd1d9b42a4debf7b01230bbb5c917334689e867d5ca08a66edfb73b80e3` |
-
-The checkpoint manifests and the live launch check agree on every shard and the model config hash on every selected host.
+| Launch check | Checkpoint manifests and the live launch check agree on every shard and the model config hash on every selected host |
 
 | Profile measurement | Value |
 | --- | --- |
 | Median live prefill, 8,192 tokens | About 0.92 s |
 | Decode intercepts | 0.2416 to 0.2426 s/token |
 
-- The packaged 2.5 s first-token deadline rejected valid KV handoffs between engines.
-- Wider-window direct probes completed on every permitted path, with first-token latency from 0.348 to 5.274 s.
-- The qualified fleet copy changes only `engine.first_token_timeout_s`, to 8.5 s.
-- The 8.5 s deadline leaves about 0.6 s of the 10 s TTFT budget after prefill.
+| Timeout measurement | Value | Result |
+| --- | --- | --- |
+| Packaged first-token deadline | 2.5 s | Rejected valid KV handoffs between engines |
+| Wider-window direct probe first-token latency | 0.348 to 5.274 s | Completed on every permitted path |
+| Qualified fleet copy `engine.first_token_timeout_s`, the only changed field | 8.5 s | About 0.6 s of the 10 s TTFT budget remains after prefill |
 
 Full preflight against the same engine containers and profiled process generations that served the benchmark passed all nine gates.
 
 ## Procedure
 
 1. Load the private deployment environment.
-2. Prepare and install the pinned package with `tools/deployment/deploy_hosts.py`.
-3. Start each engine from its checked launch plan.
-4. Capture each engine's live cache and NIXL contract.
-5. Start each engine's attestation sidecar.
-6. Finalize, profile, and preflight on the router host:
+2. Prepare the pinned package with `tools/deployment/deploy_hosts.py`.
+3. Install the pinned package with `tools/deployment/deploy_hosts.py`.
+4. Start each engine from its checked launch plan.
+5. Capture each engine's live cache and NIXL contract.
+6. Start each engine's attestation sidecar.
+7. Finalize the fleet on the router host.
+8. Profile the fleet on the router host.
+9. Run preflight on the router host, with the commands for steps 7 to 9:
 
     ```bash
     .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet \
@@ -63,7 +67,9 @@ Full preflight against the same engine containers and profiled process generatio
     .venv/bin/narwhal-check --fleet runs/<qualification-run>/fleet-qualified.json
     ```
 
-7. Start the router, update the benchmark helper in the router-host checkout to the pinned client revision, and prepare the workload:
+10. Start the router.
+11. Update the benchmark helper in the router-host checkout to the pinned client revision.
+12. Prepare the workload, with the commands for steps 10 and 12:
 
     ```bash
     .venv/bin/narwhal-serve --fleet runs/<qualification-run>/fleet-qualified.json \
@@ -75,7 +81,7 @@ Full preflight against the same engine containers and profiled process generatio
       --out runs/<qualification-run>/workload
     ```
 
-8. Run the plan from the router host:
+13. Run the plan from the router host:
 
     ```bash
     .venv/bin/python tools/measurement/benchmark_runner.py \
@@ -89,7 +95,8 @@ The private `benchmark-plan-qualified.json` sets:
 
 | Setting | Value |
 | --- | --- |
-| Points | 0.5 and 1 request/s, in order, 200 requests each |
+| Points | 0.5 request/s, then 1 request/s |
+| Requests per point | 200 |
 | Fleet | The qualified fleet copy |
 | Client revision | The pinned benchmark client revision |
 | Client command | `load_trial.py run` with `--ttft 10 --tpot 0.3 --attainment 0.95 --timeout 180` |
@@ -105,18 +112,25 @@ The private `benchmark-plan-qualified.json` sets:
 | 0.5 request/s | 0.460 request/s | 58.9 tokens/s | 5.258 / 7.298 / 7.407 s | 257.5 / 258.4 / 259.3 ms | 200/200 within limits |
 | 1 request/s | 0.840 request/s | 107.5 tokens/s | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
-The router shifted capacity toward decode during the lower-rate point and held that allocation through the higher-rate point.
+- The router shifted capacity toward decode during the 0.5 request/s point.
+- The router held that allocation through the 1 request/s point.
 
-| Point | Collector result |
-| --- | --- |
-| Both | Scrapes covered the whole run, client and journal counts matched, and the timeline shows every role change |
-| 0.5 request/s | One `counter_missing` diagnostic for `narwhal_flips_total`, a series that first appeared at the first role change |
-| 1 request/s | All collector checks passed |
+Collector results at both points:
 
-Grafana dashboard coverage begins partway through the lower-rate point.
+- Scrapes covered the whole run.
+- Client and journal counts matched.
+- The timeline shows every role change.
+
+Collector results at 0.5 request/s:
+
+- One `counter_missing` diagnostic for `narwhal_flips_total`, a series that first appeared at the first role change.
+
+Collector results at 1 request/s:
+
+- All collector checks passed.
+
+Grafana dashboard coverage begins partway through the 0.5 request/s point.
 
 A post-load KV ring check with [`narwhal-check`](../cli/Check.md) passed for role-permitted transfers between engines on the drained router.
 
-The private artifact bundle `runs/<qualification-run>/qualification-artifacts.tgz` holds the client records, router journal, per-point evidence, and qualified inputs.
-
-The bundle's SHA-256 is `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`.
+The private artifact bundle `runs/<qualification-run>/qualification-artifacts.tgz` (SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`) holds the client records, router journal, per-point evidence, and qualified inputs.

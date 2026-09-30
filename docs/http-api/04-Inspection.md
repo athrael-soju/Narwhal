@@ -19,7 +19,7 @@ Returns the configured model in OpenAI list format:
 
 ## `GET /health`
 
-Returns router process liveness with HTTP `200` in every state.
+Returns HTTP `200` in every router state.
 
 | Field                 | Meaning                                                                          |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -27,7 +27,7 @@ Returns router process liveness with HTTP `200` in every state.
 | `instances`           | Configured fleet size                                                            |
 | `available_instances` | Engines eligible for placement, excluding ejected, draining, and quarantined engines |
 
-`status` takes the first matching value in this order:
+First matching `status` value, top to bottom:
 
 | `status`      | Meaning                                                                                                   |
 | ------------- | --------------------------------------------------------------------------------------------------------- |
@@ -36,8 +36,6 @@ Returns router process liveness with HTTP `200` in every state.
 | `maintenance` | Lifecycle hold, such as a whole-wave drain                                                                |
 | `standby`     | Standby router                                                                                            |
 | `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement   |
-
-Example:
 
 ```json
 {
@@ -96,7 +94,7 @@ With zero eligible engines, the response is:
 }
 ```
 
-`reason` shows an active lifecycle or control hold ahead of `no available engines`.
+`reason` reports an active lifecycle or control hold before `no available engines`.
 
 During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
 

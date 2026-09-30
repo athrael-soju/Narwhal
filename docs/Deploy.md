@@ -23,14 +23,22 @@ Fleet requirements:
 
 ### Concurrency rules
 
+Checks per engine and host:
+
 - Compare each engine allocation with the GPU inventory collected on that engine host.
 - Keep one installed role shell per physical engine host.
+- Capture each engine's live cache layout.
+
+Concurrent work:
+
 - Inspect engine hosts concurrently.
 - Start engines with disjoint GPU allocations concurrently.
-- Start engines that share GPUs one at a time.
-- Capture each engine's live cache layout.
-- Measure fabric one directed edge at a time while all engines are idle.
 - Attest the running engines concurrently after fabric qualification.
+
+One at a time:
+
+- Start engines that share GPUs one at a time.
+- Measure fabric one directed edge at a time while all engines are idle.
 
 ### Deployment record
 
@@ -81,7 +89,7 @@ Work to repeat by change:
 | Gate                       | Inputs that define the gate                                                                                                | Typical correction path                                                                                                                                                               | Evidence to retain                                                                                                                      |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key.                             | Fix the named environment field, missing host utility, image inspection issue, credential, route, or independently verified changed host key.                                        | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`.                                                |
-| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | Create a new prepared run from corrected input<br>Resume dependency installation once the host cause is fixed                                                                       | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
+| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites.                                                  | 1. Create a new prepared run from corrected input.<br>2. Resume dependency installation once the host cause is fixed.                                                                     | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker.                                |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports.  | 1. Restore device exposure or artifacts, free the planned ports, or repair the differing checkpoint file.<br>2. Repeat discovery.                                                   | Engine role env, launch record, discovery checkpoint manifests, `model_tree_sha256`, `ENGINE_RUN`, image-check and HTTP captures.       |
 | Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget.                                     | 1. Identify the root cause in route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, or concurrent traffic.<br>2. Re-sample.           | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix.                                       |
 | Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint. | 1. Inspect the bound capture and source.<br>2. Restart only the affected process or sidecar.<br>3. Rerun finalization.                                                                           | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before/after attestation.                                            |
@@ -99,10 +107,18 @@ Work to repeat by change:
 
 External sources:
 
+Narwhal and Hugging Face:
+
 - Narwhal environment template: https://github.com/athrael-soju/Narwhal/blob/main/.env.example
 - Hugging Face snapshot download: https://huggingface.co/docs/huggingface_hub/guides/download
 - Hugging Face model cards: https://huggingface.co/docs/hub/model-cards
+
+ROCm:
+
 - ROCm container device guidance: https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html
+
+vLLM:
+
 - vLLM NIXL connector usage, v0.29.0: https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/
 - vLLM Mamba layout resolver, v0.29.0: https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/mamba/mamba_utils.py
 - vLLM KV cache interface, v0.29.0: https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_interface.py
@@ -113,5 +129,8 @@ External sources:
 - vLLM NIXL worker, v0.29.0: https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
 - vLLM attention backend utilities, v0.29.0: https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/attention/backends/utils.py
 - vLLM NIXL connector aliases, v0.29.0: https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py
+
+Network measurement:
+
 - iperf3 command reference: https://software.es.net/iperf/invoking.html
 - perftest: https://github.com/linux-rdma/perftest

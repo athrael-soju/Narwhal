@@ -2,9 +2,9 @@
 
 Requirements:
 
-- an Ubuntu shell, native or under WSL2;
-- Linux x86-64 for the GGUF plugin wheel;
-- an NVIDIA GPU and driver that support the CUDA runtime of the pinned packages.
+- An Ubuntu shell, native or under WSL2
+- Linux x86-64 for the GGUF plugin wheel
+- An NVIDIA GPU and driver that support the CUDA runtime of the pinned packages
 
 Install Narwhal and the pinned packages from a checkout on the Linux filesystem:
 
@@ -38,10 +38,8 @@ for path in source.rglob('*.py'):
 PY
 ```
 
-`narwhal dev init` rejects package versions and plugin hashes that differ from
-the selected template.
-
-Reapply the pinned sources after every plugin wheel reinstall.
+- `narwhal dev init` rejects package versions and plugin hashes that differ from the selected template.
+- Reapply the pinned sources after every plugin wheel reinstall.
 
 Download the model and tokenizer into the Hugging Face cache:
 

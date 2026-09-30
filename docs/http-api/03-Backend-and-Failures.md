@@ -15,8 +15,6 @@ Remote decode receives:
 - sampling settings
 - the validated handoff descriptor
 
-Decode generates every client-visible output token.
-
 Same-engine decode:
 
 - strips transfer parameters, including client-provided values
@@ -35,7 +33,7 @@ Decode rejects a KV handoff descriptor with:
 
 ### Request scope and timing
 
-These are scoped to the original client request:
+Scoped to the original client request:
 
 - handoff-age enforcement
 - phase reservations
@@ -49,12 +47,10 @@ Durations in the [measurement contract](../measure/01-Profile.md):
 | Duration                | Interval                                                                   |
 | ----------------------- | -------------------------------------------------------------------------- |
 | `ttft_s`                | Request arrival at the router to producer HTTP completion                  |
-| `first_byte_s`          | Request arrival at the router to the first generated decode output it observes |
+| `first_byte_s`          | Request arrival at the router to the first generated decode output |
 | `first_byte_s - ttft_s` | Producer completion to the first decode output                             |
 
 ### Python API
-
-Python callers import:
 
 ```python
 from narwhal.engines.client import EngineClient
@@ -67,18 +63,12 @@ from narwhal.engines.connector import PrefillResult
 | `PrefillResult`          | Holds the KV handoff descriptor, producer URL, endpoint, and backend request ID |
 | `result.parameters()`    | Returns a detached dictionary                                                   |
 
----
-
 ## Engine failure handling
-
-Engine faults map to HTTP status codes:
 
 | Engine fault   | HTTP  |
 | -------------- | ----- |
 | Timeout-shaped | `504` |
 | Other          | `502` |
-
-Client response by failure:
 
 | Failure                                                     | Client response                                     |
 | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -86,13 +76,9 @@ Client response by failure:
 | Decode, non-streaming                                       | HTTP error status                                   |
 | Decode, streaming, outside the [retry conditions](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
 
-Terminal SSE event:
-
 ```text
 data: {"error": ...}
 ```
-
-Failure detail by destination:
 
 | Destination                                                                                           | Content                                            |
 | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -133,7 +119,8 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 | -------------------------------------------- | ----------------------------------------------------------------------- |
 | Closes before `[DONE]`                       | Engine failure                                                          |
 | `[DONE]` before the first generated token    | HTTP `502`                                                              |
-| Upstream HTTP `200` carrying an error object | Engine failure with status from integer `code` in 400 to 599, otherwise 500 |
+| Upstream HTTP `200` carrying an error object | Engine failure with status `code`, an integer in 400 to 599 |
+| Upstream HTTP `200` carrying any other error object | Engine failure with status `500` |
 
 Journal `error` for an early `[DONE]`:
 
@@ -145,8 +132,8 @@ stream ended with [DONE] before any token arrived
 
 | Timeout                        | Window                                                                                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine.first_token_timeout_s` | Decode request start to the first generated token, including connection and response-header delays |
-| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token, including metadata chunks |
+| `engine.first_token_timeout_s` | Decode request start to the first generated token, connection and response-header delays included |
+| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token, metadata chunks included |
 | `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound |
 
 `engine.decode_read_timeout_s` expiry returns HTTP `504` with detail beginning:
@@ -159,11 +146,14 @@ engine went silent between tokens
 
 Each admitted request receives one prefill/decode attempt by default.
 
-Before visible output, Narwhal may start a fresh attempt for a transient fault when both conditions hold:
+A fresh attempt starts for a transient fault before visible output when:
 
 - the original request deadline permits it
 - retry budget remains
 
-Each retry gets fresh backend request IDs and a new KV handoff.
+Each retry receives:
 
-With `recovery.failure_quarantine_s > 0`, Narwhal excludes the failed engine from new placement for that many seconds.
+- fresh backend request IDs
+- a new KV handoff
+
+With `recovery.failure_quarantine_s > 0`, the failed engine is excluded from new placement for that many seconds.

@@ -55,9 +55,9 @@ narwhal-profile \
 
 Select at least three prefill lengths spanning the production range, including its longest inputs.
 
-The effective sweep holds each prefill length that, plus one output token, fits the live `max_model_len` from `/tokenize`.
+Effective sweep: each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
 
-Compare each engine's effective sweep in `profiles.samples.json` with the serving plan before you accept the result.
+Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 
 ### Decode sweep
 
@@ -76,14 +76,15 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 
 `profiles.samples.json` contains:
 
-* software identity;
-* sweep configuration;
-* every prefill repeat;
-* the per-length medians used for the TTFT fit;
-* decode intervals and cell medians;
-* fitted profiles;
-* `prefix_cache_hit_tokens`: prefix-cache hits per engine sweep, or `null` when engine metrics omit `vllm:prefix_cache_hits_total`;
-* the attestation response or process identity that ties each fit to its process generation.
+- software identity
+- sweep configuration
+- every prefill repeat
+- the per-length medians used for the TTFT fit
+- decode intervals and cell medians
+- fitted profiles
+- `prefix_cache_hit_tokens`: prefix-cache hits per engine sweep
+  - `null` when `vllm:prefix_cache_hits_total` is absent from engine metrics
+- the attestation response or process identity per fit
 
 | Case                  | Sample sidecar result                               |
 | --------------------- | --------------------------------------------------- |
@@ -102,12 +103,12 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 
 ### Prefill fit
 
-Measured prefill latency includes the HTTP round trip and one generated token.
+Measured prefill latency covers the HTTP round trip plus one generated token.
 
-The profiler rejects a TTFT curve that exceeds either bound:
+TTFT curve rejection bounds:
 
-* mean error above 20%;
-* worst-point error above 50%.
+- mean error above 20%
+- worst-point error above 50%
 
 ### Repair profiles produced by the earlier raw-repeat fitter
 
@@ -125,7 +126,10 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The refit writes a new pair with refitted prefill curves and copied decode coefficients.
+The refit writes a new pair holding:
+
+- refitted prefill curves
+- copied decode coefficients
 
 Activate the refitted pair:
 
@@ -135,16 +139,19 @@ Activate the refitted pair:
 
 ### Decode fit
 
-Near scheduler saturation, check the profiler's client-side active-request count and resident KV memory against the engine's request and inter-token metrics.
+Near scheduler saturation, compare these profiler measurements with the engine's request and inter-token metrics:
+
+- client-side active-request count
+- resident KV memory
 
 | Evidence | Measures |
 | --- | --- |
 | Leave-one-cell-out error | Interpolation between cells within one run |
-| Repeated sweeps | Run-to-run stability and tail behaviour |
+| Repeated sweeps | Run-to-run stability and tail behavior |
 
 Fill gaps between cells with intermediate cells that match the production workload.
 
-Default limits:
+Default limits, set from measurements covering the expected decode domain:
 
 ```text
 profiles.max_decode_fit_mape = 0.05
@@ -153,10 +160,12 @@ profiles.max_decode_cv_mape  = 0.13
 
 Fleet validation requires `profiles.max_decode_fit_mape` at or below `controller.reactive.movement_margin`.
 
-Set both limits from measurements covering the expected decode domain.
+The `narwhal-check` `profile` gate requires:
 
-The `narwhal-check` `profile` gate requires two measured points on each decode axis and both decode errors within their limits.
+- two measured points on each decode axis
+- both decode errors within their limits
 
-Reactive control needs the current profile schema and a decode sweep that passed the `profile` gate.
+Reactive control needs:
 
-Next: [target selection and deployment freeze](02-Targets-and-Freeze.md).
+- the current profile schema
+- a decode sweep that passed the `profile` gate

@@ -68,15 +68,10 @@ Each matching source role's private comparison file holds the budget rate and ha
 
 The captured layout holds:
 
-- per-rank page bytes
-- per-layer page bytes
-- token block size
-- state allowance
-- boundary allowance
-- image identity
-- package versions
-- application revision
-- launch-plan hash
+| Layout group     | Items                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| Page sizing      | per-rank page bytes, per-layer page bytes, token block size, state allowance, boundary allowance |
+| Image and launch | image identity, package versions, application revision, launch-plan hash               |
 
 ### 17.3 Uniform-cache options
 

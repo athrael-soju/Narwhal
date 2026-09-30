@@ -11,8 +11,6 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `served`, `failed`, `cancelled`, `unserved`, `rejected`, `refused` | Restored from the state handoff on resume and takeover |
 | Fields marked "current process" below                              | Start at zero                                          |
 
-Fields:
-
 | Field                   | Meaning                                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |
 | `schema`                | `narwhal.state`                                                                                 |
@@ -35,7 +33,7 @@ Fields:
 | `serving`               | Retained HTTP work, attempts, and retry state                                                   |
 | `http_pools`            | Data and control connection pools and pool-wait timeout                                         |
 | `pools`                 | Engines grouped by prefill or decode role                                                       |
-| `load`                  | Per-pool load relative to the service-level objective (SLO), where `1.0` equals the configured target |
+| `load`                  | Per-pool load as a ratio to the service-level objective (SLO) target, `1.0` at target |
 | `thresholds`            | Active reactive-controller thresholds                                                           |
 | `slo`                   | Time to first token (TTFT) and time per output token (TPOT) targets                             |
 | `first_token_timeout_s` | Decode first-token deadline                                                                     |
@@ -56,11 +54,9 @@ Fields:
 | `demand_history`        | Retained demand, shape counts, and overflow state                                               |
 | `demand_evidence`       | Consolidation evidence used by decode-to-prefill gates                                          |
 | `unserved`              | Phase placements where every eligible candidate exceeded the configured SLO                     |
-| `panic_bypasses`        | Prefill-to-decode moves the current process allowed through cooldown by panic logic                |
+| `panic_bypasses`        | Prefill-to-decode moves allowed through cooldown by panic logic in the current process                |
 | `flips_refused`         | The 20 most recent rejected role changes                                                        |
 | `flips`                 | Role changes retained up to `flip_history`                                                      |
-
-Related references:
 
 | Topic                                             | Reference                                                                                |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -77,23 +73,20 @@ Related references:
 | `last_scored_s_ago` | Seconds since the last scored window, `null` until a window scores   |
 | `prefill_paused`    | `true` while local prefill interference suspends evidence collection |
 | `prefill_pauses`    | Transitions into the paused condition                                |
-
-Confirmed ejection clears the engine's drift-window record.
+| Confirmed ejection  | Clears the engine's drift-window record                              |
 
 ### `breaker`
 
 | Field       | Meaning                                                                                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` |
+| `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed sweeps |
 | `verifying` | Engines with a health or inference probe in flight, each as `iid` and probe `kind`                                                                      |
-
-`liveness` counts missed sweeps.
 
 ### `residency`
 
 | Field             | Meaning                                                      |
 | ----------------- | ------------------------------------------------------------ |
-| `known`           | `true` when the router holds the engine's complete residency |
+| `known`           | `true` when the router holds the engine's complete residency, `false` when the sidecar is absent or answers the residency routes with HTTP 404 |
 | `reason`          | Cause of the `known` value                                   |
 | `epoch`           | Sidecar instance the record follows                          |
 | `sequence`        | Last engine event batch applied                              |
@@ -101,16 +94,12 @@ Confirmed ejection clears the engine's drift-window record.
 | `resident_blocks` | Count of resident blocks per KV cache group                  |
 | `resyncs`         | Snapshots taken since router start                           |
 
-`resyncs` counts a new snapshot after each of these events:
+`resyncs` increments on:
 
 - the sidecar reports the requested changes are gone
 - the sidecar epoch changes
 - the change sequence skips a number
 - a refresh fails
-
-`known` is `false` when the sidecar is absent or answers the residency routes with HTTP 404.
-
----
 
 ## Admission and serving state
 
@@ -124,7 +113,7 @@ Confirmed ejection clears the engine's drift-window record.
 | `queue_high_water` | Peak queue depth                                           |
 | `waiting_prefill`  | Requests waiting for prefill dispatch                      |
 | `waiting_decode`   | Requests waiting for decode dispatch                       |
-| `limit`            | Effective router limit after `--max-concurrent` precedence |
+| `limit`            | Effective router limit, `--max-concurrent` taking precedence |
 | `rejected`         | Global capacity rejections                                 |
 | `refused`          | Global predictive-admission refusals                       |
 | `engine_auth`      | `boundary` or `engine-credential`                          |
@@ -145,8 +134,6 @@ Confirmed ejection clears the engine's drift-window record.
 | `decode_tokens_observed`   | Observed decode tokens                                       |
 | `upstream_seconds`         | Cumulative HTTP leg time by phase, including failed attempts |
 
----
-
 ## Scheduler and controller state
 
 ### Pool and SLO fields
@@ -162,19 +149,15 @@ Confirmed ejection clears the engine's drift-window record.
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
 
-Floor counts cover engines eligible for placement.
-
-Below the prefill floor, the role controller moves healthy decode engines to prefill down to `min_decode`.
-
-Breach tracking starts when prefill first reaches `min_prefill`.
-
 | Field                      | Meaning                                                                    |
 | -------------------------- | -------------------------------------------------------------------------- |
 | `below_floor.active`       | `true` during a prefill-floor breach         |
-| `below_floor.live_prefill` | Eligible prefill engines                                                   |
+| `below_floor.live_prefill` | Prefill engines eligible for placement                                     |
 | `below_floor.since`        | Process-monotonic start time of the open breach |
-| `below_floor.breaches`     | Breaches since tracking started                                            |
+| `below_floor.breaches`     | Breaches since tracking started at the first prefill count of `min_prefill` |
 | `below_floor.cumulative_s` | Total breach seconds, including the open breach                            |
+| `decode_floor.live_decode` | Decode engines eligible for placement                                      |
+| Prefill-floor recovery     | Moves healthy decode engines to prefill down to `min_decode`               |
 
 ### Controller decisions
 
@@ -183,7 +166,7 @@ Breach tracking starts when prefill first reaches `min_prefill`.
 | Field            | Meaning                                                                                      |
 | ---------------- | -------------------------------------------------------------------------------------------- |
 | `advisory`       | `true` when the role controller records proposed role changes and keeps the live split fixed |
-| `last_decision`  | Most recent proposed or applied split, `null` before the first decision                      |
+| `last_decision`  | Most recent proposed or applied split, `null` until the first decision                      |
 | `decisions`      | Cumulative decision counts keyed `<by>:<result>`                                             |
 | `flips`          | Cumulative role-change counts keyed `<by>:<to>`                                              |
 | `flip_reversals` | Role changes that reverse the same engine's previous role change                             |
@@ -222,10 +205,10 @@ Optional fields, by evaluation stage:
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                    |
 | `recovery_prefill_ratio`, `queued_prefill_s`      | Inputs to the [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)                        |
 | `eligibility_rule`                                | Rule that made a scored proposal eligible                                                                  |
-| `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal so far and the number required before the move           |
+| `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal, against the required count           |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                              |
-| `source_pressure_safe`                            | Whether the source pool's pressure is at or below the shrink threshold, or the mixed-pressure rule applies |
+| `source_pressure_safe`                            | Whether source-pool pressure is at or below the shrink threshold or `mixed_pressure` applies |
 
 Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens`.
 
@@ -276,7 +259,7 @@ Blocked and held decisions keep the proposed split and objective change.
 - dwell
 - the resident guard
 
-With incomplete demand history, or a fleet health change before scoring, `control.last_decision` holds the inputs available at that stage.
+With incomplete demand history or a fleet health change before scoring, `control.last_decision` holds the inputs available at that stage.
 
 ### Role-change history
 
@@ -302,6 +285,6 @@ A role-change record has this form:
 | `by`               | Caller: `reactive`, `decode_floor`, or `floor_recovery`                       |
 | `prefill_inflight` | Resident prefill work when the role label changes                             |
 | `decode_inflight`  | Resident decode work when the role label changes                              |
-| `drained_s`        | Drain duration once that resident work finishes, `null` while it remains |
+| `drained_s`        | Drain duration in seconds after resident work finishes, `null` until then |
 
 Each `flips_refused[]` record contains `at`, `to`, and `why`.

@@ -54,10 +54,10 @@ Before preflight:
 
 With the engines idle, set these inputs:
 
-- Input lengths:
-    - spanning the served range, including its longest admitted input;
-    - each leaving room for one output token in both engines.
-- An observation bound, `--observation-timeout-s`, above the current `engine.first_token_timeout_s` and within `serving.request_timeout_s`.
+- Input lengths spanning the served range, including its longest admitted input.
+- Input lengths leaving room for one output token in both engines.
+- An observation bound, `--observation-timeout-s`, above `engine.first_token_timeout_s`.
+- An observation bound, `--observation-timeout-s`, within `serving.request_timeout_s`.
 - A fresh artifact path under the ignored `runs/` tree.
 
 For an engine launch limit of 16,384 total tokens, run the calibration from the router shell:
@@ -73,17 +73,17 @@ The artifact records input tokens, prefill time, decode-to-first-token time, and
 
 The command exits 0 when the artifact is complete:
 
-- at least 100 samples per role-permitted directed pair and input length;
-- every attempt succeeded;
-- process generations stayed the same.
+- At least 100 samples exist per role-permitted directed pair and input length.
+- Every attempt succeeds.
+- Process generations match.
 
 `serving.request_timeout_s` bounds each attempt's prompt sizing, prefill, and decode completion.
 
 An attempt that expires after its first token:
 
-- records as `request_expired`;
-- counts as failed;
-- stays out of the candidate calculation.
+- The calibration records it as `request_expired`.
+- The calibration counts it as failed.
+- The candidate calculation excludes it.
 
 The command prints the candidate deadline, the largest `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` across pairs and input lengths.
 
@@ -118,9 +118,7 @@ The full preflight runs these gates:
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `reach`    | Every engine returns HTTP 200 within the configured health HTTP I/O timeout.                                                     |
 | `contract` | Attestation matches the current process and declared runtime.                                                                    |
-| `profile`  | Each saved process generation digest matches its live engine.                                                                    |
-| `profile`  | The profile IDs match the fleet.                                                                                                 |
-| `profile`  | The measured decode errors stay within policy.                                                                                   |
+| `profile`  | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy. |
 | `model`    | Every engine serves the configured model.                                                                                        |
 | `pace`     | Prefill latency stays within the [permitted slowdown](#pace-gate).                                                               |
 | `tokenize` | Exact input sizing succeeds when enabled.                                                                                        |
@@ -133,7 +131,7 @@ The calibration path sets the first-token evidence check:
 | `engine.first_token_calibration_path` | Preflight and router startup                                                           | On failure         |
 | ------------------------------------- | -------------------------------------------------------------------------------------- | ------------------ |
 | Empty                                 | Warning.                                                                               |                    |
-| Set                                   | Require complete evidence for the running engines and a deadline above the candidate. | The router stops.  |
+| Set                                   | Require complete evidence for the running engines and a deadline above the candidate.  | The router stops.  |
 
 ### Pace gate
 
@@ -147,7 +145,7 @@ The calibration path sets the first-token evidence check:
 | Successful probes | Each engine is compared against                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Three or more     | The fleet median, and for every profiled engine, that profile's prefill prediction at the exact `usage.prompt_tokens`.      |
-| Fewer than three  | For every profiled engine, that profile's prefill prediction.                                                                |
+| Fewer than three  | For every profiled engine, that profile's prefill prediction at the exact `usage.prompt_tokens`.                             |
 
 ### KV transfer gates
 
@@ -157,13 +155,13 @@ The calibration path sets the first-token evidence check:
 | --------------- | ------------------------------------------------------------------------ |
 | Default mesh    | Every eligible ordered pair.                                             |
 | `--ring`        | The pairs covering each eligible producer and consumer.                  |
-| `--repeats N`   | Fixed transfer probes for each pair, with a verdict per probe.           |
+| `--repeats N`   | Fixed transfer probes for each pair, with a verdict per probe.                                   |
 
 In the consume gate, a transfer across a role-permitted engine pair passes when:
 
-- decode produces its first generated token within `engine.first_token_timeout_s`;
-- decode finishes a valid stream with output;
-- prefill and decode complete within `serving.request_timeout_s`.
+- Decode produces its first generated token within `engine.first_token_timeout_s`.
+- Decode finishes a valid stream with output.
+- Prefill and decode complete within `serving.request_timeout_s`.
 
 The gate reports the first-token time for each passing transfer.
 
