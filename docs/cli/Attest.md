@@ -1,6 +1,13 @@
 # `narwhal-attest`
 
-`narwhal-attest` is a sidecar for one vLLM engine. It reads the engine's identity and serves the attestation document over HTTP. Start it after vLLM is up, as the engine's user (root for container engines).
+`narwhal-attest` is an HTTP sidecar that serves the attestation document of one vLLM engine.
+
+Start the sidecar after vLLM is up, as this user:
+
+| Engine            | Sidecar user      |
+| ----------------- | ----------------- |
+| Container engine  | root              |
+| Other engines     | The engine's user |
 
 Identity checks:
 
@@ -15,11 +22,11 @@ Identity checks:
 | --------------------- | ----------- | ------------------------------------------------------------------------ |
 | `--version`           |             | Print the installed distribution version.                                |
 | `--document PATH`     | required    | The attestation document: contract values, plus a source for each field. |
-| `--engine-base URL`   | required    | vLLM base URL. The sidecar queries `/version` and `/metrics`.            |
+| `--engine-base URL`   | required    | vLLM base URL that serves `/version` and `/metrics`.                     |
 | `--host HOST`         | `127.0.0.1` | Address to bind.                                                         |
 | `--port PORT`         | `8010`      | Port to listen on.                                                       |
-| `--timeout-s SECONDS` | `5.0`       | How long to wait when reading the engine's identity.                     |
-| `--kv-events DIR`     |             | Directory with the engine's cache-event sockets. Turns on residency.     |
+| `--timeout-s SECONDS` | `5.0`       | Timeout for reading the engine's identity.                               |
+| `--kv-events DIR`     |             | Engine cache-event socket directory that turns on residency.             |
 | `--model NAME`        |             | Served model name, used in block identities.                             |
 
 `--kv-events` requires `--model`.
@@ -33,7 +40,7 @@ The contract tool's `serve` action passes `--kv-events` and `--model` when the c
 
 ## Residency
 
-With `--kv-events` set, the sidecar builds a bounded index of the prefix blocks on the engine's GPU from the engine's cache events. A router reads the index to find which prompts an engine can serve from cache.
+With `--kv-events` set, the sidecar serves a bounded index of the prefix blocks on the engine's GPU.
 
 ### Routes
 
@@ -44,30 +51,32 @@ With `--kv-events` set, the sidecar builds a bounded index of the prefix blocks 
 | Top level           | `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds` |
 | Each KV cache group | `kind`, `sliding_window`, block `identities`, and the count of `unnamed` blocks    |
 
-`GET /v1/residency/events?after=N` returns the changes applied after sequence `N` and the sidecar's `epoch`. It returns HTTP 410 when any of these holds:
+`GET /v1/residency/events?after=N` returns the changes applied after sequence `N` and the sidecar's `epoch`.
+
+The events route returns HTTP 410 when any of these holds:
 
 - residency is unknown;
 - `N` is ahead of the last applied sequence;
 - the oldest change in the bounded change log is later than `N + 1`.
 
-On HTTP 410, fetch a new snapshot and resume from it.
+On HTTP 410, resume from a new snapshot.
 
 | Sidecar state                       | Both routes return |
 | ----------------------------------- | ------------------ |
 | Residency off (`--kv-events` unset) | HTTP 404           |
 | Engine process changed              | HTTP 503           |
 
-Pricing an engine cold means treating its prefix cache as empty. A router prices the engine cold on HTTP 404.
+On HTTP 404, a router treats the engine's prefix cache as empty.
 
 ### When residency is known
 
-Residency is known when the sidecar has applied every event batch since a starting point. The starting points are:
+Residency is known when the sidecar has applied every event batch since one of these starting points:
 
 - the engine's first batch, at sequence 0, live or through replay
-- an empty replay buffer at subscription, which starts the index empty
+- an empty replay buffer at subscription
 - a cache reset
 
-Residency becomes unknown, and every group's block list is cleared, when any of these happens:
+Residency becomes unknown, with empty block lists in every group, when any of these happens:
 
 - a sequence gap remains after replay
 - the first batch arrives after sequence 0
@@ -75,21 +84,32 @@ Residency becomes unknown, and every group's block list is cleared, when any of 
 - the index grows past 1,000,000 blocks
 - replay or subscription fails
 
-Residency stays unknown until the engine resets its prefix cache.
+To restore residency, reset the engine's prefix cache.
 
 ### Block identities
 
-A block's identity chains its token IDs onto the identity of the previous block. The first block chains from the block size and the cache namespace. The cache namespace is the served model name, the engine contract fingerprint, the LoRA adapter name, and the request cache salt.
+Each block identity chains the block's token IDs onto a parent value:
 
-Boundary groups hold only boundary state, such as Mamba state in vLLM's `align` mode. A boundary group takes its identities from a group that reported every block in the same run. The group's `unnamed` count holds blocks keyed by multimodal or prompt-embedding hashes.
+| Block             | Parent value                           |
+| ----------------- | -------------------------------------- |
+| First block       | The block size and the cache namespace |
+| Every later block | The previous block's identity          |
+
+The cache namespace is the served model name, the engine contract fingerprint, the LoRA adapter name, and the request cache salt.
+
+| Term                              | Meaning                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| Boundary group                    | A group holding only boundary state, such as Mamba state in vLLM's `align` mode |
+| `identities` in a boundary group  | The identities of a group that reported every block in the same run             |
+| `unnamed` count                   | Blocks keyed by multimodal or prompt-embedding hashes                           |
 
 ### Reusable prefixes
 
-A prefix is reusable when every KV cache group can serve it. Each group kind needs these blocks:
+A prefix is reusable when every KV cache group holds the blocks its kind requires:
 
 | Group kind                                   | Required blocks                                      |
 | -------------------------------------------- | ---------------------------------------------------- |
 | Full attention                               | Every leading block                                  |
 | Sliding window                               | The blocks covering the window before the prefix end |
 | Boundary                                     | The block at the prefix end                          |
-| Other kinds, such as chunked local attention | The router prices the engine cold                    |
+| Other kinds, such as chunked local attention | The router treats the engine's prefix cache as empty |

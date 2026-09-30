@@ -1,6 +1,6 @@
 # Measure a fleet
 
-Measure a deployed fleet against its time to first token (TTFT) and time per output token (TPOT) targets. The result is the highest tested offered rate that meets both.
+A fleet measurement reports the highest tested offered rate that meets the fleet's time to first token (TTFT) and time per output token (TPOT) targets.
 
 ## Run a measurement
 

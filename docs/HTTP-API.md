@@ -1,7 +1,5 @@
 # Narwhal HTTP API reference
 
-The Narwhal router is a FastAPI application. It serves its OpenAPI schema at `/openapi.json` and an interactive schema browser at `/docs`.
-
 ## Interface map
 
 | Interface            | Public namespace                          |
@@ -18,6 +16,8 @@ The Narwhal router is a FastAPI application. It serves its OpenAPI schema at `/o
 | Lifecycle control    | `/narwhal/lifecycle` and its actions      |
 | Router telemetry     | `narwhal_*`                               |
 | Persisted schemas    | `narwhal.*`, versioned per document       |
+| OpenAPI schema       | `/openapi.json`                           |
+| Schema browser       | `/docs`                                   |
 
 The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="1"} 1`.
 
@@ -49,7 +49,8 @@ Probe responses:
 | Probe     | Response                                                                                                  |
 | --------- | --------------------------------------------------------------------------------------------------------- |
 | `/health` | HTTP 200 in every state, with the router's status and engine counts                                       |
-| `/ready`  | HTTP 200 while the router accepts client requests; HTTP 503 with `Retry-After: 1` while admission is closed |
+| `/ready`  | HTTP 200 while the router accepts client requests                                                         |
+| `/ready`  | HTTP 503 with `Retry-After: 1` while admission is closed                                                  |
 
 !!! warning
     Keep `/narwhal/state`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.

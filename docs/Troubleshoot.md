@@ -2,7 +2,7 @@
 
 ## Capture router and engine state
 
-Before changing router or engine state, collect one bundle per incident router. Each bundle uses:
+Before changing router or engine state, collect one bundle per incident router, each with:
 
 - a fresh output path;
 - that router's fleet configuration;
@@ -19,7 +19,7 @@ narwhal diagnostics collect \
   --out runs/diagnostics/router-incident-001
 ```
 
-The [diagnostic bundle manifest](Diagnostic-Bundles.md) records HTTP status, retained response bodies, collection errors, source paths, and artifact hashes. Exit status `3` means a partial bundle. Inspect its source rows before retrying individual reads.
+On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md) before retrying individual reads.
 
 | Option | Adds |
 | --- | --- |
@@ -50,18 +50,18 @@ Before stopping an engine, capture the evidence required by its planned lifecycl
 
 ## Router, admission, and lifecycle signals
 
-| Symptom | Next check or action |
-| --- | --- |
-| Request to `/health` fails | Query peer `/ready` to identify the lease holder; inspect the router process, host, and network path. |
-| `/health` reports `standby` | Send traffic and lifecycle actions to the active lease holder. |
-| `/health` reports `fenced` | Identify the current lease holder and remove the fenced router from the load balancer. |
-| `/health` reports `maintenance` | Follow `/narwhal/lifecycle` through the engine wave until readiness returns. |
-| Both routers return HTTP 503 from `/ready` | Compare refusal reasons. Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness. |
-| HTTP 429 increases | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity. |
-| HTTP 502 increases | Inspect engine failures, ejection, quarantine, and in-flight work. |
-| HTTP 504 increases | Separate queue and request expiry from engine timeouts with the response error and terminal journal row. |
-| A stream ends with an error frame after the HTTP 200 response starts | Inspect failed attempts, final outcome, and participating engines. |
-| Lifecycle state is `blocked` | Repair the failed drain identity capture or readmission check. Retry that operation. |
+| Symptom | Next check or action | Follow-up |
+| --- | --- | --- |
+| Request to `/health` fails | Query peer `/ready` to identify the lease holder. | Inspect the router process, host, and network path. |
+| `/health` reports `standby` | Send traffic and lifecycle actions to the active lease holder. | |
+| `/health` reports `fenced` | Identify the current lease holder. | Remove the fenced router from the load balancer. |
+| `/health` reports `maintenance` | Follow `/narwhal/lifecycle` through the engine wave until readiness returns. | |
+| Both routers return HTTP 503 from `/ready` | Compare refusal reasons. | Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness. |
+| HTTP 429 increases | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity. | |
+| HTTP 502 increases | Inspect engine failures, ejection, quarantine, and in-flight work. | |
+| HTTP 504 increases | Separate queue and request expiry from engine timeouts with the response error and terminal journal row. | |
+| A stream ends with an error frame after the HTTP 200 response starts | Inspect failed attempts, final outcome, and participating engines. | |
+| Lifecycle state is `blocked` | Repair the failed drain identity capture or readmission check. | Retry that operation. |
 
 Procedures by path:
 
@@ -78,13 +78,13 @@ Procedures by path:
     - predictive refusal.
 2. Keep the request mix, `serving.max_connections`, queue depth, and timeouts fixed.
 3. Test two offered rates under those conditions.
-4. Compare completed throughput and the share of requests meeting the service-level objective (SLO).
-5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising any limit that risks TTFT budgets.
+4. Compare completed throughput and the share of requests meeting the service-level objective.
+5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit that risks TTFT budgets.
 
 | Ratio | Numerator | Denominator |
 | --- | --- | --- |
 | Load-test router outcome | Router completions | Admitted requests |
-| [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) | SLO-qualified client completions | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
+| [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) | Client completions that meet the service-level objective | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
 
 ## After recovery
 

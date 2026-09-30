@@ -1,6 +1,6 @@
 # Set up observability
 
-`make observe` builds scrape targets from the deployed fleet's engine IDs and metrics endpoints and starts two services:
+`make observe` starts two services for the deployed fleet:
 
 | Service | Role |
 | --- | --- |

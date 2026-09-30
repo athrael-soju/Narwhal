@@ -1,6 +1,11 @@
 # Operate Narwhal
 
-Each model fleet runs one router pair in a shared lease domain. The lease holder admits and places requests. Its peer is the standby.
+Each model fleet runs one router pair in a shared lease domain:
+
+| Router | Role |
+| --- | --- |
+| Lease holder | Admits and places requests |
+| Peer | Standby |
 
 ```text
 clients

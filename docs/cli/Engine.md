@@ -1,6 +1,6 @@
 # `narwhal-engine`
 
-`narwhal-engine` prepares and runs vLLM engines from a `narwhal.engine-launch` record. Both backends run the same model, GPU allocation, port, NIXL connector, and runtime argument checks.
+`narwhal-engine` prepares and runs vLLM engines from a `narwhal.engine-launch` record.
 
 | Backend     | Runtime                                          |
 | ----------- | ------------------------------------------------ |
@@ -10,9 +10,7 @@
 | Variable                 | Use                                                                                       |
 | ------------------------ | ----------------------------------------------------------------------------------------- |
 | `NARWHAL_MODEL_REVISION` | Required for the native backend.                                                          |
-| `NARWHAL_MODEL_PATH`     | Local GGUF file. `prepare` records its SHA-256.                                           |
-
-Run directories are immutable. Each fresh start uses a new directory.
+| `NARWHAL_MODEL_PATH`     | Local GGUF file, recorded with its SHA-256 by `prepare`.                                  |
 
 GGUF models:
 
@@ -25,30 +23,34 @@ GGUF models:
 | Action               | Backend           | Inputs and operation                                                                                                                                                                                                                              |
 | -------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prepare`            | container, native | Read `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), verify model and hook hashes, and write a fresh launch directory with `launch.json` and the backend environment.                                  |
-| `check`              | container, native | Check the plan's pinned packages, model, tokenizer, and NIXL connector, resolve the prefix-caching and cache-event settings, and bind `checked.json` to the plan. Repeated checks append to the backend check log.                                |
+| `check`              | container, native | Check the plan's pinned packages, model, tokenizer, and NIXL connector, write `checked.json`, and append to the backend check log.                                                                                                                 |
 | `measure-cache`      | container         | Size the cache in a temporary container started from a checked, unused plan, and write `cache-layout.json`.                                                                                                                                       |
 | `model-dimensions`   | container         | Inspect the model through the checked runtime and write `model-dimensions.json`.                                                                                                                                                                  |
 | `handshake-policy`   | container, native | Inspect the installed NIXL worker against the checked connector settings and write `handshake-policy.json`.                                                                                                                                       |
-| `start`              | container         | Start one serving container from a checked plan and record `container.id`. Returns when Docker starts the container. Poll HTTP readiness yourself.                                                                                                |
+| `start`              | container         | Start one serving container from a checked plan, record `container.id`, and return when Docker starts the container.                                                                                                                              |
 | `capture-cache`      | container         | Read the running container recorded in a checked launch directory and retain its live cache pages in `cache-layout.json`.                                                                                                                         |
 | `cache-registration` | container, native | Resolve block grouping from the checked runtime and one of a serving startup log or a captured runtime layout, and write `cache-registration.json`.                                                                                                |
 | `start-shared`       | container, native | Validate two to eight checked plans sharing one GPU, start them sequentially, and retain readiness, identity, and memory readings in each `shared-start.json`.                                                                                    |
-| `stop-native`        | native            | Validate the recorded boot ID and process start ticks, stop the recorded process groups, wait for their workers, send SIGKILL to survivors, and write `native-stop.json`.                                                                        |
+| `stop-native`        | native            | Validate the recorded boot ID and process start ticks, stop the recorded process groups, send SIGKILL to survivors, and write `native-stop.json`.                                                                                                 |
 
-Outputs stay in the launch directory. To capture an output again, prepare and check a fresh directory.
+Poll HTTP readiness when `start` returns.
+
+Actions write their outputs to the launch directory.
+
+To start again or capture an output again, prepare and check a fresh launch directory.
 
 | Option             | Default     | Description                                                                                                |
 | ------------------ | ----------- | ---------------------------------------------------------------------------------------------------------- |
 | `--version`        | optional    | Print the installed distribution version.                                                                  |
-| `--format`         | `text`      | `text` or `json`. JSON output follows [versioned command results](../Command-Results.md).                  |
+| `--format`         | `text`      | `text` or `json` for [versioned command results](../Command-Results.md).                                   |
 | `--backend`        | `container` | Launch backend for `prepare` and `start-shared`, either `container` or `native`.                           |
 | `--out`            | required    | Fresh launch directory for `prepare`.                                                                      |
-| `--run`            | required    | Existing launch directory for every action except `prepare`. Repeat two to eight times for `start-shared`. |
+| `--run`            | required    | Existing launch directory for every action except `prepare`, repeated two to eight times for `start-shared`. |
 | `--ready-seconds`  | `180`       | Positive integer seconds allowed per engine for readiness and identity checks during `start-shared`.       |
 | `--startup-log`    | optional    | Serving log with one resolved KV layout, read by `cache-registration`.                                     |
 | `--runtime-layout` | optional    | Captured runtime cache-layout JSON, read by `cache-registration`.                                          |
 
-- `start-shared` requires every selected plan to use the chosen `--backend`. Other actions read the backend from the plan itself.
+- `start-shared` requires every selected plan to use the chosen `--backend`.
 - `cache-registration` takes one of `--startup-log` or `--runtime-layout`.
 
 ## Shared-GPU startup
@@ -63,12 +65,12 @@ python -m narwhal.deployment.attestation_contract native-capture --run runs/engi
 narwhal-engine stop-native --run runs/engine-1
 ```
 
-`start-shared` launches the engines sequentially. Every selected plan must meet these conditions:
+Every plan selected for `start-shared` must meet these conditions:
 
 - The plans share one group, GPU UUID, and device allowance.
 - Each plan has a unique role and port.
 - The per-engine `gpu_memory_utilization` fractions sum to at most `shared_device.device_allowance`.
-- Each plan's CUDA device resolves to `shared_device.gpu_uuid`. The checked runtime evaluates ordinals and UUID prefixes.
+- Each plan's CUDA device, as an ordinal or UUID prefix, resolves to `shared_device.gpu_uuid` in the checked runtime.
 
 Both backends apply the same memory check:
 
@@ -90,7 +92,7 @@ Backend records and failure handling:
 | Failed removal     | Adds a `cleanup_error` entry to the record and to the command error                                          |                                                                                                                                  |
 | Stop record        |                                                                                                              | `native-stop.json` records the stops of the engines that were ready                                                              |
 
-Native port checks bind the HTTP endpoint from `launch.json` and the NIXL address from `engine.env`.
+Native port checks cover the HTTP endpoint in `launch.json` and the NIXL address in `engine.env`.
 
 `NARWHAL_NODE_<n>_ATTESTATION_URL` sets the sidecar address checked at preparation and shared startup:
 
@@ -100,7 +102,7 @@ Native port checks bind the HTTP endpoint from `launch.json` and the NIXL addres
 | `start-shared` | Environment at startup, overriding the preparation value |
 | `narwhal dev`  | Instance fleet configuration                       |
 
-`native-capture` runs Narwhal's model, cache, NIXL, and handshake checks in the recorded engine environment and writes a process-bound attestation. Serve it:
+Serve the process-bound attestation that `native-capture` writes from the recorded engine environment:
 
 1. Set `NARWHAL_NODE_<n>_ATTESTATION_URL`.
 2. Run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>`.

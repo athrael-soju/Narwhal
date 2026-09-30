@@ -1,6 +1,6 @@
 # Narwhal documentation
 
-Narwhal runs disaggregated LLM inference and [reassigns prefill and decode roles](Core-Concepts.md) as demand changes. Model weights stay loaded during role changes.
+Narwhal runs disaggregated LLM inference and, as demand changes, [reassigns prefill and decode roles](Core-Concepts.md) among engines that keep their model weights loaded.
 
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark">

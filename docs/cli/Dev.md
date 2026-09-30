@@ -1,8 +1,14 @@
 # `narwhal dev`
 
-[Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a selected NVIDIA GPU and targets GPUs with 8 GB of VRAM or less.
+[Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.
 
-Templates select the model, runtime, and memory budget. A template's `gpu.product` pins a GPU product. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) records a measured four-engine configuration.
+- A template selects the model, runtime, and memory budget.
+- A template's `gpu.product` pins a GPU product.
+
+| Template | Configuration |
+| --- | --- |
+| Installed template | One prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less |
+| Optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) | A measured four-engine configuration |
 
 ## Lifecycle
 
@@ -20,11 +26,17 @@ narwhal dev down
 
 | Subcommand | Behaviour |
 | --- | --- |
-| `init` | Writes a private instance with model and runtime pins, memory budget, unique ports, engine launch records, and fleet configuration. The installed template assigns one prefill and one decode role. |
-| `up` | Checks the ports and runtime, starts each engine, and captures live attestations. Profiles every role split with at least one prefill and one decode engine, starts the router, and reports `launched`. |
-| `verify` | Runs full preflight across every eligible directed KV path and checks the profiles against current processes. Sends an arithmetic request through the router, retains router and engine metrics, and reports `ready`. |
-| `status` | Reports `launched` while supervised processes pass HTTP health checks. Reports `ready` after successful verification with current transfer evidence. |
-| `down` | Checks the recorded boot ID and start ticks, and waits for the group's workers. Escalates survivors to SIGKILL and reports `stopped`. |
+| `init` | Writes a private instance with model and runtime pins, memory budget, unique ports, engine launch records, and fleet configuration. |
+| `up` | Starts each engine, profiles every role split with at least one prefill and one decode engine, starts the router, and reports `launched`. |
+| `verify` | Runs full preflight across every eligible directed KV path, sends an arithmetic request through the router, and reports `ready`. |
+| `status` | Reports `launched`, `ready`, or `degraded`. |
+| `down` | Stops the recorded process groups, escalates survivors to SIGKILL, and reports `stopped`. |
+
+| `status` report | Condition |
+| --- | --- |
+| `launched` | Supervised processes pass HTTP health checks |
+| `ready` | Verification succeeded with current transfer evidence |
+| `degraded` | A failed `verify` remains on record until a successful verification or a completed `down` |
 
 Running `init` again on an existing instance keeps the existing files, the operator edits, and the saved value of every omitted setting.
 
@@ -35,13 +47,15 @@ Running `init` again on an existing instance keeps the existing files, the opera
 
 To change initialization settings, run `narwhal dev init --instance runs/new-instance` with the desired template and flags.
 
-For engine authentication, export `NARWHAL_ENGINE_API_KEY` before `up`. Keep it set for profiling, verification, and routing.
+For engine authentication:
+
+1. Export `NARWHAL_ENGINE_API_KEY` before `up`.
+2. Keep it set for profiling, verification, and routing.
 
 A failed `verify`:
 
 - saves its reason, evidence directory, and failure time in `lifecycle.json` and the attempt's `failure.json`;
-- makes later `status` calls report `degraded`, with the record as `verification_failure` and its reason in `problems`;
-- remains until a successful verification or a completed `down`.
+- appears in later `status` output as `verification_failure`, with its reason in `problems`.
 
 A subsequent `up` adds a run directory with fresh profiles beside the earlier runs' logs and measurements.
 
@@ -90,8 +104,8 @@ Print the installed distribution version with `narwhal --version`.
 | `--gpu` | Single discovered GPU | Physical GPU UUID. |
 | `--engine-count` | Template value, `2` | Number of independent engine processes. |
 | `--port-base` | Template ports (router 18000, engine 18101, attestation 18201, NIXL 5701) | Base port for the router, engine HTTP, attestation, and NIXL ports. |
-| `--gpu-memory-utilization` | Template value, `0.35` | Per-engine fraction of total GPU memory; finite, greater than zero, and at most 1. |
-| `--device-allowance` | Template value, `0.8` | Fraction of total GPU memory that bounds the sum of engine fractions and the aggregate observed startup memory increase; finite and at most 1. |
+| `--gpu-memory-utilization` | Template value, `0.35` | Finite per-engine fraction of total GPU memory, above zero and at most 1. |
+| `--device-allowance` | Template value, `0.8` | Finite fraction of total GPU memory, at most 1, that bounds the sum of engine fractions and the aggregate observed startup memory increase. |
 | `--interface` | `eth0` | Local NIXL/UCX network interface. |
 
 `--port-base P` port layout:
@@ -103,26 +117,28 @@ Print the installed distribution version with `narwhal --version`.
 | Attestation range start | `P+101` |
 | NIXL range start | `P+201` |
 
-All selected ports must be distinct and fit 1..65535.
+Selected ports must be distinct and fit 1..65535.
 
 Memory rules:
 
 - `init` accepts two to eight engines.
-- The decimal sum of per-engine fractions must be at most the device allowance. Three engines at `0.1` fit an allowance of `0.3`.
-- The free-memory check reserves the allowance times total device memory, plus the template's `gpu.reserve_mib` (512 MiB in the installed template).
+- The decimal sum of per-engine fractions must be at most the device allowance.
+- Three engines at `0.1` fit an allowance of `0.3`.
+- The free-memory check reserves the allowance times total device memory, plus the template's `gpu.reserve_mib`.
+- The installed template's `gpu.reserve_mib` is 512 MiB.
 
 Change the model or runtime:
 
-1. Write a custom template with the changes. A model override needs its matching checksums and serving limits in the template.
+1. Write a custom template with the changes, including the matching checksums and serving limits for a model override.
 2. Select the template with `--template`.
 
 ## Role-split replay
 
 The RTX 5090 reference's `role_cycle` holds deterministic workloads for three role splits:
 
-- one prefill and three decode engines (1P:3D);
-- two prefill and two decode engines (2P:2D);
-- three prefill and one decode engine (3P:1D).
+- 1P:3D, one prefill and three decode engines;
+- 2P:2D, two prefill and two decode engines;
+- 3P:1D, three prefill and one decode engine.
 
 From a checkout, `python -m tools.measurement.dev_cycle --instance runs/dev` replays these workloads through a verified fleet and saves transition and latency checks.
 
@@ -139,5 +155,6 @@ If `up` fails:
 
 1. Inspect the log of the stage named in the error.
 2. Repair the configuration or runtime.
-3. Run `narwhal dev down` and confirm that it reports `stopped`.
-4. Run `narwhal dev up` again.
+3. Run `narwhal dev down`.
+4. Confirm that `down` reports `stopped`.
+5. Run `narwhal dev up` again.

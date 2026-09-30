@@ -1,6 +1,6 @@
 # `narwhal diagnostics`
 
-`narwhal diagnostics collect` sends GET requests to a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics`. It writes each response and selected local artifact to a fresh private directory.
+`narwhal diagnostics collect` writes a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics` GET responses, plus selected local artifacts, to a fresh private directory.
 
 Collect one router's bundle:
 
@@ -33,7 +33,7 @@ Output location:
 | `--fleet PATH`              | optional          | Fleet file to include.                                                                                  |
 | `--instance PATH`           | optional          | Dev instance directory to include, with its current run.                                                |
 | `--run PATH`                | optional          | Existing run directory to include.                                                                      |
-| `--artifact PATH`           | optional          | Additional regular file to include; repeatable.                                                         |
+| `--artifact PATH`           | optional          | Additional regular file to include, repeatable.                                                         |
 | `--source-timeout SECONDS`  | `5`               | Deadline for each source.                                                                               |
 | `--timeout SECONDS`         | `30`              | Time budget for the whole collection.                                                                   |
 | `--max-source-bytes BYTES`  | `8388608` (8 MiB) | Maximum input bytes retained per source.                                                                |
@@ -44,18 +44,18 @@ Pass at most one of `--run` and `--instance`.
 
 | Source                | Selected by                 | Included files                                                                                                                                                                                                                          |
 | --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dev instance          | `--instance`                | The instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run its lifecycle state records. That run must be inside the instance directory.                                                                          |
+| Dev instance          | `--instance`                | The instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run named in its lifecycle state, which must be inside the instance directory.                                                                             |
 | Run directory         | `--run`                     | `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs, stage stdout/stderr files, and the JSON, log, and stage output files directly under `engine-*` and `verify-*` directories. |
 | Request content       | `--include-request-content` | `journal.jsonl` and the completion artifacts.                                                                                                                                                                                           |
-| Files kept elsewhere  | `--artifact`                | Supervisor status, ingress logs, or deployment evidence. Each must be a regular file on a path free of symbolic links.                                                                                                                  |
+| Files kept elsewhere  | `--artifact`                | Regular files on symlink-free paths, such as supervisor status, ingress logs, or deployment evidence.                                                                                                                                   |
 
 Source limits:
 
 | Case                                                | Result                                                                                                                  |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| A source exceeds `--max-source-bytes`               | The first `--max-source-bytes` bytes are kept, the source is marked `truncated`, and collection continues within the overall budget. |
-| An endpoint stalls after its headers or first bytes | The deadline covers response streaming. The row keeps the HTTP status and the body received so far.                     |
-| A local file read                                   | The deadline is checked between bounded reads.                                                                          |
+| A source exceeds `--max-source-bytes`               | The first `--max-source-bytes` bytes are kept, and the source is marked `truncated`.                                    |
+| An endpoint stalls after its headers or first bytes | The row keeps the HTTP status and the body received before the deadline.                                                |
+| A local file read                                   | The source deadline applies between bounded reads.                                                                      |
 
 Use local files for incident collection.
 
@@ -80,7 +80,7 @@ Generated filenames are a four-digit source index plus a fixed label, such as `0
 
 | Write failure  | Result                                                                                           |
 | -------------- | ------------------------------------------------------------------------------------------------ |
-| Artifact write | A `write_error` row. Collection continues with the remaining sources and the manifest.           |
+| Artifact write | A `write_error` row, with the remaining sources and the manifest collected.                      |
 | Manifest write | The command's I/O error status.                                                                  |
 
 | Exit status | Operator action                                                   |
@@ -90,7 +90,11 @@ Generated filenames are a four-digit source index plus a fixed label, such as `0
 | `3`         | Inspect individual source outcomes in the partial bundle.         |
 | `4`         | Inspect the reported I/O failure and retained output directory.   |
 
-JSON command results report the bundle path, manifest path, collection status, and source count. The manifest's artifact entry records whether this invocation created it. Exit `3` maps to command status `degraded` and error code `collection_partial`.
+JSON command results:
+
+- `data` holds the bundle path, manifest path, collection status, and source count.
+- The manifest's artifact entry records whether this invocation created it.
+- Exit `3` maps to command status `degraded` and error code `collection_partial`.
 
 ## Content policy
 
@@ -103,15 +107,15 @@ JSON command results report the bundle path, manifest path, collection status, a
 Credential redaction covers the values in:
 
 - recognised credential fields, authorization headers, URL credentials, credential query parameters, and launch arguments;
-- `*_env` references in selected JSON sources (exported JSON keeps the reference names);
+- `*_env` references in selected JSON sources;
 - environment variables whose names identify credentials.
 
 Explicitly selected credential files get an `excluded` outcome: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`.
 
 | Export                              | Redaction                                                                                                                                    |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| JSON and JSONL                      | Structured fields stay intact after redaction.                                                                                               |
-| Incomplete JSON and free-text logs  | A labelled credential or request field ends the retained text at that point, including multiline and truncated values. Unlabelled operational lines stay. |
+| JSON and JSONL                      | Structured fields and `*_env` reference names stay intact after redaction.                                                                   |
+| Incomplete JSON and free-text logs  | Retained text ends at the first labelled credential or request field, including multiline and truncated values.                              |
 
 When credentials or request content use an application-specific encoding, supply free-text logs filtered by site tooling.
 
