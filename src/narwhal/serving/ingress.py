@@ -63,7 +63,10 @@ class ServingIngress:
             await _overloaded(state, "HTTP retention limit reached", scope, receive, send)
             return
         if router.saturated():
-            message = f"router event loop is {router.loop_lag_s:.2f}s behind"
+            message = (
+                f"router saturated: loop lag {router.loop_lag_s:.2f}s, "
+                f"token counting {router.sizing_delays.median():.2f}s"
+            )
             await _overloaded(state, message, scope, receive, send)
             return
         router.ingress_inflight += 1

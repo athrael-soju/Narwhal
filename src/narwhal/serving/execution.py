@@ -298,12 +298,16 @@ async def serve_request(
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
-        (
-            req.input_len,
-            req.cached_tokens,
-            req.cache_sequences,
-            req.cache_identities,
-        ) = await state.wait(lambda: router.size(body))
+        sizing = router._clock()
+        try:
+            (
+                req.input_len,
+                req.cached_tokens,
+                req.cache_sequences,
+                req.cache_identities,
+            ) = await state.wait(lambda: router.size(body))
+        finally:
+            router.sizing_delays.add(router._clock() - sizing)
         if state.demand_observation is not None:
             router.controller.demand.resize_arrival(
                 state.demand_observation,

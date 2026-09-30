@@ -14,6 +14,7 @@ from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.router import NarwhalRouter
+from narwhal.serving.saturation import RecentDelays
 from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, invalid_token_choices
 from tests.scheduling.test_cache_evidence import warm
@@ -149,12 +150,17 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.router.loop_lag_s = self.router.scheduler.slo.ttft_s
         response = await self.post(client)
         self.assertEqual(response.status_code, 429)
-        self.assertIn("event loop", response.json()["error"]["message"])
+        self.assertIn("router saturated", response.json()["error"]["message"])
         self.assertEqual(response.headers["retry-after"], "1")
         self.assertEqual(self.calls, [])
         self.assertEqual(self.router.rejected, 1)
         self.router.loop_lag_s = 0.0
+        self.router.sizing_delays.add(self.router.scheduler.slo.ttft_s)
+        self.assertEqual((await self.post(client)).status_code, 429)
+        self.assertEqual(self.calls, [])
+        self.router.sizing_delays = RecentDelays(60.0, self.router._clock)
         self.assertEqual((await self.post(client)).status_code, 200)
+        self.assertEqual(len(self.router.sizing_delays), 1)
         self.assert_released()
 
     async def test_a_stream_that_fails_before_output_returns_an_http_error(self):
