@@ -249,17 +249,16 @@ async def calibrate(
     dialect = lookup_dialect(cfg.dialect)
     if dialect.tokenize_path is None:
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
-    generations = {
-        spec.iid: (
-            await read_generation(
-                spec,
-                cfg.engine_contract,
-                timeout_s=observation_timeout_s,
-                headers=cfg.engine_headers(),
-            )
-        ).digest
+    started = {
+        spec.iid: await read_generation(
+            spec,
+            cfg.engine_contract,
+            timeout_s=observation_timeout_s,
+            headers=cfg.engine_headers(),
+        )
         for spec in cfg.engines
     }
+    generations = {iid: generation.digest for iid, generation in started.items()}
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,
@@ -437,7 +436,7 @@ async def calibrate(
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             generation_errors.append(f"{spec.iid}: {type(exc).__name__}: {exc}")
         else:
-            if current.digest != generations[spec.iid]:
+            if current.process_digest != started[spec.iid].process_digest:
                 changed.append(spec.iid)
     complete = (
         samples_per_group >= 100
