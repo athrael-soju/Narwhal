@@ -6,121 +6,60 @@
 
 | Field                                 | Default | Meaning                                                                                                                                                         |
 | ------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `recovery.eject_after`                | `3`     | Consecutive failed legs before breaker action. At least 1.                                                                                                      |
+| `recovery.eject_after`                | `3`     | Consecutive failed legs before the breaker acts. At least 1.                                                                                                    |
 | `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines. At least 1.                                                                                                |
 | `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks. `0` disables idle sweeps and is invalid with `whole_wave`. |
 | `recovery.liveness_misses`            | `2`     | Consecutive failed liveness probes before ejection. At least 1.                                                                                                 |
-| `recovery.health.window_s`            | `30.0`  | Residual-scoring window length. At least 1 second.                                                                                                              |
+| `recovery.health.window_s`            | `30.0`  | Length of the residual-scoring window. At least 1 second.                                                                                                       |
 | `recovery.health.drift_band`          | `2.0`   | Multiple of an engine's trailing healthy residual used as the drift threshold. Greater than 1.0.                                                                |
 | `recovery.health.relative_band`       | `1.5`   | Peer-relative multiple that can override the fleet-surge veto. `0` disables the veto. Nonnegative.                                                              |
-| `recovery.health.min_samples`         | `3`     | Samples required before scoring a window. At least 1 and bounded by the monitor/window relation above.                                                          |
+| `recovery.health.min_samples`         | `3`     | Samples needed before a window is scored. At least 1, and no more than the monitor/window bound in [§7](02-Serving-and-Role-Control.md#7-role-control).         |
 | `recovery.health.probation_windows`   | `3`     | Consecutive drifting windows before probation. At least 1.                                                                                                      |
-| `recovery.health.evict_windows`       | `5`     | Consecutive drifting windows before requesting ejection. At least `probation_windows`.                                                                          |
-| `recovery.health.recovery_windows`    | `3`     | Consecutive healthy windows required to clear probation. At least 1.                                                                                            |
-| `recovery.health.probation_penalty_s` | `1.5`   | Placement penalty during probation. Nonnegative.                                                                                                                |
+| `recovery.health.evict_windows`       | `5`     | Consecutive drifting windows before ejection is requested. At least `probation_windows`.                                                                        |
+| `recovery.health.recovery_windows`    | `3`     | Consecutive healthy windows needed to clear probation. At least 1.                                                                                              |
+| `recovery.health.probation_penalty_s` | `1.5`   | Placement penalty while on probation. Nonnegative.                                                                                                              |
 
-The probation penalty enters prefill placement cost in seconds. Compare it with the fleet's TTFT target and measured healthy placement cost before changing it.
+The probation penalty is added to prefill placement cost in seconds. Before changing it, compare it with the fleet's TTFT target and with the placement cost you measure on healthy engines.
 
-Connection failures count immediately toward `recovery.eject_after`.
-
-Transport timeouts trigger a health probe first.
-
-First-token timeouts and mid-stream stalls require functional verification of the affected inference path.
-
-If verification is inconclusive, Narwhal keeps the engine out of placement and retries on the readmission cadence.
-
-Router handoff preserves this placement hold and records the producer IDs for failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
+Failures are handled according to their kind. A connection failure counts toward `recovery.eject_after` straight away, while a transport timeout first triggers a health probe. First-token timeouts and mid-stream stalls require a functional check of the inference path that failed. If that check is inconclusive, the engine stays out of placement and Narwhal tries again on the readmission cadence. Router handoff carries this placement hold across and records the producer IDs of failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
 
 ### 8.2 Decode drift evidence
 
-The drift tracker compares fresh decode residuals and stalled inter-token gaps against each engine's recent healthy baseline.
+The drift tracker compares each engine's fresh decode residuals and stalled inter-token gaps with that engine's recent healthy baseline. Placement estimates still outstanding when decode completes are not counted as health evidence. The peer-relative test suppresses ejection when the whole fleet slows down at once.
 
-Placement estimates remaining after decode completion are excluded from health evidence.
+Prefill work on an engine invalidates its decode-only profile for as long as that work runs. Narwhal therefore pauses decode correction and drift scoring for any gap that crosses a prefill boundary, including a prefill that starts and finishes between two monitor passes. When pure decode observations return, scoring opens a new window but keeps the previous healthy baseline and any probation state. Client latency, controller pressure, request deadlines, and liveness checks keep observing the mixed work the whole time. The pauses appear in `/narwhal/state` as `health.prefill_paused` and `health.prefill_pauses`.
 
-Local prefill work invalidates the decode-only profile for the affected interval. Narwhal pauses decode correction and drift scoring for gaps that cross a prefill boundary, including prefills that both start and finish between monitor passes.
-
-When pure decode observations return, Narwhal starts a new scoring window while retaining the previous healthy baseline and probation state.
-
-Client latency, controller pressure, request deadlines, and liveness checks continue to observe mixed work while decode drift scoring is paused.
-
-`/narwhal/state` exposes `health.prefill_paused` and `health.prefill_pauses`.
-
-The peer-relative test suppresses ejection during fleet-wide slowdowns.
-
-A window with at least one observation and fewer than `recovery.health.min_samples` closes as `undersampled`. Narwhal discards its residuals and carries the baseline and probation state into the next window.
-
-`/narwhal/state` and `narwhal_health_windows_*_total` report scored and undersampled windows.
-
-`last_scored_s_ago` reports time since the most recent health verdict.
-
-Confirmed ejection clears the affected engine's drift history.
+A window with at least one observation but fewer than `recovery.health.min_samples` closes as `undersampled`. Its residuals are discarded, and the baseline and probation state carry forward into the next window. Scored and undersampled windows are counted in `/narwhal/state` and in `narwhal_health_windows_*_total`, and `last_scored_s_ago` reports the time since the most recent health verdict. A confirmed ejection clears the engine's drift history.
 
 ### 8.3 Engine restart policy
 
-`recovery.engine_restart_policy` accepts:
+`recovery.engine_restart_policy` is either `individual`, the default, or `whole_wave`. Choosing `whole_wave` requires a complete `engine_contract` and a `recovery.liveness_every` greater than zero. Under that policy, any ejection or identity failure holds the whole fleet until an operator completes the [engine-wave procedure](../operate/03-Restart-Engines.md#8-restart-an-engine-wave).
 
-- `individual` (default)
-- `whole_wave`
-
-`whole_wave` requires:
-
-- a complete `engine_contract`
-- `recovery.liveness_every > 0`
-
-Under `whole_wave`, an ejection or identity failure holds the fleet until an operator completes the [engine-wave procedure](../operate/03-Restart-Engines.md#8-restart-an-engine-wave).
-
-`recovery.failure_quarantine_s` keeps failed engines out of placement while health state converges.
+Independently of the policy, `recovery.failure_quarantine_s` (see [§6](02-Serving-and-Role-Control.md#6-request-deadlines-and-engine-http-behavior)) keeps failed engines out of placement while their health state settles.
 
 ---
 
 ## 9. Resume, shutdown, and warm-standby state
 
-| Field                        | Default             | Meaning                                                                  |
-| ---------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| `recovery.state_path`        | `"runs/state.json"` | Atomic handoff file for roles, ejections, lifecycle state, and counters. |
-| `recovery.resume`            | `false`             | Applies a compatible handoff file at startup.                            |
-| `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative whole seconds.       |
+| Field                        | Default             | Meaning                                                                      |
+| ---------------------------- | ------------------- | ---------------------------------------------------------------------------- |
+| `recovery.state_path`        | `"runs/state.json"` | Atomic handoff file holding roles, ejections, lifecycle state, and counters. |
+| `recovery.resume`            | `false`             | Applies a compatible handoff file at startup.                                |
+| `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`. Nonnegative whole seconds.           |
 
-At first startup, the router uses the split declared in the fleet configuration. On restart with resume enabled, it loads a compatible handoff from `recovery.state_path`.
+On first start, the router uses the split declared in the fleet configuration. On a restart with resume enabled, it loads the handoff from `recovery.state_path` if the file is compatible. An unknown handoff schema or version aborts startup.
 
-An uncontracted development fleet also falls back to the configured split if the saved engine set differs from the current one.
+An uncontracted development fleet also returns to the configured split when the saved engine set differs from the current one. Contracted fleets are stricter. Resume and automatic takeover need handoff schema version 1 and an accepted process identity for every available engine, and a schema-valid handoff that fails those checks puts the fleet on hold for a managed wave.
 
-Contracted resume and automatic takeover require:
+A successful resume restores roles, ejections, lifecycle holds, and complete-backend-outage state. Per-engine dwell timestamps restart from process startup, and the prefill-to-decode cooldown starts when the replacement scheduler is created.
 
-- handoff schema version 1
-- accepted process identities for every available engine
-
-An unknown handoff schema or version aborts startup.
-
-When a schema-valid handoff fails the contracted fleet's resume checks, Narwhal holds the fleet for a managed wave.
-
-Successful resume restores:
-
-- roles
-- ejections
-- lifecycle holds
-- complete-backend-outage state
-
-Per-engine dwell timestamps restart from process startup.
-
-The prefill-to-decode cooldown starts when the replacement scheduler is created.
-
-Warm-standby takeover remains a CLI concern because router IDs and shared lease paths vary by host.
-
-[Operate Narwhal](../operate/01-Start-Routers.md#4-start-a-router-pair) defines readiness, fencing, recovery, and partition behaviour.
+Warm-standby takeover is handled from the command line, because router IDs and shared lease paths vary from host to host. [Operate Narwhal](../operate/01-Start-Routers.md#4-start-a-router-pair) covers readiness, fencing, recovery, and partition behavior.
 
 ---
 
 ## 10. Engine authentication and protocol adapters
 
-Ingress terminates public client credentials.
-
-For engine requests, Narwhal attaches:
-
-- the configured engine Bearer credential
-- a router-generated `x-request-id` unique to every attempt and phase
-
-Configure engine authentication as:
+Public client credentials stop at ingress. On requests to engines, Narwhal sends the configured engine Bearer credential together with an `x-request-id` that the router generates fresh for every attempt and phase. Configure the credential by naming the environment variable that holds it:
 
 ```json
 {
@@ -130,46 +69,30 @@ Configure engine authentication as:
 }
 ```
 
-| Field                       | Default | Meaning                                                                                                                                                                                                                                                                                     |
-| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine.engine_api_key_env` | `""`    | Environment-variable name resolved when an engine client is created. Serving, profiling, preflight, cache-reset, and lifecycle requests carry its Bearer credential. Attestation uses the sidecar URL on the trusted control network. A named but unset variable fails client construction. |
+| Field                       | Default | Meaning                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.engine_api_key_env` | `""`    | Name of the environment variable read when an engine client is created. Serving, profiling, preflight, cache-reset, and lifecycle requests carry its Bearer credential. Attestation requests go to the sidecar URL on the trusted control network instead. If the variable is named but unset, client construction fails. |
 
-When this field names a credential during deployment export, the engine role also receives it as `NARWHAL_ENGINE_API_KEY`.
+When this field names a credential, deployment export also passes it to the engine role as `NARWHAL_ENGINE_API_KEY`. The engine launcher then writes `VLLM_API_KEY` into a mode-0600 `container.env` and hands that file to Docker. `/narwhal/state` shows the active mode under `admission.engine_auth` as either `boundary` or `engine-credential`. Use the same mode for workload measurement as for production serving.
 
-The engine launcher writes `VLLM_API_KEY` into mode-0600 `container.env` and supplies that file to Docker.
-
-`/narwhal/state` reports either `boundary` or `engine-credential` under `admission.engine_auth`.
-
-Keep the same authentication mode between workload measurement and production serving.
-
-Protocol selection is configured as:
+Protocol selection is configured with two fields:
 
 | Field              | Default  | Accepted value in this release |
 | ------------------ | -------- | ------------------------------ |
 | `engine.connector` | `"nixl"` | `nixl`                         |
 | `engine.dialect`   | `"vllm"` | `vllm`                         |
 
-A connector or dialect is registered only after its preflight gates pass against the target engine build.
-
-Unknown names fail configuration validation.
+Unknown names fail configuration validation. A connector or dialect is only registered after its preflight gates pass against the target engine build.
 
 ---
 
 ## 11. Profile validation
 
-The `profiles` object selects the profile store and decode-fit acceptance limits used by `narwhal-check`.
+The `profiles` object selects the profile store and sets the decode-fit limits that `narwhal-check` enforces.
 
-| Field                          | Default | Meaning                                                                                                                   |
-| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `profiles.max_decode_fit_mape` | `0.05`  | Maximum accepted in-sample decode-fit error. Positive, finite, and at most `controller.reactive.movement_margin`.            |
-| `profiles.max_decode_cv_mape`  | `0.13`  | Maximum accepted leave-one-out cross-validation error. Positive and finite.                                               |
+| Field                          | Default | Meaning                                                                                                                                     |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profiles.max_decode_fit_mape` | `0.05`  | Largest accepted in-sample decode-fit error. Positive, finite, and at most `controller.reactive.movement_margin`, whose default it matches. |
+| `profiles.max_decode_cv_mape`  | `0.13`  | Largest accepted leave-one-out cross-validation error. Positive and finite.                                                                 |
 
-The default decode-fit limit equals the default movement margin.
-
-Profiles must cover the context and concurrency range used by the deployment.
-
-`narwhal-check` applies both limits to every configured engine. A failure reports:
-
-- engine identity
-- measured error
-- configured limit
+`narwhal-check` applies both limits to every configured engine. When a limit fails, it reports the engine, the measured error, and the configured limit. Profiles need to cover the full range of context lengths and concurrency the deployment will see.

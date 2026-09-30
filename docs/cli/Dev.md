@@ -9,7 +9,7 @@ Templates choose the model, runtime, and memory budget. If a recipe needs a part
 ## Quick start
 
 ```bash
-narwhal dev init --model /path/to/model.gguf --model-dir /path/to/tokenizer
+narwhal dev init --model /path/to/Qwen3.5-0.8B-Q4_K_M.gguf --model-dir /path/to/tokenizer
 narwhal dev up
 narwhal dev verify
 narwhal dev status
@@ -51,11 +51,11 @@ When it's done, it reports `launched`.
 
 `status` reports `launched` while the instance's processes pass their HTTP health checks. Once `verify` has succeeded and its transfer evidence is still current, it reports `ready`.
 
-If `verify` fails, it saves the reason, the evidence directory, and the time of the failure in `lifecycle.json` and in that attempt's `failure.json`. From then on, `status` reports `degraded`, includes the saved record as `verification_failure`, and adds the reason to `problems`. This lasts until `verify` succeeds or `down` finishes. While a new `verify` is running, the earlier failure stays in place.
+If `verify` fails, it saves the reason, the evidence directory, and the time of the failure in `lifecycle.json` and in that attempt's `failure.json`. From then on, `status` reports `degraded`, includes the saved record as `verification_failure`, and adds the reason to `problems`. This lasts until a later `verify` or `down` succeeds. While a new `verify` is running, the earlier failure stays in place.
 
 ### `down`
 
-`down` checks the recorded boot ID and process start times, so it only stops processes the instance started. It waits for each process group's workers and leader to exit, and sends SIGKILL to anything still running. It reports `stopped`.
+`down` checks the recorded boot ID and process start times, so it only stops processes the instance started. It sends SIGTERM to each process group, waits for the group's workers and leader to exit, and sends SIGKILL to anything still running. It reports `stopped`.
 
 The next `up` creates a new run directory with new profiles. Logs and measurements from earlier runs are kept next to it.
 
@@ -65,7 +65,7 @@ The next `up` creates a new run directory with new profiles. Logs and measuremen
 | -------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--instance`               | `runs/dev`                                                                               | Instance directory. Works with every subcommand.                                                                                                                                            |
 | `--template`               | installed small-GPU template                                                             | Template for `init`, with versioned model, tokenizer, runtime, profiling, and memory settings.                                                                                              |
-| `--model`                  | pinned file in the Hugging Face cache                                                    | GGUF model file. Its checksum must match the template.                                                                                                                                      |
+| `--model`                  | pinned file in the Hugging Face cache                                                    | GGUF model file. Its file name and checksum must match the template.                                                                                                                        |
 | `--model-dir`              | pinned tokenizer cache directory                                                         | Directory with the tokenizer and config files.                                                                                                                                              |
 | `--gpu`                    | the GPU found, if there's only one                                                       | Physical GPU UUID.                                                                                                                                                                          |
 | `--engine-count`           | template value (2)                                                                       | Number of engine processes, from 2 to 8.                                                                                                                                                    |
@@ -97,23 +97,23 @@ narwhal dev up > result.json
 
 Exit codes in text mode:
 
-| Code | When                                                                                                                                                                                            |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0    | The status is `initialized`, `reused`, `starting`, `launched`, `ready`, or `stopped`.                                                                                                           |
-| 1    | A lifecycle operation failed, or the status is `degraded`. After a failed `verify`, both `verify` and later `status` calls return 1 until the failure is cleared, even if the HTTP checks pass. |
-| 2    | Invalid arguments, a problem with the instance configuration, or a runtime package error.                                                                                                       |
+| Code | When                                                                                                                                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | The status is `initialized`, `reused`, `starting`, `launched`, `ready`, or `stopped`.                                                                                                                         |
+| 1    | `up`, `verify`, `status`, or `down` failed, or the status is `degraded`. After a failed `verify`, both `verify` and later `status` calls return 1 until the failure is cleared, even if the HTTP checks pass. |
+| 2    | Invalid arguments, any `init` failure, a problem with the instance configuration, or a runtime package error.                                                                                                 |
 
-With `--format json`, the state is wrapped in a versioned command result. A degraded status returns 3 and an operational error returns 4.
+With `--format json`, the state is wrapped in a versioned command result, and the exit code follows the result's status. For example, a degraded instance returns 3. [Command results](../Command-Results.md#statuses-and-exit-codes) lists every status and its exit code.
 
 ## Replaying role splits on the RTX 5090
 
-The RTX 5090 reference also includes `role_cycle`, which has fixed, repeatable workloads for three splits of prefill to decode engines: 1P:3D, 2P:2D, and 3P:1D. From a checkout of the repository, this command replays them through a verified fleet and saves the transition and latency checks:
+The RTX 5090 reference also includes `role_cycle`, whose fixed, repeatable workloads drive the controller through three splits of prefill to decode engines: 1P:3D, 2P:2D, and 3P:1D. From a checkout of the repository, this command replays them through a verified fleet and saves the transition and latency checks:
 
 ```bash
 python -m tools.measurement.dev_cycle --instance runs/dev
 ```
 
-[Replay all three role splits](../dev/08-RTX-5090-Reference.md#replay-all-three-role-splits) describes the workload order, the output files, and the exit codes.
+[Replay the role cycle](../dev/08-RTX-5090-Reference.md#replay-the-role-cycle) describes the workload order, the output files, and the exit codes.
 
 ## Run directories
 

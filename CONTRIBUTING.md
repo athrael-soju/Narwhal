@@ -137,7 +137,7 @@ Keep the engine contract portable. Deployment automation owns hardware, model, i
 | `config/`      | Shipped configuration examples                                 |
 | `docs/`        | Repository documentation and GitHub Pages source               |
 | `deploy/`      | Optional deployment infrastructure                             |
-| `assets/`      | Images used by documentation                                   |
+| `docs/assets/` | Images used by documentation                                   |
 
 ### Source responsibilities
 

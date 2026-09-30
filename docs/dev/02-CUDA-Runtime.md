@@ -1,16 +1,16 @@
 # Install the CUDA runtime and model
 
-The installed template pins vLLM, Torch, NIXL, Transformers, the GGUF loader,
-the Qwen3.5-0.8B GGUF model and its tokenizer.
+The installed template pins exact versions of vLLM, Torch, NIXL,
+Transformers, and the GGUF loader, as well as specific revisions of the
+Qwen3.5-0.8B GGUF model and its tokenizer. `narwhal dev init` checks all of
+them, so install exactly what's listed here.
 
-| Requirement    | Value                                             |
-| -------------- | ------------------------------------------------- |
-| Host           | Linux x86-64, native Ubuntu or Ubuntu under WSL2  |
-| Shell          | Ubuntu shell in a Narwhal checkout on the Linux filesystem |
-| Python         | 3.12                                              |
-| GPU and driver | NVIDIA, with support for the pinned CUDA runtime  |
+You'll need an x86-64 machine running native Ubuntu or Ubuntu under WSL2,
+Python 3.12, and an NVIDIA GPU whose driver supports the pinned CUDA
+runtime. Run everything below from the root of a Narwhal checkout on the
+Linux filesystem.
 
-## Install the Python runtime
+## Install the Python packages
 
 ```bash
 python3.12 -m venv .venv-dev
@@ -22,7 +22,14 @@ python -m pip install \
   'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
 ```
 
+The last command installs the GGUF plugin from its release wheel. The next
+step replaces part of it.
+
 ## Apply the pinned GGUF loader sources
+
+The template expects the loader code from a particular plugin commit, not
+the code that ships in the wheel. Clone the plugin at that commit and copy
+its Python files over the installed package:
 
 ```bash
 mkdir -p runs
@@ -42,9 +49,10 @@ for path in source.rglob('*.py'):
 PY
 ```
 
-`narwhal dev init` checks the installed versions and plugin hashes against
-the selected template. Reapply the pinned sources after each plugin wheel
-reinstall.
+`narwhal dev init` hashes these files and compares them with the template.
+Reinstalling the wheel puts the original files back, so if you ever
+reinstall it, run the copy step again or `init` and `up` will refuse to
+continue.
 
 ## Download the model and tokenizer
 
@@ -57,7 +65,11 @@ hf download Qwen/Qwen3.5-0.8B \
   --include '*.json' '*.txt' '*.jinja'
 ```
 
-| Cache location             | `narwhal dev init` flags                                        |
-| -------------------------- | --------------------------------------------------------------- |
-| Default Hugging Face cache |                                                                 |
-| Another directory          | `--model` for the GGUF file, `--model-dir` for the tokenizer directory |
+The first command fetches the quantized weights. The second pulls only the
+tokenizer and config files from the original model repository.
+
+If you leave both in the default Hugging Face cache
+(`~/.cache/huggingface/hub`), `narwhal dev init` finds them without any
+extra flags. It looks only there, even if you've set `HF_HOME`. If you put
+them somewhere else, pass the GGUF file with `--model` and the tokenizer
+directory with `--model-dir`.

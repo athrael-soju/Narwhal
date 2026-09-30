@@ -1,40 +1,42 @@
-# GPU telemetry, alerts, and recovery
+# GPU telemetry, alerts, and troubleshooting
 
 ## GPU telemetry
 
-Run the deployment's AMD or NVIDIA exporter to discover GPUs and collect sensor metrics for the hardware dashboard.
+`make observe` only scrapes the router and the engines, and it doesn't ship a hardware dashboard. For GPU telemetry, run your deployment's AMD or NVIDIA exporter; it finds the GPUs and collects their sensor readings for its own hardware dashboard.
 
-## Alert evaluation
+<!-- TODO: name the supported exporters, their ports, and how they get added to the scrape targets. -->
 
-Prometheus evaluates `tools/observability/prometheus-alerts.yml` and exports evaluated and firing alerts through the `ALERTS` series.
+## Alerts
 
-Inspect the loaded and evaluated rules with:
+Prometheus loads its alert rules from `tools/observability/prometheus-alerts.yml`. To see which rules loaded and how they're evaluating:
 
 ```bash
 curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 ```
 
-The target generator labels router scrapes `job="narwhal-router"` and engine scrapes `job="engines"` with `iid=<engine identity>`; the alert rules select targets through those labels.
+Pending and firing alerts also appear as the `ALERTS` metric.
 
-Production monitoring uses the same rules file and routes alerts with `severity="page"` or `severity="warn"` through the deployment's alert manager.
+The rules pick their targets by label. Router scrapes have `job="narwhal-router"`. Engine scrapes have `job="engines"` plus an `iid` label holding the engine's identity. The `job` labels come from the scrape jobs in `prometheus.yml`, and the target generator sets `iid`, so if an alert seems to be looking at the wrong thing, check those labels first.
+
+The stack that `make observe` starts doesn't send alerts anywhere. Production monitoring loads the same rules file and routes alerts labeled `severity="page"` or `severity="warn"` through the deployment's alert manager.
 
 ## Troubleshooting
 
-| Failure                                                | What to inspect                                                                                                                                                                                                                                                            |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser cannot connect                                 | Confirm the SSH tunnel is running, verify the local forwarded port, and check the route to the router host.                                                                                                                                                                |
-| `make observe` reports an occupied listener            | Stop the reported process or socket unit, or move the deployment to isolated listeners with `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`.                                                                                                        |
-| Startup reports a command deadline                     | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`.                                                                                                                                                             |
-| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana` and confirm that the pinned image versions are being used.                                                                                                                             |
-| Prometheus reports `config permission denied`          | Use the updated monitoring startup helper and Compose file together, then rerun `make observe` from the same deployed checkout. If readiness still fails, inspect staged mount permissions and container logs. Retain the failure output in the private deployment record. |
-| Grafana returns dashboard 404                          | Use the updated monitoring startup helper and Compose file together, rerun `make observe`, then inspect staged mount permissions and Grafana logs if readiness still fails. Retain the failure output in the private deployment record.                                    |
-| Router target fails                                    | Check `NARWHAL_ROUTER_URL`, verify that Prometheus can route to it from the router host, and inspect Prometheus `/targets`.                                                                                                                                                |
-| An engine replica disappears from charts               | Check the generated target entry, reachability of that engine's metrics endpoint, and its `iid` label.                                                                                                                                                                     |
-| Grafana shows an older dashboard                       | Rerun `make observe` to replace the staged dashboard. The directory mount exposes the replacement to Grafana's provisioner. If the [dashboard readiness checks](01-Start-and-Verify.md#readiness-contract) still fail, inspect the provisioning log.                                                                           |
-| An alert evaluates against the wrong scope             | Inspect target relabelling for `job`, `instance`, and `iid`.                                                                                                                                                                                                               |
+| Problem                                       | What to check                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The browser can't connect                     | Make sure the SSH tunnel is still running, the local port is forwarded, and the router host is reachable.                                                                                                                                                                             |
+| `make observe` says a listener is in use      | Stop the process or socket unit it names, or [run this stack on its own address](02-Access.md#run-a-second-monitoring-stack-on-the-same-host).                                                                                                                                        |
+| A command times out during startup            | Check that the Docker daemon is healthy and the registry is reachable, then look at `docker compose -f tools/observability/compose.yml ps`.                                                                                                                                           |
+| A container exits, or readiness times out     | Read `docker compose -f tools/observability/compose.yml logs prometheus grafana` and confirm the containers are running the pinned image versions.                                                                                                                                    |
+| Prometheus reports `config permission denied` | The Compose file and the startup script probably come from different versions. Rerun `make observe` from the deployed checkout so they match. If that doesn't fix it, check the [config file permissions](01-Start-and-Verify.md#where-the-config-files-live) and the container logs. |
+| Grafana returns 404 for the dashboard         | Usually the same cause as the permission error above, with the same fix. If a rerun doesn't help, check Grafana's logs.                                                                                                                                                               |
+| The router target is down                     | Check `NARWHAL_ROUTER_URL` and that Prometheus can reach it from the router host. The `/targets` page shows the scrape error.                                                                                                                                                         |
+| An engine drops off the charts                | Check its entry in the generated targets, whether its metrics endpoint is reachable, and its `iid` label.                                                                                                                                                                             |
+| Grafana shows an old version of the dashboard | Rerun `make observe`. Grafana picks up the new file on its own within 30 seconds. If the [readiness checks](01-Start-and-Verify.md#what-ready-means) still fail, look at Grafana's provisioning log.                                                                                  |
+| An alert fires for the wrong target           | Check the `job`, `instance`, and `iid` labels on the targets.                                                                                                                                                                                                                         |
 
-## Retain monitoring captures
+## Keep a record
 
-Store deployment addresses and captured monitoring responses under `runs/`.
+Save deployment addresses and any monitoring output you capture under `runs/`, including failure output you might need to look at later. Add the verified Prometheus targets and dashboard queries to the load record from [deployment acceptance](../deploy/07-Serve-and-Measure.md).
 
-Follow [Operate Narwhal](../operate/02-Monitor.md#6-monitor-placement-and-control) for fleet-health actions. Include verified Prometheus targets and dashboard queries with the retained load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
+For what to do when the fleet itself is unhealthy, see [Operate Narwhal](../operate/02-Monitor.md#6-monitor-placement-and-control).

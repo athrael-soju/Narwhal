@@ -2,25 +2,19 @@
 
 ## Completion API
 
-Both completion routes serve the model configured for the fleet and return OpenAI-compatible response shapes.
+Narwhal serves one model per fleet, the one set in its configuration, on two OpenAI-compatible routes.
 
 ### `POST /v1/completions`
 
-For a non-streaming completion, Narwhal returns `object: "text_completion"` with generated text in `choices[0].text`.
+A non-streaming request returns `object: "text_completion"`, with the generated text in `choices[0].text`.
 
 ### `POST /v1/chat/completions`
 
-For a non-streaming chat completion, Narwhal returns `object: "chat.completion"` and an assistant message in `choices[0].message`. Its `content` is `null` when the response contains reasoning or tool-call output alone.
-
----
+A non-streaming request returns `object: "chat.completion"`, with the assistant's reply in `choices[0].message`. If the model produced only reasoning or tool calls, `content` is `null`.
 
 ## Request contract
 
-Narwhal parses each completion request as a JSON object and validates router-interpreted fields before reserving admission or engine capacity.
-
-### Validated field types
-
-Non-null values must use the following types:
+The request body must be a JSON object. Before reserving an admission seat or any engine capacity, the router checks the fields it reads itself. When one of these fields is present and not null, it must have the type shown:
 
 | Field        | Required type                 |
 | ------------ | ----------------------------- |
@@ -32,9 +26,9 @@ Non-null values must use the following types:
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 
-Narwhal returns HTTP `400` in an OpenAI error envelope for invalid JSON, body shape, or router-interpreted field type. It also writes one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
+Anything else in the body goes to the engine untouched.
 
-Example:
+If the JSON is invalid, the body has the wrong shape, or one of these fields has the wrong type, the client gets HTTP `400` in an OpenAI error envelope, and the journal gets a [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`. For example:
 
 ```json
 {
@@ -47,34 +41,24 @@ Example:
 }
 ```
 
-Fields outside the router validation set pass through unchanged.
-
 ### Model handling
 
-Narwhal checks the requested `model` before dispatch and returns HTTP `404` with `model_not_found` if it names another model. For accepted requests, Narwhal sets the engine request's `model` to the configured model.
+If `model` names anything other than the configured model, the request fails with HTTP `404` and `model_not_found` before dispatch. Accepted requests are forwarded with `model` set to the configured model.
 
 ### Sampling width
 
-Narwhal returns HTTP `400` for `n > 1` or `best_of > 1` because the one-token prefill leg and decode leg must use the same sampling width.
+Values of `n` or `best_of` above 1 return HTTP `400`. Prefill runs as a separate one-token request, and it has to use the same sampling width as the decode leg that follows it.
 
 ### Output and tool restrictions
 
-Non-streaming requests accept text output and function tools. Narwhal returns HTTP `400` before engine dispatch for:
+Non-streaming requests can ask for text output and function tools. A non-streaming request is rejected with HTTP `400` before it reaches an engine if it sets `audio`, sets `modalities` to anything other than `["text"]`, or includes a tool whose type isn't `function`. The error type is `invalid_request_error`, and `param` names the option that was rejected.
 
-- `audio`
-- an output `modalities` value other than `["text"]`
-- a tool type other than `function`
-
-The error uses `invalid_request_error` and identifies the rejected option in `param`.
-
-Model and engine configuration determine actual support for input formats, reasoning, and function tools.
-
----
+Passing these checks doesn't guarantee the feature works. Support for particular input formats, reasoning, and function tools depends on the model and engine configuration.
 
 ## Request identity and authentication
 
-Narwhal assigns a router request ID at ingress, returns it as `x-request-id`, and derives a backend ID for each engine attempt and execution phase to track KV ownership. The request journal stores the forwarded client request ID as `client_rid` for correlation.
+Narwhal gives every completion request its own router request ID when it arrives and returns it to the client in the `x-request-id` response header. From it, Narwhal derives a separate backend ID for each engine attempt and execution phase, which is how it tracks KV ownership. If the request arrived with its own `x-request-id` header, the request journal keeps that value as `client_rid` so you can correlate the two.
 
-Ingress authenticates clients, strips client credentials and client-supplied internal IDs, then installs trusted values that Narwhal uses for client identity. Set `engine.engine_api_key_env` to attach the deployment's engine credential to serving and control requests.
+Narwhal doesn't authenticate clients itself. Your ingress in front of it authenticates the client, strips client credentials and any internal IDs the client supplied, then installs the trusted values Narwhal uses to identify the client. To attach the deployment's engine credential to serving and control requests, set `engine.engine_api_key_env`.
 
-See [Configure Narwhal](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) for the engine authentication boundary and [Operate Narwhal](../operate/01-Start-Routers.md#3-configure-the-client-path) for ingress requirements.
+The engine authentication boundary is covered in [Configure Narwhal](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters), and ingress requirements in [Operate Narwhal](../operate/01-Start-Routers.md#3-configure-the-client-path).

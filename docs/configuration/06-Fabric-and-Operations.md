@@ -2,176 +2,91 @@
 
 ## 17. Fabric workload qualification
 
-`prepare` writes a snapshot of `tools/deployment/fabric_budget.py` for each engine host, stores its SHA-256 in the manifest and engine role environment, and packages the selected application revision in `source.bundle`. `install` checks the transferred snapshot before copying it to `runs/deployment-tools/`.
-
-Start a new preparation directory when the helper changes so each run retains its source bundle, helper snapshot, and recorded digest.
+For each engine host, `prepare` writes a snapshot of `tools/deployment/fabric_budget.py`, stores its SHA-256 in the manifest and the engine role environment, and packages the selected application revision in `source.bundle`. `install` checks the transferred snapshot before copying it into `runs/deployment-tools/`. Whenever the helper changes, start a new preparation directory so that each run keeps its own source bundle, helper snapshot, and recorded digest.
 
 ### 17.1 Calculate the workload budget
 
-For each representative engine role and matching cache configuration:
+Run the calculator once for each representative engine role and matching cache configuration:
 
 ```bash
-python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
+python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
+  --model-config <config.json> --launch-config <launch-record.json> \
+  --runtime-layout <cache-layout.json> \
+  --prompt-tokens <tokens> --handoffs-per-s <rate> --burst <handoffs> \
+  --transfer-budget-s <seconds> --headroom <factor> \
+  --out <budget.json>
 ```
 
-`calculate` takes the representative's captured `cache-layout.json` through `--runtime-layout`. Use `launch_engine.py capture-cache` to capture that file from the running engine.
+`calculate` reads the representative's `cache-layout.json` through `--runtime-layout`. Capture that file from the running engine with `launch_engine.py capture-cache`. The calculator verifies the model and launch-record hashes, sums the padded cache-page bounds across TP ranks, and works out the link rate the workload needs. The workload itself is described by prompt length, peak remote-handoff rate, burst, transfer-time budget, and a headroom factor of at least 1.
 
-The calculator:
-
-1. verifies model and launch-record hashes,
-2. sums padded cache-page bounds across TP ranks,
-3. derives the link rate required by the configured workload.
-
-The workload inputs are:
-
-- prompt length
-- peak remote-handoff rate
-- burst
-- transfer-time budget
-
-[Transfer fabric preparation](../deploy/04-Qualify-Fabric.md) groups roles by:
-
-- discovered image
-- model
-- accelerator
-- TP shape
-- runtime inputs
-
-Capture the live cache layout from every engine. Matching layouts share a source budget derived from one representative capture; each directed host edge is compared with that source budget.
+[Engine validation](../deploy/03-Validate-Engines.md#derive-cache-equivalence-groups) groups roles by image, model config, accelerator, TP shape, GPU visibility, runtime inputs, and transport. Capture the live cache layout from every engine. In [transfer fabric qualification](../deploy/04-Qualify-Fabric.md), engines whose layouts match share one source budget, derived from a single representative capture, and each directed host edge is compared against that budget.
 
 ### 17.2 Retained budget evidence
 
-The representative writes mode-0600 `runs/fabric-*/budget.json` containing:
+The representative writes a mode-0600 `runs/fabric-*/budget.json` containing the model-config, launch-record, and runtime-layout hashes, the prompt length, padded-page payload bound, sizing assumptions, and the required rate in decimal Gbit/s. Each matching source role copies the budget rate and hash into its private comparison file.
 
-- input hash
-- runtime-layout hash
-- prompt length
-- padded-page payload bound
-- sizing assumptions
-- required decimal Gbit/s
-
-Each matching source role records the budget rate and hash in its private comparison file.
-
-The captured layout retains:
-
-- per-rank page bytes
-- per-layer page bytes
-- token block size
-- state allowance
-- boundary allowance
-- image identity
-- package versions
-- application revision
-- launch-plan hash
-
-After model loading and memory profiling, the representative captures its cache pages and continues to HTTP startup. Attestation and workload trials use that running model and its recorded cache geometry.
+The captured layout records per-rank and per-layer page bytes, the token block size, state and boundary allowances, image identity, package versions, application revision, and launch-plan hash. The representative captures its cache pages after model loading and memory profiling, then continues to HTTP startup, so attestation and workload trials run against that same model and its recorded cache geometry.
 
 ### 17.3 Uniform-cache options
 
-`--uniform-cache` selects an analytical attention/MLA estimate.
-
-`--bytes-per-token` supplies a measured uniform-cache override.
-
-Both uniform modes require:
-
-```text
---element-bytes
---block-tokens
-```
-
-The deployment path uses the runtime page record for both hybrid and uniform models.
+`--uniform-cache` switches to an analytical attention/MLA estimate, and `--bytes-per-token` supplies a measured uniform-cache figure instead. Both uniform modes need `--element-bytes` and `--block-tokens`. The deployment path doesn't use either one: it relies on the runtime page record for hybrid and uniform models alike.
 
 ### 17.4 Link evidence
 
-TCP comparisons use aggregate bitrate reported by the iperf3 receiver.
+TCP comparisons use the aggregate bitrate reported by the iperf3 receiver, and RDMA comparisons use the average Gbit/s from the retained perftest report.
 
-RDMA comparisons use average Gbit/s from the retained perftest report.
+`fabric_budget.py link` fingerprints each directed pair by its roles, addresses, interfaces, routes, transport, utility version, and test parameters, and `record-edge` binds the bandwidth sample and source budget to that fingerprint. If a budget is corrected later and the fingerprint still matches, `reuse-edge` compares the retained sample against the new budget and writes a new private comparison.
 
-`fabric_budget.py link` records each directed pair's:
-
-- roles
-- addresses
-- interfaces
-- routes
-- transport
-- utility version
-- test parameters
-
-`record-edge` binds the sample and source budget to that fingerprint.
-
-`reuse-edge` compares a retained bandwidth sample against a corrected budget when the fingerprint still matches, then writes a new private comparison.
-
-Each budget covers one directed host edge at the recorded workload.
-
-Running-engine KV probes and concurrent-capacity tests provide later acceptance evidence.
+Each budget applies to one directed host edge at the recorded workload. It is not the final word on the fabric: KV probes on the running engines and concurrent-capacity tests come later and provide the acceptance results.
 
 ---
 
 ## 18. CLI precedence
 
-`narwhal-serve` applies these CLI overrides after loading the fleet document:
+`narwhal-serve` loads the fleet document first and then applies these overrides:
 
-| CLI option           | Config field                 | Behaviour                                              |
-| -------------------- | ---------------------------- | ------------------------------------------------------ |
-| `--max-concurrent`   | `serving.max_connections`    | Replaces router admission capacity.                    |
-| `--graceful-timeout` | `serving.graceful_timeout_s` | Replaces Uvicorn shutdown drain time.                  |
-| `--resume`           | `recovery.resume`            | Forces resume on. A configured `true` remains enabled. |
+| CLI option           | Config field                 | Behavior                                                         |
+| -------------------- | ---------------------------- | ---------------------------------------------------------------- |
+| `--max-concurrent`   | `serving.max_connections`    | Sets the router's admission limit, at most the configured value. |
+| `--graceful-timeout` | `serving.graceful_timeout_s` | Replaces the Uvicorn shutdown drain time.                        |
+| `--resume`           | `recovery.resume`            | Forces resume on. A configured `true` stays enabled either way.  |
 
-Configure the bind address, port, log level, journal path, and warm standby through CLI flags:
-
-- `--host`
-- `--port`
-- `--log-level`
-- `--journal`
-- warm-standby options
-
-The [CLI reference](../CLI-Reference.md) defines their defaults and validation.
+The bind address, port, log level, journal path, and warm-standby behavior are set with CLI flags: `--host`, `--port`, `--log-level`, `--journal`, and the warm-standby options. The [CLI reference](../CLI-Reference.md) gives their defaults and validation rules.
 
 ---
 
 ## 19. Request journal
 
-Narwhal writes request timing records to `journal.jsonl` beside `profiles.path`. Use `narwhal-serve --journal PATH` to select another path.
-
-The [request-journal reference](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) defines the record format.
+Narwhal writes request timing records to `journal.jsonl` next to `profiles.path`. To put the journal somewhere else, pass `narwhal-serve --journal PATH`. The [request-journal reference](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) describes the record format.
 
 ---
 
 ## 20. Configuration provenance and publication
 
-Keep the exact fleet configuration beside every scored run.
+Keep the exact fleet configuration alongside every scored run.
 
-Fleet documents contain engine URLs and can reveal site addresses. Replace those values before publishing an artifact.
-
-The repository's annotated example uses placeholder addresses.
-
-Live fleet files belong under:
-
-- ignored `runs/`
-- a gitignored `config/fleet.*.json` path
-
-Keep real host allocations, deployment credentials, runtime evidence, and launch records in ignored private paths.
+Fleet documents contain engine URLs, which can reveal site addresses, so replace them before publishing any artifact. The repository's annotated example already uses placeholder addresses. Live fleet files belong in the ignored `runs/` directory or in a Git-ignored `config/fleet.*.json` path, and the same goes for real host allocations, deployment credentials, runtime captures, and launch records: keep them in ignored private paths.
 
 ---
 
 ## 21. Operational sequence
 
-For a new or materially changed deployment, the configuration flow is:
+A new deployment, or one that has changed materially, goes through these steps:
 
-1. Define the fleet model, SLOs, engine set, controller policy, serving bounds, recovery policy, and profile limits.
+1. Define the fleet's model, SLOs, engine set, controller policy, serving bounds, recovery policy, and profile limits.
 2. Load the private workstation `.env`.
-3. Run deployment discovery to produce host inventory, SSH trust, fleet endpoints, launch records, source indexes, and deployment environment.
+3. Run deployment discovery to produce the host inventory, SSH trust store, fleet endpoints, launch records, source indexes, and deployment environment.
 4. Prepare a new deployment output directory from the exact management revision.
-5. Install the verified source bundle and role-specific configuration to each physical host.
+5. Install the verified source bundle and role-specific configuration on each physical host.
 6. Inspect every engine host against its generated launch record.
 7. Verify image, package, and connector identity, then start every engine and capture its live cache layout.
 8. Qualify the directed transfer fabric against budgets derived from the matching cache layouts.
-9. Start one attestation sidecar per engine and finalise the fleet contract from the live processes.
-10. Profile the deployed engine shape using generated `profiling-limits.json`.
+9. Start one attestation sidecar per engine and finalize the fleet contract from the live processes.
+10. Profile the deployed engine shape with the generated `profiling-limits.json`.
 11. Run `narwhal-check` against the exact fleet and engine build.
 12. Start the router and observability services with the qualified fleet configuration.
-13. Measure workload capacity with the final authentication mode, queueing, retry, byte-limit, and timeout settings.
-14. Run controller advisory mode against representative traffic before allowing production role movement.
-15. Preserve the fleet, generated private inputs, launch evidence, revision, launcher digest, and container identity beside the run artifacts.
+13. Measure workload capacity with the final settings for authentication, queueing, retries, byte limits, and timeouts.
+14. Run the controller in advisory mode against representative traffic before allowing role movement in production.
+15. Keep the fleet, the generated private inputs, the launch records, the revision, the launcher digest, and the container identity with the run artifacts.
 
-Any material change to engine build, serving policy, queueing, concurrency, retry, handoff timeout, or byte limits invalidates the corresponding capacity evidence and requires remeasurement.
+A material change to the engine build, serving policy, queueing, concurrency, retries, handoff timeout, or byte limits invalidates the capacity measurements that depend on it, and those measurements have to be repeated.

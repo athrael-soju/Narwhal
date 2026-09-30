@@ -1,6 +1,6 @@
 # `narwhal-check`
 
-Run `narwhal-check` before you send traffic to a fleet. It runs nine gates in order and exits 0 only if all of them pass:
+Run `narwhal-check` before you send traffic to a fleet. It runs nine gates in order and exits 0 if none of them fails:
 
 `reach` → `contract` → `profile` → `model` → `pace` → `tokenize` → `produce` → `consume` → `slo`
 
@@ -12,12 +12,12 @@ narwhal-check --fleet fleet.json
 
 ### Preflight
 
-| Option         | Default         | Description                                                                                        |
-| -------------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `--fleet PATH` | none            | Fleet config (JSON). Needed for preflight, calibration, and evidence checks.                       |
-| `--ring`       | off (full mesh) | Test each engine against one peer instead of every eligible pair. Only affects the `consume` gate. |
-| `--repeats N`  | `1`             | Transfer probes per pair. Values below 1 count as 1.                                               |
-| `--no-kv`      | off             | Skip the `produce` and `consume` gates.                                                            |
+| Option         | Default         | Description                                                                                                                                     |
+| -------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--fleet PATH` | none            | Fleet config (JSON). Needed for preflight, calibration, and evidence checks.                                                                    |
+| `--ring`       | off (full mesh) | Test a rotating set of pairs that covers every eligible producer and consumer, instead of every eligible pair. Only affects the `consume` gate. |
+| `--repeats N`  | `1`             | Transfer probes per pair. Values below 1 count as 1.                                                                                            |
+| `--no-kv`      | off             | Skip the `produce` and `consume` gates.                                                                                                         |
 
 ### KV evidence
 
@@ -28,15 +28,15 @@ narwhal-check --fleet fleet.json
 
 ### Calibration
 
-These options only apply with `--calibrate-first-token`. See [Calibrating the first-token deadline](#calibrating-the-first-token-deadline).
+These options need `--calibrate-first-token`, and `narwhal-check` rejects them without it. See [Calibrating the first-token deadline](#calibrating-the-first-token-deadline).
 
-| Option                            | Default | Description                                         |
-| --------------------------------- | ------- | --------------------------------------------------- |
-| `--calibrate-first-token`         | off     | Measure first-token latency and propose a deadline. |
-| `--input-tokens LIST`             | none    | Input lengths to test, separated by commas.         |
-| `--samples N`                     | `100`   | Handoffs per engine pair and input length.          |
-| `--observation-timeout-s SECONDS` | none    | How long to wait for the first token.               |
-| `--calibration-out PATH`          | none    | A new JSON file under `runs/` for the results.      |
+| Option                            | Default  | Description                                         |
+| --------------------------------- | -------- | --------------------------------------------------- |
+| `--calibrate-first-token`         | off      | Measure first-token latency and propose a deadline. |
+| `--input-tokens LIST`             | required | Input lengths to test, separated by commas.         |
+| `--samples N`                     | `100`    | Handoffs per engine pair and input length.          |
+| `--observation-timeout-s SECONDS` | required | How long to wait for the first token.               |
+| `--calibration-out PATH`          | required | A new JSON file under `runs/` for the results.      |
 
 ### Output and information
 
@@ -86,7 +86,7 @@ Calibrate before you qualify a fleet. Calibration runs fresh handoffs at each in
 
 ```bash
 narwhal-check --fleet fleet.json --calibrate-first-token \
-  --input-tokens 512,4096,16384 \
+  --input-tokens 512,4096,16383 \
   --observation-timeout-s 30 \
   --calibration-out runs/first-token.json
 ```
@@ -109,7 +109,7 @@ A run is incomplete if any attempt fails, an engine's process generation changes
 
 ### The output file
 
-The file contains every raw attempt, the p99 and maximum for each group, the proposed deadline, and the engine generations. Narwhal doesn't apply the deadline for you. If you want to use it, copy it into `engine.first_token_timeout_s` yourself.
+The file contains every raw attempt, the p99 and maximum for each group, the proposed deadline, and the engine generations. Narwhal doesn't apply the deadline for you. Set `engine.first_token_timeout_s` to a value strictly greater than the proposed deadline, and point `engine.first_token_calibration_path` at the file. Preflight and router startup reject a configured deadline that isn't above it.
 
 ## Exit codes
 
@@ -117,8 +117,10 @@ In text mode:
 
 | Code | Meaning                                                               |
 | ---- | --------------------------------------------------------------------- |
-| 0    | Every gate passed.                                                    |
+| 0    | No gate failed.                                                       |
 | 1    | A gate or operation failed.                                           |
 | 2    | Invalid arguments, or the fleet config couldn't be read or validated. |
+
+A skipped gate doesn't fail a text-mode run: `narwhal-check` prints `all gates pass, N skipped` and exits 0. For example, `contract` is skipped when the fleet declares no `engine_contract`. With `--evidence-out`, any skipped gate makes the run exit 1.
 
 In JSON mode, exit codes follow the [command result contract](../Command-Results.md).

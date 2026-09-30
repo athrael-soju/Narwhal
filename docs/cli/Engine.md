@@ -3,11 +3,11 @@
 `narwhal-engine` prepares and runs vLLM engines from an existing `narwhal.engine-launch` record. It has two backends:
 
 - `native` runs vLLM from the checked Python environment on Linux or WSL2.
-- `container` runs it in Docker, the same way as before.
+- `container` runs it in a Docker container.
 
 Both backends use the same model, GPU allocation, ports, and NIXL connector, and both run the same checks on the runtime arguments.
 
-## Overview
+## How it works
 
 Every action works on a launch directory. `prepare` creates one, which you name with `--out`. Every later action points at it with `--run`.
 
@@ -18,6 +18,7 @@ A typical native run on one GPU looks like this:
 ```bash
 narwhal-engine prepare --backend native --out runs/engine-1
 narwhal-engine check --run runs/engine-1
+# Prepare and check runs/engine-2 the same way.
 narwhal-engine start-shared --backend native --run runs/engine-1 --run runs/engine-2
 python -m narwhal.deployment.attestation_contract native-capture --run runs/engine-1
 narwhal-engine stop-native --run runs/engine-1
@@ -42,7 +43,7 @@ The native backend needs `NARWHAL_MODEL_REVISION` set, along with the launch env
 | `measure-cache`      | container | Starts a temporary container from a checked plan that hasn't been used yet, writes `cache-layout.json`, and removes the container when it's done.                                                                            |
 | `model-dimensions`   | container | Inspects the model through the checked runtime and writes `model-dimensions.json`.                                                                                                                                           |
 | `handshake-policy`   | both      | Compares the installed NIXL worker with the checked connector settings and writes `handshake-policy.json`.                                                                                                                   |
-| `start`              | container | Starts one serving container from a checked plan, saves its ID in `container.id`, and then checks that it's ready over HTTP.                                                                                                 |
+| `start`              | container | Starts one serving container from a checked plan and saves its ID in `container.id`. It doesn't wait for readiness, so follow the container's logs and check its HTTP endpoints yourself.                                    |
 | `capture-cache`      | container | Reads the running container recorded in a checked launch directory and saves its live cache pages to `cache-layout.json`.                                                                                                    |
 | `cache-registration` | both      | Works out block grouping from the checked runtime plus either a serving startup log or a captured runtime layout, and writes `cache-registration.json`.                                                                      |
 | `start-shared`       | both      | Starts two to eight checked plans that share one GPU, one at a time. Each engine gets a `shared-start.json` with its readiness, identity, and memory readings.                                                               |
@@ -89,7 +90,7 @@ If startup fails, the command removes every container it created, newest first. 
 
 For each engine, the command records its Linux PID, the machine's boot ID, the process start time (in kernel clock ticks), the vLLM version, the process start time reported by `/metrics`, the model revision, and the arguments.
 
-If startup fails, the command stops the engine that was starting, then stops the engines that were already ready, using their recorded identities. The failed engine's `shared-start.json` records the cause, any cleanup errors, and a GPU memory reading taken after cleanup. Each engine that was stopped successfully gets a `native-stop.json`.
+If startup fails, the command stops the engine that was starting, then stops the engines that were already ready, using their recorded identities. The failed engine's `shared-start.json` records the cause, any cleanup errors, and a GPU memory reading taken after cleanup. Each already-ready engine that stops successfully gets a `native-stop.json`.
 
 ### Port checks with the native backend
 
@@ -105,7 +106,7 @@ To check the attestation sidecar's address as well, set `NARWHAL_NODE_<n>_ATTEST
 python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>
 ```
 
-`stop-native` checks the recorded boot ID and process start time, so it only stops processes it started. It then waits for each process group's leader and workers to exit, and sends SIGKILL to any that are still running.
+`stop-native` checks the recorded boot ID and process start time, so it only stops processes it started. It sends SIGTERM to the process group, waits up to 10 seconds for the leader and workers to exit, and then sends SIGKILL to any that are still running.
 
 ## Starting engines over Windows OpenSSH
 

@@ -2,7 +2,7 @@
 
 Installing `narwhal-inference` gives you the commands below. `narwhal --help` lists all six installed commands.
 
-Every command accepts `-h`, `--help`, and `--version`. Relative paths are resolved from the directory you run the command in.
+Every installed executable accepts `-h`, `--help`, and `--version`. Subcommands such as `narwhal config` accept `-h` and `--help`; put `--version` straight after the executable name. Relative paths are resolved from the directory you run the command in.
 
 In deployment scripts, call the installed `narwhal-*` commands rather than Python module paths, because module paths can change between releases. (`python -m narwhal.cli` also starts a router.)
 
@@ -26,6 +26,8 @@ In the default text mode, the deployment and lifecycle commands use these exit c
 | 0    | Success.                                                                                                                                                                                                     |
 | 1    | An operation failed, such as an engine HTTP request, a runtime inspection, a listener bind, a verification gate, or teardown. `narwhal dev status` also returns 1 when the development instance is degraded. |
 | 2    | Invalid arguments or configuration input.                                                                                                                                                                    |
+
+`narwhal diagnostics collect` also returns 3 for a partial bundle and 4 for an I/O error. See [Manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status).
 
 When a failure is expected, the command prints the command name, the operation, and the path or value involved to stderr. Unexpected failures print a Python traceback. If an engine inspection fails, its subprocess output is kept in the run's diagnostic logs.
 

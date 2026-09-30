@@ -1,12 +1,10 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Keep the running fleet idle while measuring each directed link against a budget derived from its source group's resolved cache layout.
+Before any real KV traffic moves, measure every directed link between engine hosts and compare it with the bandwidth the source engine's cache will need. Keep the fleet running but idle throughout.
 
 ## Build the source budget
 
-The initial trial assumes one remote handoff per second, 1,024 prompt tokens per handoff, burst size one, one-second transfer budget, and 25% bandwidth headroom. Apply the full handoff rate independently to every candidate directed edge.
-
-Calculate:
+The first trial assumes one remote handoff per second, 1,024 prompt tokens per handoff, bursts of one, a one-second transfer budget, and 25% bandwidth headroom. Each candidate directed edge has to carry that full rate on its own. Don't divide it between edges.
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
@@ -18,15 +16,15 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
   --out "$FABRIC_RUN/budget.json"
 ```
 
-For every layer and TP rank, page demand is:
+For each layer and TP rank, the number of pages needed is:
 
 ```text
 ceil(prompt_tokens / block_tokens) + extra_blocks
 ```
 
-The calculator counts the complete prompt for full attention and MLA, boundary state plus speculative/checkpoint slots for Mamba, and a boundary page for windowed attention. It sums padded page bytes across every layer and TP rank in the resolved runtime layout, so the source budget covers the complete padded cache even when the connector transfers a subset.
+`extra_blocks` depends on the layer type. Full attention and MLA add none, so they count just the prompt's pages. Mamba layers add one page for the boundary state plus the speculative and checkpoint slots. Windowed attention adds one boundary page. The calculator adds up the padded page bytes across every layer and rank in the runtime layout. The budget therefore covers the whole padded cache, even when the connector only sends part of it.
 
-Required link rate is:
+The required link rate, in decimal Gbit/s, is:
 
 ```text
 8 * payload_bytes *
@@ -34,7 +32,7 @@ max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) *
 headroom / 1e9
 ```
 
-The result is decimal Gbit/s. Verify one common layout across TP ranks:
+One budget per group only works if every TP rank resolved the same layout. Check that, and take the budget's digest:
 
 ```bash
 python3 - <<'PY_REPRESENTATIVE_BUDGET'
@@ -53,9 +51,9 @@ PY_REPRESENTATIVE_BUDGET
 sha256sum "$FABRIC_RUN/budget.json"
 ```
 
-For each representative, retain `FABRIC_RUN`, `ENGINE_RUN`, budget digest, `required_gbps`, resolved layout, and cache-group signature. Its budget applies to every outgoing edge from roles in that group.
+For each group's representative engine, write down its `FABRIC_RUN`, `ENGINE_RUN`, the budget digest, `required_gbps`, the resolved layout, and the cache-group signature. That budget applies to every outgoing edge from every engine in the group.
 
-If a role uses another host's representative budget, create a local comparison budget containing the required rate and representative digest:
+When you measure from an engine that isn't its group's representative, you need a local budget file that carries the representative's rate and digest:
 
 ```bash
 umask 077
@@ -82,11 +80,11 @@ path.chmod(0o600)
 PY_EDGE_BUDGET
 ```
 
-Use a fresh `FABRIC_RUN` for every repeated comparison.
+Create a new `FABRIC_RUN` every time you repeat a comparison.
 
 ## Bind each sample to a directed route
 
-Begin with engine 1 to engine 2. In both role shells:
+Start with engine 1 to engine 2. In both shells:
 
 ```bash
 export SOURCE_NODE=1 DEST_NODE=2 TEST_PORT=5201
@@ -110,27 +108,27 @@ On the destination:
 ip route get "$SOURCE_IP" from "$DEST_IP"
 ```
 
-Use `ip -4 route get` or `ip -6 route get` when needed. Each path must select `NARWHAL_FABRIC_INTERFACE` and the discovered source address. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source. Route, source address, and interface must be correct before bandwidth measurement.
+Add `-4` or `-6` after `ip` if you need to force an address family. Both directions should go out through `NARWHAL_FABRIC_INTERFACE` from the discovered source address. Copy the destination's one-line route exactly into `$EDGE_PREFIX.destination-route.txt` on the source. A bandwidth number is only meaningful for a known route, so get the route, source address, and interface right before you measure anything.
 
-`TEST_PORT` is temporary. Check it on both hosts, permit traffic only between selected fabric addresses, and choose another port if occupied. Existing listeners and firewall rules stay intact.
+`TEST_PORT` is only needed for the test. Check that it's free on both hosts and pick another if it isn't. Allow traffic on it only between the two fabric addresses, and don't disturb existing listeners or firewall rules.
 
-## Measure `ucx_tcp`
+## Measure TCP links (`ucx_tcp`)
 
-Install `iperf3` on both hosts if required:
+For the `ucx_tcp` transport, measure the underlying TCP path with iperf3. Install it on both hosts if it isn't there:
 
 ```bash
 sudo apt-get install iperf3
 ```
 
-Record `iperf3 --version` from both ends.
+Record `iperf3 --version` on both ends.
 
-Destination:
+On the destination:
 
 ```bash
 iperf3 --server --bind "$DEST_IP" --port "$TEST_PORT"
 ```
 
-Source, using one TCP stream per TP rank, omitting the first three seconds and measuring ten:
+On the source, run one TCP stream per TP rank, ignore the first three seconds, and measure for ten:
 
 ```bash
 export FABRIC_STREAMS="$(python3 -c 'import json,os; print(json.load(open(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]))["tensor_parallel_size"])')"
@@ -140,7 +138,7 @@ export EDGE_SAMPLE="$EDGE_PREFIX.json"
   --json > "$EDGE_SAMPLE")
 ```
 
-Record the fingerprint and compare against the source budget:
+Record the link fingerprint and compare the sample with the source's budget:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -158,19 +156,19 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
   --budget "$FABRIC_RUN/budget.json" --out "$EDGE_PREFIX.evidence.json"
 ```
 
-`record-edge` reads `end.sum_received.bits_per_second`. Exit status 0 means budget met, 1 means measured rate is below budget, and 2 means invalid sample. After saving the sample and its evidence, stop the temporary server, reverse roles, and repeat against the reverse source's budget.
+`record-edge` reads `end.sum_received.bits_per_second` from the sample. It exits with 0 if the link meets the budget, 1 if it falls short, and 2 if the sample is invalid. Once the sample and its evidence file are saved, stop the iperf3 server, swap the roles, and measure the reverse direction against the reverse source's budget.
 
-## Measure `ucx_rdma`
+## Measure RDMA links (`ucx_rdma`)
 
-Install `perftest` if required:
+Install `perftest` if it isn't there:
 
 ```bash
 sudo apt-get install perftest
 ```
 
-Record `ib_write_bw --version`. Select each host's HCA and port from `transfer.net_devices`. For `mlx5_0:1`, use `HCA=mlx5_0` and `HCA_PORT=1`.
+Record `ib_write_bw --version`. Take each host's HCA and port from `transfer.net_devices`. For `mlx5_0:1`, that's `HCA=mlx5_0` and `HCA_PORT=1`.
 
-For RoCE, inspect:
+For RoCE, look in:
 
 ```text
 /sys/class/infiniband/$HCA/ports/$HCA_PORT/gid_attrs/ndevs/
@@ -178,9 +176,9 @@ For RoCE, inspect:
 /sys/class/infiniband/$HCA/ports/$HCA_PORT/gids/
 ```
 
-Choose the GID index matching configured fabric interface, address, and RoCE mode, then set `GID_INDEX`. Retain the mapping. In the source shell, set `DEST_HCA`, `DEST_HCA_PORT`, and `DEST_GID_INDEX` from the destination's inspected mapping. Native InfiniBand uses the site's active port and GID selection.
+Pick the GID index that matches the fabric interface, address, and RoCE mode, set `GID_INDEX`, and note the mapping. In the source shell, also set `DEST_HCA`, `DEST_HCA_PORT`, and `DEST_GID_INDEX` from what you found on the destination. On native InfiniBand, use your site's active port and GID selection.
 
-Select address-family flags:
+Set the address-family flags:
 
 ```bash
 rdma_addr_args=()
@@ -189,7 +187,7 @@ case "$DEST_IP" in
 esac
 ```
 
-Destination:
+On the destination:
 
 ```bash
 ib_write_bw -d "$HCA" -i "$HCA_PORT" -x "$GID_INDEX" \
@@ -197,7 +195,7 @@ ib_write_bw -d "$HCA" -i "$HCA_PORT" -x "$GID_INDEX" \
   "${rdma_addr_args[@]}" --bind_source_ip "$DEST_IP"
 ```
 
-Source:
+On the source:
 
 ```bash
 export EDGE_SAMPLE="$EDGE_PREFIX.txt"
@@ -207,7 +205,7 @@ export EDGE_SAMPLE="$EDGE_PREFIX.txt"
 cat "$EDGE_SAMPLE"
 ```
 
-Copy `BW average[Gb/sec]` into `MEASURED_GBPS`, then:
+Copy the `BW average[Gb/sec]` figure into `MEASURED_GBPS`, then:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -226,15 +224,25 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
   --out "$EDGE_PREFIX.evidence.json"
 ```
 
-This test measures one-way RDMA writes between host-memory buffers. Reverse source and destination and repeat. For multi-rail deployments, test every selected HCA port and retain every report; later live NIXL probes determine how the connector uses the rails.
+This test measures one-way RDMA writes between host-memory buffers. Swap source and destination and repeat. If the deployment uses several rails, test every selected HCA port and keep every report. How the connector actually spreads traffic across rails only shows up later, in the live NIXL probes.
 
-## Complete the matrix and match retained evidence
+## Complete the matrix
 
-For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs. The live KV-transfer gate tests local handoff.
+With `n` distinct engine hosts, there are `n * (n - 1)` directed host pairs, and each one needs a passing sample. Handoffs between engines on the same host aren't measured here. The live KV transfer checks in Gate F cover those.
 
-Retain source role, destination role, source revision, source and reverse routes, transport, utility version, exact command, budget signature, sample path, and exit status for every edge.
+For every edge, keep:
 
-When host assignment, both routes, interfaces, transport, utility version, and measurement parameters match the retained sample, recreate the current link fingerprint and compare it with the recalculated budget:
+- the source and destination roles;
+- the source revision;
+- both route files;
+- the transport and the tool version;
+- the exact command;
+- the budget signature;
+- the sample path and exit status.
+
+### Reusing an earlier sample
+
+You don't have to re-measure a link if its host assignment, both routes, both interfaces, the transport, the tool version, and the test parameters are all unchanged. Rebuild the current link fingerprint and compare the old sample with the recalculated budget:
 
 ```bash
 python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
@@ -245,10 +253,12 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
   --out "$CURRENT_EDGE_PREFIX.comparison.json"
 ```
 
-Recalculate the budget from a new `cache-layout.json` when the runtime layout changes, and collect a new directed sample when host assignment, routes, interfaces, transport, utility version, or measurement parameters change.
+If the runtime layout has changed, recalculate the budget from the new `cache-layout.json` first. If any of the sample's inputs have changed, take a new sample.
 
-RDMA samples use `.txt`. For a legacy sample collected before `record-edge`, reconstruct its link record from verified original routes, interfaces, transport, utility version, and command; collect a new directed sample when those inputs cannot be verified.
+For an RDMA edge, pass the retained `.txt` sample to `--sample`. A sample taken before `record-edge` existed has no link record, so you'd need to rebuild one from the original routes, interfaces, transport, tool version, and command. If you can't verify those, take a new sample.
 
-A link below its source budget keeps the running fleet idle while you inspect link speed, MTU, retransmissions or RDMA counters, host CPU saturation, and concurrent traffic. After fixing the cause, sample that directed link again.
+## When a link is too slow
 
-Continue with [Gate E: Attest the live engine processes](05-Attest.md).
+Keep the fleet idle and check the link speed, MTU, TCP retransmissions or RDMA counters, CPU saturation on either host, and any other traffic sharing the path. Once you've found and fixed the cause, measure that direction again.
+
+Next: [Gate E: Attest the live engine processes](05-Attest.md).

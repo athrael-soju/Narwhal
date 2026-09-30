@@ -51,7 +51,7 @@ When a streak reaches `recovery.eject_after`, the response depends on the class.
 | First-token deadline, mid-stream silence, or invalid stream termination | `stream`           | Pause new requests and probe prefill/decode |
 | HTTP 408 or 429                                                         | `overload`         | Run a health probe                          |
 | Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and probe prefill/decode |
-| Unreadable KV handoff from prefill                                        | `kv_handoff`       | Pause new requests and probe prefill/decode |
+| Unreadable KV handoff from prefill                                      | `kv_handoff`       | Pause new requests and probe prefill/decode |
 
 Narwhal pauses new requests to an engine by applying an inference-verification hold before probing prefill and decode.
 
@@ -131,7 +131,7 @@ Successful readmission clears an operator drain.
 
 The default serving policy reports saturation after one prefill/decode attempt.
 
-[Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue or retry within the request’s original deadline.
+[Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue or retry within the request's original deadline.
 
 Each retry acquires fresh KV ownership.
 

@@ -28,9 +28,9 @@ Capabilities (as of v0.1.0):
 - Separate prefill and decode routing with NIXL KV transfer.
 - Latency-aware admission and placement using measured per-engine profiles.
 - Streaming and non-streaming completion and chat APIs, including function tools and reasoning output where supported by the engine and model.
-- Request deadlines, disconnect cancellation, bounded queues and optional retries.
-- Engine health checks, transfer validation and warm-standby router failover.
-- Prometheus metrics, request journals and a Grafana dashboard.
+- Request deadlines, disconnect cancellation, bounded queues, and optional retries.
+- Engine health checks, transfer validation, and warm-standby router failover.
+- Prometheus metrics, request journals, and a Grafana dashboard.
 
 ## Architecture
 
@@ -44,9 +44,9 @@ See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for r
 
 AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal v0.1.0, Dynamo Planner, and Ray Serve LLM.
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
+![Completion rate, SLO-qualified requests, median time to first token, and document answer quality for Narwhal, Dynamo Planner, and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
 
-[Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/) describes the test setup, the results for each workload, the effect of prefix caching and the p95 time-to-first-token tail on mixed traffic.
+[Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/) describes the test setup, the results for each workload, the effect of prefix caching, and the p95 time-to-first-token tail on mixed traffic.
 
 ## Install from PyPI
 
@@ -85,7 +85,7 @@ The final gate measures the workload through the private path, reconciles client
 
 ## Contributing
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
+[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks, and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 

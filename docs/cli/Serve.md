@@ -26,7 +26,7 @@ For how command-line options interact with values in the config, see [CLI preced
 
 ## Standby routers and lease fencing
 
-You can run a second router as a standby. Give it the primary's URL with `--standby-of` and it will poll the primary. It takes over once enough polls in a row have failed and the shared lease has expired.
+You can run a second router as a standby. Give it the primary's URL with `--standby-of` and it will poll the primary. It takes over once enough polls in a row have failed and the shared lease has expired. A standby doesn't apply `--resume` at startup; it applies the primary's handoff when it takes over.
 
 Both routers read and write the lease file, so `--lease-path` must point to storage they share. [Start a router pair](../operate/01-Start-Routers.md#4-start-a-router-pair) covers the filesystem requirements, what happens during a network partition, and how to set up load-balancer checks.
 

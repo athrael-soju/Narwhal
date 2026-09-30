@@ -1,12 +1,14 @@
 # Targets and deployment freeze
 
+With accepted profiles in place, you can pick latency targets and then lock everything else down, so the load test only varies one thing: the offered rate.
+
 ## 5. Set production SLOs
 
-Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured latency distribution.
+Run light traffic against the fleet and look at the latency distribution. Set `slo.ttft_s` and `slo.tpot_s` from that distribution and the service requirement.
 
-A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
+Check the TPOT target against the engine shape's measured per-token floor. A target below that floor leaves the fleet with zero feasible decode capacity.
 
-After changing an SLO, run `narwhal-check` against the edited fleet to test the target with saved profiles and live handoffs:
+After any SLO change, run `narwhal-check` on the edited fleet. It tests the new target against the saved profiles and live handoffs:
 
 ```bash
 narwhal-check --fleet config/fleet.production.json
@@ -14,46 +16,21 @@ narwhal-check --fleet config/fleet.production.json
 
 ### Pace gate
 
-With at least three successful probes, the pace gate compares each engine with the fleet median under a `1.5x` slowdown limit. For one or two successful probes, it requires a saved prefill profile and exact `usage.prompt_tokens` for each engine to apply the same limit.
+One of the checks looks for an engine that's much slower than the rest. With three or more successful probes, it compares each engine with the fleet median and fails any engine more than 1.5x slower. An engine with a saved prefill profile is also checked against that profile, with the same 1.5x limit. That check needs exact `usage.prompt_tokens` from the engine. With only one or two probes there's no useful median, so the profile check is the only one, and an engine without a saved profile is skipped.
 
 ## 6. Freeze the deployment under test
 
-Before the load test, assign a deployment identifier and attach the exact:
+Before the load test, assign a deployment identifier and attach everything needed to reproduce or audit the run:
 
-* Narwhal release;
-* source revision;
-* distribution digest;
-* fleet configuration;
-* profile files;
-* sample store;
-* engine image digest;
-* engine launcher;
-* attestation documents;
-* router configuration;
-* engine configuration;
-* preflight output;
-* endpoint captures;
-* deployment-client output;
-* router journal;
-* state snapshots;
-* metrics.
+- **Software:** Narwhal release, source revision, distribution digest, engine image digest, and engine launcher.
+- **Configuration:** fleet, router, and engine configuration, the profile files, the sample store, and the attestation documents.
+- **Checks:** preflight output and endpoint captures.
+- **Run output:** deployment-client output, router journal, state snapshots, and metrics.
 
 Record the workstation host, router host, and SSH tunnel mapping under the same identifier.
 
-Across the offered-rate sweep, vary the request rate while holding these inputs fixed:
+Across the sweep, only the request rate changes. Hold the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed. Between rates, let resident work and outstanding transfer leases drain.
 
-* source revision;
-* model;
-* runtime;
-* profiles;
-* router targets;
-* workload shape;
-* cache policy;
-* TTFT target;
-* TPOT target.
+Stop the sweep at the first rate that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial) with a valid client schedule, or once you've tested the highest rate you intend to run at. A miss with an invalid client schedule tells you about the client rather than the fleet. The next page explains how to tell the two apart.
 
-Between rates, drain resident work and transfer leases.
-
-End the sweep when a run with a valid client schedule misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial), or after testing the intended operating ceiling.
-
-Continue with the [synthetic load trial](03-Load-Trial.md).
+Next: [the synthetic load trial](03-Load-Trial.md).

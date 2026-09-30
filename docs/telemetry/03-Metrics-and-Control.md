@@ -2,125 +2,81 @@
 
 ## Read live state from Prometheus
 
-Narwhal restores these request-outcome counters on resume and standby takeover:
+Every metric Narwhal exports belongs to one of these families.
 
-```text
-narwhal_served_total
-narwhal_failed_total
-narwhal_unserved_total
-narwhal_refused_total
-narwhal_rejected_total
-narwhal_cancelled_total
-```
+| Area                   | Series                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contract identity      | `narwhal_contract_info`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Router ownership       | `narwhal_router_ready`, `narwhal_router_lease_epoch`                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Monitoring             | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`                                                                                                                                                                                                                        |
+| Request outcomes       | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total`                                                                                                                                                                                                                                               |
+| Attempts and quota     | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total`                                                                                                                                                                                                                                                   |
+| Queueing               | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds`                                                                                                                                                                                                                                                                                                                                                                 |
+| HTTP retention         | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Pools                  | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Health                 | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying`                                                                                                                                                                                                            |
+| Floors                 | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total`                                                                                                                                                                                                                                                                                                   |
+| Controller             | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
+| Demand history         | `narwhal_demand_history_cells`, `narwhal_demand_history_cell_limit`, `narwhal_demand_history_observations`, `narwhal_demand_history_overflow_observations`                                                                                                                                                                                                                                                                                                                                                                |
+| Consolidation evidence | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total`                                                                                                                                        |
+| Attainment evidence    | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total`                                                                                                                                                                                                                                                                                                                                                  |
+| Latency                | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds`                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Lifecycle              | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-A replacement router process initializes these counters and measurements afresh:
+## Counters across restarts
 
-- offered, unsized, and expired counters;
-- attempt counters;
-- retry quota;
-- histograms;
-- controller decision counters;
-- role-change counters;
-- floor counters;
-- invalid-request counter.
+Six request-outcome counters carry over through a resume or standby takeover: `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, and `narwhal_cancelled_total`.
 
-Use journal `run` as the process boundary when reconciling restored outcome counters with process-local offered counts.
+Everything else starts fresh in the new router process. That includes the offered, unsized, expired, and invalid-request counters, the attempt counters and retry quota, all histograms, and the controller decision, role-change, and floor counters. The one exception is consolidation risk: the handoff carries the newest risk event and the per-kind counts, so `narwhal_demand_evidence_risk_events_total` and `narwhal_demand_evidence_risk_age_seconds` continue from the old process.
 
-### Metric families
+After a restart, then, the restored outcome counts and the fresh offered count cover different stretches of time. Use the journal's `run` field to find the process boundary when you reconcile them.
 
-| Area                | Series                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contract identity   | `narwhal_contract_info`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Router ownership    | `narwhal_router_ready`, `narwhal_router_lease_epoch`                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Monitoring          | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`                                                                                                                                                                                                                        |
-| Request outcomes    | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total`                                                                                                                                                                                                                                               |
-| Attempts and quota  | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total`                                                                                                                                                                                                                                                   |
-| Queueing            | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds`                                                                                                                                                                                                                                                                                                                                                                 |
-| HTTP retention      | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Pools               | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Health              | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying`                                                                                                                                                                                                            |
-| Floors              | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total`                                                                                                                                                                                                                                                                                                   |
-| Controller          | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
-| Demand history      | `narwhal_demand_history_cells`, `narwhal_demand_history_cell_limit`, `narwhal_demand_history_observations`, `narwhal_demand_history_overflow_observations`                                                                                                                                                                                                                                                                                                                                                                |
-| Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total`                                                                                                                                                                                                                                                                                                                                                  |
-| Latency             | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds`                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Lifecycle           | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+## Role changes
 
-## Inspect scheduling and role control
+Role-change counters start accumulating when the scheduler starts.
 
-Role-change counters begin accumulating when the scheduler starts.
+`narwhal_flip_reversals_total` goes up when an engine is sent toward a different role than its previous recorded move targeted. An engine's first move never counts as a reversal.
 
-`narwhal_flip_reversals_total` increments when an engine's new target role differs from the target of its previous recorded move. The engine's first recorded move does not count as a reversal.
+`narwhal_flips_refused_total` counts role changes that were blocked, whether by timing, availability, a role pin, a role floor, the resident guard, or advisory mode.
 
-`narwhal_flips_refused_total` records role changes blocked by:
+`narwhal_pool_load` is normalized per phase, as described under [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control). A value of `1.0` means that phase has reached its target.
 
-- timing;
-- availability;
-- role pins;
-- role floors;
-- the resident guard;
-- advisory mode.
+## Latency histograms
 
-`narwhal_pool_load` uses the phase-specific normalization documented under [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control). A value of `1.0` means the phase target has been reached.
+`narwhal_slo_seconds` exports the configured TTFT and TPOT budgets, told apart by the `metric` label (`ttft` or `tpot`).
 
-## Read latency histograms
+The TTFT and TPOT histograms place their bucket edges at fixed multiples of the matching budget: 0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0, and `+Inf`. The queue-wait and seat-time histograms (`narwhal_queue_wait_seconds` and `narwhal_seat_seconds`) use the same multiples. Queue wait scales them to `serving.queue_timeout_s`, or to the TTFT budget when no queue timeout is set. Seat time scales them to the TTFT budget.
 
-`narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
+To compute quantiles, take bucket rates grouped by `instance` and `le`. Only aggregate router histograms whose bucket edges match exactly. Since the edges scale with the SLO budget, that means routers configured with the same budgets.
 
-TTFT and TPOT histograms derive their bucket boundaries from these multiples of the corresponding SLO budget:
+## Attainment evidence
 
-```text
-0.025
-0.05
-0.1
-0.2
-0.35
-0.5
-0.7
-1.0
-1.5
-3.0
-10.0
-+Inf
-```
+`narwhal_attainment_evidence_pruned_total` doesn't show up until Narwhal first drops buckets that have aged out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is either `buckets` or `outcomes`.
 
-Queue-wait and seat-time histograms use the request-lifecycle bounds configured for those measurements.
+## Demand history and the decode floor
 
-Compute histogram quantiles from bucket rates grouped by `instance` and `le`.
+Every scrape exports the configured decode floor and one sample for each retained demand-history window. The demand history lives only in the router process, so a restart wipes it. The new process reads `narwhal_decode_floor` from its fleet configuration.
 
-Aggregate router histograms with identical bucket edges.
+| Metric                                         | Type  | Labels                                                                             | Value                                                              |
+| ---------------------------------------------- | ----- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `narwhal_decode_floor`                         | gauge | none                                                                               | The configured `min_decode`.                                       |
+| `narwhal_demand_history_cells`                 | gauge | `window`: `unsized`, `arrivals`, `expected_decode`, `observed_decode`, `residency` | Demand cohorts currently retained.                                 |
+| `narwhal_demand_history_cell_limit`            | gauge | same `window` values                                                               | The most cohorts the window will retain.                           |
+| `narwhal_demand_history_observations`          | gauge | same `window` values                                                               | Original observations the window represents.                       |
+| `narwhal_demand_history_overflow_observations` | gauge | same `window` values                                                               | Observations merged into existing cohorts after the limit was hit. |
 
-## Inspect retained attainment evidence
+## Consolidation gates
 
-`narwhal_attainment_evidence_pruned_total` appears after Narwhal first drops buckets outside the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is `buckets` or `outcomes`.
+These metrics show the demand evidence behind consolidation and which gate, if any, is currently blocking it. All are gauges except `narwhal_demand_evidence_risk_events_total`, which is a counter.
 
-## Inspect demand history and decode floor
-
-Each Prometheus scrape exports:
-
-- the configured decode floor;
-- one sample for every retained demand-history window.
-
-Router restart clears these process-local histories. The new process reads `narwhal_decode_floor` from its fleet configuration.
-
-| Metric                                         | Type  | Labels                                                                             | Value                                                      |
-| ---------------------------------------------- | ----- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `narwhal_decode_floor`                         | gauge | none                                                                               | Configured `min_decode`.                                   |
-| `narwhal_demand_history_cells`                 | gauge | `window`: `unsized`, `arrivals`, `expected_decode`, `observed_decode`, `residency` | Retained demand cohorts.                                   |
-| `narwhal_demand_history_cell_limit`            | gauge | same `window` values                                                               | Maximum retained cohorts.                                  |
-| `narwhal_demand_history_observations`          | gauge | same `window` values                                                               | Original observations represented by the window.           |
-| `narwhal_demand_history_overflow_observations` | gauge | same `window` values                                                               | Observations coalesced after the cohort limit was reached. |
-
-## Inspect consolidation gates
-
-| Metric                                            | Meaning                                                                                                 | Labels                              |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `narwhal_demand_evidence_span_seconds`            | Duration of the retained arrival window in seconds.                                                     | none                                |
-| `narwhal_demand_evidence_arrivals`                | Arrival samples contained in that window.                                                               | none                                |
-| `narwhal_demand_evidence_closed`                  | `1` after the evidence window closes.                                                                   | none                                |
-| `narwhal_demand_evidence_risk_age_seconds`        | Age of the newest risk event in seconds.                                                                | none                                |
-| `narwhal_demand_evidence_short_decode_engines`    | Short-horizon decode demand in engine equivalents.                                                      | none                                |
-| `narwhal_demand_evidence_envelope_decode_engines` | Conservative decode-demand envelope in engine equivalents.                                              | none                                |
-| `narwhal_demand_evidence_trend_ratio`             | Short-horizon demand divided by long-horizon demand. Exported only when a long-horizon estimate exists. | none                                |
-| `narwhal_demand_evidence_refused`                 | `1` for a gate currently blocking consolidation. Every gate is `0` when consolidation is permitted.     | `gate`: `risk`, `evidence`, `trend` |
-| `narwhal_demand_evidence_risk_events_total`       | Risk-event count. Appears after the first event.                                                        | `kind`                              |
+| Metric                                            | Meaning                                                                                                                           | Labels                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `narwhal_demand_evidence_span_seconds`            | How many seconds the retained arrival window spans.                                                                               | none                                             |
+| `narwhal_demand_evidence_arrivals`                | Arrival samples in that window.                                                                                                   | none                                             |
+| `narwhal_demand_evidence_closed`                  | `1` while the evidence window is closed. A new risk event reopens it.                                                             | none                                             |
+| `narwhal_demand_evidence_risk_age_seconds`        | Age of the most recent risk event, in seconds. `0` until one is recorded.                                                         | none                                             |
+| `narwhal_demand_evidence_short_decode_engines`    | Short-horizon decode demand, in engine equivalents.                                                                               | none                                             |
+| `narwhal_demand_evidence_envelope_decode_engines` | A conservative envelope on decode demand: the larger of the short- and long-horizon estimates, in engine equivalents.             | none                                             |
+| `narwhal_demand_evidence_trend_ratio`             | Short-horizon demand divided by long-horizon demand. Missing while the long-horizon estimate is zero.                             | none                                             |
+| `narwhal_demand_evidence_refused`                 | `1` on the one gate blocking consolidation right now, and `0` on the others. When consolidation is allowed, every gate reads `0`. | `gate`: `risk`, `evidence`, `trend`              |
+| `narwhal_demand_evidence_risk_events_total`       | Number of risk events. Missing until the first one occurs.                                                                        | `kind`: `first_token_timeout`, `p_to_d_recovery` |

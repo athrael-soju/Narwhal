@@ -1,88 +1,63 @@
-# Admission and responses
+# How requests are admitted and answered
 
 ## Admission and refusal semantics
 
-| Condition                                                                    |  HTTP | Result                                                           |
-| ---------------------------------------------------------------------------- | ----: | ---------------------------------------------------------------- |
-| Invalid JSON, body shape, or router-interpreted field type                   | `400` | `invalid_request_error`; affected field appears in `param`       |
-| Requested model differs from the configured model                            | `404` | `model_not_found`                                                |
-| `n > 1` or `best_of > 1`                                                     | `400` | Invalid sampling width                                           |
-| Unsupported non-streaming audio, modality, or tool request                   | `400` | `invalid_request_error` naming the option in `param`             |
-| Request exceeds `serving.max_request_bytes`                                  | `413` | `request_too_large`                                              |
-| HTTP retention limit is full                                                 | `429` | `Retry-After: 1`                                                 |
-| Admission queue is full                                                      | `429` | `Retry-After: 1`                                                 |
-| Admission wait expires before response headers                               | `504` | Terminal expiry                                                  |
-| Original request deadline expires before response headers                    | `504` | Terminal expiry                                                  |
-| Predictive admission projects total TTFT above the budget although the prompt alone fits | `429` | `Retry-After` contains the rounded budget overrun, at least 1 s   |
-| Prompt alone exceeds the TTFT budget                                         | `429` | Error envelope; shorten the prompt or raise the target           |
-| Scheduler finds zero placement-eligible engines                              | `503` | `backend_unavailable`, `Retry-After: 1`                          |
-| Router is standby, fenced, in whole-wave maintenance, or monitoring-degraded | `503` | Retryable refusal, `Retry-After: 1`; `/ready` reports the reason |
+This table covers the ways a completion request can be turned away or cut short before response headers are sent.
 
-Set `admission: open` to send placed requests directly to prefill under the HTTP retention, queue, and phase-concurrency limits.
+| Condition                                                                         |  HTTP | Result                                                       |
+| --------------------------------------------------------------------------------- | ----: | ------------------------------------------------------------ |
+| Invalid JSON, wrong body shape, or wrong type on a field the router reads         | `400` | `invalid_request_error`; `param` names the field             |
+| `model` differs from the configured model                                         | `404` | `model_not_found`                                            |
+| `n > 1` or `best_of > 1`                                                          | `400` | Invalid sampling width                                       |
+| Non-streaming request asks for audio, a non-text modality, or a non-function tool | `400` | `invalid_request_error`; `param` names the option            |
+| Body larger than `serving.max_request_bytes`                                      | `413` | `request_too_large`                                          |
+| HTTP retention limit or admission queue is full                                   | `429` | `server_overloaded_error`, `Retry-After: 1`                  |
+| Admission wait or the original request deadline expires                           | `504` | Terminal expiry; error type `queue_expired`, `request_expired`, or `expired`, depending on where it expired |
+| Predicted total TTFT exceeds the budget, but the prompt alone would fit           | `429` | `server_overloaded_error`; `Retry-After` is the projected overrun rounded up to whole seconds, minimum 1 |
+| The prompt alone exceeds the TTFT budget                                          | `429` | `server_overloaded_error`, no `Retry-After`; shorten the prompt or raise the TTFT target |
+| No prefill engine is live and the chosen engine has resident decode work, so prefill can't be priced | `429` | `server_overloaded_error`, `Retry-After: 1` |
+| No engine is eligible for placement                                               | `503` | `backend_unavailable` (`no_schedulable_engines` if placement fails before the first prefill), `Retry-After: 1` |
+| Router is standby, fenced, in whole-wave maintenance, monitoring-degraded, or still validating engine identities | `503` | `standby`, `Retry-After: 1`; the message and `/ready` give the reason |
+
+With `serving.admission: open`, placed requests go straight to prefill, subject to the HTTP retention, queue, and phase-concurrency limits. The TTFT refusals above apply only to the default, `predictive`.
 
 ### Admission counters
 
-Narwhal records one `offered` arrival for each request to a completion route and increments `unsized_offered` when the body ends before workload sizing.
+Every request to a completion route counts once in `offered`. If it ends before Narwhal reads and sizes its body, for example because it was turned away first, it also counts in `unsized_offered`.
 
-Global accounting classifies terminal conditions as follows:
-
-- capacity rejection: `rejected`
-- predictive refusal: `refused`
-- malformed request body: `invalid_requests`
-
----
+Refusals have their own counters: capacity rejections, including not-ready `503` refusals, go to `rejected`; predictive refusals go to `refused`; and requests rejected as invalid (`400`, `404`, or `413`) go to `invalid_requests`.
 
 ## Streaming and response assembly
 
 ### Streaming responses
 
-Narwhal forwards streaming delta fields in the engine's response shape, applying its token-ID exposure rules.
+Streaming clients receive the engine's delta fields in the engine's own response shape. Narwhal holds back metadata frames until the first generated token, so a retried attempt doesn't repeat them. Otherwise it changes only token-ID exposure, described [below](#token-identity-and-output-accounting).
 
 ### Non-streaming assembly
 
-For non-streaming clients, Narwhal consumes the engine stream and assembles one final response.
+Narwhal still streams from the engine when the client asked for a non-streaming response. It reads the whole stream and builds one final response from it:
 
-| Engine output            | Assembly behaviour                                                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Chat `content`           | String deltas concatenate under `content`                                                                                 |
-| Chat `reasoning`         | String deltas concatenate under `reasoning`                                                                               |
-| Chat `reasoning_content` | String deltas concatenate under `reasoning_content`                                                                       |
-| Chat `refusal`           | String deltas concatenate under `refusal`                                                                                 |
-| `tool_calls`             | Calls are grouped by stream index and returned in index order; ID, function name, and arguments concatenate independently |
-| Legacy `function_call`   | Function name and argument fragments concatenate into one message field                                                   |
-| Chat logprobs            | Content and refusal arrays concatenate in stream order                                                                    |
-| Text-completion logprobs | Token, logprob, and offset arrays concatenate in stream order                                                             |
+| Engine output                                               | How it's assembled                                                                                                         |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Chat `content`, `reasoning`, `reasoning_content`, `refusal` | String deltas for each field are concatenated into that field                                                              |
+| `tool_calls`                                                | Grouped by stream index and returned in index order; the ID, function name, and arguments are each concatenated separately |
+| Legacy `function_call`                                      | Name and argument fragments are concatenated into a single message field                                                   |
+| Chat logprobs                                               | Content and refusal arrays are concatenated in stream order                                                                |
+| Text-completion logprobs                                    | Token, logprob, and offset arrays are concatenated in stream order                                                         |
 
-Every tool call must contain:
+Each assembled tool call has to have an ID and a function name. Arguments come back as the string the engine generated; parsing them is the client's job.
 
-- an ID
-- a function name
-
-Tool arguments remain engine-generated strings for the client to interpret.
-
-The non-streaming assembler returns HTTP `502` for unsupported choice or chat-delta fields that carry a value, including audio, annotations, and custom tool output, and for malformed supported fields.
+The assembler returns HTTP `502` when a choice or chat delta carries a value in a field it doesn't support, such as audio, annotations, or custom tool output, or when a supported field is malformed.
 
 ### Metadata and usage
 
-Non-streaming assembly retains:
+The assembled response keeps the engine's response metadata, its `usage` object when it isn't null, `finish_reason`, and `stop_reason` if the engine sent one. When the engine sends no usage and Narwhal counted output token IDs, Narwhal fills usage in from the input length and that count.
 
-- response metadata
-- non-null engine `usage`
-- `finish_reason`
-- optional `stop_reason`
-
-If the engine omits `usage`, Narwhal computes it from:
-
-- input length
-- measured output token count
-
-`finish_reason` and `stop_reason` survive later usage-only frames.
-
----
+Some engines send a usage-only frame after the frame that carries `finish_reason`. That trailing frame doesn't overwrite the finish or stop reason.
 
 ## Token identity and output accounting
 
-Narwhal requests token IDs with the decode stream from engines that support them:
+When the engine supports it, Narwhal asks for token IDs on the decode stream:
 
 ```json
 {
@@ -91,8 +66,8 @@ Narwhal requests token IDs with the decode stream from engines that support them
 }
 ```
 
-Narwhal checks the ID list on each event carrying generated text, reasoning, tool calls, or refusals, counting IDs that are nonnegative integers. An event that omits the list, supplies a Boolean ID, or returns a malformed list fails the decode attempt or profiling measurement.
+Every event that carries generated text, reasoning, tool calls, or a refusal has to include the ID list, and Narwhal counts the IDs that are nonnegative integers. If the list is missing, contains a Boolean, or is otherwise malformed, the decode attempt or profiling measurement fails.
 
-Validated IDs give Narwhal output length and per-token timing for TPOT scoring. Narwhal uses the same identified output for decode correction, drift scoring, and output-length learning.
+These IDs are how Narwhal knows output length and per-token timing for TPOT scoring. The same output also drives decode correction, drift scoring, and output-length learning.
 
-The router reports `token_accounting: token_ids` for engines that supply IDs and `token_accounting: unavailable` for other dialects. Clients requesting `return_token_ids` receive the IDs in streaming and assembled responses.
+The router reports `token_accounting: token_ids` for engines that return IDs and `token_accounting: unavailable` for dialects that don't. Clients that set `return_token_ids` themselves get the IDs back in both streaming and assembled responses.

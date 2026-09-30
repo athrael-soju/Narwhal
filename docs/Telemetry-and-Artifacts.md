@@ -1,7 +1,9 @@
 # Narwhal telemetry and artifacts
 
-- [Request journal](telemetry/01-Journal.md): reconcile terminal outcomes, retries, placement, and timing.
-- [Engine profiles and capacity](telemetry/02-Profiles.md): validate the curves Narwhal uses for pricing.
-- [Metrics and controller state](telemetry/03-Metrics-and-Control.md): inspect current and process-lifetime state.
-- [Monitoring and engine failure diagnosis](telemetry/04-Failures.md): trace monitor degradation and breaker holds.
-- [Interface versions and compatibility](telemetry/05-Compatibility.md): compare contract manifests before an upgrade.
+These pages cover what Narwhal records and exports, and how to use it when something goes wrong.
+
+- [Request journal](telemetry/01-Journal.md): one row per request, with its outcome, retries, placement, and timing, plus router events.
+- [Engine profiles and capacity](telemetry/02-Profiles.md): the measured cost curves behind capacity pricing, and how they're validated.
+- [Metrics and controller state](telemetry/03-Metrics-and-Control.md): the Prometheus metrics, and which of them survive a router restart.
+- [Monitoring and engine failure diagnosis](telemetry/04-Failures.md): why monitoring degrades, and how engine breakers trip and clear.
+- [Interface versions and compatibility](telemetry/05-Compatibility.md): schema versions, and what to compare before an upgrade.

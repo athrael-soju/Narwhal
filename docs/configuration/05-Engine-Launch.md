@@ -2,41 +2,13 @@
 
 ## 14. Engine endpoints generated from node environments
 
-An engine URL points to the running vLLM HTTP service, for example:
+An engine URL is the base URL of the running vLLM HTTP service, such as `http://10.0.0.11:8000`. A plain IP address works as long as the router can reach that address and port. The attestation sidecar has its own URL, such as `http://10.0.0.11:8010/v1/attestation`. Use whatever ports the engine deployment actually configures.
 
-```text
-http://10.0.0.11:8000
-```
+For generated deployment inputs, set `NARWHAL_FABRIC_INTERFACE`, `NARWHAL_ENGINE_PORT`, and `NARWHAL_ATTEST_PORT` in `.env`. Discovery reads the chosen interface on each engine host, writes its unique global address to `config/deployment.env` as `NARWHAL_NODE_<n>_IP`, and builds the engine and attestation URLs from that address, adding IPv6 brackets where needed.
 
-An engine URL may use an IP address directly when the router can reach that address and port.
+Some setups need manual values. If the interface has more than one global address, set `NARWHAL_NODE_<n>_IP` yourself. If a service has to use a different reachable address, set its full URL. If you change a port, add the matching per-node port override as well.
 
-The attestation sidecar has a separate URL, for example:
-
-```text
-http://10.0.0.11:8010/v1/attestation
-```
-
-Use the ports actually configured by engine deployment.
-
-For generated deployment inputs, provide these values in `.env`:
-
-```text
-NARWHAL_FABRIC_INTERFACE
-NARWHAL_ENGINE_PORT
-NARWHAL_ATTEST_PORT
-```
-
-Discovery reads the chosen interface on each engine host and writes its unique global address as `NARWHAL_NODE_<n>_IP` in `config/deployment.env`.
-
-It derives engine and attestation URLs from that address and uses IPv6 host brackets where required.
-
-Set `NARWHAL_NODE_<n>_IP` explicitly when the interface has multiple global addresses.
-
-Set a full engine or attestation URL when that service must use another reachable address.
-
-Changing a port also requires the matching per-node port override.
-
-The generated fleet uses those derived values:
+Discovery adds one fleet record per engine, referring to the derived values:
 
 ```json
 {
@@ -47,148 +19,66 @@ The generated fleet uses those derived values:
 }
 ```
 
-Discovery adds one fleet record per engine.
-
-`.env.example` shows the two-engine minimum and the shared fabric interface.
-
-Store site-specific fleet files under either ignored path:
-
-```text
-config/fleet.json
-config/fleet.*.json
-```
-
-After loading `.env`, invoke profiling, preflight, and serving with:
-
-```bash
---fleet "$NARWHAL_FLEET"
-```
-
-Observability resolves endpoint URLs using the same complete-value substitution rules.
+`.env.example` shows the two-engine minimum with a shared fabric interface. Keep site-specific fleet files at `config/fleet.json` or `config/fleet.*.json`, both of which Git ignores. After loading `.env` and `config/deployment.env`, pass `--fleet "$NARWHAL_FLEET"` to profiling, preflight, and serving. Observability resolves endpoint URLs with the same whole-value substitution rules as the fleet loader, described in [§1.3](01-Fleet-Schema.md#13-environment-loading).
 
 ---
 
 ## 15. Engine launch records
 
-`NARWHAL_LAUNCH_CONFIG` selects the private generated management-workstation file:
+`NARWHAL_LAUNCH_CONFIG` points at `config/engine-launch.local.json`, a private file generated on the management workstation. Discovery writes one launch record for each assigned `engine-<n>` role, based on the detected GPUs, device paths, image package versions, and the launch policy selected in the environment. Each record lists the inspection and policy inputs it came from under `sources`, and `config/engine-launch.sources.json` indexes those references. The [launch-record example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents the allocation, transport, and runtime fields.
 
-```text
-config/engine-launch.local.json
-```
-
-Discovery creates one launch record per assigned `engine-<n>` role from:
-
-- detected GPUs
-- device paths
-- image package versions
-- environment-selected launch policy
-
-Each record identifies its retained inspection and policy inputs under `sources`; `config/engine-launch.sources.json` indexes those references.
-
-The [launch-record example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents allocation, transport, and runtime fields.
-
-To change GPU allocation or runtime policy, change the corresponding `.env` policy input and rerun discovery into a fresh output set.
+To change GPU allocation or runtime policy, change the corresponding `.env` input and rerun discovery into a fresh output set.
 
 ### 15.1 Allocation and transport fields
 
-| Field                  | Deployment meaning                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `accelerator`          | Product identity. Compare against host inspection and fleet hardware fields.                                                         |
-| `gpu_ids`              | Selected GPU indices or UUIDs for the replica.                                                                                       |
-| `tensor_parallel_size` | TP size for the replica.                                                                                                             |
-| `gpu_visibility_env`   | Chooses `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. Preparation joins `gpu_ids` into the exported value.                       |
-| `accelerator_devices`  | Host device paths mapped into the container. ROCm requires `/dev/kfd` plus DRI mappings for allocated GPUs.                          |
-| `network_mode`         | Uses `host` for the recorded network and port allocation.                                                                            |
-| `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                             |
-| `transfer.net_devices` | Ethernet interfaces for TCP or HCA:port names for RDMA. `${NARWHAL_FABRIC_INTERFACE}` resolves from the selected engine environment. |
-| `transfer.devices`     | Transport device paths mapped into the container. RDMA requires its character devices. TCP uses an empty list.                       |
-| `sources`              | Allocation, device, and transfer definitions that produced the record.                                                               |
+| Field                  | Deployment meaning                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `accelerator`          | Product identity. Compare it with the host inspection and the fleet's hardware fields.                                                |
+| `gpu_ids`              | GPU indices or UUIDs selected for the replica.                                                                                        |
+| `tensor_parallel_size` | TP size for the replica.                                                                                                              |
+| `gpu_visibility_env`   | Either `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. Preparation joins `gpu_ids` into the exported value.                         |
+| `accelerator_devices`  | Host device paths mapped into the container. ROCm needs `/dev/kfd` plus DRI mappings for the allocated GPUs.                          |
+| `network_mode`         | `host`, matching the recorded network and port allocation.                                                                            |
+| `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                              |
+| `transfer.net_devices` | Ethernet interfaces for TCP, or HCA:port names for RDMA. `${NARWHAL_FABRIC_INTERFACE}` resolves from the selected engine environment. |
+| `transfer.devices`     | Transport device paths mapped into the container. RDMA needs its character devices; TCP uses an empty list.                           |
+| `sources`              | The allocation, device, and transfer definitions that produced the record.                                                            |
 
-`prepare` validates every assigned engine record before it creates the output directory.
+`prepare` validates every assigned engine record before it creates the output directory. From each record it derives the GPU visibility variable and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`. `install` copies the selected record into the engine checkout's `config/` directory, and the role environment points at that copy. At launch time, the delivered launcher combines the recorded arguments and device mappings with the runtime fields and records the complete container command.
 
-It derives GPU visibility and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
+Launch records and their supporting extracts are written with mode `0600` to Git-ignored files matching `config/engine-launch.*.json`. Real allocation and runtime data belongs in private files like these.
 
-`install` copies the selected launch record into the engine checkout's `config/` directory. The role environment points to that file.
-
-The delivered launcher combines these recorded arguments and device mappings with runtime fields, then records the complete container command.
-
-Launch records and their supporting extracts use mode `0600` and remain in Git-ignored files matching `config/engine-launch.*.json`.
-
-Keep real allocation and runtime evidence in private files.
-
-When preparation reports an invalid `.env` input or a missing remote prerequisite, correct the named input, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
+If preparation reports an invalid `.env` input or a missing remote prerequisite, correct the input it names, regenerate the affected configuration, and prepare a new run so the manifest records the corrected state.
 
 ---
 
 ## 16. Runtime launch records and image verification
 
-Every generated engine record contains a `runtime` object consumed by `launch_engine.py`.
+Every generated engine record has a `runtime` object, which `launch_engine.py` consumes. Discovery fills it from the package pins and supported runtime-environment fields in the selected image, the model dtype in the model config, and the [environment launch policy](../deploy/01-Discover.md#confirm-launch-policy). Preparation sends both the launch record and a snapshot of the launcher to the engine host.
 
-Discovery reads:
+| Runtime field       | Operator input                                                                                                                                                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expected_packages` | Exact installed versions of `vllm` and of `nixl` or `nixl-rocm`, plus any other image packages whose identity must be checked.                                                                                                    |
+| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                          |
+| `kv_cache_dtype`    | `auto`. The launcher accepts no other value.                                                                                                                                                                                      |
+| `block_size`        | Requested runtime block size. Cache planning records the adjusted token-block size and padded page bytes for fabric sizing.                                                                                                       |
+| `environment`       | Image-local settings with a `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_`, or `SAFETENSORS_` prefix, plus `LD_LIBRARY_PATH` and `PYTHONPATH`.                                                           |
+| `extra_args`        | Model-specific vLLM arguments covering context and batching limits, memory utilization, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. |
 
-- package pins from the selected image
-- supported runtime-environment fields from that image
-- model dtype from model config
-- policy from [environment launch policy](../deploy/01-Discover.md#confirm-launch-policy)
+From the role environment, the launcher takes the model mount, served model name, bind family, and HTTP port. It applies the recorded TP size and configures `NixlConnector` with `kv_both`, UCX, and failure propagation. GPU visibility, advertised addresses and ports, transport selection, and engine authentication are set by the launcher itself.
 
-Preparation transfers both the launch record and a launcher snapshot to the engine host.
+Discovery also derives two settings from the model. It adds `--trust-remote-code` when the checkpoint's model or tokenizer metadata contains an `auto_map`, and it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` when the metadata identifies convolutional SSM transfer state. Discovery keeps these derived settings when `NARWHAL_ENGINE_ARGS` replaces the default argument list or `NARWHAL_ENGINE_ENV` adds environment values, and it rejects a `NARWHAL_ENGINE_ENV` that sets a different layout. `extra_args` accepts only an allow-list of vLLM options.
 
-| Runtime field       | Operator input                                                                                                                                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `expected_packages` | Exact installed versions for `vllm` and `nixl` or `nixl-rocm`; add any image packages whose identity must be checked.                                                                                                    |
-| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                 |
-| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                     |
-| `block_size`        | Requested runtime block size. Cache planning records adjusted token-block size and padded page bytes for fabric sizing.                                                                                                  |
-| `environment`       | Image-local ROCm/CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                             |
-| `extra_args`        | Model-specific vLLM arguments for context/batching limits, memory utilisation, reasoning parser, attention backend, remote model code, language-only loading, eager execution, async scheduling, or hybrid-cache policy. |
+Before the model starts, the image check runs these steps in order:
 
-The launcher takes these values from the role environment:
+1. Verify `--trust-remote-code` against the mounted checkpoint.
+2. For convolutional SSM models, confirm that the engine environment sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`.
+3. Validate the image identity.
+4. Check exact distribution versions.
+5. Validate the connector configuration and import.
+6. For SSM models, check the pinned image's convolutional-state layout.
+7. Construct the checkpoint tokenizer.
 
-- model mount
-- served model name
-- bind family
-- HTTP port
+The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and the image ID. The HTTP probe later compares `/version` with that recorded value.
 
-It applies the recorded TP size and configures `NixlConnector` with:
-
-- `kv_both`
-- UCX
-- failure propagation
-
-The launcher itself supplies:
-
-- GPU visibility
-- advertised addresses and ports
-- transport selection
-- engine authentication
-
-Discovery adds `--trust-remote-code` when the checkpoint model or tokenizer metadata contains an `auto_map`.
-
-When model metadata identifies convolutional SSM transfer state, discovery sets:
-
-```text
-VLLM_SSM_CONV_STATE_LAYOUT=DS
-```
-
-The launcher retains these derived settings when `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` supplies additional values.
-
-The launcher rejects `extra_args` that override launcher-managed settings.
-
-Before model startup, the image check:
-
-1. verifies `--trust-remote-code` against the mounted checkpoint,
-2. validates image identity,
-3. checks exact distribution versions,
-4. validates connector configuration and import,
-5. constructs the checkpoint tokenizer,
-6. checks the pinned image's convolutional-state layout for SSM models.
-
-The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`, tied to the launch-plan hash and image ID.
-
-The HTTP probe compares `/version` with that captured value.
-
-Use an image whose NIXL connector implements the fleet's required `kv_both` behaviour. Runtime transfer probes exercise both producer and consumer operations.
-
-Keep launch directories, environment files, and runtime captures under ignored `runs/`.
-
-Record the application revision, launcher digest, and container ID with the deployment.
+The image's NIXL connector has to implement the `kv_both` behavior the fleet depends on, and the runtime transfer probes exercise both the producer and consumer sides. Keep launch directories, environment files, and runtime captures under the ignored `runs/` directory, and record the application revision, launcher digest, and container ID with the deployment.

@@ -2,102 +2,65 @@
 
 ## Diagnose a request from the journal
 
-Pass `--journal <path>` to place the JSON Lines journal at a chosen path; its default is `journal.jsonl` beside `profiles.path`. Narwhal appends records under a process-specific `run` identifier, separating restarts and standby takeovers in a shared file.
+Narwhal writes a JSON Lines journal to `journal.jsonl` next to `profiles.path`, or wherever you point `--journal <path>`. Every request and event row carries `schema` (`narwhal.journal`), `schema_version`, and a `run` identifier unique to the router process that wrote it, so a file shared across restarts and standby takeovers still separates cleanly by process.
 
-The first row identifies the journal contract and the build that produced it:
+Each router process appends a metadata row when it opens the journal. The row records the journal contract and the build that wrote it, and it has no `run` field:
 
 ```json
 {"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.1.0","git":"<commit>","source":"sha256:...","token_accounting":"token_ids"}}
 ```
 
-`source` is the SHA-256 digest of the installed package's Python files. Identical Python source produces the same digest from a checkout, deployment, or wheel.
+`source` is a SHA-256 digest of the installed package's Python files. It depends only on the source code, so a checkout, a deployment, and a wheel built from the same code all report the same value. `git` is the `git describe` output when Narwhal runs from a source checkout, and `null` otherwise.
 
 ### Terminal request records
 
-Narwhal closes each original completion request with one terminal row, attaching retries and the final invalid, rejected, expired, failed, cancelled, refused, or completed outcome to that request.
+Every original completion request ends with exactly one terminal row. Retries don't get rows of their own. They're folded into that final row along with the outcome: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.
 
-| Field                                        | Meaning                                                                                                                                                               |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`, `rid`, `client_rid`                   | Router process, Narwhal request ID, and optional caller request ID.                                                                                                   |
-| `arrived`                                    | Arrival time on the process monotonic clock. Compare this value only within one `run`.                                                                                |
-| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. For a cancellation, `output_len` records delivered tokens when they can be measured.                     |
-| `ttft_s`, `tpot_s`, `first_byte_s`           | Router-side prefill, decode, and first-visible-output timing.                                                                                                         |
-| `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
-| `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
-| `token_accounting`                           | Decode-output accounting mode. `token_ids` provides exact per-token identity; every other dialect reports `unavailable`.                                              |
-| `refused`, `refused_cause`                   | Predictive refusal flag and reason: `prompt` (prompt alone exceeds the TTFT budget), `queue` (total predicted TTFT exceeds the budget although the prompt alone fits), or `aggregate_unpriced` (no calibrated aggregate prefill price). See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| `cancelled`, `cancelled_phase`               | Client disconnect and the phase in which it occurred: `admission`, `queue`, `backoff`, `prefill`, or `decode`.                                                        |
-| `terminal`                                   | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.                                                              |
-| `input_sized`                                | Whether local input sizing completed. When false, the body terminated before sizing and `input_len: 0` records that early exit.                                       |
-| `attempts`, `decode_attempts`                | Prefill and decode dispatch counts for the original request.                                                                                                          |
-| `attempt_failures`                           | Bounded records for failed attempts, including failures followed by successful retries.                                                                               |
-| `queue_wait_s`, `duration_s`                 | Total admission and dispatch wait, and complete request lifetime on the router clock.                                                                                 |
-| `decode_tpot_s`                              | Time from first to last observed output token divided by `output_tokens - 1`. Null when fewer than two tokens were observed or exact token accounting is unavailable. |
-| `decode_tokens_observed`, `upstream_seconds` | Tokens observed across every attempt and summed HTTP-leg duration, including failed work, transfer time, and waiting.                                                 |
-| `error`                                      | Failure or refusal detail. Successful and cancelled requests use null.                                                                                                |
+| Field                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run`, `rid`, `client_rid`                   | The router process, Narwhal's request ID, and the caller's request ID if one was sent.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `arrived`                                    | Arrival time on the router's monotonic clock. Only comparable to other rows from the same `run`.                                                                                                                                                                                                                                                                                                                                                                         |
+| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, tokens returned, and output tokens requested (`max_tokens`, or `0` if unset). `input_len` is exact when the prompt arrives as token IDs or an engine counted it, and a local estimate otherwise. `output_len` is null without exact token accounting. For a canceled request, it's the number of tokens delivered, if Narwhal could measure it.                                                                                                           |
+| `ttft_s`, `tpot_s`, `first_byte_s`           | Time from arrival to the end of prefill, decode time per output token, and time from arrival to the first visible output, all measured at the router. `tpot_s` is the time from the end of prefill to the last output token, divided by `output_len - 1`. It's null under the same conditions as `decode_tpot_s`.                                                                                                                                                        |
+| `prefill_iid`, `decode_iid`                  | The engines chosen for prefill and for decode.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `crossed`                                    | True when decode ran on a different engine and consumed KV produced by the recorded prefill engine. False when both phases ran on one engine or no decode engine was chosen.                                                                                                                                                                                                                                                                                             |
+| `token_accounting`                           | How decode output was counted. `token_ids` means every token was identified exactly. Any other dialect reports `unavailable`.                                                                                                                                                                                                                                                                                                                                            |
+| `refused`, `refused_cause`                   | Present only when Narwhal turned the request away because it predicted a TTFT miss. `refused` is `true`, and the cause is `prompt` if the prompt alone would blow the TTFT budget, `queue` if the prompt fits but queueing pushes the prediction over, or `aggregate_unpriced` if aggregate prefill can't be priced because every candidate engine is carrying decode work. See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
+| `cancelled`, `cancelled_phase`               | Present only when the client disconnected. `cancelled` is `true`, and the phase is `admission`, `queue`, `backoff`, `prefill`, or `decode`. A disconnect after the request's deadline is recorded as `expired` instead.                                                                                                                                                                                                                                                  |
+| `rejected`, `expired`                        | `true` on rejected and expired rows. Absent otherwise.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `terminal`                                   | The final state, one of the seven outcomes listed above.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `input_sized`                                | False if the request ended before Narwhal finished sizing the input. `input_len` is `0` in that case.                                                                                                                                                                                                                                                                                                                                                                    |
+| `attempts`, `decode_attempts`                | How many times the request was dispatched to prefill and to decode.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `attempt_failures`                           | Details of each failed attempt, including ones a later retry recovered from.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `queue_wait_s`, `duration_s`                 | Total time spent waiting for admission and dispatch, and the request's whole lifetime, both on the router clock.                                                                                                                                                                                                                                                                                                                                                         |
+| `decode_tpot_s`                              | Time from the first to the last observed output token, divided by `output_len - 1`. Null if fewer than two tokens were seen or exact token accounting wasn't available.                                                                                                                                                                                                                                                                                                  |
+| `decode_tokens_observed`, `upstream_seconds` | Tokens seen across all attempts (null without exact token accounting), and the summed duration of every HTTP leg as an object keyed `prefill` and `decode`, in seconds. Failed work, transfer, and waiting all count toward it.                                                                                                                                                                                                                                          |
+| `error`                                      | Why the request didn't complete. Set for failed, refused, rejected, expired, and invalid requests. Null for completed and canceled requests.                                                                                                                                                                                                                                                                                                                             |
 
-Each `attempt_failures` entry can record:
+An `attempt_failures` entry records the time of the failure on the monotonic clock (`at`), the `attempt` number and `phase`, and the `prefill_iid` and `decode_iid`. It also carries the exception's type, message, and status (`error_type`, `error_message`, `status`), whether the failure was classed as `transient`, and whether any output had already reached the client (`output_started`). Finally, it records whether Narwhal decided to retry (`retry_scheduled`), why (`retry_reason`), and what backoff it scheduled (`backoff_s`, null when no retry was scheduled). `retry_reason` is `allowed`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. The list keeps at most `serving.max_attempts` entries, and messages are cut off at 240 characters.
 
-- monotonic time;
-- attempt number;
-- request phase;
-- prefill and decode engine IDs;
-- exception type, message, and status;
-- transient classification;
-- visible-output state;
-- retry decision;
-- scheduled backoff.
-
-Narwhal retains at most `serving.max_attempts` failure entries and caps messages at 240 characters. A retry decision records the scheduled action, which a client cancellation can interrupt during backoff before dispatch.
+Keep in mind that the retry decision records what Narwhal planned, not what necessarily happened. If the client disconnects during backoff, the retry is never dispatched.
 
 ### Attainment accounting
 
-For deployment acceptance, score the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) against its TTFT and TPOT limits. Only completed client responses within the applicable limits pass. All other scored offers are misses. Build this population from the client's offer records, including unsent offers and excluding the unscored warmup.
+Deployment acceptance is scored from the client's side. Start from the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal), including offers that were never sent but leaving out the unscored warmup, and check each one against the client's TTFT and TPOT limits. An offer passes only if it completed within the limits that apply to it. Everything else is a miss.
 
-Join sent, scored offers to terminal journal rows by `client_rid` to diagnose misses. Journal outcomes that represent misses include:
+To find out why an offer missed, join the sent, scored offers to terminal journal rows on `client_rid`. Usually the row will show an invalid request, a capacity rejection, a predictive refusal, an expiry, an engine failure, or a cancellation. A null `output_len` or `ttft_s` on a terminal row also means a miss, and so does a completed request that came in over a client latency limit.
 
-- invalid requests;
-- capacity rejections;
-- predictive refusals;
-- expiries;
-- engine failures;
-- cancellations, including those with partial output and measured timing;
-- terminal requests whose `output_len` is null;
-- terminal requests whose `ttft_s` is null.
+Cancellations can look deceptively healthy. When a client disconnects, Narwhal still writes whatever timing it measured to the `cancelled` row and counts the request once in the cancellation counter. The row may have a real `output_len` and `ttft_s`, but the offer is still a miss.
 
-Completed responses above an applicable client latency limit also miss. Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request. Cancelled requests count as misses even when `output_len` or `ttft_s` has a measured value.
+The router also reports a [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment). It leaves out canceled, rejected, and invalid requests, so it can read higher than the client's score. Don't use it for acceptance.
 
-The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) excludes cancelled, rejected, and invalid requests. Use the client's all-offer score for deployment acceptance.
+### Transfer time versus decode queueing
 
-### Separate transfer and decode queueing
-
-For requests whose first byte follows prefill, `first_byte_s - ttft_s` measures KV transfer plus decode queueing.
-
-A crossed request normally pays both components. A request decoded on the local engine can still wait in the decode queue.
+When the first byte arrives after prefill, `first_byte_s - ttft_s` is the time spent on KV transfer plus waiting in the decode queue. A crossed request normally pays for both. A request decoded on the local engine can still sit in the decode queue, so a nonzero gap doesn't by itself mean a transfer happened.
 
 ### Journal events
 
-Narwhal appends router operation events to the request journal for:
+Router events share the journal with request rows. Narwhal logs prefill-floor breaches and recoveries (`below_floor`, `below_floor_recovered`), every controller decision, including blocked and advisory ones (`controller_decision`), decode-floor restorations (`decode_floor_restored`), engine lifecycle operations (`engine_lifecycle`), and monitoring health. Event rows name their type in an `event` field and have no `terminal` field. Filter on that before you analyze anything, or events will leak into your request statistics. Most events stamp `at` on the router's monotonic clock. `engine_lifecycle` events use Unix wall-clock seconds.
 
-- role-floor breaches and recoveries;
-- blocked decode-floor changes;
-- engine lifecycle operations;
-- monitoring health.
+Sometimes a health or inference recovery probe finds that an engine's profile generation doesn't verify. Narwhal then keeps the engine out of placement and writes an `engine_lifecycle` event with `action: profile_recovery_blocked`. The event includes the engine's `iid`, the check that failed in `error`, and `at` in Unix wall-clock seconds. Look at the engine's [profile generation evidence](02-Profiles.md#validate-the-engine-cost-model) before you try recovery again.
 
-If profile-generation verification fails during a health or inference
-recovery probe, Narwhal excludes the engine from placement and writes an
-`engine_lifecycle` event with `action: profile_recovery_blocked`. The event
-records the engine `iid`, the failed check in `error`, and `at` as Unix
-wall-clock seconds. Inspect the engine's
-[profile generation evidence](02-Profiles.md#validate-the-engine-cost-model)
-before retrying recovery.
+Monitoring writes three kinds of event. Each failed stage produces a `monitoring_stage_failure` with the `stage`, the exception's class name in `class`, and a `consecutive` count local to that stage. When the number of consecutive failed monitoring passes reaches `controller.monitor_failure_limit`, Narwhal writes `monitoring_degraded`. It names the `stage` and `class` of the streak's first failure and the pass count in `core_consecutive`. The next monitoring pass that succeeds completely clears the degraded state and writes `monitoring_recovered`.
 
-Monitoring writes these event types:
-
-- `monitoring_stage_failure`, including `stage`, `class`, and the stage-local `consecutive` failure count;
-- `monitoring_degraded` when consecutive failures reach `controller.monitor_failure_limit`;
-- `monitoring_recovered` after a fully successful monitoring pass clears degraded state.
-
-Select terminal request rows and process event rows separately during journal analysis.
-
-Failure text can contain engine IDs and engine URLs. Remove those identifiers before publishing timing journals.
+Failure messages can contain engine IDs and URLs. Strip them out before you publish a timing journal.

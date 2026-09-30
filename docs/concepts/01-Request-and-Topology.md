@@ -11,14 +11,14 @@ Each engine implements the same runtime contract:
 - pass preflight validation before entering service;
 - pass lifecycle readmission checks after a hold, drain, failure, or maintenance event.
 
-For vLLM engines with effective [`kv_both` behaviour](../deploy/05-Attest.md#capture-attestation-inputs), an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
+For vLLM engines with effective [`kv_both` behavior](../deploy/05-Attest.md#capture-attestation-inputs), an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
 
 ## How a request executes
 
 1. **Admission:**
     The router receives the request and assigns an available serving seat: one slot under its [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission).
 
-    When all seats are occupied, the request enters a bounded FIFO and keeps its original deadline. Once the FIFO reaches its configured limit, Narwhal returns a retryable refusal.
+    When all seats are occupied, the request enters a bounded FIFO and keeps its original deadline. Once the FIFO reaches `serving.queue_capacity`, Narwhal returns a retryable refusal. The default capacity is `0`, so a saturated router refuses new requests immediately.
 
 2. **Prefill pricing:**
     Narwhal counts prompt tokens and evaluates eligible prefill engines using their measured performance curves and current resident work.

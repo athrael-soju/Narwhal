@@ -1,6 +1,6 @@
-# Narwhal Production Operations
+# Narwhal production operations
 
-A router pair shares one lease domain for each model fleet. The lease gives one router admission and placement authority while its peer remains on standby.
+Each model fleet is served by a router pair that shares one lease domain. Whichever router holds the lease has admission and placement authority, and the other waits on standby until it's needed.
 
 ```text
 clients
@@ -20,20 +20,19 @@ TLS, authentication, WAF, model routing
 
 ## Production startup checklist
 
-For a new or replaced production deployment:
+Work through this list for any new or replaced production deployment:
 
 1. Assemble one release, fleet configuration, profile store, and evidence set.
-2. Confirm router handoff compatibility with `narwhal-check --print-contract-versions`.
-3. Configure private control interfaces and trusted ingress rewriting.
-4. Confirm both router hosts share the required lease domain.
+2. Check router handoff compatibility with `narwhal-check --print-contract-versions`.
+3. Keep the control interfaces private and set up trusted ingress rewriting.
+4. Make sure both router hosts share the required lease domain.
 5. Start the intended primary.
 6. Start its standby from the same deployment set.
-7. Verify lease ownership through `/ready`.
-8. Verify process and fleet state through `/health`.
-9. Run the deployment workload through production ingress.
-10. Verify dashboard collection and paging thresholds.
-11. Run the engine lifecycle procedure permitted by the configured restart policy.
-12. Run router failover through the production load balancer.
-13. Open client admission.
+7. Check lease ownership with `/ready` and process and fleet state with `/health`.
+8. Send the deployment workload through production ingress.
+9. Confirm the dashboard is collecting and the paging thresholds are set.
+10. Run whichever engine lifecycle procedure your restart policy allows.
+11. Run router failover through the production load balancer.
+12. Open client admission.
 
-Use [Troubleshoot a fleet](Troubleshoot.md) for failure procedures and [Measure a fleet](Measure.md) for production evidence and deployment validation.
+If something goes wrong, [Troubleshoot a fleet](Troubleshoot.md) has the failure procedures. [Measure a fleet](Measure.md) covers production evidence and deployment validation.

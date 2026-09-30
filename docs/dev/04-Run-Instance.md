@@ -1,82 +1,88 @@
 # Run and stop an instance
 
-Keep one Python environment active for every lifecycle command on an
-instance.
+An instance records the Python interpreter it was created with, so activate
+the same virtual environment for every command you run against it.
 
-## Start and verify
+## Start it up
 
-Select the IPv4 interface from [Prepare Ubuntu or WSL2](01-Prepare-Host.md):
+Use the interface you picked in [Prepare Ubuntu or WSL2](01-Prepare-Host.md):
 
 ```bash
-interface=eth0  # replace with the interface reported by ip
+interface=eth0  # replace with the interface from ip -brief -4 address
 narwhal dev init --interface "$interface"
 narwhal dev up
 narwhal dev verify
 narwhal dev status
 ```
 
-| Command  | Success status | Checks                                                                 |
-| -------- | -------------- | ---------------------------------------------------------------------- |
-| `init`   | `initialized`  | Model, runtime and GPU allocation                                      |
-| `up`     | `launched`     | Ports, engine startup, profiles, attestations and router startup       |
-| `verify` | `ready`        | Preflight across eligible directed KV paths, routed arithmetic request |
-| `status` | Current status | Engine health and the retained verification result                    |
+Each command builds on the one before it:
 
-| Output                        | Content                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------- |
-| stdout                        | One JSON lifecycle document                                                |
-| stderr                        | Preparation, profiling and error diagnostics                               |
-| stdout with `--format json`   | [Versioned command result](../Command-Results.md) with automation exit codes |
+| Command  | Reports on success | What it does                                                                                         |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
+| `init`   | `initialized`      | Checks the model, runtime, and GPU allocation                                                        |
+| `up`     | `launched`         | Checks ports, starts the engines, captures attestations, profiles role splits, and starts the router |
+| `verify` | `ready`            | Tests every eligible directed KV path, then sends an arithmetic request through the router           |
+| `status` | Current state      | Reports engine health and the result of the last `verify`                                            |
 
-A failed `verify` sets `status` to `degraded` with the retained reason.
-Restore `ready`:
+Each command writes one JSON document describing the instance's state to
+stdout. Progress messages, profiling output, and errors go to stderr. For
+scripts, add `--format json` to get a
+[versioned command result](../Command-Results.md) with stable exit codes.
 
-1. Repair the failing input.
-2. Run `narwhal dev verify`.
+If `verify` fails, `status` switches to `degraded` and keeps the reason.
+Fix whatever the reason points to and run `verify` again. When it passes,
+the instance is back to `ready`.
 
-## Inspect the router
+## Talk to the router
 
-The default router listens at `http://127.0.0.1:18000`:
+By default the router listens on `http://127.0.0.1:18000`. Its state and
+metrics are the quickest way to see what the instance is doing:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-| Change             | Flag                                 |
-| ------------------ | ------------------------------------ |
-| Port layout        | `narwhal dev init --port-base`       |
-| Instance directory | `--instance PATH` on every command   |
+To use a different set of ports, pass `--port-base` to `narwhal dev init`.
+To keep an instance somewhere other than `runs/dev`, pass `--instance PATH`,
+and pass it to every later command as well.
 
-## Inspect the run directory
+## Look inside the run directory
 
-`status` prints the current run directory.
+`status` prints the path of the current run directory. The files you'll
+reach for most often:
 
-| Path                      | Records                                   |
-| ------------------------- | ----------------------------------------- |
-| `engine-*/startup.log`    | Model loading and engine requests         |
-| `profile-*.log`           | Probe and fit outcomes                    |
-| `verify-*/preflight.log`  | Runtime, profile and transfer checks      |
-| `verify-*/completion.json`| Routed response                           |
-| `*-memory.jsonl`          | Device memory samples                     |
-| `journal.jsonl`           | Request journal                           |
-| `teardown.json`           | Teardown result                           |
+| Path                       | What's in it                                 |
+| -------------------------- | -------------------------------------------- |
+| `engine-*/startup.log`     | Model loading and requests for each engine   |
+| `profile-*.log`            | Profiling probes and how the fits turned out |
+| `verify-*/preflight.log`   | Runtime, profile and KV transfer checks      |
+| `verify-*/completion.json` | The routed test response                     |
+| `*-memory.jsonl`           | GPU memory samples over time                 |
+| `journal.jsonl`            | Request journal                              |
+| `teardown.json`            | What happened at shutdown                    |
 
-## Stop the instance
+## Stop it
 
 ```bash
 narwhal dev down
 narwhal dev status
 ```
 
-`down` reports `stopped` after stopping the process groups that match the
-recorded boot ID and start ticks. The next `up` creates a fresh run directory
-with new profiles.
+`down` only stops process groups whose boot ID and start ticks match what
+Narwhal recorded when it started them, so it won't touch an unrelated
+process that happens to have reused a PID. It reports `stopped` when it's
+done. The next `up` creates a new run directory and profiles the engines
+from scratch.
 
-## Restart after a runtime change
+## After changing the runtime
 
-After a runtime change or engine restart:
+The profiles describe the runtime that was running when they were taken. If
+you change the runtime, or an engine restarts on its own, take the instance
+down and bring it back up so it gets fresh profiles, then verify it:
 
-1. Run `narwhal dev down`.
-2. Run `narwhal dev up`.
-3. Run `narwhal dev verify`.
+```bash
+narwhal dev down
+narwhal dev up
+narwhal dev verify
+```

@@ -1,76 +1,64 @@
 # Engine and whole-wave recovery
 
-These lifecycle procedures require a complete
-[`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract).
+These procedures assume your fleet config has a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract). Without one, the lifecycle steps below don't apply.
 
 ## Engine failure
 
 ### One engine failed unexpectedly
 
-Confirm that the engine is ejected or quarantined and that surviving engines continue receiving work. Save the engine boot log and supervisor exit reason before restarting the process.
+First, make sure the failure is contained. The engine should show as ejected or quarantined, and the other engines should still be getting work.
 
-Check `recovery.engine_restart_policy` and follow the matching procedure below.
+Save the engine's boot log and the supervisor's exit reason. Do this before the restart, not after.
 
-For `individual` recovery:
+What comes next depends on `recovery.engine_restart_policy`. If it's `whole_wave`, go to [Whole-wave recovery](#whole-wave-recovery). If it's `individual`:
 
-1. Start the engine far enough to verify its HTTP endpoints.
-2. Restart its sidecar through the configured process manager so the sidecar binds the new process identity.
-3. Inspect the sidecar log.
-4. Repair any named endpoint or contract failure.
-5. If the engine process changed, [activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activate-replacement-profiles), then request readmission.
-6. Follow `/narwhal/lifecycle` while the router runs the health, attestation, profile-generation, model, generation, role-permitted KV, and final-health gates.
-7. Confirm `accepts_new: true` and that the engine ejection has cleared.
+1. Start the engine and wait until you can reach its HTTP endpoints.
+2. Restart its sidecar through your process manager. The sidecar binds to a process identity, so it needs a restart to pick up the new engine process.
+3. Read the sidecar log. If it reports an endpoint or contract failure, fix that before going further.
+4. If the engine process changed, [activate fresh profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles) without releasing the hold, then request readmission.
+5. Watch `/narwhal/lifecycle` while the router runs its readmission gates: health, attestation, profile generation, model, generation, role-permitted KV, and a final health check.
+6. The engine is back once it reports `accepts_new: true` and is no longer ejected.
 
-If validation enters `blocked`, repair the failure named in
-`engines.<id>.error`, then send a `POST` request to:
+If readmission stops in `blocked`, the reason is in `engines.<id>.error`. Fix it and retry:
 
 ```text
-/narwhal/lifecycle/readmit
+POST /narwhal/lifecycle/readmit
 ```
 
-The router clears the ejection after every recovery gate passes.
-
-For `whole_wave`, use the complete-wave procedure below for drain and readmission.
+The router reruns every gate and only clears the ejection if all of them pass.
 
 ### Planned restart of one engine
 
-Follow the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine).
-Wait until `/narwhal/lifecycle` reports `ready_to_stop: true`, then stop the
-engine through its supervisor. Start the replacement with a newer process
-identity and activate its fresh profiles while preserving the hold. Request
-readmission; Narwhal reruns the recovery checks before placing new work on
-that engine.
+This works like the unplanned case, except you drain the engine first. The full steps are in the [individual restart sequence](../operate/03-Restart-Engines.md#7-restart-one-engine). In short:
+
+1. Drain the engine with `POST /narwhal/lifecycle/drain`, then wait for `/narwhal/lifecycle` to report `ready_to_stop: true` for it.
+2. Stop the engine through its supervisor.
+3. Start the replacement and restart its attestation sidecar. The replacement needs a newer process identity than the one it replaces.
+4. Activate its fresh profiles while keeping the hold in place.
+5. Request readmission. Narwhal runs the same checks as above before it sends the engine any new work.
 
 ## Whole-wave recovery
 
-Use whole-wave recovery for:
+Some failures leave shared peer state that nothing can trust, and then every engine in the wave has to restart together. Use this procedure when:
 
-- `recovery.engine_restart_policy: whole_wave`;
-- stale-peer assertions;
-- transfer stalls that kill a peer;
-- process replacements that invalidate shared peer state.
+- `recovery.engine_restart_policy` is `whole_wave`
+- an engine hits a stale-peer assertion
+- a transfer stall killed a peer
+- replacing a process invalidated shared peer state
 
-Under the `individual` policy, a stale profile holds the affected engine.
-Activate its fresh profiles and request individual readmission.
+A stale profile by itself isn't a reason to restart the wave. Under the `individual` policy it only holds the affected engine, so activate fresh profiles for that engine and request individual readmission.
 
-Start a lifecycle whole-wave drain so the router stops new traffic.
+To restart the wave:
 
-If drain identity capture fails for an engine, use the [unplanned whole-wave procedure](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) to restore that endpoint, then retry the drain.
+1. Start a whole-wave drain through the lifecycle API. The router stops sending new traffic.
 
-Wait for both conditions:
+   If the drain can't capture an engine's identity, restore that engine's endpoint using the [unplanned whole-wave procedure](../operate/03-Restart-Engines.md#8-restart-an-engine-wave), then start the drain again.
 
-- `wave.ready_to_stop` is `true`.
-- `/ready` returns HTTP 503.
+2. Wait until `wave.ready_to_stop` is `true` and `/ready` returns HTTP 503. You need both before going on.
+3. Stop every engine process tree through the external supervisor.
+4. Check accelerator memory. Every allocation should belong to a worker you mean to run. Anything else is likely left over from the old wave and should be cleared before you relaunch.
+5. Launch every engine from the same immutable image and launch contract, each with its own fresh attestation sidecar.
+6. With the wave still held, [activate the replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles) and request whole-wave readmission.
+7. Restore ingress once the KV ring and final-health gates pass and `/ready` returns HTTP 200.
 
-Stop every engine process tree through the external supervisor.
-
-Before restarting the wave, verify that accelerator memory allocations belong to the intended worker processes.
-
-Launch every engine from the same immutable image and launch contract. Start
-a fresh attestation sidecar for every engine process. While the wave remains
-held, [activate the replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles),
-then request whole-wave readmission.
-
-Restore ingress after the KV ring and final-health gates pass and `/ready` returns HTTP 200.
-
-Run the [post-recovery drills](../Troubleshoot.md#after-recovery) after the repaired fleet returns to service.
+When the fleet is back in service, finish with the [post-recovery drills](../Troubleshoot.md#after-recovery).

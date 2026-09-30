@@ -1,8 +1,8 @@
-# Model, health, and metrics inspection
+# Inspection endpoints
 
 ## `GET /v1/models`
 
-Returns the configured served model in OpenAI list format.
+Returns the configured model in OpenAI's list format:
 
 ```json
 {
@@ -19,22 +19,9 @@ Returns the configured served model in OpenAI list format.
 
 ## `GET /health`
 
-Reports router process liveness.
+`/health` tells you whether the router process is alive. It always returns HTTP `200`; the router's condition is in `status`, which is `ok`, `standby`, `fenced`, `maintenance`, or `degraded`.
 
-Possible `status` values are:
-
-- `ok`
-- `standby`
-- `fenced`
-- `maintenance`
-- `degraded`
-
-The response also reports:
-
-- configured fleet size as `instances`
-- placement-eligible engine count as `available_instances`
-
-Example:
+The response also includes `instances`, the configured fleet size, and `available_instances`, the number of engines currently eligible for placement once ejected, draining, and quarantined engines are left out:
 
 ```json
 {
@@ -44,55 +31,42 @@ Example:
 }
 ```
 
-All `/health` states return HTTP `200`.
-
-Narwhal counts engines eligible for placement after ejection, drain, and quarantine in `available_instances`.
-
-Use Prometheus scrape targets and breaker state for engine-level liveness.
+`/health` says nothing about individual engines. For that, check Prometheus scrape targets and breaker state.
 
 ## `GET /ready`
 
-Narwhal answers each `/ready` probe with HTTP `200` when this router holds fleet control and admits new work, allowing the load balancer to send it client requests. An HTTP `503` keeps the router out of rotation for one of these conditions:
+This is the endpoint to give your load balancer. It returns HTTP `200` when this router holds fleet control and is admitting new work. It returns `503`, taking the router out of rotation, when any of these apply:
 
-- standby state
-- fencing
-- lease-storage failure
-- lifecycle hold
-- loss of eligible backends
-- monitoring degradation
+- it is a standby
+- it has been fenced
+- lease storage has failed
+- a lifecycle hold is in place
+- no eligible backends remain
+- monitoring is degraded
+- engine process identities are still being validated
 
-After `controller.monitor_failure_limit` consecutive failed monitoring passes, `/ready` reports:
+A `503` also carries `Retry-After: 1`. Either way, the body has `status` (`ready` or `not_ready`), `control_ready`, the lease `epoch` and `holder`, and a `reason` that's empty when the router is ready.
 
-```text
-monitoring degraded: <stage> <class>
-```
+Monitoring counts as degraded after `controller.monitor_failure_limit` consecutive failed monitoring passes. `/ready` then reports `monitoring degraded: <stage> <class>`, and one fully successful pass clears it. Standby routers count the same failures toward takeover.
 
-Standbys count the same failures toward takeover.
-
-One completely successful monitoring pass clears degraded state.
-
-When the eligible engine count reaches zero, `/ready` returns HTTP `503` with:
+When no engines are eligible, and nothing else is holding the router back, `/ready` returns `503` with a body like this one from a router without a lease:
 
 ```json
 {
+  "status": "not_ready",
+  "control_ready": true,
+  "epoch": 0,
+  "holder": "",
   "reason": "no available engines"
 }
 ```
 
-New completion requests receive `backend_unavailable` with `Retry-After: 1`.
+and new completion requests get `backend_unavailable` with `Retry-After: 1`.
 
-Lifecycle and control holds take precedence over backend state.
+Lifecycle and control holds take precedence over backend state. During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave), `/health` reports `maintenance`, `/ready` gives the lifecycle reason, and completion requests get HTTP `503` with error code `standby`.
 
-During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
-
-- `/health` reports `maintenance`
-- `/ready` reports the lifecycle reason
-- completion requests return HTTP `503` with error code `standby`
-
-`control_ready` stays true during backend loss or managed maintenance while lease ownership and monitoring remain healthy, allowing standbys to keep handoffs current.
+`control_ready` is separate from client readiness. It stays true through backend loss or managed maintenance as long as the router still holds its lease and monitoring is healthy, so standbys keep getting current handoffs.
 
 ## `GET /metrics`
 
-Returns Prometheus exposition format `0.0.4`.
-
-See [Metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) for the operational series.
+Serves Prometheus exposition format `0.0.4`. [Metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) describes the series worth watching.

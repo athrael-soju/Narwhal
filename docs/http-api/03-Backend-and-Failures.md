@@ -1,153 +1,86 @@
-# Backend execution and failures
+# Running requests on engines
 
 ## Disaggregated backend execution
 
+Each request runs in two legs: prefill on a producer engine, then decode.
+
 ### Prefill
 
-Narwhal sends the producer a non-streaming, one-token completion request and discards the generated token after capturing the KV handoff descriptor.
-
-`PrefillResult` associates the backend-owned KV descriptor with:
-
-- producer URL
-- endpoint
-- backend request ID
+The producer gets a non-streaming completion request capped at one token. Narwhal keeps the KV handoff descriptor from the response and throws the generated token away. The resulting `PrefillResult` ties that backend-owned descriptor to the producer URL, the endpoint, and the backend request ID.
 
 ### Decode
 
-Remote decode receives:
+Remote decode gets the original prompt or messages, the requested output limit, the sampling settings, and the validated handoff descriptor. Every token the client sees comes from decode.
 
-- the original prompt or messages
-- the requested output limit
-- sampling settings
-- the validated handoff descriptor
-
-Decode generates every client-visible output token.
-
-For same-worker decode, Narwhal removes transfer parameters, including client-provided values, and relies on engine prefix caching or prompt recomputation.
+When decode runs on the same worker that did prefill, Narwhal strips all transfer parameters, including any the client sent, and the engine either reuses its prefix cache or recomputes the prompt.
 
 ### Descriptor validation
 
-Narwhal validates the descriptor before making the decode HTTP request.
+The descriptor is checked before the decode HTTP request goes out. Narwhal rejects it if the engine identity is missing, the block IDs are malformed, or the connector or endpoint doesn't match. Opaque runtime fields that Narwhal doesn't interpret are passed through.
 
-It rejects:
-
-- missing engine identity
-- malformed block IDs
-- connector mismatch
-- endpoint mismatch
-
-Opaque runtime fields are retained.
-
-[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
+[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) checks the pinned engine contract ahead of time and probes each KV transfer the roles allow.
 
 ### Ownership and timing
 
-The original client request owns:
+The original client request owns the handoff from start to finish. It enforces handoff age, holds the phase reservations, and handles retries and cleanup. The handoff-age clock starts when the producer HTTP leg starts. A retry gets fresh backend request IDs and a new producer owner.
 
-- handoff-age enforcement
-- phase reservations
-- retries
-- cleanup
+Narwhal records two durations, both measured from when the request reached the router:
 
-Handoff age begins when the producer HTTP leg starts.
+- `ttft_s` runs until the producer HTTP leg completes.
+- `first_byte_s` runs until the router sees the first generated decode output.
 
-Every retry receives:
-
-- fresh backend request IDs
-- new producer ownership
-
-Narwhal records two durations from the original request's arrival at the router:
-
-- `ttft_s`: elapsed time to producer HTTP completion.
-- `first_byte_s`: elapsed time to the first generated decode output observed by the router.
-
-Their difference, `first_byte_s - ttft_s`, gives the interval between those events. See the [measurement contract](../measure/01-Profile.md).
+See the [measurement contract](../measure/01-Profile.md) for how these are used.
 
 ### Python API
-
-Python callers import:
 
 ```python
 from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import PrefillResult
 ```
 
-Pass the result of `EngineClient.prefill()` directly to `EngineClient.decode()`. For inspection, `result.parameters()` returns a detached dictionary.
-
-Internal Python APIs may change between releases.
-
----
+Pass whatever `EngineClient.prefill()` returns straight to `EngineClient.decode()`. If you want to look inside it, `result.parameters()` gives you a detached dictionary. These are internal APIs and can change between releases.
 
 ## Engine failure handling
 
-Narwhal maps timeout-shaped engine faults to HTTP `504` and other engine faults to HTTP `502`.
+Engine faults that look like timeouts become HTTP `504`. Anything else from the engine becomes `502`. The client gets a generic message such as `Upstream request failed`; the full engine detail goes to the `error` field of the [request journal](../telemetry/01-Journal.md#terminal-request-records).
 
-Narwhal counts a nonempty `prompt` array of nonnegative integer token IDs locally. For text and chat input, when `engine.tokenize` is enabled and the configured dialect has an exact-count endpoint, a tokenisation timeout returns HTTP `504` before placement. Other tokenisation failures return an engine error. Character-ratio sizing applies when token counting is disabled or the dialect omits the exact-count endpoint.
+If `prompt` is a nonempty array of nonnegative integer token IDs, Narwhal counts it locally. For text and chat input, it asks the engine for an exact count when `engine.tokenize` is on and the dialect has an exact-count endpoint. A timeout on that call returns `504` before the request is placed, and any other tokenization failure returns an engine error. With token counting off, or on a dialect without an exact-count endpoint, Narwhal estimates size from a character ratio instead.
 
-Prefill finishes before client streaming begins, so prefill failures can be returned as ordinary HTTP errors.
+Prefill always finishes before anything streams to the client, so a prefill failure can still go back as an ordinary HTTP error.
 
 ### Breaker readmission
 
-When `engine_contract` is configured, breaker readmission runs lifecycle validation. Development fleets that rely on health checks can readmit an ejected engine after a successful check.
+After `recovery.eject_after` consecutive stream failures on an engine, first-token timeouts and mid-stream silence included, Narwhal takes it out of placement until an inference probe succeeds. Each leg of the probe gets `engine.first_token_timeout_s`. If the engine failed during a crossed decode, the probe uses a fresh handoff from the original producer. An inconclusive probe just waits for the next regular readmission attempt.
 
-After `recovery.eject_after` consecutive stream failures, Narwhal removes the engine from placement until an inference probe succeeds.
-
-The failure streak includes:
-
-- first-token timeout
-- mid-stream silence
-
-After a crossed-decode failure, the probe uses a new handoff produced by the original producer.
-
-Each probe leg uses `engine.first_token_timeout_s`.
-
-Inconclusive probes return to the normal readmission cadence.
-
-Whole-wave restart policy continues to apply.
+When `engine_contract` is configured, breaker readmission also runs lifecycle validation. Development fleets that rely on health checks instead can readmit an ejected engine once a check succeeds. Whole-wave restart policy still applies in both cases.
 
 ### Successful stream termination
 
-A valid engine stream contains:
-
-1. generated output
-2. `data: [DONE]`
-
-Closing the stream before `[DONE]` is an engine failure.
-
-Receiving `[DONE]` before the first generated token returns HTTP `502` with:
+A good engine stream sends its generated output and then ends with `data: [DONE]`. If the stream closes without `[DONE]`, Narwhal treats it as an engine failure. If `[DONE]` arrives before any token, the attempt fails as a `502` engine error, and the journal's `error` field includes:
 
 ```text
 stream ended with [DONE] before any token arrived
 ```
 
-An error object carried inside an upstream HTTP `200` stream propagates with the error object's own status.
+If the upstream responds with HTTP `200` but puts an error object in the stream, Narwhal treats it as an engine failure with the error object's status, or `500` if it has none. That status decides whether the attempt can be retried and how the breaker counts it. A non-streaming client gets `504` for a `408` or `504` status and `502` for anything else.
 
 ### Decode timeouts
 
-`engine.first_token_timeout_s` starts before opening the decode HTTP stream and ends at the first generated token. Connection and response-header delays consume the same budget.
+Two timeouts cover decode. `engine.first_token_timeout_s` starts before Narwhal opens the decode HTTP stream and runs until the first generated token, so connecting and waiting for response headers both use up the same budget. After the first token, `engine.decode_read_timeout_s` limits how long the stream can go quiet between transport chunks. Metadata chunks count as activity and reset it. Set it to 0 and the stream is bounded only by the original request deadline.
 
-After the first token, `engine.decode_read_timeout_s` bounds silence between transport chunks; metadata chunks reset the timer.
-
-Expiry returns HTTP `504` with detail beginning:
+When it fires, the attempt fails with status `504`, and the journal's `error` field includes:
 
 ```text
 engine went silent between tokens
 ```
 
-A zero `engine.decode_read_timeout_s` uses the original request deadline as the stream bound.
-
 ### Retries
 
-Each admitted request receives one prefill/decode attempt by default.
+By default each admitted request gets one prefill/decode attempt. With `serving.max_attempts` above 1, if a transient fault happens before any output reaches the client, Narwhal can start a fresh attempt, provided the original request deadline allows it and there's retry budget left.
 
-Before visible output, Narwhal may start a fresh attempt for a transient fault when both conditions hold:
+When `recovery.failure_quarantine_s` is above zero, the failed engine is briefly kept out of placement while the breaker catches up.
 
-- the original request deadline still permits it
-- retry budget remains
-
-When `recovery.failure_quarantine_s > 0`, the failed engine is temporarily excluded from subsequent placement while breaker state catches up.
-
-A decode failure after HTTP `200` has already been committed emits a terminal SSE event:
+Once HTTP `200` has gone out, the status can't change. If decode fails after that point, Narwhal ends the stream with an error event:
 
 ```text
 data: {"error": ...}

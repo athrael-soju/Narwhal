@@ -40,8 +40,8 @@ One urgent wake may apply one adjacent move. If TTFT remains elevated after the 
 
 Narwhal uses two pressure directions:
 
-- source pressure up to `shrink` drives consolidation;
-- sustained prefill pressure at or above `expand` can move decode capacity into prefill.
+- source pressure up to `controller.thresholds.shrink` drives consolidation;
+- sustained prefill pressure at or above `controller.thresholds.expand` can move decode capacity into prefill.
 
 Both paths pass profile, safety, and confirmation gates before any role changes.
 
@@ -72,7 +72,7 @@ Moves preserve `controller.min_prefill` and `controller.min_decode` whenever eno
 
 `controller.thresholds.dwell_s` keeps a recently moved engine in its new role for the configured interval.
 
-`controller.thresholds.flip_resident_guard` requires the lightest eligible decode donor's resident stream count to be at or below the configured ceiling before a decode-to-prefill move.
+When `controller.thresholds.flip_resident_guard` is above `0`, it requires the lightest eligible decode donor's resident stream count to be at or below that ceiling before a decode-to-prefill move.
 
 Narwhal applies role changes to new placements while existing requests continue on their assigned engines.
 
@@ -93,13 +93,7 @@ Urgent decode-to-prefill evaluation still enforces:
 
 ### Advisory mode
 
-With:
-
-```yaml
-controller.advisory: true
-```
-
-Narwhal evaluates a proposed role move while the live split stays fixed.
+When `controller.advisory` is `true`, Narwhal evaluates a proposed role move while the live split stays fixed.
 
 It records:
 
@@ -120,7 +114,7 @@ When the failed engine later passes readmission, Narwhal assigns its role accord
 
 ### Aggregate fallback from an idle decode engine
 
-If failures or drains empty the prefill pool, the scheduler can select a live decode-labelled engine as the aggregate fallback.
+If failures or drains empty the prefill pool, the scheduler can select a live decode-labeled engine as the aggregate fallback.
 
 Predictive admission rejects new work on that engine until its resident decode work drains, because the measured curves price one phase at a time.
 
