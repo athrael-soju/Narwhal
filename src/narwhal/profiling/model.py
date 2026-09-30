@@ -309,10 +309,11 @@ class Profile:
         )
 
     def covers_output(self, output_len: float) -> bool:
-        """Return whether an output length was in the measured decode sweep."""
-        return (
-            self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
-        ) and (self.decode_max_output_tokens is None or output_len <= self.decode_max_output_tokens)
+        """Return whether an output length reaches the measured decode sweep's minimum.
+
+        The decode fit prices one step from batch requests and KV tokens.
+        """
+        return self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
         """Predict one decode iteration from active requests and their KV tokens."""

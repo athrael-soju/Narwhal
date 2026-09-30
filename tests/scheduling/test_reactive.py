@@ -337,7 +337,6 @@ class MixedPressureTests(unittest.TestCase):
             {"decode_max_kv_tokens": 50},
             {"decode_min_kv_tokens": 200},
             {"prefill_max_tokens": 50},
-            {"decode_max_output_tokens": 5},
         ):
             with self.subTest(bounds=bounds):
                 narrowed = replace(
@@ -381,6 +380,17 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(
             fleet.scheduler._last_decision["decision_basis"], "prefill_pressure_recovery"
         )
+
+    def test_demand_prices_outputs_past_the_profiled_decode_length(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(
+            replace(p, decode_max_output_tokens=4) for p in fleet.profiles.all_profiles()
+        )
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+        priced = demand.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+        self.assertTrue(priced.complete)
+        self.assertGreater(priced.decode_engines, 0.0)
 
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet

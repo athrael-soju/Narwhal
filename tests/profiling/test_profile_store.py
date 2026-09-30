@@ -107,7 +107,9 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual(restored.get(row.iid), row)
         self.assertIsNone(restored.mean_prefill_time(64))
         self.assertIsNotNone(restored.mean_prefill_time(256))
-        self.assertEqual(row.decode_rps(1, 256, 32), 0)
+        self.assertGreater(row.decode_rps(1, 256, 32), 0)
+        self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
+        self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)
         with self.assertRaisesRegex(ValueError, "colocated role mix"):
             replace(row, colocated_decode_rps=None)
 
