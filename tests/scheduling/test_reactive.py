@@ -408,6 +408,41 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(short.prefill_engines, 0.0)
         self.assertAlmostEqual(short.prefill_engines, shortest.prefill_engines)
 
+    def test_decode_capacity_prices_length_buckets_at_or_above_exact_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        shapes = [(400 + i, 200 + (7 * i) % 100) for i in range(200)]
+        for input_len, wanted_len in shapes:
+            demand.saw_arrival(input_len, wanted_len=wanted_len, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        original = Profile.decode_rps
+        with patch.object(Profile, "decode_rps", autospec=True, side_effect=original) as rps:
+            bucketed = price()
+        self.assertLess(rps.call_count, len(shapes) * len(profiles) / 2)
+        with patch.object(type(demand), "_capacity_bucket", staticmethod(lambda tokens: tokens)):
+            exact = price()
+        self.assertGreater(exact, 0.0)
+        self.assertGreaterEqual(bucketed, exact)
+        self.assertLess(bucketed, exact * 1.2)
+
+    def test_state_snapshots_reuse_the_controller_output_estimates(self) -> None:
+        fleet = self.fleet
+        demand = fleet.controller.demand
+        demand.refresh_output_estimates()
+        with patch.object(demand, "_output_estimates", wraps=demand._output_estimates) as rebuild:
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_not_called()
+            fleet.now += demand.window_s
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_called_once()
+
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
         fleet.profiles._by_id.pop("e5")
