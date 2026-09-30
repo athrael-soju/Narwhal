@@ -259,10 +259,14 @@ class Profile:
         _check({f.name: getattr(self, f.name) for f in fields(self)}, label)
 
     def prefill_time(self, input_len: int) -> float:
-        """Predict prefill time for an input length, adding `ttft_split` when it splits."""
-        x = float(input_len)
+        """Predict prefill time for an input length, adding `ttft_split` when it splits.
+
+        A prompt below the measured sweep is priced at the sweep's shortest length.
+        """
+        tokens = max(input_len, self.prefill_min_tokens or 0)
+        x = float(tokens)
         return max(
-            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(input_len)
+            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(tokens)
         )
 
     def _split_step(self, tokens: int) -> float:
@@ -303,10 +307,8 @@ class Profile:
         )
 
     def covers_prefill(self, input_len: int) -> bool:
-        """Return whether a prompt length was in the measured prefill sweep."""
-        return (self.prefill_min_tokens is None or input_len >= self.prefill_min_tokens) and (
-            self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
-        )
+        """Return whether a prompt length is at most the measured prefill sweep's longest."""
+        return self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
 
     def covers_output(self, output_len: float) -> bool:
         """Return whether an output length reaches the measured decode sweep's minimum.
@@ -344,16 +346,10 @@ class Profile:
         return capacity
 
     def covers_decode(self, batch_requests: float, batch_tokens: float) -> bool:
-        """Return whether a decode point is inside the measured profile domain."""
-        if batch_requests <= 0 or batch_tokens <= 0:
-            return True
-        bounds = (
-            (self.decode_min_requests, self.decode_max_requests, batch_requests),
-            (self.decode_min_kv_tokens, self.decode_max_kv_tokens, batch_tokens),
-        )
-        return all(lo is None or lo <= value for lo, _, value in bounds) and all(
-            hi is None or value <= hi for _, hi, value in bounds
-        )
+        """Return whether a decode point is at most the measured profile domain's largest."""
+        requests = self.decode_max_requests is None or batch_requests <= self.decode_max_requests
+        tokens = self.decode_max_kv_tokens is None or batch_tokens <= self.decode_max_kv_tokens
+        return requests and tokens
 
     @property
     def decode_token_limit(self) -> int | None:

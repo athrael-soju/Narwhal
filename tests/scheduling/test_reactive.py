@@ -333,17 +333,17 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(snapshot.offered_inputs, ())
         self.assertEqual(snapshot.offered_outputs, ())
         candidates = dict(snapshot.profile_options)[2]
-        for bounds in (
-            {"decode_max_kv_tokens": 50},
-            {"decode_min_kv_tokens": 200},
-            {"prefill_max_tokens": 50},
+        for bounds, covered in (
+            ({"decode_max_kv_tokens": 50}, False),
+            ({"prefill_max_tokens": 50}, False),
+            ({"decode_min_kv_tokens": 200, "prefill_min_tokens": 200}, True),
         ):
             with self.subTest(bounds=bounds):
                 narrowed = replace(
                     snapshot,
                     profile_options=((2, tuple(replace(p, **bounds) for p in candidates)),),
                 )
-                self.assertFalse(narrowed.score(2).decode_profile_covered)
+                self.assertEqual(narrowed.score(2).decode_profile_covered, covered)
         self.assertIsNotNone(fleet.confirm())
 
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
@@ -391,6 +391,22 @@ class MixedPressureTests(unittest.TestCase):
         priced = demand.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
         self.assertTrue(priced.complete)
         self.assertGreater(priced.decode_engines, 0.0)
+
+    def test_demand_prices_prompts_below_the_profiled_prefill_sweep_at_its_shortest(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(replace(p, prefill_min_tokens=100) for p in fleet.profiles.all_profiles())
+
+        def offered(length: int):
+            model = type(fleet.controller.demand)(
+                fleet.monitor, fleet.scheduler, lambda: fleet.now, window_s=60.0, bucket_s=1.0
+            )
+            model.saw_arrival(length, wanted_len=4, at=fleet.now)
+            return model.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+
+        short, shortest = offered(10), offered(100)
+        self.assertTrue(short.complete)
+        self.assertGreater(short.prefill_engines, 0.0)
+        self.assertAlmostEqual(short.prefill_engines, shortest.prefill_engines)
 
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
