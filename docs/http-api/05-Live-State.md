@@ -10,10 +10,10 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 
 ### Top-level fields
 
-| Counters                                                                               | New router process                                     |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `served`, `failed`, `cancelled`, `unserved`, `admission.rejected`, `admission.refused` | Restored from the state handoff on resume and takeover |
-| Other counters                                                                         | Start at zero                                          |
+| Counters | New router process |
+| --- | --- |
+| `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused` | Restored from the state handoff on resume and takeover |
+| Other counters | Start at zero |
 
 | Field                   | Meaning                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -210,7 +210,7 @@ Optional fields, by evaluation stage:
 
 | Field                                             | Meaning                                                                                                    |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `current_prefill`, `current_decode`               | Current split                                                                                              |
+| `current_prefill`, `current_decode`               | Current split across live engines                                                                          |
 | `prefill_work`, `decode_work`                     | Estimated prefill and decode demand, in engines                                                            |
 | `arrivals`                                        | Arrivals in the demand window                                                                              |
 | `output_observations`                             | Completed-output observations in demand history                                                            |
@@ -275,7 +275,7 @@ Blocked and held decisions keep the proposed split and objective change.
 - profile coverage
 - KV capacity
 - role floors
-- live availability while fleet health is changing
+- a role with no live engine while fleet health is changing
 - pins
 - cooldown
 - dwell

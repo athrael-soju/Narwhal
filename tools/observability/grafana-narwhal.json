@@ -68,8 +68,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 1,
-                    "title": "Controller",
-                    "description": "Router admission readiness, controller mode, and firing Narwhal alerts.",
+                    "title": "Router",
+                    "description": "Router admission readiness and firing Narwhal alerts.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -93,27 +93,6 @@
                                             "uid": "${DS_PROMETHEUS}"
                                         },
                                         "refId": "A",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "(narwhal_controller_advisory{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
-                                                "instant": false,
-                                                "legendFormat": "Controller",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "B",
                                         "hidden": false
                                     }
                                 },
@@ -149,9 +128,9 @@
                             "pluginVersion": "",
                             "options": {
                                 "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "horizontal",
+                                "graphMode": "none",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -161,9 +140,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 24
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -196,41 +176,15 @@
                                                         "options": {
                                                             "-1": {
                                                                 "text": "Offline",
-                                                                "color": "#EF8585"
+                                                                "color": "#D44A3A"
                                                             },
                                                             "0": {
                                                                 "text": "Not ready",
-                                                                "color": "#EF8585"
+                                                                "color": "#D44A3A"
                                                             },
                                                             "1": {
                                                                 "text": "Ready",
-                                                                "color": "#8CCF7E"
-                                                            }
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Controller"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "mappings",
-                                                "value": [
-                                                    {
-                                                        "type": "value",
-                                                        "options": {
-                                                            "0": {
-                                                                "text": "Automatic",
-                                                                "color": "text"
-                                                            },
-                                                            "1": {
-                                                                "text": "Advisory",
-                                                                "color": "text"
+                                                                "color": "#56A64B"
                                                             }
                                                         }
                                                     }
@@ -244,6 +198,10 @@
                                             "options": "Alerts"
                                         },
                                         "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
                                             {
                                                 "id": "color",
                                                 "value": {
@@ -278,8 +236,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 2,
-                    "title": "Fleet",
-                    "description": "Engines taking no new work (Draining, Ejected, Validating, Blocked or Scrape down), the current prefill and decode pool sizes, and role flips within the displayed interval.",
+                    "title": "Engines",
+                    "description": "Engines taking no new work (Draining, Ejected, Validating, Blocked, Unreachable or Restarting), and role flips within the displayed interval.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -292,7 +250,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "count((max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(2 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(8 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\"))) >= 4) or vector(0)",
+                                                "expr": "count((max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * ((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))) >= 5) or vector(0)",
                                                 "instant": true,
                                                 "legendFormat": "Out of service",
                                                 "range": false
@@ -303,48 +261,6 @@
                                             "uid": "${DS_PROMETHEUS}"
                                         },
                                         "refId": "A",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "max(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\",role=\"prefill\"})",
-                                                "instant": true,
-                                                "legendFormat": "Prefill",
-                                                "range": false
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "B",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "max(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\",role=\"decode\"})",
-                                                "instant": true,
-                                                "legendFormat": "Decode",
-                                                "range": false
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "C",
                                         "hidden": false
                                     }
                                 },
@@ -381,8 +297,8 @@
                             "options": {
                                 "colorMode": "value",
                                 "graphMode": "none",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -392,9 +308,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 22
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -425,6 +342,10 @@
                                         },
                                         "properties": [
                                             {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
                                                 "id": "color",
                                                 "value": {
                                                     "mode": "thresholds"
@@ -451,29 +372,18 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Prefill"
+                                            "options": "Flips"
                                         },
                                         "properties": [
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
                                             {
                                                 "id": "color",
                                                 "value": {
                                                     "mode": "fixed",
-                                                    "fixedColor": "#279B98"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Decode"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "color",
-                                                "value": {
-                                                    "mode": "fixed",
-                                                    "fixedColor": "#607FA8"
+                                                    "fixedColor": "text"
                                                 }
                                             }
                                         ]
@@ -489,7 +399,7 @@
                 "spec": {
                     "id": 5,
                     "title": "Goodput",
-                    "description": "Share of offered requests that completed within both the TTFT and TPOT SLOs, and those requests per second. Refused, failed and expired requests count as misses.",
+                    "description": "Share of offered requests completed within both the TTFT and TPOT SLOs, and those requests per second.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -525,7 +435,7 @@
                                                 "editorMode": "code",
                                                 "expr": "sum(rate(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                                                 "instant": false,
-                                                "legendFormat": "Goodput",
+                                                "legendFormat": "Rate",
                                                 "range": true
                                             }
                                         },
@@ -548,9 +458,9 @@
                             "pluginVersion": "",
                             "options": {
                                 "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
+                                "graphMode": "none",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -560,9 +470,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 22
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -631,12 +542,23 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Goodput"
+                                            "options": "Rate"
                                         },
                                         "properties": [
                                             {
                                                 "id": "unit",
                                                 "value": "reqps"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "text"
+                                                }
                                             }
                                         ]
                                     }
@@ -746,7 +668,7 @@
                 "spec": {
                     "id": 7,
                     "title": "Engines",
-                    "description": "One row per engine, most serious state first, then by role. State ranks Scrape down, Blocked, Validating, Ejected, Draining, Verifying, Probation, Backlogged (vLLM has waiting requests) and Serving. Resident and vLLM running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
+                    "description": "One row per engine, most serious state first, then by role. State ranks Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Verifying, Probation, Backlogged (vLLM has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and vLLM running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -781,7 +703,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(2 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(8 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\"))",
+                                                "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * ((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
                                                 "format": "table",
                                                 "instant": true,
                                                 "legendFormat": "",
@@ -1092,36 +1014,44 @@
                                                                 "color": "#56A64B"
                                                             },
                                                             "1": {
+                                                                "text": "Switching",
+                                                                "color": "#5B8DB8"
+                                                            },
+                                                            "2": {
                                                                 "text": "Backlogged",
                                                                 "color": "#C8963E"
                                                             },
-                                                            "2": {
+                                                            "3": {
                                                                 "text": "Probation",
                                                                 "color": "#C8963E"
                                                             },
-                                                            "3": {
+                                                            "4": {
                                                                 "text": "Verifying",
                                                                 "color": "#C8963E"
                                                             },
-                                                            "4": {
+                                                            "5": {
                                                                 "text": "Draining",
                                                                 "color": "#8F8FA3"
                                                             },
-                                                            "5": {
+                                                            "6": {
                                                                 "text": "Ejected",
                                                                 "color": "#D44A3A"
                                                             },
-                                                            "6": {
+                                                            "7": {
                                                                 "text": "Validating",
                                                                 "color": "#7F6BB0"
                                                             },
-                                                            "7": {
+                                                            "8": {
                                                                 "text": "Blocked",
                                                                 "color": "#A11D1D"
                                                             },
-                                                            "8": {
-                                                                "text": "Scrape down",
+                                                            "9": {
+                                                                "text": "Unreachable",
                                                                 "color": "#D44A3A"
+                                                            },
+                                                            "10": {
+                                                                "text": "Restarting",
+                                                                "color": "#8F8FA3"
                                                             }
                                                         }
                                                     },
@@ -1331,7 +1261,7 @@
                 "spec": {
                     "id": 8,
                     "title": "Engine role history",
-                    "description": "Routing assignments over time for the selected engines. Draining, Ejected and Blocked periods replace the role for their duration.",
+                    "description": "Role over time for the selected engines. Draining, Ejected, Validating, Blocked, Unreachable and Restarting periods replace the role for their duration, in the Engines State colours.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -1344,7 +1274,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\")) > 0",
+                                                "expr": "max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(8 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(9 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\")) > 0",
                                                 "instant": false,
                                                 "legendFormat": "{{iid}}",
                                                 "range": true
@@ -1372,7 +1302,7 @@
                                 "legend": {
                                     "displayMode": "list",
                                     "placement": "bottom",
-                                    "showLegend": true
+                                    "showLegend": false
                                 },
                                 "mergeValues": true,
                                 "rowHeight": 0.8,
@@ -1410,8 +1340,20 @@
                                                     "color": "#D44A3A"
                                                 },
                                                 "6": {
+                                                    "text": "Validating",
+                                                    "color": "#7F6BB0"
+                                                },
+                                                "7": {
                                                     "text": "Blocked",
                                                     "color": "#A11D1D"
+                                                },
+                                                "8": {
+                                                    "text": "Unreachable",
+                                                    "color": "#D44A3A"
+                                                },
+                                                "9": {
+                                                    "text": "Restarting",
+                                                    "color": "#8F8FA3"
                                                 }
                                             }
                                         }
@@ -2639,13 +2581,34 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 60,
-                    "title": "Offered",
-                    "description": "Arrival rate, and the share refused at admission (predictive refusal and capacity rejection) or ended by failure or deadline expiry.",
+                    "title": "Load",
+                    "description": "Share of offered requests refused at admission or ended by failure or deadline expiry, and the arrival rate. Request outcomes below splits them by outcome.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
                         "spec": {
                             "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Unserved",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "U",
+                                        "hidden": false
+                                    }
+                                },
                                 {
                                     "kind": "PanelQuery",
                                     "spec": {
@@ -2666,48 +2629,6 @@
                                         "refId": "A",
                                         "hidden": false
                                     }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "(sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
-                                                "legendFormat": "Refused",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "B",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "(sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
-                                                "legendFormat": "Failed",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "C",
-                                        "hidden": false
-                                    }
                                 }
                             ],
                             "transformations": [],
@@ -2720,9 +2641,9 @@
                             "pluginVersion": "",
                             "options": {
                                 "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
+                                "graphMode": "none",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -2732,9 +2653,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 22
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -2761,19 +2683,7 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Offered"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "unit",
-                                                "value": "reqps"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Refused"
+                                            "options": "Unserved"
                                         },
                                         "properties": [
                                             {
@@ -2815,12 +2725,12 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Failed"
+                                            "options": "Offered"
                                         },
                                         "properties": [
                                             {
                                                 "id": "unit",
-                                                "value": "percentunit"
+                                                "value": "reqps"
                                             },
                                             {
                                                 "id": "decimals",
@@ -2829,27 +2739,8 @@
                                             {
                                                 "id": "color",
                                                 "value": {
-                                                    "mode": "thresholds"
-                                                }
-                                            },
-                                            {
-                                                "id": "thresholds",
-                                                "value": {
-                                                    "mode": "absolute",
-                                                    "steps": [
-                                                        {
-                                                            "color": "#56A64B",
-                                                            "value": null
-                                                        },
-                                                        {
-                                                            "color": "#C8963E",
-                                                            "value": 0.001
-                                                        },
-                                                        {
-                                                            "color": "#D44A3A",
-                                                            "value": 0.01
-                                                        }
-                                                    ]
+                                                    "mode": "fixed",
+                                                    "fixedColor": "text"
                                                 }
                                             }
                                         ]
@@ -2865,7 +2756,7 @@
                 "spec": {
                     "id": 61,
                     "title": "TTFT p95",
-                    "description": "95th-percentile TTFT on the selected router, as a share of its SLO and in seconds.",
+                    "description": "95th-percentile TTFT on the selected router as a share of its SLO, and its value.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -2880,7 +2771,7 @@
                                                 "editorMode": "code",
                                                 "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
                                                 "instant": false,
-                                                "legendFormat": "of SLO",
+                                                "legendFormat": "Of SLO",
                                                 "range": true
                                             }
                                         },
@@ -2924,9 +2815,9 @@
                             "pluginVersion": "",
                             "options": {
                                 "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
+                                "graphMode": "none",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -2936,9 +2827,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 22
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -2965,7 +2857,7 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "of SLO"
+                                            "options": "Of SLO"
                                         },
                                         "properties": [
                                             {
@@ -3016,7 +2908,14 @@
                                             },
                                             {
                                                 "id": "decimals",
-                                                "value": 3
+                                                "value": 2
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "text"
+                                                }
                                             }
                                         ]
                                     }
@@ -3031,7 +2930,7 @@
                 "spec": {
                     "id": 62,
                     "title": "TPOT p95",
-                    "description": "95th-percentile TPOT on the selected router, as a share of its SLO and in seconds.",
+                    "description": "95th-percentile TPOT on the selected router as a share of its SLO, and its value.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -3046,7 +2945,7 @@
                                                 "editorMode": "code",
                                                 "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
                                                 "instant": false,
-                                                "legendFormat": "of SLO",
+                                                "legendFormat": "Of SLO",
                                                 "range": true
                                             }
                                         },
@@ -3090,9 +2989,9 @@
                             "pluginVersion": "",
                             "options": {
                                 "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
+                                "graphMode": "none",
+                                "justifyMode": "center",
+                                "orientation": "vertical",
                                 "reduceOptions": {
                                     "calcs": [
                                         "lastNotNull"
@@ -3102,9 +3001,10 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 22
+                                    "valueSize": 26
                                 },
-                                "textMode": "value_and_name"
+                                "textMode": "value_and_name",
+                                "wideLayout": true
                             },
                             "fieldConfig": {
                                 "defaults": {
@@ -3131,7 +3031,7 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "of SLO"
+                                            "options": "Of SLO"
                                         },
                                         "properties": [
                                             {
@@ -3182,7 +3082,14 @@
                                             },
                                             {
                                                 "id": "decimals",
-                                                "value": 3
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "text"
+                                                }
                                             }
                                         ]
                                     }
@@ -3306,20 +3213,7 @@
                         "spec": {
                             "x": 0,
                             "y": 18,
-                            "width": 12,
-                            "height": 8,
-                            "element": {
-                                "kind": "ElementReference",
-                                "name": "panel-10"
-                            }
-                        }
-                    },
-                    {
-                        "kind": "GridLayoutItem",
-                        "spec": {
-                            "x": 12,
-                            "y": 18,
-                            "width": 12,
+                            "width": 24,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
@@ -3414,7 +3308,7 @@
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-49"
+                                "name": "panel-10"
                             }
                         }
                     },
@@ -3424,6 +3318,19 @@
                             "x": 12,
                             "y": 50,
                             "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-49"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 58,
+                            "width": 24,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",

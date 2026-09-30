@@ -71,6 +71,8 @@ The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fiel
 | `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
 | Lifecycle hold | Takes draining and recovering engines out of placement. |
 
+The role controller scores splits over live engines, so it keeps moving roles while an engine is ejected, draining or recovering. It holds while a configured role has no live engine.
+
 Existing requests finish on their assigned engines after a role change.
 
 A projected-TTFT recovery evaluation applies:

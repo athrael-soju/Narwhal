@@ -27,7 +27,7 @@ The high-availability (HA) standby router polls this route before takeover.
 | `roles`             | Engine ID mapped to `prefill` or `decode`                                             |
 | `ejected`           | Breaker-excluded engines                                                              |
 | `inference_sources` | Suspect engine ID mapped to its inference-probe producer IDs, `""` for a local probe  |
-| `counters`          | `served`, `failed`, `unserved`, `refused`, `rejected`, `cancelled` totals             |
+| `counters`          | `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `invalid_requests`, `unserved`, `refused`, `rejected`, `cancelled` totals |
 | `lifecycle`         | Drain records, lifecycle events, wave ID, restart policy, and accepted process starts |
 | `demand_risk`       | Newest consolidation-risk event, or `null`                                            |
 

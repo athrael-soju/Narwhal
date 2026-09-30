@@ -256,6 +256,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "narwhal_engine_breaker_verifying",
             "narwhal_probation_instances",
             "vllm:num_requests_waiting",
+            'narwhal_resident_requests{job="narwhal-router",instance=~"$router",iid=~"$iid",phase="prefill"}',
         ):
             self.assertIn(source, state)
         mappings = next(
@@ -267,6 +268,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             [mappings[str(code)]["text"] for code in range(len(mappings))],
             [
                 "Serving",
+                "Switching",
                 "Backlogged",
                 "Probation",
                 "Verifying",
@@ -274,18 +276,30 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Ejected",
                 "Validating",
                 "Blocked",
-                "Scrape down",
+                "Unreachable",
+                "Restarting",
             ],
         )
         history = elements["panel-8"]["spec"]
         expr = history["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"]
-        for source in ("narwhal_engine_draining", "narwhal_ejected", 'state="blocked"'):
+        for source in (
+            "narwhal_engine_draining",
+            "narwhal_ejected",
+            'state="validating"',
+            'state="blocked"',
+            'up{job="engines"',
+        ):
             self.assertIn(source, expr)
         roles = history["vizConfig"]["spec"]["fieldConfig"]["defaults"]["mappings"][0]["options"]
-        self.assertEqual(
-            {code: roles[code]["text"] for code in ("4", "5", "6")},
-            {"4": "Draining", "5": "Ejected", "6": "Blocked"},
-        )
+        table_colors = {
+            name: entry["color"]
+            for name, entry in ((entry["text"], entry) for entry in mappings.values())
+        }
+        for code, name in enumerate(
+            ("Draining", "Ejected", "Validating", "Blocked", "Unreachable", "Restarting"), start=4
+        ):
+            self.assertEqual(roles[str(code)]["text"], name)
+            self.assertEqual(roles[str(code)]["color"], table_colors[name])
 
     def test_headline_row_reports_goodput_and_latency_against_the_slo(self):
         """The first row divides SLO-met completions by offers and latency p95 by its SLO."""
@@ -298,7 +312,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [elements[name]["spec"]["title"] for _, name in row],
-            ["Goodput", "Offered", "TTFT p95", "TPOT p95", "Fleet", "Controller"],
+            ["Goodput", "Load", "TTFT p95", "TPOT p95", "Engines", "Router"],
         )
 
         def expressions(name):
@@ -311,8 +325,10 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         goodput = expressions(row[0][1])["Within SLO"]
         self.assertIn("narwhal_slo_met_total", goodput.split(" / ")[0])
         self.assertIn("narwhal_offered_total", goodput.split(" / ")[1])
+        for _, name in row:
+            self.assertEqual(len(expressions(name)), 2)
         for (_, name), metric in zip(row[2:4], ("ttft", "tpot"), strict=True):
-            share = expressions(name)["of SLO"]
+            share = expressions(name)["Of SLO"]
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
 

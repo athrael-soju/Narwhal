@@ -155,6 +155,7 @@ Automatic recovery validates an ejected engine once its `/health` returns HTTP 2
 | Condition | Procedure |
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
+| A crashed engine on a host shared with other KV-transfer engines fails to start because its GPU memory stays allocated | Peers still map the stopped engine's KV memory. [Restart the engine wave](#8-restart-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
 | The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
@@ -182,12 +183,16 @@ POST /narwhal/lifecycle/drain
 
 Set `recovery.engine_restart_policy` to `whole_wave` when engine builds share peer state across the fleet.
 
+Under `individual`, a wave restart also recovers a crashed engine whose host peers keep its GPU memory mapped. `narwhal-check` warns when engines share a host and exchange KV.
+
 Under `whole_wave`:
 
 - a confirmed ejection, process change, or identity failure holds the whole wave
 - the router's `/ready` returns HTTP 503 until whole-wave readmission completes
 
 ### 8.1 Drain the wave
+
+A wave member that stopped and was ejected before the drain keeps the process identity the router last verified for it, so the wave can include engines that already failed.
 
 Drain the wave with a 600-second deadline:
 

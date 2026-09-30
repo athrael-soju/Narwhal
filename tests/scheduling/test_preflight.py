@@ -48,6 +48,19 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         output.__enter__()
         self.addCleanup(output.__exit__, None, None, None)
 
+    def test_colocated_kv_engines_warn_about_individual_restarts(self):
+        """Engines sharing a host under individual restarts name themselves in one warning."""
+        self.assertEqual(check.colocated_restart_risk(self.cfg), "")
+        self.cfg.engines = [
+            replace(spec, url=f"http://node-a.invalid:{8200 + index}")
+            for index, spec in enumerate(self.cfg.engines)
+        ]
+        risk = check.colocated_restart_risk(self.cfg)
+        self.assertIn("e0, e3 share a host", risk)
+        self.assertIn("whole-wave restart", risk)
+        self.cfg.engine_restart_policy = "whole_wave"
+        self.assertEqual(check.colocated_restart_risk(self.cfg), "")
+
     async def test_reach_and_tokenize_account_for_unreachable_engines(self):
         """Failed health checks remove engines from subsequent exact-count probes."""
         client = SimpleNamespace(

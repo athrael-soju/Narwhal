@@ -46,9 +46,11 @@ class ReactivePolicy:
             controller._last_step = now
 
         # Resident requests keep their serving engine after reassignment.
-        # Price them in each subsequent proposal; only unavailable engines,
-        # including actual relaunch downtime, block control fleet-wide.
-        if len(controller.scheduler.live_instances()) != len(controller.monitor.instances):
+        # Splits cover the live engines; a role left without one holds control.
+        if any(
+            controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
+            for role in (Role.PREFILL, Role.DECODE)
+        ):
             self.proposal, self.confirmations = None, 0
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)

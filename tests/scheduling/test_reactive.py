@@ -726,7 +726,8 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(fleet.step())
         self.assertEqual(fleet.scheduler.flips[-1].to, Role.DECODE)
 
-    def test_advisory_and_unavailable_fleet_cannot_mutate(self) -> None:
+    def test_advisory_holds_and_unavailable_engines_leave_the_scored_split(self) -> None:
+        """An unavailable engine drops out of scoring; a role with no live engine holds control."""
         fleet = self.fleet
         fleet.scheduler.advisory = True
         self.assertIsNone(fleet.confirm())
@@ -734,6 +735,15 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(fleet.scheduler.flips, [])
         fleet.scheduler.advisory = False
         fleet.scheduler.drain("e5")
+        moved = fleet.confirm()
+        self.assertIsNotNone(moved)
+        self.assertNotEqual(moved.iid, "e5")
+        decision = fleet.scheduler._last_decision
+        self.assertEqual(decision["current_prefill"] + decision["current_decode"], 5)
+        live = fleet.scheduler.live_instances()
+        fleet.scheduler.pinned = frozenset(inst.iid for inst in live)
+        for inst in fleet.scheduler.live_instances(Role.DECODE):
+            fleet.scheduler.drain(inst.iid)
         self.assertIsNone(fleet.confirm())
         self.assertEqual(fleet.scheduler._last_decision["reason"], "fleet health is changing")
 
@@ -907,13 +917,16 @@ class ProjectedTTFTRecoveryTests(unittest.TestCase):
         self.assertIsNone(fleet.controller.step(urgent=True))
         self.assertIn("flip_resident_guard", fleet.scheduler._last_decision["reason"])
 
-    def test_urgent_move_holds_while_fleet_health_changes(self) -> None:
+    def test_urgent_move_uses_a_live_donor_while_an_engine_is_unavailable(self) -> None:
+        """Projected-TTFT recovery keeps moving and never flips the unavailable engine."""
         fleet = self.fleet
         requests = self.queue(11)
         fleet.scheduler.drain("e5")
         self.assertTrue(fleet.controller.note_prefill_risk(requests[-1]))
-        self.assertIsNone(fleet.controller.step(urgent=True))
-        self.assertEqual(fleet.scheduler._last_decision["reason"], "fleet health is changing")
+        moved = fleet.controller.step(urgent=True)
+        self.assertIsNotNone(moved)
+        self.assertNotEqual(moved.iid, "e5")
+        self.assertEqual(fleet.scheduler.flips[-1].to, Role.PREFILL)
 
 
 class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):

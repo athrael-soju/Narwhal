@@ -401,8 +401,11 @@ class SplitScorer:
         window_s: float | None = None,
         step_s: float | None = None,
     ) -> SplitSnapshot:
-        """Resolve live request and profile inputs into immutable values."""
-        instances = tuple(self.monitor.instances.values())
+        """Resolve live request and profile inputs into immutable values.
+
+        Splits cover the live engines; unavailable engines add no capacity.
+        """
+        instances = tuple(self.scheduler.live_instances())
         profiles = tuple(
             profile
             for inst in instances
@@ -460,7 +463,7 @@ class SplitScorer:
                     if donor is not None:
                         roles[donor.iid] = target
                 rows = self.scheduler.profiles.profiles_for_split(
-                    self.monitor.instances, prefill, len(instances) - prefill, roles
+                    roles, prefill, len(instances) - prefill, roles
                 )
             profile_options_list.append((prefill, rows))
             prefill_iids[prefill] = {iid for iid, role in roles.items() if role is Role.PREFILL}

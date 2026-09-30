@@ -56,8 +56,12 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         doc = copy.deepcopy(self.doc)
         doc["roles"] = {"e0": "decode", "e3": "prefill", "stale": "invalid"}
         doc["counters"] = {
+            "offered": 30,
+            "unsized_offered": 2,
             "served": 8,
             "slo_met": 7,
+            "expired": 3,
+            "invalid_requests": 1,
             "failed": 2,
             "unserved": 3,
             "refused": 4,
@@ -72,14 +76,18 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.monitor.instances["e3"].role, Role.PREFILL)
         self.assertEqual(
             (
+                self.router.offered,
+                self.router.unsized_offered,
                 self.router.served,
                 self.router.slo_met,
+                self.router.expired,
+                self.router.invalid_requests,
                 self.router.failed,
                 self.router.refused,
                 self.router.rejected,
                 self.router.cancelled,
             ),
-            (8, 7, 2, 4, 5, 6),
+            (30, 2, 8, 7, 3, 1, 2, 4, 5, 6),
         )
         self.assertIn("e3", self.router.scheduler.ejected)
         self.assertEqual(self.router._inference_sources["e3"], {"e0"})
