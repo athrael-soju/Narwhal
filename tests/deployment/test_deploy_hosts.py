@@ -202,9 +202,14 @@ class HostDeploymentTests(unittest.TestCase):
             run, manifest = self.prepare_run(root)
             transport = LocalSSH(root)
             install(self.hosts, manifest, run, transport)
+            first = len(transport.calls)
             install(self.hosts, manifest, run, transport)
             for host in self.hosts:
                 self.assertEqual(transport.uploads.count((host.id, "source.bundle")), 1)
+                self.assertEqual(
+                    [gate for owner, gate in transport.calls[first:] if owner == host.id],
+                    ["verify files", "revision and installation"],
+                )
                 self.assertEqual(
                     (root / host.id / "installs").read_text().splitlines(), ["install"]
                 )

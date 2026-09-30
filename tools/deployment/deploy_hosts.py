@@ -183,19 +183,30 @@ def load_run(run: Path, hosts: list[Host], env: dict[str, str]) -> dict:
     return manifest
 
 
-def send(ssh: SSH, host: Host, source: Path, target: str, expected: str) -> None:
+def missing_files(ssh: SSH, host: Host, root: str, files: dict[str, str]) -> set[str]:
+    """Create the deployment directory and return the named files it lacks, in one call."""
+    checks = "\n".join(
+        f"check {shlex.quote(f'{root}/{name}')} {expected} {shlex.quote(name)}"
+        for name, expected in files.items()
+    )
+    script = f"""set -eu
+umask 077
+mkdir -p {shlex.quote(root)}
+check() {{
+  test ! -L "$1"
+  if test -e "$1"; then
+    test -f "$1"
+    test "$(sha256sum "$1" | cut -d' ' -f1)" = "$2"
+  else
+    printf '%s\\n' "$3"
+  fi
+}}
+{checks}"""
+    return set(ssh.run(host, "verify files", script).split())
+
+
+def transfer(ssh: SSH, host: Host, source: Path, target: str, expected: str) -> None:
     path = shlex.quote(target)
-    probe = f"""set -eu
-test ! -L {path}
-if test -e {path}; then
-  test -f {path}
-  test "$(sha256sum {path} | cut -d' ' -f1)" = {expected}
-  printf present
-else
-  printf absent
-fi"""
-    if ssh.run(host, "verify file", probe) == "present":
-        return
     temporary = shlex.quote(f"{target}.part-{uuid.uuid4().hex}")
     script = f"""set -eu
 umask 077
@@ -260,10 +271,15 @@ def install(hosts: list[Host], manifest: dict, run: Path, ssh: SSH) -> None:
     for host in hosts:
         root = manifest["remote_dir"]
         print(f"{host.id}: source, {', '.join(host.roles)}, installation", flush=True)
-        ssh.run(host, "create deployment directory", f"umask 077; mkdir -p {root}")
-        for name in ["source.bundle", *role_files(host)]:
-            local = name if name == "source.bundle" else f"{host.id}/{name}"
-            send(ssh, host, run / local, f"{root}/{name}", manifest["hashes"][local])
+        sources = {
+            name: name if name == "source.bundle" else f"{host.id}/{name}"
+            for name in ["source.bundle", *role_files(host)]
+        }
+        expected = {name: manifest["hashes"][local] for name, local in sources.items()}
+        absent = missing_files(ssh, host, root, expected)
+        for name, local in sources.items():
+            if name in absent:
+                transfer(ssh, host, run / local, f"{root}/{name}", expected[name])
         ssh.run(host, "revision and installation", install_script(host, manifest))
         print(f"{host.id}: installation ready", flush=True)
 
