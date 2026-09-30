@@ -108,7 +108,7 @@ To change GPU allocation or runtime policy, change the corresponding `.env` poli
 
 It derives GPU visibility and `UCX_NET_DEVICES` under `environment`, and writes `--tensor-parallel-size` under `vllm_args`.
 
-Colocated CUDA engines run on their allocated GPUs and transfer KV to each other through CUDA IPC. A shared-device engine keeps its single GPU.
+Colocated CUDA engines run on their allocated GPUs and transfer KV to each other through CUDA IPC. Their containers share the host PID namespace. A shared-device engine keeps its single GPU.
 
 `install` copies the selected launch record into the engine checkout's `config/` directory. The role environment points to that file.
 
