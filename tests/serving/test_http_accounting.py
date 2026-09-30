@@ -144,6 +144,19 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.calls, [])
                 self.assert_released()
 
+    async def test_a_saturated_event_loop_rejects_new_requests_before_admission(self):
+        client = self.client()
+        self.router.loop_lag_s = self.router.scheduler.slo.ttft_s
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("event loop", response.json()["error"]["message"])
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.router.rejected, 1)
+        self.router.loop_lag_s = 0.0
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assert_released()
+
     async def test_readiness_blocks_traffic_until_identity_capture(self):
         """Declared engines require captured process identities before admission."""
         client = self.client()

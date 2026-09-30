@@ -10,6 +10,7 @@
 | Unsupported non-streaming audio, modality, or tool request                   | `400` | `invalid_request_error` naming the option in `param`             |
 | Request exceeds `serving.max_request_bytes`                                  | `413` | `request_too_large`                                              |
 | HTTP retention limit is full                                                 | `429` | `Retry-After: 1`                                                 |
+| Router event loop wakes at least a quarter of `slo.ttft_s` late              | `429` | `Retry-After: 1`                                                 |
 | Admission queue is full                                                      | `429` | `Retry-After: 1`                                                 |
 | Admission wait expires before response headers                               | `504` | Terminal expiry                                                  |
 | Original request deadline expires before response headers                    | `504` | Terminal expiry                                                  |

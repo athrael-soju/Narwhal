@@ -46,6 +46,7 @@ from ..runtime.standby import (
 from .completion import completion_body_error
 from .ingress import BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .router import NarwhalRouter
+from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
 
 log = logging.getLogger("narwhal.app")
@@ -208,6 +209,7 @@ def create_app(
         if controls_fleet(router):
             await check_process_identities(router)
         loop = asyncio.create_task(monitor_loop(router))
+        lag = asyncio.create_task(measure_loop_lag(router))
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
@@ -224,8 +226,11 @@ def create_app(
             persist_final_state = controls_fleet(router)
             router.standby = True
             loop.cancel()
+            lag.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
+            with contextlib.suppress(asyncio.CancelledError):
+                await lag
             if watch is not None:
                 watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

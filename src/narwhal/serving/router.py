@@ -42,6 +42,7 @@ from .dispatch import Dispatcher
 from .execution import request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
 from .retry import RetryBudget
+from .saturation import SATURATED_TTFT_SHARE
 
 if TYPE_CHECKING:
     from ..runtime.lease import FileLease
@@ -212,6 +213,7 @@ class NarwhalRouter:
         self.offered = 0
         self.ingress_inflight = 0
         self.ingress_high_water = 0
+        self.loop_lag_s = 0.0
         self.unsized_offered = 0
         self.expired = 0
         self.prefill_attempts = 0
@@ -308,6 +310,10 @@ class NarwhalRouter:
                         return got.count, {}, {}, {}
                     return got.count, *(await self._cache_evidence(body, ids))
         return self.estimate_length(body), {}, {}, {}
+
+    def saturated(self) -> bool:
+        """Return whether the event loop wakes a quarter of the TTFT budget late."""
+        return self.loop_lag_s >= SATURATED_TTFT_SHARE * self.scheduler.slo.ttft_s
 
     def _tokenize_engine(self, live: list[Instance]) -> Instance:
         """Pick the least-occupied live engine, rotating among ties."""
