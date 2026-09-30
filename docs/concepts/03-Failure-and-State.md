@@ -128,6 +128,8 @@ With `recovery.failure_quarantine_s` above `0`, a failed engine's placement depe
 
 Lifecycle readmission requires a complete `engine_contract`.
 
+Automatic recovery starts these checks once the ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds. An engine that fails automatic recovery stays blocked until readmission. While another engine stays in placement, other ejected engines keep recovering individually. After every placement peer is lost, recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recover-loss-of-every-placement-peer), and a blocked member holds it.
+
 Readmission checks, in order:
 
 1. Health.

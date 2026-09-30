@@ -150,8 +150,11 @@ Verify placement:
 
 ### 7.4 Recover an unplanned ejection
 
+Automatic recovery validates an ejected engine once its `/health` returns HTTP 200 and its attestation sidecar responds. While another engine stays in placement, an engine that fails automatic recovery holds only its own recovery.
+
 | Condition | Procedure |
 | --- | --- |
+| The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
 | The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |

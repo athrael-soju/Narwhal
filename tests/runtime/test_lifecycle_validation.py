@@ -189,6 +189,28 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.records["e0"].state, "validating")
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
 
+    def test_failed_automatic_recovery_holds_only_its_own_engine(self):
+        """A blocked recovery leaves other engines recoverable; drains and waves still hold."""
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.router.scheduler.eject("e0")
+        self.assertTrue(self.manager.start_recovery_validation(["e0"]))
+        self.manager.validation_failed(ValidationOutcome(failures={"e0": ["sidecar down"]}))
+        self.assertEqual(self.manager.records["e0"].state, "blocked")
+        self.assertFalse(self.manager.start_recovery_validation(["e0"]))
+        self.router.scheduler.eject("e3")
+        self.assertTrue(self.manager.start_recovery_validation(["e3"]))
+        self.assertEqual(self.manager.records["e3"].state, "validating")
+        for held in ("draining", "wave"):
+            with self.subTest(held=held):
+                self.manager.records["e3"].state = "active"
+                self.router.scheduler.finish_drain("e3")
+                self.router.scheduler.eject("e3")
+                record = self.manager.records["e0"]
+                record.restart_required = held == "draining"
+                record.wave_id = "wave-held" if held == "wave" else ""
+                self.assertFalse(self.manager.start_recovery_validation(["e3"]))
+
     def test_wave_recovery_and_validation_failure_preserve_all_holds(self):
         """One engine's validation failure keeps the entire restart wave blocked."""
         self.manager.records.clear()

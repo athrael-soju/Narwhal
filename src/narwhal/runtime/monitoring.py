@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import (
@@ -208,6 +210,8 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     # None answers are inconclusive (the local control pool waited out) and
     # fall out of the `is True` filter beside False.
     healthy = [iid for iid, ok in zip(due, answers, strict=True) if ok is True]
+    if router.cfg.engine_contract is not None:
+        healthy = await attested(router, healthy)
     back: list[str] = []
     # KV transfer validation needs live peers. After a total outage, wait
     # for the complete fleet and validate it atomically.
@@ -254,6 +258,26 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
                 router.lifecycle.validation_failed(outcome)
                 log.warning("held %s out: recovery validation failed", iid)
     return back
+
+
+async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
+    """Return the engines whose attestation sidecar responds, or that configure none."""
+    urls = {spec.iid: spec.attestation_url for spec in router.cfg.engines}
+    async with httpx.AsyncClient(
+        timeout=router.cfg.health_timeout_s, transport=router.lifecycle_transport
+    ) as client:
+
+        async def answers(iid: str) -> bool:
+            if not urls.get(iid):
+                return True
+            try:
+                await client.get(urls[iid])
+            except httpx.HTTPError:
+                return False
+            return True
+
+        results = await asyncio.gather(*(answers(iid) for iid in engines))
+    return [iid for iid, ok in zip(engines, results, strict=True) if ok]
 
 
 async def sweep_liveness(router: NarwhalRouter) -> list[str]:

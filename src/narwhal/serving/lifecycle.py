@@ -256,6 +256,13 @@ class RequestLifecycle:
                 if self.prefilled_at is not None
                 else True,
             )
+        if (
+            completed
+            and prefill_s is not None
+            and prefill_s <= router.cfg.slo.ttft_s
+            and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s)
+        ):
+            router.slo_met += 1
         if prefill_s is not None:
             router.ttft.observe(prefill_s)
         if tpot_s is not None:

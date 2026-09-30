@@ -58,6 +58,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         },
         "counters": {
             "served": router.served,
+            "slo_met": router.slo_met,
             "failed": router.failed,
             "unserved": router.scheduler.unserved,
             "refused": router.refused,
@@ -223,6 +224,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
 
     counters = doc.get("counters") or {}
     router.served = int(counters.get("served", 0))
+    router.slo_met = int(counters.get("slo_met", 0))
     router.failed = int(counters.get("failed", 0))
     router.scheduler.unserved = int(counters.get("unserved", 0))
     # Admission counters are cumulative across router restarts.

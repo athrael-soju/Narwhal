@@ -68,8 +68,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 1,
-                    "title": "Admission / controller",
-                    "description": "Admission readiness of the selected router and controller execution mode, with trailing-area sparklines. Automatic mode applies eligible role changes; advisory mode records proposed changes.",
+                    "title": "Controller",
+                    "description": "Router admission readiness, controller mode, and firing Narwhal alerts.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -114,6 +114,27 @@
                                             "uid": "${DS_PROMETHEUS}"
                                         },
                                         "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "count(ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity!=\"info\"}) or vector(0)",
+                                                "instant": true,
+                                                "legendFormat": "Alerts",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
                                         "hidden": false
                                     }
                                 }
@@ -216,6 +237,36 @@
                                                 ]
                                             }
                                         ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Alerts"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 1
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -227,8 +278,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 2,
-                    "title": "Engine scrapes",
-                    "description": "Scrape status of all configured engine targets, with a trailing-area sparkline.",
+                    "title": "Fleet",
+                    "description": "Engines taking no new work (Draining, Ejected, Validating, Blocked or Scrape down), the current prefill and decode pool sizes, and role flips within the displayed interval.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -241,91 +292,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(up{job=\"engines\"})",
-                                                "instant": false,
-                                                "legendFormat": "Targets up",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "A",
-                                        "hidden": false
-                                    }
-                                }
-                            ],
-                            "transformations": [],
-                            "queryOptions": {}
-                        }
-                    },
-                    "vizConfig": {
-                        "kind": "stat",
-                        "spec": {
-                            "pluginVersion": "",
-                            "options": {
-                                "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "reduceOptions": {
-                                    "calcs": [
-                                        "lastNotNull"
-                                    ],
-                                    "fields": "",
-                                    "values": false
-                                },
-                                "text": {
-                                    "titleSize": 12,
-                                    "valueSize": 24
-                                },
-                                "textMode": "value_and_name"
-                            },
-                            "fieldConfig": {
-                                "defaults": {
-                                    "unit": "short",
-                                    "decimals": 0,
-                                    "min": 0,
-                                    "color": {
-                                        "mode": "fixed",
-                                        "fixedColor": "text"
-                                    },
-                                    "noValue": "No data",
-                                    "custom": {
-                                        "fillOpacity": 6,
-                                        "lineWidth": 2,
-                                        "showPoints": "never",
-                                        "spanNulls": false
-                                    }
-                                },
-                                "overrides": []
-                            }
-                        }
-                    }
-                }
-            },
-            "panel-5": {
-                "kind": "Panel",
-                "spec": {
-                    "id": 5,
-                    "title": "Requests",
-                    "description": "Per-second completed, failed, expired, refused and rejected terminal outcomes with trailing-area sparklines, plus the corresponding totals over the displayed interval on the selected router. Client cancellations count separately.",
-                    "links": [],
-                    "data": {
-                        "kind": "QueryGroup",
-                        "spec": {
-                            "queries": [
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
-                                                "legendFormat": "Successful/s",
-                                                "range": true
+                                                "expr": "count((max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(2 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(8 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\"))) >= 4) or vector(0)",
+                                                "instant": true,
+                                                "legendFormat": "Out of service",
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -343,10 +313,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_invalid_requests_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
-                                                "legendFormat": "Unsuccessful/s",
-                                                "range": true
+                                                "expr": "max(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\",role=\"prefill\"})",
+                                                "instant": true,
+                                                "legendFormat": "Prefill",
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -364,10 +334,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(increase(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
-                                                "instant": false,
-                                                "legendFormat": "Successful total",
-                                                "range": true
+                                                "expr": "max(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\",role=\"decode\"})",
+                                                "instant": true,
+                                                "legendFormat": "Decode",
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -385,10 +355,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_invalid_requests_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
-                                                "instant": false,
-                                                "legendFormat": "Unsuccessful total",
-                                                "range": true
+                                                "expr": "sum(increase(narwhal_flips_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "instant": true,
+                                                "legendFormat": "Flips",
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -396,6 +366,174 @@
                                             "uid": "${DS_PROMETHEUS}"
                                         },
                                         "refId": "D",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "none",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 22
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 0,
+                                    "noValue": "No data",
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "No traffic"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Out of service"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 1
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Prefill"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "#279B98"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Decode"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "#607FA8"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-5": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 5,
+                    "title": "Goodput",
+                    "description": "Share of offered requests that completed within both the TTFT and TPOT SLOs, and those requests per second. Refused, failed and expired requests count as misses.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Within SLO",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Goodput",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
                                         "hidden": false
                                     }
                                 }
@@ -422,96 +560,83 @@
                                 },
                                 "text": {
                                     "titleSize": 12,
-                                    "valueSize": 24
+                                    "valueSize": 22
                                 },
                                 "textMode": "value_and_name"
                             },
                             "fieldConfig": {
                                 "defaults": {
+                                    "unit": "short",
+                                    "decimals": 2,
+                                    "noValue": "No data",
                                     "color": {
                                         "mode": "fixed",
                                         "fixedColor": "text"
                                     },
-                                    "noValue": "No data"
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "No traffic"
+                                                }
+                                            }
+                                        }
+                                    ]
                                 },
                                 "overrides": [
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Successful/s"
+                                            "options": "Within SLO"
                                         },
                                         "properties": [
                                             {
-                                                "id": "decimals",
-                                                "value": 2
+                                                "id": "unit",
+                                                "value": "percentunit"
                                             },
                                             {
-                                                "id": "min",
-                                                "value": 0
+                                                "id": "decimals",
+                                                "value": 1
                                             },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.9
+                                                        },
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": 0.95
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Goodput"
+                                        },
+                                        "properties": [
                                             {
                                                 "id": "unit",
                                                 "value": "reqps"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Unsuccessful/s"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 2
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "reqps"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Successful total"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Unsuccessful total"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
                                             }
                                         ]
                                     }
@@ -525,8 +650,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 49,
-                    "title": "Tokens",
-                    "description": "Per-second prefill and decode token rates with trailing-area sparklines, and the corresponding totals over the displayed interval, across the selected router's fleet.",
+                    "title": "Token throughput",
+                    "description": "Engine prompt tokens and router-observed output tokens per second.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -573,48 +698,6 @@
                                         "refId": "B",
                                         "hidden": false
                                     }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "sum(increase(vllm:prompt_tokens_total{job=\"engines\"}[$__range]))",
-                                                "instant": false,
-                                                "legendFormat": "Prefill total",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "C",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "sum(increase(narwhal_decode_tokens_observed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
-                                                "instant": false,
-                                                "legendFormat": "Decode total",
-                                                "range": true
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "D",
-                                        "hidden": false
-                                    }
                                 }
                             ],
                             "transformations": [],
@@ -622,117 +705,37 @@
                         }
                     },
                     "vizConfig": {
-                        "kind": "stat",
+                        "kind": "timeseries",
                         "spec": {
                             "pluginVersion": "",
                             "options": {
-                                "colorMode": "value",
-                                "graphMode": "area",
-                                "justifyMode": "auto",
-                                "orientation": "auto",
-                                "reduceOptions": {
-                                    "calcs": [
-                                        "lastNotNull"
-                                    ],
-                                    "fields": "",
-                                    "values": false
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": true
                                 },
-                                "text": {
-                                    "titleSize": 12,
-                                    "valueSize": 24
-                                },
-                                "textMode": "value_and_name"
+                                "tooltip": {
+                                    "mode": "multi",
+                                    "sort": "desc"
+                                }
                             },
                             "fieldConfig": {
                                 "defaults": {
+                                    "unit": "short",
+                                    "min": 0,
                                     "color": {
-                                        "mode": "fixed",
-                                        "fixedColor": "text"
+                                        "mode": "palette-classic-by-name"
                                     },
-                                    "noValue": "No data"
-                                },
-                                "overrides": [
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Prefill/s"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 2
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Decode/s"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 2
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Prefill total"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Decode total"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "decimals",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "min",
-                                                "value": 0
-                                            },
-                                            {
-                                                "id": "unit",
-                                                "value": "short"
-                                            }
-                                        ]
+                                    "noValue": "No data",
+                                    "custom": {
+                                        "fillOpacity": 9,
+                                        "gradientMode": "opacity",
+                                        "lineWidth": 2,
+                                        "showPoints": "never",
+                                        "spanNulls": false
                                     }
-                                ]
+                                },
+                                "overrides": []
                             }
                         }
                     }
@@ -742,8 +745,8 @@
                 "kind": "Panel",
                 "spec": {
                     "id": 7,
-                    "title": "Engine assignments and work",
-                    "description": "Select Engine detail to filter current assignments, resident work and native vLLM load by engine.",
+                    "title": "Engines",
+                    "description": "One row per engine, most serious state first, then by role. State ranks Scrape down, Blocked, Validating, Ejected, Draining, Verifying, Probation, Backlogged (vLLM has waiting requests) and Serving. Resident and vLLM running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -778,7 +781,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) (up{job=\"engines\",iid=~\"$iid\"})",
+                                                "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(2 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(8 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\"))",
                                                 "format": "table",
                                                 "instant": true,
                                                 "legendFormat": "",
@@ -789,7 +792,7 @@
                                             "type": "prometheus",
                                             "uid": "${DS_PROMETHEUS}"
                                         },
-                                        "refId": "B",
+                                        "refId": "S",
                                         "hidden": false
                                     }
                                 },
@@ -800,7 +803,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                                                "expr": "max by(iid) (sum by(iid, job, instance) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
                                                 "format": "table",
                                                 "instant": true,
                                                 "legendFormat": "",
@@ -811,51 +814,7 @@
                                             "type": "prometheus",
                                             "uid": "${DS_PROMETHEUS}"
                                         },
-                                        "refId": "C",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
-                                                "format": "table",
-                                                "instant": true,
-                                                "legendFormat": "",
-                                                "range": false
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "D",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
-                                                "expr": "max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
-                                                "format": "table",
-                                                "instant": true,
-                                                "legendFormat": "",
-                                                "range": false
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "E",
+                                        "refId": "R",
                                         "hidden": false
                                     }
                                 },
@@ -888,28 +847,6 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
-                                                "format": "table",
-                                                "instant": true,
-                                                "legendFormat": "",
-                                                "range": false
-                                            }
-                                        },
-                                        "datasource": {
-                                            "type": "prometheus",
-                                            "uid": "${DS_PROMETHEUS}"
-                                        },
-                                        "refId": "G",
-                                        "hidden": false
-                                    }
-                                },
-                                {
-                                    "kind": "PanelQuery",
-                                    "spec": {
-                                        "query": {
-                                            "kind": "prometheus",
-                                            "spec": {
-                                                "editorMode": "code",
                                                 "expr": "max by(iid) (vllm:kv_cache_usage_perc{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
                                                 "format": "table",
                                                 "instant": true,
@@ -932,8 +869,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) ((narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) or on(iid) (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))",
-                                                "format": "table",
+                                                "expr": "sum by(iid) (rate(vllm:prefix_cache_hits_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) / sum by(iid) (rate(vllm:prefix_cache_queries_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))",
                                                 "instant": true,
                                                 "legendFormat": "",
                                                 "range": false
@@ -943,7 +879,28 @@
                                             "type": "prometheus",
                                             "uid": "${DS_PROMETHEUS}"
                                         },
-                                        "refId": "I",
+                                        "refId": "P",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (sum by(iid) (rate(vllm:generation_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
+                                                "instant": true,
+                                                "legendFormat": "",
+                                                "range": false
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "T",
                                         "hidden": false
                                     }
                                 }
@@ -978,26 +935,22 @@
                                             "indexByName": {
                                                 "iid": 0,
                                                 "Value #A": 1,
-                                                "Value #B": 2,
-                                                "Value #C": 3,
-                                                "Value #D": 4,
-                                                "Value #E": 5,
-                                                "Value #F": 6,
-                                                "Value #G": 7,
-                                                "Value #H": 8,
-                                                "Value #I": 9
+                                                "Value #S": 2,
+                                                "Value #R": 3,
+                                                "Value #F": 4,
+                                                "Value #H": 5,
+                                                "Value #P": 6,
+                                                "Value #T": 7
                                             },
                                             "renameByName": {
                                                 "iid": "Engine",
                                                 "Value #A": "Role",
-                                                "Value #B": "Scrape",
-                                                "Value #C": "Drain",
-                                                "Value #D": "Prefills",
-                                                "Value #E": "Decodes",
-                                                "Value #F": "Running",
-                                                "Value #G": "Waiting",
+                                                "Value #S": "State",
+                                                "Value #R": "Resident",
+                                                "Value #F": "vLLM running",
                                                 "Value #H": "KV cache",
-                                                "Value #I": "Ejected"
+                                                "Value #P": "Prefix hits",
+                                                "Value #T": "Tokens/s"
                                             }
                                         }
                                     }
@@ -1018,8 +971,12 @@
                                 "showHeader": true,
                                 "sortBy": [
                                     {
-                                        "desc": false,
-                                        "displayName": "Engine"
+                                        "displayName": "State",
+                                        "desc": true
+                                    },
+                                    {
+                                        "displayName": "Role",
+                                        "desc": false
                                     }
                                 ]
                             },
@@ -1052,6 +1009,18 @@
                                     }
                                 },
                                 "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Engine"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "custom.width",
+                                                "value": 90
+                                            }
+                                        ]
+                                    },
                                     {
                                         "matcher": {
                                             "id": "byName",
@@ -1096,135 +1065,141 @@
                                             {
                                                 "id": "custom.cellOptions",
                                                 "value": {
-                                                    "type": "color-text"
+                                                    "type": "color-background",
+                                                    "mode": "basic"
                                                 }
                                             },
                                             {
                                                 "id": "custom.width",
-                                                "value": 120
+                                                "value": 110
                                             }
                                         ]
                                     },
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Scrape"
+                                            "options": "State"
                                         },
                                         "properties": [
                                             {
                                                 "id": "mappings",
                                                 "value": [
                                                     {
+                                                        "type": "value",
                                                         "options": {
                                                             "0": {
-                                                                "color": "#EF8585",
-                                                                "text": "Down"
+                                                                "text": "Serving",
+                                                                "color": "#56A64B"
                                                             },
                                                             "1": {
-                                                                "color": "#8CCF7E",
-                                                                "text": "Up"
+                                                                "text": "Backlogged",
+                                                                "color": "#C8963E"
+                                                            },
+                                                            "2": {
+                                                                "text": "Probation",
+                                                                "color": "#C8963E"
+                                                            },
+                                                            "3": {
+                                                                "text": "Verifying",
+                                                                "color": "#C8963E"
+                                                            },
+                                                            "4": {
+                                                                "text": "Draining",
+                                                                "color": "#8F8FA3"
+                                                            },
+                                                            "5": {
+                                                                "text": "Ejected",
+                                                                "color": "#D44A3A"
+                                                            },
+                                                            "6": {
+                                                                "text": "Validating",
+                                                                "color": "#7F6BB0"
+                                                            },
+                                                            "7": {
+                                                                "text": "Blocked",
+                                                                "color": "#A11D1D"
+                                                            },
+                                                            "8": {
+                                                                "text": "Scrape down",
+                                                                "color": "#D44A3A"
                                                             }
-                                                        },
-                                                        "type": "value"
+                                                        }
                                                     },
                                                     {
+                                                        "type": "special",
                                                         "options": {
                                                             "match": "nan",
                                                             "result": {
                                                                 "text": "N/A"
                                                             }
-                                                        },
-                                                        "type": "special"
+                                                        }
                                                     }
                                                 ]
                                             },
                                             {
                                                 "id": "custom.cellOptions",
                                                 "value": {
-                                                    "type": "color-text"
+                                                    "type": "color-background",
+                                                    "mode": "basic"
                                                 }
+                                            },
+                                            {
+                                                "id": "custom.width",
+                                                "value": 130
                                             }
                                         ]
                                     },
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Drain"
+                                            "options": "Resident"
                                         },
                                         "properties": [
                                             {
-                                                "id": "mappings",
-                                                "value": [
-                                                    {
-                                                        "options": {
-                                                            "0": {
-                                                                "color": "text",
-                                                                "text": "No"
-                                                            },
-                                                            "1": {
-                                                                "color": "#E9B96E",
-                                                                "text": "Draining"
-                                                            }
-                                                        },
-                                                        "type": "value"
-                                                    },
-                                                    {
-                                                        "options": {
-                                                            "match": "nan",
-                                                            "result": {
-                                                                "text": "N/A"
-                                                            }
-                                                        },
-                                                        "type": "special"
-                                                    }
-                                                ]
-                                            },
-                                            {
                                                 "id": "custom.cellOptions",
                                                 "value": {
-                                                    "type": "color-text"
+                                                    "type": "gauge",
+                                                    "mode": "basic",
+                                                    "valueDisplayMode": "text"
                                                 }
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "#6C9BD2"
+                                                }
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
                                             }
                                         ]
                                     },
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Ejected"
+                                            "options": "vLLM running"
                                         },
                                         "properties": [
                                             {
-                                                "id": "mappings",
-                                                "value": [
-                                                    {
-                                                        "options": {
-                                                            "0": {
-                                                                "color": "text",
-                                                                "text": "No"
-                                                            },
-                                                            "1": {
-                                                                "color": "#EF8585",
-                                                                "text": "Ejected"
-                                                            }
-                                                        },
-                                                        "type": "value"
-                                                    },
-                                                    {
-                                                        "options": {
-                                                            "match": "nan",
-                                                            "result": {
-                                                                "text": "N/A"
-                                                            }
-                                                        },
-                                                        "type": "special"
-                                                    }
-                                                ]
-                                            },
-                                            {
                                                 "id": "custom.cellOptions",
                                                 "value": {
-                                                    "type": "color-text"
+                                                    "type": "gauge",
+                                                    "mode": "basic",
+                                                    "valueDisplayMode": "text"
                                                 }
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "#8B83A3"
+                                                }
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
                                             }
                                         ]
                                     },
@@ -1243,8 +1218,105 @@
                                                 "value": 1
                                             },
                                             {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
                                                 "id": "max",
                                                 "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.8
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 0.95
+                                                        }
+                                                    ]
+                                                }
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "gauge",
+                                                    "mode": "gradient",
+                                                    "valueDisplayMode": "text"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Prefix hits"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "min",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "max",
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "fixed",
+                                                    "fixedColor": "#279B98"
+                                                }
+                                            },
+                                            {
+                                                "id": "custom.cellOptions",
+                                                "value": {
+                                                    "type": "gauge",
+                                                    "mode": "basic",
+                                                    "valueDisplayMode": "text"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Tokens/s"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "short"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "custom.width",
+                                                "value": 110
                                             }
                                         ]
                                     }
@@ -1259,7 +1331,7 @@
                 "spec": {
                     "id": 8,
                     "title": "Engine role history",
-                    "description": "Routing assignments over time for the selected engines.",
+                    "description": "Routing assignments over time for the selected engines. Draining, Ejected and Blocked periods replace the role for their duration.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -1272,7 +1344,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))) > 0",
+                                                "expr": "max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\")) > 0",
                                                 "instant": false,
                                                 "legendFormat": "{{iid}}",
                                                 "range": true
@@ -1328,6 +1400,18 @@
                                                 "3": {
                                                     "text": "Colocated",
                                                     "color": "#8B83A3"
+                                                },
+                                                "4": {
+                                                    "text": "Draining",
+                                                    "color": "#8F8FA3"
+                                                },
+                                                "5": {
+                                                    "text": "Ejected",
+                                                    "color": "#D44A3A"
+                                                },
+                                                "6": {
+                                                    "text": "Blocked",
+                                                    "color": "#A11D1D"
                                                 }
                                             }
                                         }
@@ -2550,6 +2634,563 @@
                         }
                     }
                 }
+            },
+            "panel-60": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 60,
+                    "title": "Offered",
+                    "description": "Arrival rate, and the share refused at admission (predictive refusal and capacity rejection) or ended by failure or deadline expiry.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Offered",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Refused",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "(sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                                                "instant": false,
+                                                "legendFormat": "Failed",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "C",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 22
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 2,
+                                    "noValue": "No data",
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "No traffic"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Offered"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "reqps"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Refused"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.01
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 0.05
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "Failed"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 1
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.001
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 0.01
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-61": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 61,
+                    "title": "TTFT p95",
+                    "description": "95th-percentile TTFT on the selected router, as a share of its SLO and in seconds.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
+                                                "instant": false,
+                                                "legendFormat": "of SLO",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))))",
+                                                "instant": false,
+                                                "legendFormat": "p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 22
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 2,
+                                    "noValue": "No data",
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "No traffic"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "of SLO"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.8
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 1.0
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "p95"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "s"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 3
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            "panel-62": {
+                "kind": "Panel",
+                "spec": {
+                    "id": 62,
+                    "title": "TPOT p95",
+                    "description": "95th-percentile TPOT on the selected router, as a share of its SLO and in seconds.",
+                    "links": [],
+                    "data": {
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
+                                                "instant": false,
+                                                "legendFormat": "of SLO",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "A",
+                                        "hidden": false
+                                    }
+                                },
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "query": {
+                                            "kind": "prometheus",
+                                            "spec": {
+                                                "editorMode": "code",
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))))",
+                                                "instant": false,
+                                                "legendFormat": "p95",
+                                                "range": true
+                                            }
+                                        },
+                                        "datasource": {
+                                            "type": "prometheus",
+                                            "uid": "${DS_PROMETHEUS}"
+                                        },
+                                        "refId": "B",
+                                        "hidden": false
+                                    }
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {}
+                        }
+                    },
+                    "vizConfig": {
+                        "kind": "stat",
+                        "spec": {
+                            "pluginVersion": "",
+                            "options": {
+                                "colorMode": "value",
+                                "graphMode": "area",
+                                "justifyMode": "auto",
+                                "orientation": "auto",
+                                "reduceOptions": {
+                                    "calcs": [
+                                        "lastNotNull"
+                                    ],
+                                    "fields": "",
+                                    "values": false
+                                },
+                                "text": {
+                                    "titleSize": 12,
+                                    "valueSize": 22
+                                },
+                                "textMode": "value_and_name"
+                            },
+                            "fieldConfig": {
+                                "defaults": {
+                                    "unit": "short",
+                                    "decimals": 2,
+                                    "noValue": "No data",
+                                    "color": {
+                                        "mode": "fixed",
+                                        "fixedColor": "text"
+                                    },
+                                    "mappings": [
+                                        {
+                                            "type": "special",
+                                            "options": {
+                                                "match": "nan",
+                                                "result": {
+                                                    "text": "No traffic"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                },
+                                "overrides": [
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "of SLO"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "percentunit"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 0
+                                            },
+                                            {
+                                                "id": "color",
+                                                "value": {
+                                                    "mode": "thresholds"
+                                                }
+                                            },
+                                            {
+                                                "id": "thresholds",
+                                                "value": {
+                                                    "mode": "absolute",
+                                                    "steps": [
+                                                        {
+                                                            "color": "#56A64B",
+                                                            "value": null
+                                                        },
+                                                        {
+                                                            "color": "#C8963E",
+                                                            "value": 0.8
+                                                        },
+                                                        {
+                                                            "color": "#D44A3A",
+                                                            "value": 1.0
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "matcher": {
+                                            "id": "byName",
+                                            "options": "p95"
+                                        },
+                                        "properties": [
+                                            {
+                                                "id": "unit",
+                                                "value": "s"
+                                            },
+                                            {
+                                                "id": "decimals",
+                                                "value": 3
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
             }
         },
         "layout": {
@@ -2574,33 +3215,7 @@
                         "spec": {
                             "x": 0,
                             "y": 4,
-                            "width": 3,
-                            "height": 4,
-                            "element": {
-                                "kind": "ElementReference",
-                                "name": "panel-1"
-                            }
-                        }
-                    },
-                    {
-                        "kind": "GridLayoutItem",
-                        "spec": {
-                            "x": 3,
-                            "y": 4,
-                            "width": 3,
-                            "height": 4,
-                            "element": {
-                                "kind": "ElementReference",
-                                "name": "panel-2"
-                            }
-                        }
-                    },
-                    {
-                        "kind": "GridLayoutItem",
-                        "spec": {
-                            "x": 6,
-                            "y": 4,
-                            "width": 6,
+                            "width": 4,
                             "height": 4,
                             "element": {
                                 "kind": "ElementReference",
@@ -2611,26 +3226,65 @@
                     {
                         "kind": "GridLayoutItem",
                         "spec": {
-                            "x": 12,
+                            "x": 4,
                             "y": 4,
-                            "width": 6,
+                            "width": 4,
                             "height": 4,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-49"
+                                "name": "panel-60"
                             }
                         }
                     },
                     {
                         "kind": "GridLayoutItem",
                         "spec": {
-                            "x": 18,
+                            "x": 8,
                             "y": 4,
-                            "width": 6,
+                            "width": 4,
                             "height": 4,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-37"
+                                "name": "panel-61"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 4,
+                            "width": 4,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-62"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 16,
+                            "y": 4,
+                            "width": 4,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-2"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 20,
+                            "y": 4,
+                            "width": 4,
+                            "height": 4,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-1"
                             }
                         }
                     },
@@ -2640,7 +3294,7 @@
                             "x": 0,
                             "y": 8,
                             "width": 24,
-                            "height": 8,
+                            "height": 10,
                             "element": {
                                 "kind": "ElementReference",
                                 "name": "panel-7"
@@ -2651,7 +3305,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 16,
+                            "y": 18,
                             "width": 12,
                             "height": 8,
                             "element": {
@@ -2664,7 +3318,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 12,
-                            "y": 16,
+                            "y": 18,
                             "width": 12,
                             "height": 8,
                             "element": {
@@ -2677,7 +3331,20 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 32,
+                            "y": 26,
+                            "width": 24,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-11"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 0,
+                            "y": 34,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2690,7 +3357,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 8,
-                            "y": 32,
+                            "y": 34,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2703,7 +3370,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 16,
-                            "y": 32,
+                            "y": 34,
                             "width": 8,
                             "height": 8,
                             "element": {
@@ -2716,12 +3383,12 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 24,
-                            "width": 24,
+                            "y": 42,
+                            "width": 12,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-11"
+                                "name": "panel-9"
                             }
                         }
                     },
@@ -2729,7 +3396,7 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 12,
-                            "y": 40,
+                            "y": 42,
                             "width": 12,
                             "height": 8,
                             "element": {
@@ -2742,12 +3409,25 @@
                         "kind": "GridLayoutItem",
                         "spec": {
                             "x": 0,
-                            "y": 40,
+                            "y": 50,
                             "width": 12,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-9"
+                                "name": "panel-49"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 50,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-37"
                             }
                         }
                     }

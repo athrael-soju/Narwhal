@@ -21,6 +21,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `schema_version`        | State schema version, `1`                                                             |
 | `journal_run`           | Request-journal run ID of the current router process                                  |
 | `served`                | Completed requests                                                                    |
+| `slo_met`               | Completed requests within the TTFT and TPOT SLOs                                      |
 | `failed`                | Requests ending in error                                                              |
 | `offered`               | Completion arrivals                                                                   |
 | `unsized_offered`       | Arrivals that terminated before workload sizing                                       |

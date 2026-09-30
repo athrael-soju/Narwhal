@@ -443,6 +443,7 @@ class StateOut(BaseModel):
     schema_version: Literal[1]
     journal_run: str = ""
     served: int
+    slo_met: int = 0
     offered: int = 0
     unsized_offered: int = 0
     expired: int = 0

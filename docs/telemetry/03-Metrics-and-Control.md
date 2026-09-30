@@ -10,7 +10,7 @@ Starting values in a new router process:
 
 | Series | Starting value |
 | --- | --- |
-| `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
+| `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
 | `narwhal_retry_credits` | `serving.retry_budget`. |
 | Histograms and every other counter | `0`. |
 
@@ -35,7 +35,7 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total` |
 | Consolidation | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total` |
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
-| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop` |
+| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
 ## Inspect scheduling and role control
 

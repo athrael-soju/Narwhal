@@ -76,6 +76,12 @@ def _render_admission(state: dict) -> list[str]:
         "counter",
         [({}, state.get("served", 0))],
     )
+    out += _lines(
+        "narwhal_slo_met_total",
+        "Requests completed within the TTFT and TPOT SLOs",
+        "counter",
+        [({}, state.get("slo_met", 0))],
+    )
     for field_name, help_text in (
         ("offered", "Original completion requests received, including early refusals"),
         ("unsized_offered", "Original requests terminated before input sizing"),
@@ -215,6 +221,15 @@ def _render_runtime(state: dict) -> list[str]:
         "gauge",
         [
             ({"iid": iid}, 1 if entry.get("ready_to_stop") else 0)
+            for iid, entry in lifecycle_engines.items()
+        ],
+    )
+    out += _lines(
+        "narwhal_engine_lifecycle_state",
+        "1 for the engine's current lifecycle state",
+        "gauge",
+        [
+            ({"iid": iid, "state": entry.get("state", "active")}, 1)
             for iid, entry in lifecycle_engines.items()
         ],
     )

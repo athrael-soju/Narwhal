@@ -10,6 +10,7 @@ import httpx
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
+from narwhal.runtime.lifecycle import DrainRecord
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router import NarwhalRouter
@@ -85,6 +86,15 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         names = re.findall(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", response.text, re.M)
         self.assertTrue(names)
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
+
+    async def test_lifecycle_state_metric_reports_each_engine(self):
+        """Each engine exports its current lifecycle state, including a blocked recovery."""
+        self.router.lifecycle.records["p"] = DrainRecord(
+            iid="p", state="blocked", requested_at=0.0, deadline_at=0.0, restart_required=False
+        )
+        response = await self.client.get("/metrics")
+        self.assertIn('narwhal_engine_lifecycle_state{iid="p",state="blocked"} 1', response.text)
+        self.assertIn('narwhal_engine_lifecycle_state{iid="d",state="active"} 1', response.text)
 
     async def test_state_and_metrics_share_event_loop_lag(self):
         self.router.monitoring.observe_event_loop_lag(0.03)
@@ -167,6 +177,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "tools/observability/grafana-narwhal.json": (
                 "narwhal_failed_total",
                 "narwhal_served_total",
+                "narwhal_engine_lifecycle_state",
+                "narwhal_slo_met_total",
             ),
             "tools/observability/prometheus-alerts.yml": (
                 "narwhal_failed_total",
@@ -224,6 +236,85 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "narwhal_retry_attempts_total",
             " ".join(query["spec"]["query"]["spec"]["expr"] for query in exceptions),
         )
+
+    def test_engine_views_mark_held_and_unreachable_engines(self):
+        """The engine table ranks each engine's state and the role history marks held periods."""
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        elements = dashboard["spec"]["elements"]
+        table = elements["panel-7"]["spec"]
+        state = next(
+            query["spec"]["query"]["spec"]["expr"]
+            for query in table["data"]["spec"]["queries"]
+            if query["spec"]["refId"] == "S"
+        )
+        for source in (
+            'up{job="engines"',
+            'narwhal_engine_lifecycle_state{job="narwhal-router",instance=~"$router",iid=~"$iid",state="blocked"}',
+            'state="validating"',
+            "narwhal_ejected",
+            "narwhal_engine_draining",
+            "narwhal_engine_breaker_verifying",
+            "narwhal_probation_instances",
+            "vllm:num_requests_waiting",
+        ):
+            self.assertIn(source, state)
+        mappings = next(
+            override["properties"][0]["value"][0]["options"]
+            for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "State"
+        )
+        self.assertEqual(
+            [mappings[str(code)]["text"] for code in range(len(mappings))],
+            [
+                "Serving",
+                "Backlogged",
+                "Probation",
+                "Verifying",
+                "Draining",
+                "Ejected",
+                "Validating",
+                "Blocked",
+                "Scrape down",
+            ],
+        )
+        history = elements["panel-8"]["spec"]
+        expr = history["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"]
+        for source in ("narwhal_engine_draining", "narwhal_ejected", 'state="blocked"'):
+            self.assertIn(source, expr)
+        roles = history["vizConfig"]["spec"]["fieldConfig"]["defaults"]["mappings"][0]["options"]
+        self.assertEqual(
+            {code: roles[code]["text"] for code in ("4", "5", "6")},
+            {"4": "Draining", "5": "Ejected", "6": "Blocked"},
+        )
+
+    def test_headline_row_reports_goodput_and_latency_against_the_slo(self):
+        """The first row divides SLO-met completions by offers and latency p95 by its SLO."""
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        elements = dashboard["spec"]["elements"]
+        row = sorted(
+            (item["spec"]["x"], item["spec"]["element"]["name"])
+            for item in dashboard["spec"]["layout"]["spec"]["items"]
+            if item["spec"]["y"] == 4
+        )
+        self.assertEqual(
+            [elements[name]["spec"]["title"] for _, name in row],
+            ["Goodput", "Offered", "TTFT p95", "TPOT p95", "Fleet", "Controller"],
+        )
+
+        def expressions(name):
+            specs = (
+                query["spec"]["query"]["spec"]
+                for query in elements[name]["spec"]["data"]["spec"]["queries"]
+            )
+            return {spec["legendFormat"]: spec["expr"] for spec in specs}
+
+        goodput = expressions(row[0][1])["Within SLO"]
+        self.assertIn("narwhal_slo_met_total", goodput.split(" / ")[0])
+        self.assertIn("narwhal_offered_total", goodput.split(" / ")[1])
+        for (_, name), metric in zip(row[2:4], ("ttft", "tpot"), strict=True):
+            share = expressions(name)["of SLO"]
+            self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
+            self.assertIn(f'metric="{metric}"', share)
 
     def test_request_outcomes_plot_every_terminal_counter_from_zero(self):
         """Each terminal counter has its own unstacked series beside offered."""

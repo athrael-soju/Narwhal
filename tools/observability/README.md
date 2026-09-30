@@ -4,7 +4,7 @@ The pinned Compose project starts Prometheus and Grafana with Narwhal alert rule
 
 ## Dashboard
 
-**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports admission, controller mode, engine reachability, terminal request rates, token rates and firing Narwhal alerts. The engine table shows current role, drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by request outcomes, retries and pool pressure.
+**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports goodput against the SLOs, offered load with its refused and failed shares, TTFT and TPOT p95 against their SLOs, out-of-service engines with pool sizes and flips, and controller readiness, mode and firing Narwhal alerts. The engine table lists the most serious states first and shows resident Narwhal work, native vLLM work, KV occupancy, prefix cache hits and token rate. Pool assignments and the role history, which marks draining, ejected and blocked periods, lead into TTFT, TPOT and request-wait quantiles, followed by request outcomes, retries, pool pressure, token throughput and fleet events.
 
 The dashboard selects every router target in the data source when it opens. The shipped scrape configuration binds one router and one fleet to each data source, so the bare dashboard URL immediately populates router totals and pool pressure. **Engine detail** filters the engine table and role timeline.
 
@@ -20,7 +20,7 @@ Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collec
 
 ### Metric boundaries
 
-**Requests** counts completed, failed, expired, refused and rejected terminal outcomes per second, while client cancellations have their own counter. **Tokens** counts engine prompt tokens as prefill and router-observed output tokens as decode. Each panel sums `increase()` over the displayed interval, so router and engine counter resets preserve the interval count.
+**Goodput** divides requests completed within both the TTFT and TPOT SLOs (`narwhal_slo_met_total`) by offered requests, so refused, failed and expired requests count as misses. **Offered** reports the arrival rate with the refused share (predictive refusal and capacity rejection) and the failed share (failure and deadline expiry). **Request outcomes** plots each terminal outcome per second, and client cancellations have their own series. **Token throughput** plots engine prompt tokens and router-observed output tokens per second. The flip count sums `increase()` over the displayed interval, so router counter resets preserve it.
 
 **Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** uses the same `instance` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. The dashboard selects one router before calculating quantiles, while `narwhal_slo_seconds` supplies that process's configured TTFT and TPOT lines. Aggregating latency buckets across routers requires identical SLO-derived bucket edges.
 

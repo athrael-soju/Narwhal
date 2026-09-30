@@ -278,6 +278,17 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.terminal_rows()), 1)
         self.assert_released()
 
+    async def test_completed_requests_meet_the_slo_only_within_both_targets(self):
+        """A completion counts toward the SLO only when TTFT and TPOT stay within it."""
+        client = self.client()
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assertEqual((self.router.served, self.router.slo_met), (1, 1))
+        self.router.cfg.slo = replace(self.router.cfg.slo, ttft_s=1e-9)
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assertEqual((self.router.served, self.router.slo_met), (2, 1))
+        metrics = await client.get("/metrics")
+        self.assertIn("narwhal_slo_met_total 1", metrics.text)
+
     async def test_invalid_and_oversized_bodies_settle_before_dispatch(self):
         """Malformed JSON and streamed body limits each produce one terminal record."""
         self.cfg.serving = replace(self.cfg.serving, max_request_bytes=64)

@@ -8,11 +8,18 @@ from contextlib import ExitStack, suppress
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from narwhal.runtime import monitoring
 from narwhal.runtime.lifecycle import ValidationOutcome
 from narwhal.runtime.monitoring import MonitoringLedger, monitor_once, readmit, sweep_liveness
 from narwhal.serving.app import create_app
 from tests.fixtures import bind_identity_profiles, fleet
+
+
+async def answering(_router, engines):
+    """Report every engine's attestation sidecar as answering."""
+    return engines
 
 
 class MonitoringLedgerTests(unittest.TestCase):
@@ -231,6 +238,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
                 stack.enter_context(
                     patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True))
                 )
+                stack.enter_context(patch.object(monitoring, "attested", new=answering))
                 stack.enter_context(
                     patch.object(monitoring, "controls_fleet", return_value=not fenced)
                 )
@@ -256,11 +264,15 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         ).engine_contract
         for iid in ("e0", "e3"):
             self.router.scheduler.eject(iid)
-        with patch.object(self.router.engines, "healthy", new=AsyncMock(side_effect=[True, False])):
+        with (
+            patch.object(self.router.engines, "healthy", new=AsyncMock(side_effect=[True, False])),
+            patch.object(monitoring, "attested", new=answering),
+        ):
             self.assertEqual(await readmit(self.router, 0), [])
         self.assertFalse(self.router.lifecycle.records)
         with (
             patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
+            patch.object(monitoring, "attested", new=answering),
             patch.object(
                 monitoring,
                 "validate_readmission",
@@ -271,6 +283,82 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(validate.call_args.kwargs["wave"])
         self.assertEqual(self.router.lifecycle.wave_id, "")
         self.assertEqual(self.router.scheduler.draining, set())
+
+    def _sidecars(self, status):
+        """Serve attestation from each engine's sidecar URL with a per-engine status or outage."""
+        urls = {spec.attestation_url: spec.iid for spec in self.router.cfg.engines}
+
+        def respond(request):
+            iid = urls[str(request.url)]
+            if status.get(iid) is None:
+                raise httpx.ConnectError("sidecar down", request=request)
+            return httpx.Response(status[iid], json={})
+
+        self.router.cfg.engine_contract = fleet(
+            self.router.cfg.profiles_path.parent
+        ).engine_contract
+        self.router.lifecycle_transport = httpx.MockTransport(respond)
+
+    async def test_contract_recovery_waits_for_the_attestation_sidecar(self):
+        """An engine whose sidecar is unreachable stays ejected and validates once it responds."""
+        status = {"e0": None, "e3": 200}
+        self._sidecars(status)
+        self.router.scheduler.eject("e0")
+        with (
+            patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
+            patch.object(
+                monitoring,
+                "validate_readmission",
+                new=AsyncMock(return_value=ValidationOutcome(starts={"e0": 101})),
+            ) as validate,
+        ):
+            self.assertEqual(await readmit(self.router, 0), [])
+            validate.assert_not_awaited()
+            self.assertNotIn("e0", self.router.lifecycle.records)
+            self.assertIn("e0", self.router.scheduler.ejected)
+            status["e0"] = 200
+            self.assertEqual(await readmit(self.router, 0), ["e0"])
+        validate.assert_awaited_once()
+        self.assertEqual(self.router.lifecycle.records["e0"].state, "active")
+
+    async def test_contract_recovery_validates_a_sidecar_that_responds_with_an_error(self):
+        """A sidecar status error reaches validation, which blocks with the named failure."""
+        self._sidecars({"e0": 503, "e3": 200})
+        self.router.scheduler.eject("e0")
+        failed = ValidationOutcome(failures={"e0": ["attestation unreadable: HTTPStatusError"]})
+        with (
+            patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
+            patch.object(
+                monitoring, "validate_readmission", new=AsyncMock(return_value=failed)
+            ) as validate,
+            self.assertLogs("narwhal.monitoring_loop", level="WARNING"),
+        ):
+            self.assertEqual(await readmit(self.router, 0), [])
+        validate.assert_awaited_once()
+        record = self.router.lifecycle.records["e0"]
+        self.assertEqual(record.state, "blocked")
+        self.assertIn("HTTPStatusError", record.error)
+
+    async def test_full_outage_recovery_waits_for_every_attestation_sidecar(self):
+        """Whole-wave recovery starts only after every sidecar responds."""
+        status = {"e0": 200, "e3": None}
+        self._sidecars(status)
+        for iid in ("e0", "e3"):
+            self.router.scheduler.eject(iid)
+        with (
+            patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
+            patch.object(
+                monitoring,
+                "validate_readmission",
+                new=AsyncMock(return_value=ValidationOutcome(starts={"e0": 101, "e3": 102})),
+            ) as validate,
+        ):
+            self.assertEqual(await readmit(self.router, 0), [])
+            validate.assert_not_awaited()
+            self.assertFalse(self.router.lifecycle.records)
+            status["e3"] = 200
+            self.assertEqual(await readmit(self.router, 0), ["e0", "e3"])
+        self.assertTrue(validate.call_args.kwargs["wave"])
 
     async def test_whole_wave_policy_converts_automatic_recovery_to_operator_hold(self):
         """Whole-wave policy holds every engine before any automatic health readmission."""

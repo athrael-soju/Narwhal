@@ -208,6 +208,7 @@ class NarwhalRouter:
         # into the journal's run metadata when the journal opens.
         journal.extra = {"token_accounting": self._token_accounting()}
         self.served = 0
+        self.slo_met = 0
         self.failed = 0
         self.refused = 0
         # `rejected` records capacity limits. `refused` records predictive admission.
@@ -710,6 +711,7 @@ class NarwhalRouter:
         out = {
             "journal_run": self.journal.run,
             "served": self.served,
+            "slo_met": self.slo_met,
             "offered": self.offered,
             "unsized_offered": self.unsized_offered,
             "expired": self.expired,

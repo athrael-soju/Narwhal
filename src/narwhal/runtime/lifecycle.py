@@ -162,7 +162,18 @@ class LifecycleManager:
         if self.router.cfg.engine_restart_policy == "whole_wave":
             self.require_restart_wave("engine recovery requires a managed whole-wave restart")
             return False
-        held = {name for name, rec in self.records.items() if rec.state != "active"}
+        # A failed automatic recovery waits for an operator without holding other engines.
+        held = {
+            name
+            for name, rec in self.records.items()
+            if rec.state != "active"
+            and not (
+                rec.state == "blocked"
+                and not rec.restart_required
+                and not rec.wave_id
+                and name not in engines
+            )
+        }
         configured = set(self.router.monitor.instances)
         if wave and set(engines) != configured:
             raise LifecycleError("whole-wave recovery must name every configured engine")
