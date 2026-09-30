@@ -157,6 +157,29 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post(client)).status_code, 200)
         self.assert_released()
 
+    async def test_a_stream_that_fails_before_output_returns_an_http_error(self):
+        client = self.client()
+        self.decode_frames = []
+        response = await client.post(
+            "/v1/completions",
+            json={"model": self.cfg.model, "prompt": "hello", "max_tokens": 1, "stream": True},
+        )
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.headers["content-type"], "application/json")
+        self.assertIn("message", response.json()["error"])
+        self.assert_released()
+        self.decode_frames = [
+            {"choices": [{"index": 0, "text": "x", "token_ids": [1], "finish_reason": "length"}]},
+        ]
+        streamed = await client.post(
+            "/v1/completions",
+            json={"model": self.cfg.model, "prompt": "hello", "max_tokens": 1, "stream": True},
+        )
+        self.assertEqual(streamed.status_code, 200)
+        self.assertIn('"text":"x"', streamed.text)
+        self.assertTrue(streamed.text.rstrip().endswith("data: [DONE]"))
+        self.assert_released()
+
     async def test_readiness_blocks_traffic_until_identity_capture(self):
         """Declared engines require captured process identities before admission."""
         client = self.client()

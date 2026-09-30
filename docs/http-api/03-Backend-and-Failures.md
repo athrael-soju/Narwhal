@@ -84,7 +84,7 @@ Narwhal maps timeout-shaped engine faults to HTTP `504` and other engine faults 
 
 Narwhal counts a nonempty `prompt` array of nonnegative integer token IDs locally. For text and chat input, when `engine.tokenize` is enabled and the configured dialect has an exact-count endpoint, a tokenisation timeout returns HTTP `504` before placement. Other tokenisation failures return an engine error. Each exact count goes to the live engine that holds the fewest requests. A failed count excludes its engine from later counts until another count succeeds. Character-ratio sizing applies when token counting is disabled or the dialect omits the exact-count endpoint.
 
-Prefill finishes before client streaming begins, so prefill failures can be returned as ordinary HTTP errors.
+Client streaming begins with the first decode output, so failures before any output return ordinary HTTP errors.
 
 ### Breaker readmission
 
