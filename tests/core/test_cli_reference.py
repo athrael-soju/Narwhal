@@ -144,5 +144,6 @@ class CliReferenceTests(unittest.TestCase):
 
     def test_readme_inventory_matches_installed_commands(self):
         readme = (ROOT / "README.md").read_text()
-        inventory = re.search(r"The wheel installs (.+?)\.", readme).group(1)
+        inventory = re.search(r"The wheel installs these commands:\n\n((?:- .+\n)+)", readme)
+        inventory = inventory.group(1)
         self.assertEqual(set(re.findall(r"`(narwhal[\w-]*)`", inventory)), set(self.scripts))
