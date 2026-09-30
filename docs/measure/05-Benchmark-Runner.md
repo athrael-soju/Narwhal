@@ -1,3 +1,7 @@
+---
+description: Run a plan of ordered benchmark points against a Narwhal router.
+---
+
 # Ordered benchmark points
 
 `tools/measurement/benchmark_runner.py` runs the plan's points in order, with these steps per point:

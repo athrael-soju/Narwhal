@@ -1,3 +1,7 @@
+---
+description: Fail over to the standby Narwhal router and roll back a router release.
+---
+
 # Router failover and rollback
 
 ## Router failover

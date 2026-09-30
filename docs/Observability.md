@@ -1,3 +1,7 @@
+---
+description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana dashboard.
+---
+
 # Set up observability
 
 `make observe` starts two services for the deployed fleet:

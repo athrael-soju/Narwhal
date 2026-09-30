@@ -1,3 +1,7 @@
+---
+description: Package an approved Narwhal revision and install it on the router and engine hosts.
+---
+
 # Gate B: Package and install the approved revision
 
 | Command   | Action                                                         |

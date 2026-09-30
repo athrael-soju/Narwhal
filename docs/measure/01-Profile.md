@@ -1,3 +1,7 @@
+---
+description: Define the TTFT and TPOT measurement contract and build a validated idle-fleet latency profile.
+---
+
 # Measurement contract and profiling
 
 ## 1. Define the measurement contract

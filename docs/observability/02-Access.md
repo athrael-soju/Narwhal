@@ -1,3 +1,7 @@
+---
+description: Open the Narwhal Grafana dashboard from a workstation and isolate a second monitoring stack.
+---
+
 # Access dashboards and isolate listeners
 
 ## Access the dashboard from a workstation

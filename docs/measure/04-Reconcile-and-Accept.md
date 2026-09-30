@@ -1,3 +1,7 @@
+---
+description: Reconcile client offers with the Narwhal router journal and record deployment acceptance.
+---
+
 # Reconcile and accept
 
 ## 10. Join client offers to the router journal

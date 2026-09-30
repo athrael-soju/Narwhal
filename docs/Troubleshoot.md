@@ -1,3 +1,7 @@
+---
+description: Capture diagnostic bundles and recover a Narwhal fleet from router, admission and overload failures.
+---
+
 # Troubleshoot a fleet
 
 ## Capture router and engine state

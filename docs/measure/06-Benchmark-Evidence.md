@@ -1,3 +1,7 @@
+---
+description: Evidence collection for each point of a Narwhal benchmark plan.
+---
+
 # Benchmark evidence bundle
 
 The `evidence` object in the plan starts one evidence collector for each point of the [ordered benchmark runner](05-Benchmark-Runner.md).

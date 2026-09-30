@@ -1,3 +1,7 @@
+---
+description: Export AMD or NVIDIA GPU telemetry to the Narwhal hardware dashboard and evaluate its alerts.
+---
+
 # GPU telemetry, alerts, and recovery
 
 ## GPU telemetry

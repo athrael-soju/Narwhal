@@ -1,3 +1,7 @@
+---
+description: The deployment environment, generated artifacts, host inventory and SSH trust for a Narwhal fleet.
+---
+
 # Deployment inputs and SSH trust
 
 ## 12. Deployment inputs and generated artifacts

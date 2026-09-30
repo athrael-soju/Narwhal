@@ -1,3 +1,7 @@
+---
+description: Narwhal fleet settings for request admission, placement, deadlines and prefill and decode role control.
+---
+
 # Serving and role control
 
 ## 4. Request admission and bounded serving

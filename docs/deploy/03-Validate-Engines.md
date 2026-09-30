@@ -1,3 +1,7 @@
+---
+description: Validate and start every vLLM engine in a Narwhal fleet.
+---
+
 # Gate C: Validate and start every engine
 
 ## Inspect every engine host

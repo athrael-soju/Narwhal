@@ -1,3 +1,7 @@
+---
+description: Options, exit codes and run directories for narwhal dev on one NVIDIA CUDA GPU.
+---
+
 # `narwhal dev`
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.

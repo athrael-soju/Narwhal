@@ -1,3 +1,7 @@
+---
+description: Freeze the deployment inputs and discover the hosts of a Narwhal vLLM fleet.
+---
+
 # Gate A: Freeze inputs and discover the real deployment
 
 ## Load the private environment

@@ -1,3 +1,7 @@
+---
+description: The engine contract, request execution path and fleet topology behind Narwhal disaggregated serving.
+---
+
 # Request flow and fleet topology
 
 ## Engine contract

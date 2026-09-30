@@ -1,3 +1,7 @@
+---
+description: Measure the highest offered request rate a Narwhal fleet sustains within its TTFT and TPOT targets.
+---
+
 # Measure a fleet
 
 A fleet measurement reports the highest tested offered rate that meets the fleet's time to first token (TTFT) and time per output token (TPOT) targets.
@@ -35,6 +39,6 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
 
     ---
 
-    Pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on AMD Instinct MI355X engines.
+    Pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on eight-GPU engines.
 
 </div>

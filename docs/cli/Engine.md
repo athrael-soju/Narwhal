@@ -1,3 +1,7 @@
+---
+description: Prepare and run vLLM engines from engine launch records with narwhal-engine.
+---
+
 # `narwhal-engine`
 
 `narwhal-engine` prepares and runs vLLM engines from a `narwhal.engine-launch` record.

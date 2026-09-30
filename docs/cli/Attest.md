@@ -1,3 +1,7 @@
+---
+description: narwhal-attest serves the attestation document of one vLLM engine over HTTP.
+---
+
 # `narwhal-attest`
 
 `narwhal-attest` is an HTTP sidecar that serves the attestation document of one vLLM engine.

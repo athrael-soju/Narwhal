@@ -1,3 +1,7 @@
+---
+description: Diagnose requests and SLO attainment from the Narwhal JSON Lines request journal.
+---
+
 # Request journal
 
 ## Diagnose a request from the journal

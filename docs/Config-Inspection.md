@@ -1,3 +1,7 @@
+---
+description: Validate a Narwhal fleet file and inspect its effective values with narwhal config.
+---
+
 # `narwhal config`
 
 `narwhal config validate` runs these checks on a fleet file:

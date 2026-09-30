@@ -1,3 +1,7 @@
+---
+description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen Narwhal deployment.
+---
+
 # Synthetic load trial
 
 ## 7. Run the synthetic deployment trial

@@ -1,3 +1,7 @@
+---
+description: Disaggregated prefill and decode execution and engine failure handling in the Narwhal router.
+---
+
 # Backend execution and failures
 
 ## Disaggregated backend execution

@@ -1,3 +1,7 @@
+---
+description: Run the narwhal-check preflight gates against profiled, idle Narwhal engines.
+---
+
 # Gate F: Profile once and run the live KV contract
 
 ## Profile idle engines

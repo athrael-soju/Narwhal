@@ -1,3 +1,7 @@
+---
+description: Start Prometheus and Grafana for a Narwhal router and verify every scrape target.
+---
+
 # Start and verify monitoring
 
 ## Prerequisites

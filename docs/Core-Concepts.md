@@ -1,3 +1,7 @@
+---
+description: How Narwhal moves dual-capability engines between prefill and decode roles for disaggregated LLM inference.
+---
+
 # Core concepts
 
 Narwhal assigns prefill and decode roles across dual-capability engines that serve one model.

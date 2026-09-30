@@ -1,6 +1,10 @@
+---
+description: All Kimi-K3 requests at 0.5 and 1 request/s on a Narwhal GPU fleet met the 10 s TTFT and 0.3 s TPOT limits.
+---
+
 # Kimi-K3 GPU benchmark qualification
 
-At 0.5 and 1 request/s on AMD Instinct MI355X engines, all 200 `moonshotai/Kimi-K3` requests at each rate stayed within the 10 s time to first token (TTFT) and 0.3 s time per output token (TPOT) limits.
+At 0.5 and 1 request/s, all 200 `moonshotai/Kimi-K3` requests at each rate stayed within the 10 s time to first token (TTFT) and 0.3 s time per output token (TPOT) limits.
 
 The private run bundle in `runs/<qualification-run>/` holds the deployment inputs and the raw evidence from each stage.
 
@@ -11,9 +15,9 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 | Narwhal router source | `6c6c7da4c879101d4f353da1590aa32ce2bf7c10` |
 | Benchmark client (load trial helper) source | `31b0b78e0d8b1438b212ae56b9fbba32832b53a2` |
 | Model | `moonshotai/Kimi-K3` |
-| Engine | vLLM `0.29.0+rocm100` |
+| Engine | vLLM `0.29.0` |
 | Engine image | `sha256:9eacf87e93ecffcb910802d0d0505ef3c9b753a66fb09bec304d72d8dac1dbc2` |
-| Accelerator per engine | AMD Instinct MI355X, eight GPUs, tensor parallelism 8 |
+| Accelerator per engine | Eight GPUs, tensor parallelism 8 |
 | Checkpoint weights | 96 safetensors shards |
 | Sorted `path:sha256` shard manifest SHA-256 | `6cd00d6ba5817a868738202c91b977534668c42d89fce3b317340de88ea9d2ed` |
 | Model config SHA-256 | `9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213` |

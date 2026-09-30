@@ -1,3 +1,7 @@
+---
+description: Roll out and roll back Narwhal upgrades with compatible state handoff versions.
+---
+
 # Upgrade and rollback
 
 ## 10. Upgrade and rollback

@@ -1,3 +1,7 @@
+---
+description: Top-level keys, a minimal fleet definition and the engine compatibility contract for Narwhal fleet files.
+---
+
 # Fleet schema and engine contract
 
 ## 1. Configuration model

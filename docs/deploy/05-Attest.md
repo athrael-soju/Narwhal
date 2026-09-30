@@ -1,3 +1,7 @@
+---
+description: Generate and serve attestation documents for the live vLLM engines of a Narwhal fleet.
+---
+
 # Gate E: Attest the live engines
 
 ## Check the router inventory

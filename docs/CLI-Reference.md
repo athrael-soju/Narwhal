@@ -1,3 +1,7 @@
+---
+description: Reference for the narwhal command and the five narwhal-* commands in the narwhal-inference package.
+---
+
 # Narwhal CLI reference
 
 `narwhal-inference` installs `narwhal` and the five `narwhal-*` commands.

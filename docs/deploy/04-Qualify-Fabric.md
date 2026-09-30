@@ -1,3 +1,7 @@
+---
+description: Measure UCX TCP and RDMA bandwidth on each directed host edge of a Narwhal fleet against its KV cache budget.
+---
+
 # Gate D: Prove the transfer fabric against the serving cache
 
 Measure each directed host edge against its source cache group's budget while the fleet is idle.

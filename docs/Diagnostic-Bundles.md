@@ -1,3 +1,7 @@
+---
+description: Collect a private bundle of Narwhal router state and local artifacts with narwhal diagnostics.
+---
+
 # `narwhal diagnostics`
 
 `narwhal diagnostics collect` writes a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics` GET responses and selected local artifacts to a fresh private directory.

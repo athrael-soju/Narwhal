@@ -1,3 +1,7 @@
+---
+description: Reference for the OpenAI-compatible completion routes and the health, metrics and control endpoints of a Narwhal router.
+---
+
 # Narwhal HTTP API reference
 
 ## Interface map

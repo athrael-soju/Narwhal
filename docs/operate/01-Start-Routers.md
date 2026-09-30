@@ -1,3 +1,7 @@
+---
+description: Define the production boundary and start a Narwhal primary and standby router pair.
+---
+
 # Production boundary and router pair
 
 ## 1. Production boundary

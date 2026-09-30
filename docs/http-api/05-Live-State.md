@@ -1,3 +1,7 @@
+---
+description: Read live admission, scheduler and role controller state from GET /narwhal/state.
+---
+
 # Live router and scheduler state
 
 ## `GET /narwhal/state`

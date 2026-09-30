@@ -1,3 +1,7 @@
+---
+description: Sources and schemas of every artifact and telemetry stream a Narwhal router writes.
+---
+
 # Narwhal telemetry and artifacts
 
 | Artifact | Source | Schema |

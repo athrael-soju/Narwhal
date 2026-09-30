@@ -1,3 +1,7 @@
+---
+description: Reference for Narwhal fleet files and deployment inputs, from the engine schema to fabric qualification.
+---
+
 # Narwhal fleet configuration and deployment reference
 
 | Models  | Deployment                              | Model selection |

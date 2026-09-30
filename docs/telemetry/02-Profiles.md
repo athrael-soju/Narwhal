@@ -1,3 +1,7 @@
+---
+description: Validate the measured per-engine cost model that narwhal-profile writes.
+---
+
 # Engine profiles and capacity
 
 ## Validate the engine cost model

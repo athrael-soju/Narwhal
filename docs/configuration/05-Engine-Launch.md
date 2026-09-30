@@ -1,3 +1,7 @@
+---
+description: Engine endpoints, engine launch records and runtime image verification for a Narwhal fleet.
+---
+
 # Engine endpoints and launch records
 
 ## 14. Engine endpoints generated from node environments

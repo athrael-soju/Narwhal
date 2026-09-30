@@ -1,3 +1,7 @@
+---
+description: Measure the prefill and decode cost model of each engine with narwhal-profile sweeps.
+---
+
 # `narwhal-profile`
 
 `narwhal-profile --fleet PATH` runs in one of three modes:

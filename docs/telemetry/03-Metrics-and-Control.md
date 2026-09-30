@@ -1,3 +1,7 @@
+---
+description: Read Narwhal Prometheus metrics for scheduling, role control, latency and demand.
+---
+
 # Metrics and role controller state
 
 ## Read live state from Prometheus

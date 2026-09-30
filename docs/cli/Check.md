@@ -1,3 +1,7 @@
+---
+description: Run the narwhal-check deployment preflight gates, from engine reachability to live KV transfer probes.
+---
+
 # `narwhal-check`
 
 `narwhal-check --fleet PATH` runs these deployment preflight gates in order: `reach`, `contract`, `profile`, `model`, `pace`, `tokenize`, `produce`, `consume`, `slo`.

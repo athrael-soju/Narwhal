@@ -1,3 +1,7 @@
+---
+description: Fabric qualification, CLI precedence, request journal and configuration provenance settings in Narwhal.
+---
+
 # Fabric, CLI, and configuration operations
 
 ## 17. Fabric workload qualification

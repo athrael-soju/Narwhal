@@ -1,3 +1,7 @@
+---
+description: Validate every Narwhal release with drills on an idle fleet.
+---
+
 # Release drills
 
 ## 11. Validate every release

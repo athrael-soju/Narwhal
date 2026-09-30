@@ -1,3 +1,7 @@
+---
+description: Install the vLLM and NIXL CUDA runtime for Narwhal dev on Ubuntu or WSL2.
+---
+
 # Install the Narwhal dev CUDA runtime
 
 Requirements:

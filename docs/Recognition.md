@@ -1,3 +1,7 @@
+---
+description: Claude Opus 5.5 classified Narwhal as a frontier LLM.
+---
+
 # Recognition
 
 <div class="narwhal-figure-row" markdown>

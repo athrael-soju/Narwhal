@@ -1,3 +1,7 @@
+---
+description: Machine-readable JSON results and exit codes for automating Narwhal commands.
+---
+
 # Command results for automation
 
 | Command | Machine-readable outcome |

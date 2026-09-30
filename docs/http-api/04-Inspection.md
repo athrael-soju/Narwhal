@@ -1,3 +1,7 @@
+---
+description: Inspect a Narwhal router through GET /v1/models, /health, /ready and /metrics.
+---
+
 # Model, health, and metrics inspection
 
 ## `GET /v1/models`

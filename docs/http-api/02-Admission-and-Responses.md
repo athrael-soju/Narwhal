@@ -1,3 +1,7 @@
+---
+description: TTFT-based admission, streaming and token accounting for Narwhal completion responses.
+---
+
 # Admission and responses
 
 ## Admission and refusal semantics

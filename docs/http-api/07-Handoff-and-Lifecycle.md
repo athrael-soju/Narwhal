@@ -1,3 +1,7 @@
+---
+description: Hand off router state and drain or readmit engines through the Narwhal lifecycle API.
+---
+
 # State handoff and engine lifecycle
 
 ## State handoff

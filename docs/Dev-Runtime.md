@@ -1,3 +1,7 @@
+---
+description: Narwhal dev runs several vLLM engines with prefill and decode role swaps on one NVIDIA CUDA GPU under Ubuntu or WSL2.
+---
+
 # Narwhal dev
 
 Narwhal dev runs several independent inference engines on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2.

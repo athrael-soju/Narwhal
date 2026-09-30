@@ -1,3 +1,7 @@
+---
+description: Recovery procedures and reference GPU qualification checks for Narwhal dev instances.
+---
+
 # Narwhal dev recovery and qualification
 
 | Situation | Procedure |

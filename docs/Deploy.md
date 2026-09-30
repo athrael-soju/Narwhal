@@ -1,3 +1,7 @@
+---
+description: Deploy Narwhal on a multi-node vLLM fleet with NIXL KV transfer, from host discovery to live serving.
+---
+
 # Deploy a fleet
 
 ## Operating model

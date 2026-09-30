@@ -1,3 +1,7 @@
+---
+description: SLO attainment per time bucket and demand accounting in the Narwhal state API.
+---
+
 # SLO attainment and demand accounting
 
 ## SLO attainment

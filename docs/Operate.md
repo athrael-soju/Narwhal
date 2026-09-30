@@ -1,3 +1,7 @@
+---
+description: Operate a Narwhal fleet with a warm-standby router pair in a shared lease domain.
+---
+
 # Operate Narwhal
 
 Each model fleet runs one router pair in a shared lease domain:

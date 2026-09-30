@@ -1,3 +1,7 @@
+---
+description: Engine monitoring, failure handling, readmission and durable control-plane state in Narwhal.
+---
+
 # Failure, readmission, and state
 
 ## Monitoring and readiness

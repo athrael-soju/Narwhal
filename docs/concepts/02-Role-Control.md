@@ -1,3 +1,7 @@
+---
+description: How the Narwhal role controller moves engines between prefill and decode while holding capacity floors.
+---
+
 # Role control and capacity floors
 
 ## Role control

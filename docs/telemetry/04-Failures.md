@@ -1,3 +1,7 @@
+---
+description: Metrics for engine monitoring degradation and engine breaker state in a Narwhal fleet.
+---
+
 # Engine monitoring and failure diagnosis
 
 ## Engine monitoring degradation

@@ -1,3 +1,7 @@
+---
+description: Install the narwhal-inference package from PyPI on Linux with Python 3.11 or newer.
+---
+
 # Install Narwhal from PyPI
 
 `narwhal-inference` installs the `narwhal` Python package and six commands for local development, engine launch, attestation, profiling, preflight and routing.

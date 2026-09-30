@@ -1,3 +1,7 @@
+---
+description: Narwhal fleet settings for engine recovery, warm standby, engine authentication and profile validation.
+---
+
 # Recovery, authentication, and profile validation
 
 ## 8. Engine health and recovery

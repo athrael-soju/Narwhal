@@ -1,3 +1,7 @@
+---
+description: Start the Narwhal router and validate fleet capacity through the private path.
+---
+
 # Gate G: Start the service and validate capacity through the private path
 
 ## Start and locally verify the router

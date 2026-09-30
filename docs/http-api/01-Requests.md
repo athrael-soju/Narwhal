@@ -1,3 +1,7 @@
+---
+description: Request contract for POST /v1/completions and /v1/chat/completions on a Narwhal router.
+---
+
 # Completion requests
 
 ## Completion routes

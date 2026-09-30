@@ -1,3 +1,7 @@
+---
+description: Launch and verify four Qwen3.5-0.8B engines on one RTX 5090 with Narwhal dev.
+---
+
 # RTX 5090 reference for Narwhal dev
 
 Four Qwen3.5-0.8B GGUF engines run on one RTX 5090, on Ubuntu or Ubuntu under WSL2.

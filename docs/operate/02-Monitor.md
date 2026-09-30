@@ -1,3 +1,7 @@
+---
+description: Interpret Narwhal router health, readiness and placement state during operation.
+---
+
 # Router state and placement monitoring
 
 ## 5. Interpret router state

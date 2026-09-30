@@ -1,3 +1,7 @@
+---
+description: Restart Narwhal engines one at a time or in waves and detect process replacement.
+---
+
 # Engine restart and process replacement
 
 Prerequisites:

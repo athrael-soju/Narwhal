@@ -1,3 +1,7 @@
+---
+description: Narwhal hot-swaps prefill and decode roles across vLLM engines on NVIDIA and AMD GPUs, from a single GPU to multi-node fleets.
+---
+
 # Narwhal documentation
 
 Narwhal is the first open-source LLM inference framework that automatically hot-swaps prefill and decode roles on both NVIDIA and AMD GPUs. It [moves engines between roles](Core-Concepts.md) as demand changes, on a fixed GPU fleet with model weights already loaded. It scales from a [single GPU](Dev-Runtime.md) to [distributed multi-node deployments](Deploy.md).

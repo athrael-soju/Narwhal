@@ -1,3 +1,7 @@
+---
+description: Serving options, standby takeover and lease fencing for the narwhal-serve router.
+---
+
 # `narwhal-serve`
 
 Start a router: `narwhal-serve --fleet PATH`.

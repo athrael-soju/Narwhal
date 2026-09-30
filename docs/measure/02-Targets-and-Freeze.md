@@ -1,3 +1,7 @@
+---
+description: Set production TTFT and TPOT SLOs and freeze the Narwhal deployment under test.
+---
+
 # Targets and deployment freeze
 
 ## 5. Set production SLOs
