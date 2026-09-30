@@ -184,7 +184,7 @@ For text and chat inputs, when `engine.tokenize` is enabled and the dialect prov
 
 Set `serving.prefill_timeout_s` from measurements of the longest admitted inputs under the supported load. For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the probe HTTP timeout.
 
-Set `engine.health_timeout_s` from health and identity latency measured under the intended load. A timed-out health probe counts as a failed liveness observation.
+Set `engine.health_timeout_s` from health and identity latency measured under the intended load. A timed-out health probe counts as a failed liveness observation. A timeout that surfaces more than 1.5 times the health budget after the probe starts leaves the engine-health verdict unchanged.
 
 Measure connection setup and local pool waits under the intended load before setting `engine.connect_timeout_s` and `engine.pool_timeout_s`. Local pool exhaustion leaves the engine-health verdict unchanged.
 

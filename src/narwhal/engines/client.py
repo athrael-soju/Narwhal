@@ -73,6 +73,8 @@ STREAM_SILENCE_DETAIL = "engine went silent between tokens"
 STREAM_UNTERMINATED_DETAIL = "stream ended before the [DONE] terminator"
 STREAM_EMPTY_DETAIL = "stream ended with [DONE] before any token arrived"
 NO_HANDOFF_DETAIL = "no handoff"
+# A health timeout surfacing this far past its budget measured router scheduling delay.
+LATE_TIMEOUT_FACTOR = 1.5
 
 # The probe runs the plain completion route every dialect serves.
 _PROBE_ENDPOINT = "/v1/completions"
@@ -174,16 +176,15 @@ class EngineClient:
         # has no fleet context, so it keeps the small explicit budget.
         control_connections = control_connections if control_connections > 0 else 2
         self.control_connections = control_connections
-        self._data = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                timeout_s, connect=connect_timeout_s, read=self._read_timeout, pool=pool_timeout_s
-            ),
-            limits=httpx.Limits(
-                max_connections=max_connections,
-                max_keepalive_connections=max(1, max_connections // 2),
-            ),
-            transport=transport,
+        self._data_timeout = httpx.Timeout(
+            timeout_s, connect=connect_timeout_s, read=self._read_timeout, pool=pool_timeout_s
         )
+        self._data_limits = httpx.Limits(
+            max_connections=max_connections,
+            max_keepalive_connections=max(1, max_connections // 2),
+        )
+        self._transport = transport
+        self._data_pools: dict[str, httpx.AsyncClient] = {}
         self._control = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 timeout_s, connect=connect_timeout_s, read=self._read_timeout, pool=pool_timeout_s
@@ -214,9 +215,21 @@ class EngineClient:
             out["authorization"] = f"Bearer {self._engine_api_key}"
         return out
 
+    def _data(self, url: str) -> httpx.AsyncClient:
+        """Return the data pool for the engine at `url`."""
+        pool = self._data_pools.get(url)
+        if pool is None:
+            pool = httpx.AsyncClient(
+                timeout=self._data_timeout, limits=self._data_limits, transport=self._transport
+            )
+            self._data_pools[url] = pool
+        return pool
+
     async def aclose(self) -> None:
         """Close all pooled connections."""
-        await self._data.aclose()
+        for pool in self._data_pools.values():
+            await pool.aclose()
+        self._data_pools.clear()
         await self._control.aclose()
 
     def _phase_timeout(self, budget_s: float) -> httpx.Timeout:
@@ -232,9 +245,12 @@ class EngineClient:
 
         `True` is a passing health check. `False` is an endpoint-side
         failure: connect or read timeout, connect error, or a non-200
-        answer. `None` means the local control pool was exhausted, which is
-        inconclusive and says nothing about the engine.
+        answer. `None` means the local control pool was exhausted, or a
+        timeout surfaced beyond `LATE_TIMEOUT_FACTOR` times the health
+        budget; both are inconclusive and say nothing about the engine.
         """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         try:
             r = await self._control.get(
                 f"{url}{self.dialect.health_path}",
@@ -243,6 +259,10 @@ class EngineClient:
             )
         except httpx.PoolTimeout:
             return None
+        except httpx.TimeoutException:
+            if loop.time() - started > self._health_timeout * LATE_TIMEOUT_FACTOR:
+                return None
+            return False
         except httpx.HTTPError:
             return False
         return r.status_code == 200
@@ -270,7 +290,7 @@ class EngineClient:
             return None
         try:
             async with asyncio.timeout(timeout_s):
-                r = await self._data.post(
+                r = await self._data(url).post(
                     f"{url}{self.dialect.tokenize_path}",
                     headers=self._auth(None),
                     json=self.dialect.tokenize_request(body.get("model"), body),
@@ -329,7 +349,7 @@ class EngineClient:
 
         try:
             async with asyncio.timeout(self._prefill_timeout):
-                r = await self._data.post(
+                r = await self._data(url).post(
                     f"{url}{endpoint}",
                     json=leg,
                     headers=self._auth(headers),
@@ -390,12 +410,12 @@ class EngineClient:
         first = True  # no generated token observed yet
         # HTTPX applies its read timeout to headers and pre-token body reads
         # too. Use the first-output budget there and raw-chunk gaps afterward.
-        timeouts = self._data.timeout.as_dict()
+        timeouts = self._data_timeout.as_dict()
         if deadline is not None:
             timeouts["read"] = None
         async with AsyncExitStack() as stack:
             opening = stack.enter_async_context(
-                self._data.stream(
+                self._data(url).stream(
                     "POST",
                     f"{url}{endpoint}",
                     json=leg,

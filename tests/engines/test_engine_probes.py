@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import time
 import unittest
 from unittest.mock import patch
 
 import httpx
 
 from narwhal.engines.client import (
+    LATE_TIMEOUT_FACTOR,
     EngineClient,
     EngineError,
     ProbeLeg,
@@ -79,6 +81,21 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(expected=expected):
                 self.assertIs(await self.client.healthy("http://engine"), expected)
         self.assertEqual(self.client.control_connections, 2)
+
+    async def test_a_health_timeout_that_surfaces_late_is_inconclusive(self):
+        """A prompt timeout blames the engine; one surfacing past its budget measured the router."""
+        delay = {"s": 0.0}
+
+        def handle(request):
+            time.sleep(delay["s"])
+            raise httpx.ReadTimeout("health")
+
+        client = EngineClient(transport=httpx.MockTransport(handle), health_timeout_s=0.05)
+        self.addAsyncCleanup(client.aclose)
+        for late_s, expected in ((0.0, False), (0.05 * LATE_TIMEOUT_FACTOR + 0.05, None)):
+            delay["s"] = late_s
+            with self.subTest(late_s=late_s):
+                self.assertIs(await client.healthy("http://engine"), expected)
 
     async def test_tokenizer_failures_preserve_the_unknown_length_result(self):
         """Transport, status and malformed JSON failures leave exact length unavailable."""

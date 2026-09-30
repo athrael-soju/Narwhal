@@ -33,7 +33,7 @@ monitor-failure counters.
 
 ### Connection pools
 
-Prefill, decode, and token counting use the data connection pool bounded by `serving.max_connections`.
+Prefill, decode, and token counting use one data connection pool per engine. `serving.max_connections` bounds each pool.
 
 Health checks and suspect verification use the reserved control pool bounded
 by `engine.control_connections`.
