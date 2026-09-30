@@ -140,7 +140,7 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 
 ![Role controller changing engine roles with weights resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-## Narwhal against Dynamo Planner and Ray Serve LLM
+## Evaluation
 
 <h3 align="center"><a href="https://athrael.net/posts/evaluating-narwhal/">Read the full evaluation: Evaluating Narwhal</a></h3>
 
