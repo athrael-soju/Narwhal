@@ -1,6 +1,6 @@
 # Observability asset contracts
 
-The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
+The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard.
 
 ## Dashboard
 
@@ -26,7 +26,6 @@ Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collec
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 

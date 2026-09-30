@@ -1,6 +1,6 @@
 ## Change
 
-Describe the problem and the behaviour this PR changes. Link the related issue and its parent when applicable. For milestone work, confirm the target branch follows [Milestone delivery](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#milestone-delivery).
+Describe the problem and the behaviour this PR changes. Link the related issue and its parent when applicable.
 
 ## Checks
 
