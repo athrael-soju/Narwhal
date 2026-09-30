@@ -6,16 +6,16 @@ Every engine in a fleet meets the same contract:
 
 - It speaks the configured inference-engine dialect.
 - It produces and consumes compatible key-value (KV) cache.
-- It sends KV to any peer eligible to receive it.
+- It sends KV to every peer eligible to receive it.
 - It has measured prefill and decode performance profiles.
 - It passes preflight validation before it takes traffic.
-- It passes readmission checks again after any hold, drain, failure, or maintenance event.
+- It passes readmission checks again after a hold, drain, failure, or maintenance event.
 
 The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) that every engine must match.
 
 ### KV transfer for vLLM engines
 
-An engine with the effective `kv_both` role produces and consumes KV. Narwhal allows KV transfer for a vLLM engine with that role across the configured ring or mesh when all three requirements hold:
+Narwhal allows KV transfer across the configured ring or mesh for a vLLM engine with the effective `kv_both` role when these three requirements hold:
 
 | Requirement                                                          | Provider                                                        |
 | -------------------------------------------------------------------- | --------------------------------------------------------------- |
@@ -28,8 +28,8 @@ An engine with the effective `kv_both` role produces and consumes KV. Narwhal al
 | Stage | Behavior |
 | --- | --- |
 | Admission | The router gives the request a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| Pricing | Narwhal counts the prompt tokens and prices each eligible prefill engine from its measured performance curves and resident work. |
-| Predictive check | With `serving.admission` set to `predictive` (the default), Narwhal projects time to first token (TTFT) on the cheapest available prefill path. A projection above the TTFT budget rejects the request before dispatch. |
+| Pricing | Each eligible prefill engine gets a price from the prompt token count, its measured performance curves, and its resident work. |
+| Predictive check | With the default `serving.admission` of `predictive`, a projected time to first token (TTFT) above the TTFT budget on the cheapest available prefill path rejects the request before dispatch. |
 | Prefill | The chosen engine processes the prompt, holds the resulting KV as the producer, and returns a typed KV handoff. |
 | Decode | The same engine, or another eligible engine that consumes the handoff, runs decode. |
 | Streaming | Narwhal streams tokens to the client and tracks token timing and resident work. |
@@ -43,11 +43,9 @@ When every seat is occupied, `serving.queue_capacity` sets the outcome:
 | Positive, queue full | Narwhal returns a retryable refusal. |
 | `0` (the default) | Narwhal returns a retryable refusal. |
 
-A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode from scratch with a fresh KV handoff. Narwhal discards the KV from the failed attempt.
+A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode from scratch with a fresh KV handoff.
 
 ## Fleet topology
-
-The four topologies differ in how roles are assigned and in the cost of a role change.
 
 | Topology              | How roles are assigned                                        | In practice                                                          |
 | --------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -60,13 +58,13 @@ The four topologies differ in how roles are assigned and in the cost of a role c
 
 ![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
 
-Aggregated serving is the baseline. Every replica handles the whole request. A long prefill occupies the same scheduler as decode batches.
+Aggregated serving is the baseline topology.
 
 ### Static disaggregation
 
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
 
-Prompts run on the prefill pool, and their KV handoffs move to the decode pool. The pool ratio is set when the fleet is sized for the expected workload. A workload shift that needs a different ratio, such as a move toward longer prompts, requires an operator to move engines between pools by hand.
+The pool ratio is set when the fleet is sized for the expected workload.
 
 ### Adaptive cold-swap
 
@@ -86,7 +84,7 @@ Cold-swap suits traffic shifts that last longer than this sequence.
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
 
-Hot-swap changes the scheduler role of an eligible dual-capability engine in place. The engine keeps running, with its weights loaded and its KV connections to eligible peers intact.
+Hot-swap changes the scheduler role of an eligible dual-capability engine in place, with its KV connections to eligible peers intact.
 
 [Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 

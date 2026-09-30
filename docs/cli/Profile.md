@@ -8,7 +8,7 @@
 | Refit | Recomputes time to first token (TTFT) fits from retained samples. | `--out` |
 | Merge | Combines separately measured role mixes. | `--out` |
 
-Every mode writes a profile store and a sample sidecar. The sidecar sits at the store's path with its suffix replaced by `.samples.json`.
+Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.
 
 | Fleet configuration     | A live sweep binds each fit to                                                          |
 | ----------------------- | --------------------------------------------------------------------------------------- |
@@ -17,7 +17,7 @@ Every mode writes a profile store and a sample sidecar. The sidecar sits at the 
 
 The `.samples.json` sidecar stores that evidence with the raw observations.
 
-Refits and merges need fresh output paths. Symlink destinations are rejected in every mode.
+Every mode rejects symlink destinations.
 
 ## Selection, refitting, and output
 
@@ -25,21 +25,24 @@ Refits and merges need fresh output paths. Symlink destinations are rejected in 
 | ---------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--version`            |             | Print the installed distribution version. |
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). |
-| `--fleet PATH`         | required    | Fleet configuration file; defines engine membership for all three modes. |
-| `--only IID`           | every engine | Instance ID (`iid`) of an engine to include in a live sweep; repeatable. |
-| `--refit-samples PATH` | omitted     | Sample sidecar holding saved samples bound to process generations. A refit recomputes TTFT from it while retaining the decode fits. |
-| `--merge PATH`         | omitted     | Measured profile store, with its matching sample sidecar, to combine; repeat at least twice. |
+| `--fleet PATH`         | required    | Fleet configuration file that defines engine membership for every mode. |
+| `--only IID`           | every engine | Repeatable engine `iid` to include in a live sweep. |
+| `--refit-samples PATH` | omitted     | Sample sidecar for a refit, which recomputes TTFT and keeps the decode fits. |
+| `--merge PATH`         | omitted     | Measured profile store to combine with its matching sample sidecar, repeated at least twice. |
 | `--out PATH`           | omitted     | Fresh profile destination for `--refit-samples` and `--merge`, with a matching `.samples.json` sample sidecar. |
 | `--limits PATH`        | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
-| `--observation-timeout-s SECONDS` | each probe's built-in timeout | Positive diagnostic HTTP timeout for every live probe. |
-| `--overwrite`          | `false`     | Replace live profile and sample files when the first engine completes. With `--only`, the new store contains the selected profiles. |
+| `--observation-timeout-s SECONDS` | each probe's built-in timeout | Positive diagnostic HTTP timeout for every live probe, recorded in the sample sidecar. |
+| `--overwrite`          | `false`     | Replace live profile and sample files when the first engine completes. |
 
 Mode rules:
 
-- Live sweeps write to `profiles.path` and reject `--out`.
-- `--refit-samples` requires `--out` and samples covering every fleet engine. It is mutually exclusive with `--only` and `--merge`.
-- `--merge` requires `--out`. It is mutually exclusive with `--refit-samples`, `--only`, and `--overwrite`.
+- Live sweeps reject `--out`.
+- `--refit-samples` requires `--out` and samples covering every fleet engine.
+- `--refit-samples` is mutually exclusive with `--only` and `--merge`.
+- `--merge` requires `--out`.
+- `--merge` is mutually exclusive with `--only` and `--overwrite`.
 - `--observation-timeout-s` applies only to live sweeps.
+- With `--only`, `--overwrite` writes a store holding the selected profiles.
 
 Refit and merge outputs:
 
@@ -59,31 +62,31 @@ narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --o
 
 ## Prefill and decode sweeps
 
-These options apply to live sweeps. The command validates every supplied sweep value before selecting a mode.
+Every mode validates these live-sweep options.
 
-If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-timeout-s` for a diagnostic sweep. The sample sidecar records the value.
+If a working engine exceeds a probe's built-in HTTP timeout, set `--observation-timeout-s` for a diagnostic sweep.
 
-| Option                      | Default                                   | Description                                                                                                                                                                                                  |
-| --------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--prefill-lens LIST`       | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated candidate prefill lengths. The profiler keeps points within each engine's live `max_model_len`. At least three distinct usable values must remain.                                           |
-| `--decode-input-lens LIST`  | `512,4096,8192`                           | Comma-separated prompt lengths for the decode sweep. Requires at least two distinct values.                                                                                                                  |
-| `--decode-concurrency LIST` | `1,4,16,48`                               | Candidate stream counts; at least two distinct usable values. With `--limits`, the profiler keeps points within each engine's limit. It adds that limit as a point when a candidate exceeds it. |
-| `--decode-tokens N`         | `64`                                      | Tokens per decode stream; minimum 3. Raise it for large cohorts.                                                                                                                                             |
-| `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length; minimum 3. The fit uses each length's median.                                                                                                   |
-| `--decode-repeats N`        | `1`                                       | Repetitions per decode input-length and concurrency point; minimum 1.                                                                                                                                        |
+| Option                      | Default                                   | Description                                                                                          | Valid values                        |
+| --------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `--prefill-lens LIST`       | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated candidate prefill lengths, filtered to each engine's live `max_model_len`.           | At least three distinct usable values |
+| `--decode-input-lens LIST`  | `512,4096,8192`                           | Comma-separated prompt lengths for the decode sweep.                                                 | At least two distinct values        |
+| `--decode-concurrency LIST` | `1,4,16,48`                               | Candidate stream counts, with candidates above an engine's `--limits` value replaced by that value.  | At least two distinct usable values |
+| `--decode-tokens N`         | `64`                                      | Tokens per decode stream.                                                                            | At least 3, higher for large cohorts |
+| `--prefill-repeats N`       | `3`                                       | Repetitions per prefill length.                                                                      | At least 3                          |
+| `--decode-repeats N`        | `1`                                       | Repetitions per decode input-length and concurrency point.                                           | At least 1                          |
 
 ## Shared-GPU neighbour traffic
 
-`--colocated` loads the other engines in each target's `shared_device.group` according to their configured roles. Each neighbour's tokenized input plus output must fit its live `max_model_len`.
+Each neighbour's tokenized input plus output must fit its live `max_model_len`.
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--colocated` | `false` | Measure each target with traffic on peers in its shared GPU group; requires all five neighbour options. |
-| `--neighbour-prefill-rps RATE` | required with `--colocated` | Offered requests per second per prefill neighbour; finite and positive. |
-| `--neighbour-decode-rps RATE` | required with `--colocated` | Offered requests per second per decode neighbour; finite and positive. |
-| `--neighbour-prefill-tokens N` | required with `--colocated` | Input tokens per prefill neighbour request, as a positive integer. Each request asks for one output token. |
-| `--neighbour-decode-input-tokens N` | required with `--colocated` | Input tokens per decode neighbour request, as a positive integer. |
-| `--neighbour-decode-output-tokens N` | required with `--colocated` | Output tokens per decode neighbour request, as a positive integer. |
+| Option | Default | Description | Valid values |
+| --- | --- | --- | --- |
+| `--colocated` | `false` | Measure each target under traffic that peers in its `shared_device.group` send by their configured roles. | |
+| `--neighbour-prefill-rps RATE` | required with `--colocated` | Offered requests per second per prefill neighbour. | Finite, positive |
+| `--neighbour-decode-rps RATE` | required with `--colocated` | Offered requests per second per decode neighbour. | Finite, positive |
+| `--neighbour-prefill-tokens N` | required with `--colocated` | Input tokens per prefill neighbour request, each asking for one output token. | Positive integer |
+| `--neighbour-decode-input-tokens N` | required with `--colocated` | Input tokens per decode neighbour request. | Positive integer |
+| `--neighbour-decode-output-tokens N` | required with `--colocated` | Output tokens per decode neighbour request. | Positive integer |
 
 Run a colocated sweep:
 
@@ -96,7 +99,7 @@ narwhal-profile --fleet fleet.json --colocated \
 
 ## Sweep validation and completion
 
-With `--colocated`, every neighbour must complete requests during the target's measurement interval. Otherwise the profile's measured role mix is rejected.
+With `--colocated`, a profile's measured role mix is rejected when a neighbour completes zero requests during the target's measurement interval.
 
 The sample sidecar records each neighbour's role, completion count, achieved rate, and errors.
 

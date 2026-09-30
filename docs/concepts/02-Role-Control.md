@@ -6,14 +6,14 @@ The role controller runs at most one regular evaluation per `controller.reactive
 
 | Evaluation property | Value |
 | --- | --- |
-| Candidates | Every adjacent prefill/decode split. An adjacent split moves one engine between the two phases. |
+| Candidates | Every adjacent prefill/decode split, one engine move away from the current split |
 | Price | The worst projected service-level objective (SLO) ratio, from measured demand and projected service times |
 | Available moves | Limited by role floors and engine eligibility |
 | Multi-engine moves | Allowed when a phase sits below its configured minimum size |
 
 ### Prefill queue projections
 
-Every valid, locally sized prefill offer enters a bounded waiting set. Narwhal projects FIFO completion from these inputs:
+Narwhal projects FIFO prefill completion from these inputs:
 
 - measured engine profiles;
 - the live prefill pool;
@@ -43,7 +43,7 @@ Two load thresholds steer the controller:
 
 Both paths clear the profile, safety, and confirmation checks before a role changes.
 
-A decode-to-prefill move also requires stable decode demand and a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation).
+A decode-to-prefill move requires stable decode demand and a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation).
 
 | Window event | Condition |
 | --- | --- |
@@ -66,21 +66,28 @@ The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fiel
 | `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
 | Lifecycle hold | Takes draining and recovering engines out of placement. |
 
-Role changes affect new placements. Existing requests finish on their assigned engines.
+Existing requests finish on their assigned engines after a role change.
 
-A projected-TTFT recovery evaluation applies these guards and checks profile coverage, decode capacity, and consolidation evidence and trend.
+A projected-TTFT recovery evaluation applies these guards plus checks of profile coverage, decode capacity, and consolidation evidence and trend.
 
 ### Advisory mode
 
-[Advisory rollout](../configuration/02-Serving-and-Role-Control.md#74-advisory-rollout) sets `controller.advisory` to `true`. In advisory mode the role controller evaluates proposed role moves and leaves the live split unchanged. It records the proposed split, the caller, the reason, and the advisory result.
+With `controller.advisory` set to `true` for an [advisory rollout](../configuration/02-Serving-and-Role-Control.md#74-advisory-rollout), the role controller leaves the live split unchanged.
+
+Each advisory decision records:
+
+- the proposed split;
+- the caller;
+- the reason;
+- the advisory result.
 
 ## Floors, fallback, and degraded capacity
 
 ### Decode-floor repair
 
-If live decode capacity falls below its configured floor, each monitor pass restores one eligible engine and preserves the prefill floor. A health failure removes the failed engine from placement, and repair picks another eligible engine.
+If live decode capacity falls below its configured floor, each monitor pass moves one eligible engine to decode, keeping the prefill floor.
 
-When the failed engine passes readmission, Narwhal assigns its role from current demand.
+A readmitted engine gets its role from current demand.
 
 ### Aggregate fallback from an idle decode engine
 

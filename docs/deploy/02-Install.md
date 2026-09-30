@@ -42,9 +42,9 @@ The manifest records:
 - a unique install path under `~/Narwhal-deploy/`
 - SHA-256 hashes for the source bundle, helper snapshots, and role files
 
-Later SSH steps check the prepared directory against the manifest. Credentials come from the workstation environment.
+Management credentials come from the workstation environment.
 
-`install` places three helper snapshots under `runs/deployment-tools/` on the engine hosts. The role environment exports the path and SHA-256 of each:
+Helper snapshots that `install` places under `runs/deployment-tools/` on the engine hosts, with their role environment variables:
 
 | Helper snapshot                          | Path variable                | SHA-256 variable                    |
 | ---------------------------------------- | ---------------------------- | ----------------------------------- |
@@ -61,7 +61,9 @@ python3 tools/deployment/deploy_hosts.py install \
   --run runs/deployment-env/first-deploy --role engine-1
 ```
 
-Narwhal installs into `.venv`. On success the installer prints `<host-id>: installation ready`. A host with router and engine roles receives both role environments in one install.
+On success the installer prints `<host-id>: installation ready`.
+
+A host with router and engine roles receives both role environments in one install.
 
 When engine 1 is ready, install the remaining hosts:
 
@@ -71,7 +73,6 @@ python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first
 
 `install` behaviour across hosts:
 
-- Installs the physical hosts one at a time.
 - Reuses finished installations and matching transferred files.
 - Stops at the first host where the source checkout changed or a file differs.
 
@@ -81,7 +82,7 @@ python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first
 | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
 | Transfer validation fails                 | Compare the prepared hashes with the existing remote artifact before you modify it.          |
 | Revision validation fails                 | Check that the bundle and role files came from the same prepared run.                        |
-| A dependency installation stops early     | Rerun the same `install --run`. A host is complete when the installed `narwhal-check --help` responds. |
+| A dependency installation stops early     | Rerun the same `install --run` until the installed `narwhal-check --help` responds.          |
 | A `.install-lock` remains                 | Remove it after the installer that created it has exited.                                    |
 
 ## Open installed role shells

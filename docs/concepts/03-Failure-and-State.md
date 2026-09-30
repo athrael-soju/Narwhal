@@ -16,7 +16,7 @@ A monitor pass runs these stages independently:
 | `handoff` | State handoff persistence |
 | `telemetry` | Floor-state refresh and loop logging |
 
-If a stage raises an exception, Narwhal records it and continues with the remaining stages. Each pass with a failed stage extends the monitor-failure streak.
+Each pass with a failed stage extends the monitor-failure streak.
 
 When the streak reaches `controller.monitor_failure_limit`, the router enters a degraded state:
 
@@ -46,7 +46,7 @@ These events reset the streak:
 
 ### Failure evidence
 
-Narwhal keeps a failure streak for each engine and class. When a streak reaches `recovery.eject_after`, the action depends on the class:
+When an engine's failure streak for one class reaches `recovery.eject_after`, the action depends on the class:
 
 | Failure                                                                 | Class              | Action                                         |
 | ----------------------------------------------------------------------- | ------------------ | ---------------------------------------------- |
@@ -57,29 +57,34 @@ Narwhal keeps a failure streak for each engine and class. When a streak reaches 
 | Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and run an inference probe  |
 | Unreadable KV handoff from prefill                                      | `kv_handoff`       | Pause new requests and run an inference probe  |
 
-Pausing an engine places it under an inference-verification hold. Admission sends new work to other eligible engines until the hold lifts.
+A paused engine is under an inference-verification hold.
 
-Recovery probes require loaded profiles that match the live process generation before they clear evidence and holds. This requirement is the profile-match rule.
+The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
 The inference probe runs a prefill leg and a decode leg:
 
 | Probe result | Effect |
 | --- | --- |
-| Inconclusive leg | The hold stays, and engine monitoring schedules another probe. |
+| Inconclusive leg | Engine monitoring keeps the hold and schedules another probe. |
 | Failed prefill or decode leg | Narwhal ejects the engine. |
 | Success | Clears recorded inference failures and the hold, under the profile-match rule. |
 
 ### Liveness
 
-Liveness has its own per-engine miss counter. Narwhal ejects an engine after `recovery.liveness_misses` consecutive failed liveness probes.
-
-A successful liveness health probe resets the counter. For a quarantined engine that meets the profile-match rule, the probe also lifts quarantine and clears failure evidence.
+| Liveness probe result | Effect |
+| --- | --- |
+| `recovery.liveness_misses` consecutive failures | Narwhal ejects the engine. |
+| Success | Resets the engine's liveness miss count. |
+| Success on a quarantined engine that meets the profile-match rule | Lifts quarantine and clears failure evidence. |
 
 ### Last-engine protection
 
-The last eligible engine stays in placement under performance-drift and temporary-quarantine holds. A confirmed failure removes it.
+| Last eligible engine | Placement |
+| --- | --- |
+| Performance-drift or temporary-quarantine hold | Stays in placement |
+| Confirmed failure | Leaves placement |
 
-At zero serving capacity, `/ready` and new completion requests return HTTP 503. Engine monitoring keeps running recovery probes.
+At zero serving capacity, `/ready` and new completion requests return HTTP 503.
 
 ### Clearing failure evidence
 
@@ -101,13 +106,15 @@ With `recovery.failure_quarantine_s` above `0`, a failed engine stays quarantine
 
 ## Readmission and drains
 
-Lifecycle readmission requires a complete `engine_contract`. It runs these checks in order:
+Lifecycle readmission requires a complete `engine_contract`.
+
+Readmission checks, in order:
 
 1. Health.
 2. Attestation.
 3. Loaded profile generations.
 4. Model identity.
-5. A direct completion probe (the `generation` check).
+5. The `generation` check, a direct completion probe.
 6. A role-permitted KV transfer.
 7. A final health check.
 
@@ -120,39 +127,50 @@ Profile checks cover every loaded variant:
 | `engine_contract` set | Profile digests match verified attestation. |
 | `engine_contract` unset | Automatic recovery checks health or inference and matches profiles to the live process identity. |
 
-A profile mismatch keeps an engine excluded from recovery, readmission, and takeover. The running router keeps its loaded profiles until restart.
+A profile mismatch excludes an engine from recovery, readmission, and takeover.
 
-An operator drain survives healthy responses, resume, and takeover. Only readmission clears it.
+The running router keeps its loaded profiles until restart.
+
+An operator drain survives healthy responses, resume, and takeover until readmission clears it.
 
 ## Serving saturation and retries
 
-Each admitted request gets one prefill and one decode attempt. When every admission seat is occupied, new requests are refused at once.
+| Default | Behavior |
+| --- | --- |
+| `serving.max_attempts` at `1` | One prefill and one decode attempt per admitted request |
+| `serving.queue_capacity` at `0` | Immediate refusal of new requests when every admission seat is occupied |
 
-[Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue or retry within the request's original deadline. Each [retry](01-Request-and-Topology.md#how-a-request-executes) obtains a fresh KV handoff.
+[Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue a request or [retry](01-Request-and-Topology.md#how-a-request-executes) it within its original deadline.
 
 ## Durable control-plane state
 
-On every monitor pass the active router writes a versioned state handoff. It records engine roles, ejections, lifecycle holds, inference-verification holds, consolidation risk, counters, and the lease holder.
+On every monitor pass, the active router writes a versioned state handoff that records:
+
+- engine roles;
+- ejections;
+- lifecycle holds;
+- inference-verification holds;
+- consolidation risk;
+- counters;
+- the lease holder.
 
 ### Resume validation
 
 `narwhal-serve --resume` applies a saved state handoff when its schema, engine set, and engine restart policy match the configured fleet.
 
-With `engine_contract` configured, resume also requires an accepted process identity for each engine the saved state handoff counts as available.
+With `engine_contract` configured, resume requires an accepted process identity for each engine the saved state handoff counts as available.
 
 To load fresh measurements and keep lifecycle holds and drain identities, follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles).
 
 ### Atomic state handoff writes
 
-Each write renames a complete handoff from a process-unique temporary file over the destination.
-
 | Case | Destination |
 | --- | --- |
 | Concurrent writers | One complete document |
-| Failed write | The previous handoff. Narwhal deletes the temporary file. |
+| Failed write | The previous handoff |
 
 ### Warm standby and the lease
 
-A warm standby router follows the active router's state handoff and serves traffic after it acquires the shared lease. Load balancers find the serving router through `/ready`.
+A warm standby router serves traffic after it acquires the shared lease.
 
-The previous lease holder fences itself before its local lease expires.
+Load balancers find the serving router through `/ready`.

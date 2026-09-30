@@ -1,10 +1,8 @@
 # Gate A: Freeze inputs and discover the real deployment
 
-Discovery builds the deployment configuration from the private `.env`, the live hosts, the checkpoint, and the pinned image.
-
 ## Load the private environment
 
-Use a fresh management checkout. `.env.example` lists the expected fields.
+In a fresh management checkout, fill `.env` with the fields listed in `.env.example`.
 
 Load `.env` with shell tracing disabled:
 
@@ -15,16 +13,25 @@ set -a
 set +a
 ```
 
-Set `NARWHAL_NODE_<n>_SSH` for every engine. The router runs on the host named by `NARWHAL_ROUTER_SSH`, or on the lowest-numbered engine host when that variable is unset. Roles that share a destination share one host entry and credential.
+Set the SSH destinations:
 
-A destination is an OpenSSH alias or a plain `user@host`. An alias can carry the username, port, identity, and jump host.
+| Variable               | Destination                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `NARWHAL_NODE_<n>_SSH` | Engine `<n>`, required for every engine                            |
+| `NARWHAL_ROUTER_SSH`   | Router, optional, with the lowest-numbered engine host as default |
+
+A destination is a plain `user@host` or an OpenSSH alias, which can carry the username, port, identity, and jump host.
+
+Roles that share a destination share one host entry and credential.
 
 | Authentication | Credential                                  |
 | -------------- | ------------------------------------------- |
 | Password       | The matching `_SSH_PASSWORD` variable       |
 | Key            | The configured identity or the SSH agent    |
 
-The default engine and attestation URLs use the global address on `NARWHAL_FABRIC_INTERFACE` and the configured service ports. Per-node overrides:
+The default engine and attestation URLs use the global address on `NARWHAL_FABRIC_INTERFACE` and the configured service ports.
+
+Per-node overrides:
 
 | Override                                                        | Use when                                                   |
 | --------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -40,7 +47,11 @@ The default engine and attestation URLs use the global address on `NARWHAL_FABRI
 | `NARWHAL_ENGINE_MODEL_NAME` | The served model name                        |
 | `NARWHAL_MODEL_DIR`         | The checkpoint directory on each engine host |
 
-For an empty directory with a Hugging Face source, set `MODEL_REPO_ID` to the repository and `MODEL_REVISION` to the full commit SHA. Stage the same snapshot on every engine host:
+For an empty directory with a Hugging Face source:
+
+1. Set `MODEL_REPO_ID` to the repository.
+2. Set `MODEL_REVISION` to the full commit SHA.
+3. Stage the same snapshot on every engine host:
 
 ```bash
 hf download "$MODEL_REPO_ID" --revision "$MODEL_REVISION" --local-dir "$NARWHAL_MODEL_DIR"
@@ -48,7 +59,12 @@ hf download "$MODEL_REPO_ID" --revision "$MODEL_REVISION" --local-dir "$NARWHAL_
 
 Keep the repository ID and commit SHA in the private record.
 
-Discovery compares the path, size, and SHA-256 of every regular file in the provisioned model directory across replicas. The root `README.md` and the `.cache/huggingface/` metadata are excluded. A differing shard, tokenizer, configuration, or code file stops discovery before configuration or installation.
+Discovery stops when the model directories differ across replicas:
+
+| Model directory content                                 | Replica comparison      |
+| ------------------------------------------------------- | ----------------------- |
+| Every regular file                                      | Path, size, and SHA-256 |
+| Root `README.md` and `.cache/huggingface/` metadata     | Excluded                |
 
 ## Run discovery and access checks
 
@@ -63,9 +79,9 @@ python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
 
-`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store, `config/ssh.known_hosts` by default, and can point at an existing verified file. Discovery records each new SSH host key on first contact through the authenticated private route. Later deployment commands reject a mismatched host key.
+`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store, `config/ssh.known_hosts` by default or an existing verified file.
 
-When a host key changes:
+When a deployment command rejects a changed host key:
 
 1. Confirm the new key in the provider console.
 2. Replace the local entry.
@@ -78,7 +94,7 @@ For each engine, discovery records:
 - the convolutional-state fields
 - the fabric interface and global address
 - the immutable image identity
-- the image package metadata, model dtype, and image runtime environment, read in a temporary container
+- the image package metadata, model dtype, and image runtime environment
 
 Discovery derives these launch settings from the checkpoint:
 
@@ -98,7 +114,7 @@ Discovery writes mode-0600 configuration:
 | `config/fleet.json`                 | Defines the model, measured hardware and TP shape, engine URL references, initial roles, initial latency targets, and profile path. |
 | `config/deployment.env`             | Selects the generated paths, fabric addresses, engine/attestation URLs, and per-engine image/hash values used later.            |
 
-The discovery output directory also holds:
+The discovery output directory holds:
 
 - the per-engine observations
 - the SSH logs
@@ -107,7 +123,7 @@ The discovery output directory also holds:
 - the first differing path, when replicas differ
 - the shared `model_tree_sha256`
 
-Keep all generated `config/` files together.
+Keep the generated `config/` files together.
 
 Reuse an inspected fleet:
 
@@ -115,7 +131,7 @@ Reuse an inspected fleet:
 2. Verify access.
 3. Prepare a new deployment run.
 
-Run a fresh discovery into a new output directory after any change to the hardware, model, image, checkpoint, launch policy, route, transport, or other discovery input.
+Run a fresh discovery into a new output directory after a change to the hardware, model, image, checkpoint, launch policy, route, transport, or other discovery input.
 
 ## Confirm the launch policy
 
@@ -124,7 +140,7 @@ Run a fresh discovery into a new output directory after any change to the hardwa
 | One                        | Every detected GPU, with tensor parallelism set to that count           |
 | Several                    | Declare disjoint `NARWHAL_NODE_<n>_GPU_IDS` lists                       |
 
-All replicas must have a matching accelerator product and TP shape.
+Every replica must have the same accelerator product and TP shape.
 
 Default serving policy:
 
@@ -150,24 +166,19 @@ Override the policy in `.env` before discovery:
 | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | GPU indices or NVIDIA UUIDs and the replica TP size.                        |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype and requested cache block size.                                 |
-| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array replacing the default vLLM arguments.                            |
-| `NARWHAL_ENGINE_ENV`                                                                     | JSON object overriding the launcher-supported image runtime environment fields. |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array replacing the default vLLM arguments, with `--trust-remote-code` appended when the checkpoint requires it. |
+| `NARWHAL_ENGINE_ENV`                                                                     | JSON object overriding the launcher-supported image runtime environment fields, with `VLLM_SSM_CONV_STATE_LAYOUT` held at `DS` when the checkpoint requires it. |
 | `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Select `ucx_rdma`, the HCA:port entries, and the RDMA device paths.         |
 | `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds.                                   |
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`.
-
-| Variable | Effect |
-| --- | --- |
-| `NARWHAL_ENGINE_ARGS` | Replaces the default vLLM arguments. Discovery appends `--trust-remote-code` and the DS layout setting. |
-| `NARWHAL_ENGINE_ENV` | Overrides launcher-supported image runtime environment fields. Conflicting values are rejected. |
 
 ## Access failure handling
 
 | Command        | Result                                                                                                                                  |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `plan`         | Prints the host IDs and role assignment.                                                                                                |
-| `check-access` | Logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`. One login covers every colocated role. |
+| `check-access` | Logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`. |
 
 Open a role shell with:
 
@@ -177,14 +188,16 @@ python3 tools/deployment/deploy_hosts.py shell --role engine-1
 
 Use `--role router` or `--role engine-<n>` for the other roles.
 
-When `check-access` fails, match the symptom to the fix:
+When `check-access` fails:
 
 | Symptom                               | Fix                                                                                   |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | Missing access variable               | Check the named `.env` field.                                                         |
-| New or changed host key               | Verify the destination and fingerprint independently. Replace the entry.              |
+| New or changed host key               | Replace the entry after you verify the destination and fingerprint independently.     |
 | Authentication or connection problem  | Check the username, credential, route, SSH port, and firewall.                        |
 
-Note which host and gate failed first. Share only sanitised extracts of the private access logs outside the team.
+Note which host and gate failed first.
+
+Share only sanitised extracts of the private access logs outside the team.
 
 Continue with [Gate B: Package and install the approved revision](02-Install.md).
