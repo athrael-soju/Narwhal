@@ -1,111 +1,156 @@
+---
+description: Start the Narwhal router and validate fleet capacity through the private path.
+---
+
 # Gate G: Start the service and validate capacity through the private path
 
 ## Start and locally verify the router
 
-On the router host:
-
-```bash
-.venv/bin/narwhal-serve \
-  --fleet runs/deployment/fleet.json \
-  --host 127.0.0.1 \
-  --port 8000
-```
-
-The SSH tunnel carries workstation trial traffic to this loopback listener. Public ingress needs TLS, authentication, WAF policy, request limits, and model routing ahead of the router.
-
-From another shell on the router host:
-
-```bash
-curl -fsS http://127.0.0.1:8000/health
-curl -fsS http://127.0.0.1:8000/ready
-curl -fsS http://127.0.0.1:8000/narwhal/state | python3 -m json.tool
-curl -fsS http://127.0.0.1:8000/metrics
-curl -fsS http://127.0.0.1:8000/v1/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"<served-model>","prompt":"Return one sentence about narwhals.","max_tokens":32}'
-```
-
 Replace `<served-model>` with the fleet model.
 
-Before load, retain:
+1. In the router shell, start the router:
 
-- `/health`, including liveness and cached instance counts;
-- `/ready`, including admission state;
-- `/narwhal/state`, including engine inventory and role split;
-- `/metrics`;
-- one successful completion that increments `served`.
+    ```bash
+    .venv/bin/narwhal-serve \
+      --fleet runs/deployment/fleet.json \
+      --host 127.0.0.1 \
+      --port 8000
+    ```
 
-## Start observability on the router
+2. From another router-host shell, check the router:
 
-Use `runs/deployment/fleet.json` and router URL `http://127.0.0.1:8000`, then:
+    ```bash
+    curl -fsS http://127.0.0.1:8000/health
+    curl -fsS http://127.0.0.1:8000/ready
+    curl -fsS http://127.0.0.1:8000/narwhal/state | python3 -m json.tool
+    curl -fsS http://127.0.0.1:8000/metrics
+    curl -fsS http://127.0.0.1:8000/v1/completions \
+      -H 'content-type: application/json' \
+      -d '{"model":"<served-model>","prompt":"Return one sentence about narwhals.","max_tokens":32}'
+    ```
+
+3. Retain these responses before load:
+
+    | Response          | Shows                                                                   |
+    | ----------------- | ----------------------------------------------------------------------- |
+    | `/health`         | Liveness status and instance counts.                                    |
+    | `/ready`          | Admission state.                                                        |
+    | `/narwhal/state`  | Engine inventory and role split.                                        |
+    | `/metrics`        | Router metrics.                                                         |
+    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`. |
+
+## Start the monitoring stack on the router
+
+In the router shell, run:
 
 ```bash
+export NARWHAL_FLEET=runs/deployment/fleet.json
+export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 make observe
 ```
 
-Retain target-discovery and dashboard-verification output. Prometheus scrapes the router locally and resolves engine targets from the fleet document.
+Retain the target-discovery and dashboard-verification output.
 
 ## Tunnel router, Prometheus, and Grafana to the workstation
 
-From a management-checkout terminal with `.env` loaded:
+1. On the workstation, open a terminal in the checkout with `.env` loaded.
+2. Open the tunnel:
 
-```bash
-python3 tools/deployment/deploy_hosts.py tunnel --role router \
-  --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
-```
+    ```bash
+    python3 tools/deployment/deploy_hosts.py tunnel --role router \
+      --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
+    ```
 
-The helper binds workstation loopback ports, verifies the recorded SSH host key, and uses the router role's configured password, key, or agent. Keep the terminal open.
+3. Keep the tunnel terminal open.
+4. From another workstation shell, check through the tunnel:
 
-From another workstation shell:
+    ```bash
+    export NARWHAL_TRIAL_URL=http://127.0.0.1:18000
+    curl -fsS "$NARWHAL_TRIAL_URL/health"
+    curl -fsS "$NARWHAL_TRIAL_URL/ready"
+    curl -fsSG http://127.0.0.1:19090/api/v1/query \
+      --data-urlencode 'query=up{job=~"narwhal-router|engines"}' \
+      | python3 -m json.tool
+    ```
 
-```bash
-export NARWHAL_TRIAL_URL=http://127.0.0.1:18000
-curl -fsS "$NARWHAL_TRIAL_URL/health"
-curl -fsS "$NARWHAL_TRIAL_URL/ready"
-curl -fsSG http://127.0.0.1:19090/api/v1/query \
-  --data-urlencode 'query=up{job=~"narwhal-router|engines"}' \
-  | python3 -m json.tool
-```
+5. Open Grafana at:
 
-Grafana is available at:
+    ```text
+    http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator
+    ```
 
-```text
-http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator
-```
+6. Point the workload client at `$NARWHAL_TRIAL_URL`.
+7. Record:
 
-Point the workload client at `$NARWHAL_TRIAL_URL`. The trial therefore includes SSH network and encryption overhead in the measured client path.
+    - The router role assignment.
+    - The workstation hostname.
+    - The source revision.
+    - The tunnel mappings.
 
-The helper targets `127.0.0.1` on the router and writes a log under `runs/access-<id>/`. If a workstation port is occupied, change its local `--forward` value and the corresponding client URL; keep the remote service port.
+Tunnel settings:
 
-If a forwarded request fails after SSH connects, inspect the listener on the router host. Use `--remote-address` for a different bind address; the helper applies one remote address to all forwards in an invocation, so services on different addresses need separate tunnels. Ctrl-C closes that tunnel's forwards.
+| Tunnel property | Value                                                 |
+| --------------- | ----------------------------------------------------- |
+| Local ports     | Workstation loopback.                                 |
+| Remote address  | `127.0.0.1` on the router.                            |
+| Host key        | Verified against the recorded SSH host key.           |
+| Authentication  | The router role's configured password, key, or agent. |
+| Log             | `runs/access-<id>/`                                   |
+| Latency         | Includes SSH network and encryption overhead.         |
 
-Record router role assignment, workstation hostname, source revision, and local-to-remote tunnel mappings.
+### Troubleshoot the tunnel
+
+| Symptom                                                             | Fix                                                                          |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| A workstation port is already in use                                | 1. Pick another local port in `--forward`.<br>2. Match the client URL to it. |
+| A forwarded request fails after SSH connects                        | Inspect the listener on the router host.                                     |
+| A service listens on an address other than the router's `127.0.0.1` | Pass one tunnel per remote address, each with `--remote-address`.            |
 
 ## Run the initial capacity trial
 
-Run the capacity trial and retain its evidence in this order:
+The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#prepare-check-and-start-each-engine) on every engine.
 
-1. Create a deployment identifier and assemble the deployment evidence set defined by [Measure a fleet](../Measure.md).
-2. Attach Gate F's passing preflight to the deployment evidence.
-3. Retain monitoring startup output and successful Prometheus scrape evidence for router and engines.
-4. Run the initial synthetic workload from the workstation through `$NARWHAL_TRIAL_URL`: 200-request runs at 0.5 and 1 request/s, 8,192 input tokens, 128 output tokens. Retain workload definition, request-level records, and summaries.
+Candidate thresholds:
 
-    Treat 2 s TTFT, 33.3 ms TPOT, and 95% attainment as candidate thresholds until measured performance and service requirements define acceptance.
+| Candidate threshold          | Value   |
+| ---------------------------- | :-----: |
+| Time to first token (TTFT)   | 2 s     |
+| Time per output token (TPOT) | 33.3 ms |
+| Attainment                   | 95%     |
 
-    Capture client CPU, memory, network, and scheduler behaviour so workstation or SSH-path saturation can be separated from serving saturation.
+Run the trial:
 
-5. Drain resident work. Reconcile every offer against client and router terminal classes. Query engine, request, token, role, and pool-load series through Grafana's provisioned data source. Then run the post-load KV ring.
+1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
+2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test) under a new deployment identifier.
+3. Attach Gate F's passing preflight to the deployment evidence.
+4. Retain the monitoring startup output and the router and engine scrape evidence.
+5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
+6. Retain the workload definition, the request-level records, and the summaries.
+7. Capture the client CPU, memory, network, and scheduler behaviour.
+8. Confirm the drained, idle router state in `state-after.json`.
+9. [Reconcile](../measure/04-Reconcile-and-Accept.md) every offer against the client and router terminal classes.
+10. Query the engine, request, token, role, and pool-load series in Grafana.
+11. Run the post-load KV ring on the router:
 
-After drain:
+    ```bash
+    .venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
+    ```
 
-```bash
-.venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
-```
+The trial passes when steps 5 to 11 succeed.
 
-The trial passes when the router serves the measured workload, client records reconcile with the router journal, Prometheus scrapes router and engines successfully, Grafana contains the required series, and the post-load KV ring passes.
+Close the trial:
 
-Retain service locations, approved source revision, fleet configuration, profiles, router journal, and monitoring endpoints with the private deployment record.
+1. Retain with the private deployment record:
 
-Once the client records and post-load KV ring are retained, stop the client and close the workstation tunnel when private access ends. Keep the engines, attestation sidecars, router, and monitoring stack running after the trial passes; use [Operate Narwhal](../Operate.md) for a later planned engine drain or shutdown.
+    - The service locations.
+    - The approved source revision.
+    - The fleet configuration.
+    - The profiles.
+    - The router journal.
+    - The monitoring endpoints.
 
-Use the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index) when recording the final gate.
+2. Save the client records and the post-load KV ring output.
+3. Stop the client.
+4. Press Ctrl+C in the tunnel terminal when private access ends.
+5. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
+6. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).

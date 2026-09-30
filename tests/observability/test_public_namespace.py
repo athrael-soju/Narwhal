@@ -153,6 +153,18 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(field=field):
                 self.assertEqual(decision[field], value)
 
+    async def test_state_response_keeps_residency_snapshot(self):
+        view = self.router.residency.views["p"]
+        view.known, view.reason, view.epoch, view.sequence = True, "", "e1", 4
+        view.block_size, view.resyncs = 16, 2
+        view.groups = {"g0": ("full", 16, {b"a", b"b"})}
+
+        response = await self.client.get("/narwhal/state")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["residency"], self.router.residency.snapshot())
+        self.assertEqual(response.json()["residency"]["p"]["resident_blocks"], {"g0": 2})
+
     async def test_dashboard_and_alerts_use_router_metric_names(self):
         dashboard_path = ROOT / "tools/observability/grafana-narwhal.json"
         dashboard = json.loads(dashboard_path.read_text())

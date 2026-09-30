@@ -1,127 +1,112 @@
+---
+description: How the Narwhal role controller moves engines between prefill and decode while holding capacity floors.
+---
+
 # Role control and capacity floors
 
 ## Role control
 
-During regular operation, Narwhal rate-limits role evaluations to one per `controller.reactive.step_s`.
+The role controller runs at most one regular evaluation per `controller.reactive.step_s`.
 
-It prices each adjacent prefill/decode split by its worst projected SLO ratio, using measured demand and projected service times. Role floors and engine eligibility constrain the available moves.
-
-A move may involve more than one engine when the current pool for one phase is already below its configured minimum size.
+| Evaluation property | Value |
+| --- | --- |
+| Candidates | Every adjacent prefill/decode split, one engine move away from the current split |
+| Price | The worst projected service-level objective (SLO) ratio across TTFT, TPOT, and decode queueing |
+| Demand input | Measured window demand, with the larger of the short- and long-horizon decode estimates for decode-to-prefill candidates |
+| Available moves | Limited by role floors and engine eligibility |
+| Floor restoration | One engine per monitor pass while a phase sits below its configured floor |
 
 ### Prefill queue projections
 
-Every valid, locally sized prefill offer enters a bounded waiting set.
+FIFO prefill completion projection inputs:
 
-Narwhal computes a FIFO completion projection from:
+- measured engine profiles
+- the live prefill pool
+- resident prefill requests
+- requests waiting for prefill
 
-- measured engine profiles;
-- the live prefill pool;
-- currently resident requests;
-- output work awaiting prefill completion.
+Projected time to first token (TTFT) above `slo.ttft_s` triggers one coalesced projected-TTFT recovery evaluation between regular passes.
 
-Candidate pricing uses the larger of the short- and long-horizon demand estimates.
-
-If projected TTFT exceeds `slo.ttft_s`, Narwhal schedules one coalesced controller evaluation between regular controller passes.
-
-At that evaluation, Narwhal:
-
-1. rechecks the current queue;
-2. prices the adjacent decode-to-prefill split;
-3. compares projected service for the request that triggered the evaluation;
-4. moves capacity when the candidate split strictly improves that projection.
-
-The trigger disappears if the queue drains before the evaluation.
-
-The controller retains the current split when one request's prefill duration alone exceeds the SLO and both splits produce the same projection.
-
-One urgent wake may apply one adjacent move. If TTFT remains elevated after the topology changes, the new state can trigger another guarded evaluation.
+| Condition | Result |
+| --- | --- |
+| The adjacent decode-to-prefill split strictly improves projected service for the triggering request | The evaluation applies one adjacent move. |
+| Otherwise | The split stays. |
+| The queue drains before the evaluation | The trigger clears. |
+| TTFT stays high after a move | The new state can trigger another evaluation. |
+| Any recovery evaluation | `/narwhal/state` reports the decision under the [Projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields). |
 
 ### Expansion and consolidation
 
-Narwhal uses two pressure directions:
+| Threshold | Condition | Effect |
+| --- | --- | --- |
+| `shrink` | Source load at or below the threshold | Drives consolidation |
+| `expand` | Sustained prefill load at or above the threshold | Can move decode capacity into prefill |
 
-- source pressure up to `shrink` drives consolidation;
-- sustained prefill pressure at or above `expand` can move decode capacity into prefill.
+Both paths require passing the profile, safety, and confirmation checks.
 
-Both paths pass profile, safety, and confirmation gates before any role changes.
+[Arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) requirements by move:
 
-Scheduled prefill-to-decode moves retain their normal cooldown and confirmation requirements.
+| Move | Requirement |
+| --- | --- |
+| Decode to prefill, by the role controller | A closed window and stable decode demand |
+| Prefill to decode | Proceeds with the window open |
+| Floor restoration, in either direction | Proceeds with the window open |
 
-Before moving a decode engine into prefill, Narwhal closes the arrival-evidence window and checks decode stability.
+| Window event | Condition |
+| --- | --- |
+| Closes | `controller.reactive.evidence_span_s` has elapsed and at least `controller.reactive.evidence_min_arrivals` arrivals exist. |
+| Closes under sparse traffic | `controller.reactive.evidence_max_span_s` has elapsed. |
+| Restarts | A first-token timeout, an applied move toward decode, or a decode-floor restoration. |
 
-The evidence window closes when both conditions are satisfied:
-
-- `controller.reactive.evidence_span_s` has elapsed;
-- at least `controller.reactive.evidence_min_arrivals` samples exist.
-
-Under sparse traffic, it closes at `controller.reactive.evidence_max_span_s`.
-
-A first-token timeout or a decode-recovery move restarts the consolidation evidence window.
-
-Decode expansion and emergency floor restoration may proceed using the open-window thresholds defined in the [role-control reference](../configuration/02-Serving-and-Role-Control.md#7-role-control).
-
-`/narwhal/state` records retained demand, overflow, and the priced inputs used for each controller decision under the [demand accounting contract](../http-api/06-SLO-and-Demand.md#demand-accounting).
+The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fields in `/narwhal/state` report the demand, overflow, and inputs behind each role-controller decision.
 
 ### Guards on role changes
 
-Pinned engines keep their configured roles.
+| Guard | Effect |
+| --- | --- |
+| Pinned engine | Keeps its configured role. |
+| `controller.min_prefill`, `controller.min_decode` | Moves preserve these floors when enough healthy capacity remains. |
+| `controller.thresholds.cooldown_s` | Minimum time between prefill-to-decode moves. |
+| `controller.thresholds.dwell_s` | Keeps a recently moved engine in its new role for the configured interval. |
+| `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
+| Lifecycle hold | Takes draining and recovering engines out of placement. |
 
-Moves preserve `controller.min_prefill` and `controller.min_decode` whenever enough healthy capacity remains.
+Existing requests finish on their assigned engines after a role change.
 
-`controller.thresholds.cooldown_s` limits moves toward decode.
+A projected-TTFT recovery evaluation applies:
 
-`controller.thresholds.dwell_s` keeps a recently moved engine in its new role for the configured interval.
-
-`controller.thresholds.flip_resident_guard` requires the lightest eligible decode donor's resident stream count to be at or below the configured ceiling before a decode-to-prefill move.
-
-Narwhal applies role changes to new placements while existing requests continue on their assigned engines.
-
-Lifecycle holds remove draining and recovering engines from placement.
-
-Urgent decode-to-prefill evaluation still enforces:
-
-- profile coverage;
-- decode capacity;
-- consolidation evidence;
-- consolidation trend;
-- role floors;
-- health exclusions;
-- pins;
-- dwell;
-- resident ownership;
-- `flip_resident_guard`.
+- the guards above
+- the profile coverage check
+- the decode capacity check
+- the consolidation evidence and trend check
 
 ### Advisory mode
 
-With:
+With `controller.advisory` set to `true` for an [advisory rollout](../configuration/02-Serving-and-Role-Control.md#74-advisory-rollout), the role controller leaves the live split unchanged.
 
-```yaml
-controller.advisory: true
-```
+Each advisory decision records:
 
-Narwhal evaluates a proposed role move while the live split stays fixed.
-
-It records:
-
-- the proposed split;
-- caller;
-- reason;
-- advisory result.
+- the proposed split
+- the caller
+- the reason
+- the advisory result
 
 ## Floors, fallback, and degraded capacity
 
-### Decode-floor repair
+### Floor repair
 
-If live decode capacity falls below its configured floor, each monitor pass restores one eligible engine.
+| Floor breach | Repair on each monitor pass |
+| --- | --- |
+| Live decode engines below `controller.min_decode` | Moves one eligible prefill engine to decode, within `controller.min_prefill` |
+| Live prefill engines below `controller.min_prefill` | Moves one eligible decode engine to prefill, within `controller.min_decode` |
 
-A health failure can remove an engine from placement; Narwhal repairs the decode floor with another eligible engine while preserving the prefill floor.
-
-When the failed engine later passes readmission, Narwhal assigns its role according to current demand.
+A readmitted engine rejoins placement in its last assigned role.
 
 ### Aggregate fallback from an idle decode engine
 
-If failures or drains empty the prefill pool, the scheduler can select a live decode-labelled engine as the aggregate fallback.
+If failures or drains empty the prefill pool, the scheduler selects a live decode-labelled engine as the aggregate fallback.
 
-Predictive admission rejects new work on that engine until its resident decode work drains, because the measured curves price one phase at a time.
-
-Narwhal can then price the engine for aggregate prefill placement.
+| Fallback engine state | Predictive admission |
+| --- | --- |
+| Resident decode work present | Rejects new work on the engine |
+| Resident decode work drained | Prices the engine for aggregate prefill placement |

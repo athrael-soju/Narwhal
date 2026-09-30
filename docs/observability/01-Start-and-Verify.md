@@ -1,29 +1,42 @@
+---
+description: Start Prometheus and Grafana for a Narwhal router and verify every scrape target.
+---
+
 # Start and verify monitoring
 
 ## Prerequisites
 
-Start monitoring with:
+- a running Narwhal router
+- the fleet configuration for that deployment
+- Linux
+- Docker Engine with the Compose plugin
+- Python 3.11 or newer
+- `curl`
+- network reachability from the router host to every engine metrics endpoint
 
-- a running Narwhal router;
-- the fleet document used for that deployment;
-- Linux;
-- Docker Engine with the Compose plugin;
-- Python 3.11 or newer;
-- `curl`;
-- network reachability from the router host to every engine metrics endpoint.
+Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells).
 
-Run the commands from the deployed checkout inside the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells), which loads `runs/deployment/.env.router` and activates the installed Python environment. `make observe` uses the project environment created by `make setup`.
+| Shell state | Value |
+| --- | --- |
+| Working directory | Deployed checkout |
+| Environment | `runs/deployment/.env.router` |
+| Python | `.venv` active |
 
 ## Configure the monitored deployment
 
-Set the fleet document and router origin:
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_FLEET` | Fleet configuration file with the engine IDs and metrics URLs |
+| `NARWHAL_ROUTER_URL` | Router origin Prometheus scrapes, direct or through a stable local tunnel |
+
+Set both in the router-role shell:
 
 ```bash
 export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 
-`make observe` reads `NARWHAL_FLEET` for engine IDs and metrics URLs, resolving [environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) with variables loaded by the router-role shell before it writes discovery targets. Set `NARWHAL_ROUTER_URL` to an origin Prometheus can reach from the router host, directly or through a stable local tunnel.
+[Environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) in the fleet file resolve from the variables loaded in the router-role shell.
 
 ## Start Prometheus and Grafana
 
@@ -33,35 +46,31 @@ Run:
 make observe
 ```
 
-`make observe` starts monitoring in this order:
-
-1. Generates Prometheus discovery for the router and configured engines.
-2. Checks ownership of the monitoring listeners.
-3. Reports the owner of an occupied listener so the deployment can use another address.
-4. Stages Prometheus, Grafana, alerting, dashboard, and target files.
-5. Starts the pinned Prometheus and Grafana images.
-6. Verifies the complete monitoring readiness contract.
+The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
 
 ### Readiness contract
 
-Startup completes after these checks pass:
+| Component | Check |
+| --- | --- |
+| Prometheus | `/-/ready` answers and the build reports version `3.14.0` |
+| Grafana | `/api/health` reports database `ok` and version `13.2.1` |
+| Grafana datasource | The `Prometheus` datasource points at the Prometheus listener |
+| Dashboard | `narwhal-router` loads with its `router` selector defaulting to All (regex `.*`) |
+| Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present |
+| `narwhal-router` job | Exactly one healthy target at `NARWHAL_ROUTER_URL` |
+| `engines` job | One healthy target per fleet engine, labelled with its `iid` |
+| Router readiness | `narwhal_router_ready` reports `1` |
 
-- exactly one router target is healthy;
-- every configured engine target is healthy;
-- the `narwhal_router_ready` metric is present;
-- Grafana has selected the expected Prometheus datasource;
-- the `narwhal-router` dashboard is available and its `router` selector defaults to **All**, using the regex `.*`;
-- at least one dashboard query uses `instance=~"$router"`, and none uses `instance="$router"`.
-
-Listener ownership and Docker inspection commands have a 10-second deadline.
-
-Initial image pulls and container creation may take up to five minutes.
-
-After the containers start, Prometheus `3.14.0` and Grafana `13.2.1` have 60 seconds to satisfy the full readiness contract.
+| Startup stage | Deadline |
+| --- | --- |
+| Listener checks and each Docker inspection command | 10 seconds |
+| Initial image pulls and container creation | 5 minutes |
+| Prometheus and Grafana HTTP checks, including datasource and dashboard | 60 seconds after the containers start |
+| Target health and `narwhal_router_ready` | 60 seconds after the HTTP checks pass |
 
 ## Verify Prometheus targets
 
-After startup, query the scrape state directly:
+Query the scrape state from the router host:
 
 ```bash
 curl -fsSG http://127.0.0.1:9090/api/v1/query \
@@ -69,35 +78,35 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
   | python3 -m json.tool
 ```
 
-Prometheus returns:
+The response has one series for the router and one for each configured engine:
 
-- one series for the Narwhal router;
-- one series for every configured engine.
+| Value | Scrape |
+| :---: | --- |
+| `1` | Succeeded |
+| `0` | Failed |
 
-For each series:
-
-- `1` means the scrape succeeded;
-- `0` means the scrape failed.
-
-Prometheus `/targets` provides the corresponding discovery state and scrape error for each endpoint.
+Prometheus `/targets` shows the discovery state and scrape errors for each endpoint.
 
 ## Staged monitoring files
 
-Narwhal stages monitoring configuration under `runs/observability/mounts/`, whose parent directory uses mode `0700`.
+`make observe` stages its configuration under `runs/observability/mounts/`:
 
-Files mounted into the containers are staged with permissions that allow the Prometheus and Grafana service users to read them:
+| Source | Staged path |
+| --- | --- |
+| `tools/observability/prometheus.yml` | `prometheus/prometheus.yml` |
+| `tools/observability/prometheus-alerts.yml` | `prometheus/prometheus-alerts.yml` |
+| `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL` | `prometheus/targets/router.json`, `prometheus/targets/engines.json` |
+| `tools/observability/grafana/provisioning/` | `grafana-provisioning/` |
+| `tools/observability/grafana-narwhal.json` | `grafana-dashboards/narwhal.json` |
 
-- mounted subdirectories: `0755`;
-- mounted files: `0644`.
+| Path | Mode |
+| --- | :---: |
+| `runs/observability/mounts/` | `0700` |
+| Mounted subdirectories | `0755` |
+| Mounted files | `0644` |
 
-Compose bind-mounts these staged subdirectories read-only:
+Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only.
 
-```text
-prometheus
-grafana-provisioning
-grafana-dashboards
-```
+Each `make observe` run regenerates the staged files and resets their permissions.
 
-Running `make observe` again regenerates the staged files and repairs their permissions before Compose updates the monitoring services.
-
-Open the [workstation dashboard route](02-Access.md) after the scrape targets pass.
+[![Next: Access dashboards and isolate listeners](https://img.shields.io/badge/next-Access%20dashboards%20and%20isolate%20listeners-0f766e)](02-Access.md)

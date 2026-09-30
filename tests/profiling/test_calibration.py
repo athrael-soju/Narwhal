@@ -163,7 +163,10 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         return code, json.loads(output.read_text())
 
     async def test_slow_working_handoff_is_measured_past_serving_default(self):
-        async def decode(*args, **kwargs):
+        bodies = []
+
+        async def decode(url, endpoint, body, *args, **kwargs):
+            bodies.append(body)
             await asyncio.sleep(0.03)
             yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
             yield "data: [DONE]"
@@ -178,6 +181,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertGreater(document["candidate_deadline_s"], 0.5)
+        # Calibration forces its requested output so an immediate end of text cannot fail it.
+        self.assertTrue(all(body["ignore_eos"] and body["min_tokens"] >= 1 for body in bodies))
 
     async def test_stalled_handoff_is_kept_out_of_timing_samples(self):
         async def decode(*args, **kwargs):

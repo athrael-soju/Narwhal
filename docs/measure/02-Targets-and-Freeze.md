@@ -1,59 +1,74 @@
+---
+description: Set production TTFT and TPOT SLOs and freeze the Narwhal deployment under test.
+---
+
 # Targets and deployment freeze
 
 ## 5. Set production SLOs
 
-Run light traffic with accepted profiles, then set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured latency distribution.
+| Field        | Target                       |
+| ------------ | ---------------------------- |
+| `slo.ttft_s` | Time to first token (TTFT)   |
+| `slo.tpot_s` | Time per output token (TPOT) |
 
-A TPOT target below the measured per-token floor of the engine shape yields zero feasible decode capacity.
+1. Run light traffic with accepted profiles.
+2. Set both targets from the service requirement and the latency distribution measured in step 1.
+3. Validate the config:
 
-After changing an SLO, run `narwhal-check` against the edited fleet to test the target with saved profiles and live handoffs:
+    ```bash
+    narwhal-check --fleet config/fleet.production.json
+    ```
 
-```bash
-narwhal-check --fleet config/fleet.production.json
-```
+A TPOT target below the engine's measured per-token time gives zero feasible decode capacity.
+
+The `narwhal-check` `slo` gate passes each engine when:
+
+| Target | Condition |
+| --- | --- |
+| `slo.tpot_s` | At or above the profile's token interval at the smallest measured decode cohort |
+| `slo.ttft_s` | Above the profile's single-token prefill time |
 
 ### Pace gate
 
-With at least three successful probes, the pace gate compares each engine with the fleet median under a `1.5x` slowdown limit. For one or two successful probes, it requires a saved prefill profile and exact `usage.prompt_tokens` for each engine to apply the same limit.
+| Check | Applies to | Passes with |
+| --- | --- | --- |
+| Fleet median | Every engine, when three or more probes succeed | Pace within `1.5x` of the fleet median |
+| Saved profile | Every engine with a saved prefill profile | Exact `usage.prompt_tokens` and pace within `1.5x` of the profile prediction |
+
+With one or two successful probes, the pace gate requires a saved prefill profile for each engine.
 
 ## 6. Freeze the deployment under test
 
-Before the load test, assign a deployment identifier and attach the exact:
+1. Assign a deployment identifier before the load test.
+2. Attach the exact artifacts to it:
 
-* Narwhal release;
-* source revision;
-* distribution digest;
-* fleet configuration;
-* profile files;
-* sample store;
-* engine image digest;
-* engine launcher;
-* attestation documents;
-* router configuration;
-* engine configuration;
-* preflight output;
-* endpoint captures;
-* deployment-client output;
-* router journal;
-* state snapshots;
-* metrics.
+    | Artifact group | Items |
+    | --- | --- |
+    | Release | Narwhal release, source revision, distribution digest |
+    | Configuration | fleet configuration, router configuration, engine configuration |
+    | Engine inputs | profile files, sample store, engine image digest, engine launcher |
+    | Deployment evidence | attestation documents, preflight output, endpoint captures, deployment-client output |
+    | Run evidence | router journal, state snapshots, metrics |
 
-Record the workstation host, router host, and SSH tunnel mapping under the same identifier.
+3. Record the hosts and SSH tunnel mapping with the identifier.
 
-Across the offered-rate sweep, vary the request rate while holding these inputs fixed:
+The offered-rate sweep holds these fixed:
 
-* source revision;
-* model;
-* runtime;
-* profiles;
-* router targets;
-* workload shape;
-* cache policy;
-* TTFT target;
-* TPOT target.
+- source revision
+- model
+- runtime
+- profiles
+- router targets
+- workload shape
+- cache policy
+- both latency targets
 
-Between rates, drain resident work and transfer leases.
+Before the next rate, wait for:
 
-End the sweep when a run with a valid client schedule misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial), or after testing the intended operating ceiling.
+- resident work to finish
+- transfer leases to release
 
-Continue with the [synthetic load trial](03-Load-Trial.md).
+Stop the sweep at the first of:
+
+- a run that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial)
+- a tested rate at the intended operating ceiling

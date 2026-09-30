@@ -1,53 +1,62 @@
+---
+description: The engine contract, request execution path and fleet topology behind Narwhal disaggregated serving.
+---
+
 # Request flow and fleet topology
 
-## Runtime contract
+## Engine contract
 
-Each engine implements the same runtime contract:
+Every engine in a fleet meets the same contract:
 
-- expose the configured inference-engine dialect;
-- produce and consume compatible KV cache;
-- transfer KV to every eligible peer;
-- provide measured prefill and decode performance profiles;
-- pass preflight validation before entering service;
-- pass lifecycle readmission checks after a hold, drain, failure, or maintenance event.
+- Speaks the configured inference-engine dialect.
+- Produces and consumes compatible key-value (KV) cache.
+- Sends KV to every peer eligible to receive it.
+- Has measured prefill and decode performance profiles.
+- Passes preflight validation before taking traffic.
+- Passes readmission checks after a hold, drain, failure, or maintenance event.
 
-For vLLM engines with effective [`kv_both` behaviour](../deploy/05-Attest.md#capture-attestation-inputs), an attestation sidecar binds the running process to its image, NIXL connector, and required runtime features. `narwhal-check` validates that process before Narwhal permits KV transfer across the configured ring or mesh.
+The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) that every engine must match.
+
+### KV transfer for vLLM engines
+
+KV transfer across the configured ring or mesh is allowed for a vLLM engine with the effective `kv_both` role when all three requirements hold:
+
+| Requirement | Provider |
+| --- | --- |
+| Attestation inputs captured from the live process | [Gate E](../deploy/05-Attest.md#capture-the-attestation-inputs) |
+| The process bound to its image, NIXL connector, and runtime features | Attestation sidecar |
+| The attested process validated | [`narwhal-check`](../cli/Check.md) |
 
 ## How a request executes
 
-1. **Admission:**
-    The router receives the request and assigns an available serving seat: one slot under its [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission).
+| Stage | Behavior |
+| --- | --- |
+| Admission | The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
+| Pricing | Each eligible prefill engine is priced from the prompt token count, its measured performance curves, and its resident work. |
+| Predictive check | With the default `serving.admission` of `predictive`, a projected time to first token (TTFT) above the TTFT budget on the cheapest available prefill path rejects the request. |
+| Prefill | The chosen engine holds the prompt KV as the producer and returns a typed KV handoff. |
+| Decode | An eligible engine consumes the handoff and runs decode. |
+| Streaming | Tokens stream to the client. |
+| Journal | The request journal records admission, placement, retries, transfers, timing, and the final outcome. |
 
-    When all seats are occupied, the request enters a bounded FIFO and keeps its original deadline. Once the FIFO reaches its configured limit, Narwhal returns a retryable refusal.
+When every seat is occupied, `serving.queue_capacity` sets the outcome:
 
-2. **Prefill pricing:**
-    Narwhal counts prompt tokens and evaluates eligible prefill engines using their measured performance curves and current resident work.
+| `serving.queue_capacity` | Outcome |
+| --- | --- |
+| Positive, queue has space | The request waits in a bounded FIFO queue under its original deadline. |
+| Positive, queue full | Retryable refusal. |
+| `0` (the default) | Retryable refusal. |
 
-3. **Predictive admission:**
-    Before dispatch, Narwhal can reject a request whose cheapest available prefill path projects TTFT beyond the request budget.
-
-4. **Prefill:**
-    The selected engine processes the prompt and returns a typed KV handoff owned by the producer.
-
-5. **Decode placement:**
-    Narwhal selects a decode engine. Decode may remain on the prefill engine or consume the KV handoff on another eligible engine.
-
-6. **Streaming:**
-    Decode tokens stream to the client while Narwhal tracks token timing and resident work.
-
-7. **Journal:**
-    The request journal records admission, placement, retries, transfer activity, timing, and final outcome.
-
-Every retry obtains fresh KV ownership.
+A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 
-| Topology             | Role assignment                                               | Operational implications                                                                      |
-| -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Aggregated           | Every engine executes prefill and decode with local KV        | Long prefills occupy the same scheduler as decode batches                                    |
-| Static disaggregated | Separate fixed prefill and decode pools                       | Operator must manually change pool membership                                                 |
-| Adaptive cold-swap   | Engines move between pools by draining and relaunching        | Restart, weight load, peer registration, and validation delay the new capacity               |
-| Adaptive hot-swap    | Dual-capability engines form logical prefill and decode pools | Scheduler changes the role label while weights remain resident                                |
+| Topology | How roles are assigned | In practice |
+| --- | --- | --- |
+| Aggregated serving | Every engine does both prefill and decode, with local KV | Long prefills share a scheduler with decode batches |
+| Static disaggregation | Fixed prefill pool and fixed decode pool | An operator changes pool membership by hand |
+| Adaptive cold-swap | Engines change pools by draining and relaunching | Capacity arrives after restart, weight load, and validation |
+| Adaptive hot-swap | Dual-capability engines form logical prefill and decode pools | Weights stay loaded |
 
 ### Aggregated serving
 
@@ -57,36 +66,32 @@ Every retry obtains fresh KV ownership.
 
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
 
-Prompts run on the prefill pool. Their KV handoffs then move to the decode pool.
-
-The configured pool ratio reflects the workload used for sizing. When the request mix changes enough to require a different ratio, an operator must reallocate engines.
-
 ### Adaptive cold-swap
 
 ![One engine draining and restarting in the decode pool.](../assets/architectures/coldswap.svg)
 
-A cold-swap:
+A cold-swap move runs these steps:
 
-1. drains the engine;
-2. relaunches it in the target role;
-3. reloads weights;
-4. registers transfer peers;
-5. completes health validation;
-6. returns the engine to service.
+1. Drain the engine.
+2. Relaunch it in the new role.
+3. Reload its weights.
+4. Register its transfer peers.
+5. Pass health validation.
 
-Cold-swap pays the drain and restart interval before the new split serves traffic, so the traffic shift must persist long enough to use that capacity.
+Use cold-swap for traffic shifts longer than this sequence.
 
 ### Adaptive hot-swap
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
 
-Hot-swap reassigns the scheduler role of an eligible dual-capability engine while model weights stay resident and KV paths continue connecting eligible peers.
+Hot-swap changes the scheduler role of an eligible dual-capability engine in place.
 
-Narwhal constrains these moves with:
+[Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 
-- cooldown;
-- dwell time;
-- confirmation rules;
-- minimum role floors;
-- resident-work guards;
-- health and lifecycle exclusions.
+- a cooldown
+- a minimum dwell time
+- confirmation rules
+- minimum role floors
+- a check on resident work
+- exclusion of unhealthy engines
+- exclusion of engines in a lifecycle event

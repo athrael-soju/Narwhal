@@ -2,7 +2,7 @@
 
 ## Set up the checkout
 
-Fork [Narwhal](https://github.com/athrael-soju/Narwhal), then clone your fork.
+Fork [Narwhal](https://github.com/athrael-soju/Narwhal) and clone your fork:
 
 ```bash
 git clone git@github.com:YOUR-USERNAME/Narwhal.git
@@ -12,89 +12,101 @@ git fetch upstream
 git switch -c describe-your-change upstream/main
 ```
 
-Run `make help` from the repository root to list contributor commands and their
-overrides.
+Run all `make` commands from the repository root. `make help` lists the contributor commands and their overrides.
 
-Install the development tools and local checks.
+First, create the development environment if it does not exist:
 
 ```bash
 make setup
+```
+
+Then install the pre-commit hooks:
+
+```bash
 .venv/bin/pre-commit install
+```
+
+Finally, run the local checks:
+
+```bash
 make check
 ```
 
-`constraints-dev.txt` pins the development toolchain. The equivalent manual install is:
+The development toolchain is pinned in `constraints-dev.txt`. If you need to install it manually, run:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
 ```
 
-After pulling changes to `pyproject.toml` or `constraints-dev.txt`, refresh the
-development dependencies from the repository root:
+After any change to `pyproject.toml` or `constraints-dev.txt`, refresh the environment with:
 
 ```bash
 make sync
 ```
 
-`make sync` installs the editable package and development dependencies using
-`constraints-dev.txt`. It creates `.venv` if needed.
-
-To use an existing virtual environment for `make sync`, tests, linting,
-formatting or documentation, pass its Python executable as `VENV_PYTHON`.
-Replace `/path/to/venv/bin/python` with that executable in this example:
+`make sync` installs the editable package and its development dependencies against `constraints-dev.txt`, creating `.venv` when needed. You can point it at an existing virtual environment by setting `VENV_PYTHON`, which applies to `make sync`, tests, linting, formatting, and documentation:
 
 ```bash
 make sync VENV_PYTHON=/path/to/venv/bin/python
 ```
 
-`make check` runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker.
+| Command                    | Action                                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `make check`               | Runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
+| `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                               |
+| `make publication`         | Scans the Git index for private files and private key material                                                               |
+| `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                              |
+| `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                    |
+| `make test`                | Runs the unit suite                                                                                                          |
 
-`make lint` and `make format` report lint and formatting errors without editing
-files. To apply safe Ruff lint fixes and then format `src/`, `tools/` and `tests/`,
-run:
+Stage new files with `git add` before running `make publication`.
+
+To apply safe Ruff fixes and formatting, use:
 
 ```bash
 make fix
 ```
 
-Review the diff before committing. If lint errors remain, the command stops
-before formatting; address those errors and rerun it.
+`make fix` formats `src/`, `tools/`, and `tests/`, but stops before formatting if any lint errors remain. Review the resulting diff before committing.
 
-`make publication` scans the Git index for private files and private key material, so include new files in the index when checking them for publication.
-
-`make links` checks links and HTML targets in unfenced Markdown, heading anchors and canonical Narwhal URLs against the checkout. `make docs-build` builds the public site in strict mode and reports navigation, asset and rendering errors.
-
-Start the CI suite from GitHub Actions or with `gh workflow run ci.yml --ref <branch>` when the branch needs a remote check. Release automation also dispatches it for release PRs.
-
-The suite runs `make check` on GitHub-hosted runners. It runs the unit suite and installed-wheel checks on Python 3.11, 3.12 and 3.13. Python 3.12 also builds the documentation and runs the unit suite from an extracted source distribution. The wheel checks exercise console commands, package data and HTTP routes outside the checkout.
-
-The CI jobs use synthetic test inputs and a standard read-only GitHub token.
-
-CodeQL scans the Python source and GitHub Actions workflows on pushes and pull requests to `main`, and weekly.
-
-`make test` runs the unit suite. Pass unittest discovery options through
-`TEST_ARGS` to select tests or change verbosity:
+Pass unittest discovery options through `TEST_ARGS`:
 
 ```bash
 make test TEST_ARGS='-k failover -v'
 ```
 
-This command runs tests whose fully qualified names contain `failover`, with
-verbose output. `make unit` and `make check` use the full unit suite regardless
-of `TEST_ARGS`, including values supplied through the environment.
+`make unit` and `make check` always run the full unit suite and ignore `TEST_ARGS`, including any value set in the environment.
+
+You can start the remote CI either from GitHub Actions or with `gh workflow run ci.yml --ref <branch>`, replacing `<branch>` with the branch name. Release automation dispatches the same suite for release PRs.
+
+On the GitHub-hosted runners, the suite covers:
+
+- `make check`
+- the unit suite and installed-wheel checks on Python 3.11, 3.12, and 3.13
+- the documentation build and unit suite from an extracted source distribution on Python 3.12
+
+The wheel checks exercise console commands, package data, and HTTP routes outside the checkout.
+
+CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes and pull requests to `main` that change files outside `docs/`, Markdown, and `mkdocs.yml`.
 
 ### Coverage and test scope
 
-`make coverage` runs the unit suite with package and tool coverage, writing HTML branch annotations, JSON and XML reports, and the test log to a new `runs/coverage/run-*` directory. Set `COVERAGE_ARGS='--out runs/coverage/review'` to choose the output path.
+`make coverage` runs the unit suite with package and tool coverage, writing HTML branch annotations, JSON and XML reports, and the test log to a fresh `runs/coverage/run-*` directory. Set the output path with `COVERAGE_ARGS='--out runs/coverage/review'`.
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Fleet acceptance follows [Deploy a fleet](docs/Deploy.md) on GPU hosts: inspect devices and artifacts, start each checked engine, qualify directed links against the live cache, attest and profile those processes, then run preflight and routed load through the private path.
+Fleet acceptance on GPU hosts follows [Deploy a fleet](docs/Deploy.md):
+
+1. Inspect devices and artifacts.
+2. Start each checked engine.
+3. Qualify directed links against the live cache.
+4. Attest and profile those processes.
+5. Run preflight and routed load through the private path.
 
 ### Documentation preview
 
-From the repository root, install the documentation tools:
+Install the documentation tools:
 
 ```bash
 make docs-setup
@@ -106,133 +118,182 @@ Start the local preview:
 make docs-serve
 ```
 
-Open `http://127.0.0.1:8000/Narwhal/`. MkDocs runs in the foreground and reloads the
-preview after documentation edits. Press Ctrl+C to stop it.
+then open `http://127.0.0.1:8000/Narwhal/`.
 
-If port 8000 is occupied, run `make docs-serve DOCS_PORT=8001` and open
-`http://127.0.0.1:8001/Narwhal/`.
+MkDocs runs in the foreground and reloads the preview as you edit the documentation. Press Ctrl+C to stop it. If port 8000 is already in use, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/` instead.
 
-Before submitting documentation changes, run the strict build:
+Run the strict build before submitting documentation changes:
 
 ```bash
 make docs-build
 ```
 
-MkDocs clears and rebuilds `site/`. Documentation warnings fail the build.
+MkDocs clears and rebuilds `site/`, and any documentation warning fails the build.
 
 ## Behaviour changes
 
-Add focused tests for serving and recovery changes. Validate process replacement and router failover on a deployed fleet using the [release drills](docs/operate/04-Upgrade-and-Validate.md).
+Add focused tests for serving and recovery changes, and validate process replacement and router failover on a deployed fleet with the [release drills](docs/operate/05-Release-Drills.md).
 
-Add operator settings to `FleetConfig` and document them in the annotated example, keeping secret values in environment variables. `NARWHAL_FLEET` selects the fleet configuration.
+Put operator settings in `FleetConfig` and document them in `config/fleet.example.json`, keeping secret values in environment variables. `NARWHAL_FLEET` selects the fleet configuration.
 
-Keep the engine contract portable. Deployment automation owns hardware, model, image and launch details; the fleet config records the compatibility fields that Narwhal verifies.
+Keep the engine contract portable, leaving hardware, model, image, and launch details to the deployment automation. The fleet configuration records the compatibility fields that Narwhal verifies.
+
+Update the docs whenever a config field, route, journal field, metric, CLI flag, or operator procedure changes.
 
 ## Repository layout
 
-| Path           | Contents                                                       |
-| -------------- | -------------------------------------------------------------- |
-| `src/narwhal/` | Python package and scheduling implementation                   |
-| `tools/`       | Operator commands and support scripts                          |
-| `config/`      | Shipped configuration examples                                 |
-| `docs/`        | Repository documentation and GitHub Pages source               |
-| `deploy/`      | Optional deployment infrastructure                             |
-| `assets/`      | Images used by documentation                                   |
+| Path           | Contents                                         |
+| -------------- | ------------------------------------------------ |
+| `src/narwhal/` | Python package and scheduling implementation     |
+| `tools/`       | Operator commands and support scripts            |
+| `config/`      | Shipped configuration examples                   |
+| `docs/`        | Repository documentation and GitHub Pages source |
+| `deploy/`      | Optional deployment infrastructure               |
+| `assets/`      | Images used by documentation                     |
 
 ### Source responsibilities
 
-| Area                                                                               | Owner                                                 |
-| ---------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| HTTP routes, router construction, admission, request execution and responses       | `serving/`                                            |
-| Placement, role control, demand, cost scoring and engine availability              | `scheduling/`                                         |
-| Engine HTTP client, API dialects, KV connectors and attestation                    | `engines/`                                            |
-| Engine lifecycle, monitoring loop, persisted state, leases and failover            | `runtime/`                                            |
-| Calibration probes, cost-model fitting and profile storage                         | `profiling/`                                          |
-| Fleet preflight and KV transfer checks                                            | `diagnostics/`                                        |
-| Prometheus metrics and request journals                                            | `observability/`                                      |
-| Config models, JSON loading, validation and serialization                          | `config/`                                             |
-| Serving entry point, versioned document contracts, build identity and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
+| Area                                                                                | Package                                               |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| HTTP routes, router construction, admission, request execution, and responses       | `serving/`                                            |
+| Placement, role control, demand, cost scoring, and engine availability              | `scheduling/`                                         |
+| Engine HTTP client, API dialects, KV connectors, and attestation                    | `engines/`                                            |
+| Engine lifecycle, engine monitoring, persisted state, leases, and failover          | `runtime/`                                            |
+| Calibration probes, cost-model fitting, and profile storage                         | `profiling/`                                          |
+| Fleet preflight and KV transfer checks                                              | `diagnostics/`                                        |
+| Prometheus metrics and request journals                                             | `observability/`                                      |
+| Config models, JSON loading, validation, and serialization                          | `config/`                                             |
+| Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
 
-Paths in this table are relative to `src/narwhal/`. Put changes in the package that owns the operation or state: `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` manages engine drains and replacement.
+Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
 
-Keep package initializers light and cross-package imports explicit. Use `TYPE_CHECKING` for type-only imports across the serving/runtime boundary.
+`serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` handles engine drains and replacement.
 
-Because config models already import scheduling definitions and serving policy, those modules must stay independent of router construction to avoid circular imports.
+Keep package initializers light and cross-package imports explicit, using `TYPE_CHECKING` for type-only imports across the serving/runtime boundary. Config models import scheduling definitions from `scheduling/control.py` and serving policy from `serving/policy.py`, and those two modules must stay independent of router construction.
 
-Within those packages:
+Module responsibilities break down as follows:
 
-- `profiling/fitting.py` owns numerical fitting and cross-validation; `model.py` owns profile validation and capacity calculations; `store.py` owns persistence and fleet queries.
-- `engines/stream.py` decodes SSE events and validates token identity for serving and profiling. HTTP deadlines belong to `engines/client.py`; each consumer owns its timing and completion requirements.
+- `profiling/fitting.py` implements numerical fitting and cross-validation, `model.py` implements profile validation and capacity calculations, and `store.py` implements persistence and fleet queries.
+- `engines/stream.py` decodes server-sent events (SSE) and validates token identity for serving and profiling.
+- `engines/client.py` holds HTTP deadlines.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
-- `config/serialization.py` builds fleet documents for file output and CLI printing.
-- `observability/metrics.py` composes section renderers in a fixed order. Metric names, labels, histogram buckets and conditional emission are part of the metrics contract.
+- `config/serialization.py` serializes the versioned fleet configuration for file output and CLI printing.
+- `observability/metrics.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.
 
-Runtime helpers take `NarwhalRouter` explicitly. Type injected HTTP transports as `httpx.AsyncBaseTransport` and resolve their type errors. Lease renewal requires a configured `FileLease`.
+Runtime helpers take `NarwhalRouter` explicitly, and injected HTTP transports should be typed as `httpx.AsyncBaseTransport` with their type errors resolved. Lease renewal requires a configured `FileLease`.
 
-Use the installed `narwhal-*` commands in deployment scripts. `python -m narwhal.cli` also starts the router. Internal Python module paths may change between releases. Document schema identifiers such as `narwhal.state` name wire contracts.
+Use the installed `narwhal-*` commands in deployment scripts, though `python -m narwhal.cli` also starts the router. Each wire contract carries a document schema identifier, such as `narwhal.state`.
 
 ### Working files and deployment artifacts
 
-Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers and paper working files outside the tracked source tree. Profiling and preflight commands produce Narwhal-owned deployment evidence; the deployment load toolchain owns workload acceptance.
+Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers, and paper working files outside the tracked source tree.
 
-Store local profiles, journals and run outputs under `runs/`, and use `config/fleet.json` or the ignored `config/fleet.*.json` pattern for working fleet configs. Keep live engine addresses and site paths in those ignored files or reference node URLs from the ignored `.env` through the documented endpoint syntax.
+| Data                                      | Location                                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Local profiles, journals, and run outputs | `runs/`                                                                                          |
+| Working fleet configurations              | `config/fleet.json` or the ignored `config/fleet.*.json` pattern                                 |
+| Live engine addresses and site paths      | Those ignored files, or node URLs from the ignored `.env` through the documented endpoint syntax |
 
-Site automation owns host credentials, source distribution, network configuration and engine process launch. [Deploy Narwhal](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
+Site automation provides host credentials, the source distribution, network configuration, and engine process launch. [Gate D: Prove the transfer fabric against the serving cache](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
 
 ## Issues
 
-Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose)
-to report a failure, request a feature or suggest a documentation correction.
+Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose) to report a failure, request a feature, or suggest a documentation correction.
 
-Apply the labels that match the work: `bug` for a confirmed failure or regression, `enhancement` for a new capability or behaviour change, and `documentation` when the issue changes operator or contributor guidance. Combine labels when both apply, such as `enhancement` and `documentation` for a feature with operator guidance. The bug, feature and documentation forms select `bug`, `enhancement` and `documentation`, respectively; blank issues receive `triage`, which maintainers replace with the applicable label.
+| Label           | Use for                                      |
+| --------------- | -------------------------------------------- |
+| `bug`           | A confirmed failure or regression            |
+| `enhancement`   | A new capability or behaviour change         |
+| `documentation` | A change to operator or contributor guidance |
 
-Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
+Combine labels when several apply.
+
+New issues receive a label from their source:
+
+| Source                        | Label applied   |
+| ----------------------------- | --------------- |
+| Bug report form               | `bug`           |
+| Feature request form          | `enhancement`   |
+| Documentation correction form | `documentation` |
+| Blank issue                   | `triage`        |
+
+Maintainers replace `triage` with the applicable label. Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
 ### Milestone delivery
 
-Use this workflow for each newly scoped milestone:
+For each newly scoped milestone:
 
-1. Create one parent issue in the milestone. Record its outcome, scope, exclusions, dependencies and acceptance gates.
-2. Create its integration branch, `milestone/<number>-<slug>`, from current `main`. Use the milestone number and record the branch and starting commit in the parent issue.
-3. Divide the work into native GitHub sub-issues under that parent, assigned to the same milestone. Give each sub-issue its package ownership, prerequisites, acceptance criteria and required checks. Choose the number of sub-issues to fit the work.
-4. When a sub-issue starts, create `issue/<number>-<slug>` from the integration branch after its prerequisites have merged. Its PR must target the integration branch. Update dependent work from that branch before review.
-5. Close each sub-issue explicitly after its PR merges and its acceptance criteria pass. Keep live qualification gates open until the required measurements pass. A failed feasibility gate blocks dependent implementation.
-6. Open the parent PR from the integration branch to `main`. Merge it after all sub-issues and milestone acceptance gates pass, then close the parent issue and milestone.
+1. Create one parent issue in the milestone.
+2. Create the integration branch `milestone/<number>-<slug>` from current `main`, using the milestone number.
+3. Create native GitHub sub-issues under the parent in the same milestone.
+4. Branch `issue/<number>-<slug>` from the integration branch after prerequisites merge.
+5. Open the sub-issue PR against the integration branch.
+6. Update dependent work from the integration branch before review.
+7. Close each sub-issue explicitly after its PR merges and its criteria pass.
+8. Open the parent PR from the integration branch to `main`.
+9. Merge the parent PR after all sub-issues close and the milestone criteria pass.
+10. Close the parent issue and the milestone.
 
-Link cross-milestone prerequisites explicitly. Deliver their shared contracts through the owning milestone's merge to `main`, then update dependent integration branches from `main`.
+| Issue        | Records                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| Parent issue | Outcome, scope, exclusions, dependencies, acceptance criteria, integration branch, and starting commit |
+| Sub-issue    | Package, prerequisites, acceptance criteria, and required checks                                       |
+
+Link cross-milestone prerequisites explicitly. Deliver shared contracts through the defining milestone's merge to `main`, then update dependent integration branches from `main` after it lands.
 
 ### Hardware and model selection
 
-Keep Narwhal's scope and shared contracts hardware/GPU agnostic. Milestones, issues and sub-issues describe required capabilities, topology, behaviour and acceptance gates without selecting hardware or models.
+Keep Narwhal's scope and shared contracts hardware and GPU agnostic. Milestones, issues, and sub-issues describe the required capabilities, topology, behaviour, and acceptance criteria.
 
-Select hardware and model inputs when the corresponding work starts. Retain those selections, pinned execution inputs and raw evidence in the private locations described under [Working files and deployment artifacts](#working-files-and-deployment-artifacts). Keep hardware and model identities out of public milestone and issue text, comments and attachments, including copied configuration and logs. Public qualification records state the tested capabilities, outcomes, limits and a sanitised reference to the private evidence. A passing run qualifies only its measured scope.
+Select hardware and model inputs when the corresponding work starts, keeping those selections, pinned execution inputs, and raw evidence in the private locations under [Working files and deployment artifacts](#working-files-and-deployment-artifacts).
+
+Keep hardware and model identities out of public milestone and issue text, comments, and attachments, including any copied configuration and logs.
 
 ## Pull requests
 
-Review the diff and commit messages and run the local checks before pushing.
+Review the diff and commit messages and run the local checks before pushing. Then push your branch to your fork and open a pull request in `athrael-soju/Narwhal`, since maintainers use branches in the same repository.
 
-Push your branch to your fork and open a pull request against the target branch in `athrael-soju/Narwhal`. Sub-issue PRs target their [milestone integration branch](#milestone-delivery); parent milestone PRs and standalone changes target `main`. Maintainers use branches in the same repository. Keep the branch limited to one coherent change, and open a draft while implementation or evidence gathering continues.
+| PR                | Target branch                                       |
+| ----------------- | --------------------------------------------------- |
+| Sub-issue         | [Milestone integration branch](#milestone-delivery) |
+| Parent milestone  | `main`                                              |
+| Standalone change | `main`                                              |
 
-Describe the problem, the resulting behaviour, and how you checked it. Link the relevant issue and, for a sub-issue, its parent. Include reproduction steps for a bug fix and identify any checks that require hardware. Keep deployment selections in private execution records and sanitise logs and configuration before attaching them.
+Keep each branch to one coherent change, and open a draft while implementation or evidence gathering continues.
 
-Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The required PR title check validates the prefix before squash merge, and the prefix determines the release impact.
+The PR description should cover the problem, the resulting behaviour, and how you checked it, along with the relevant issue and, for a sub-issue, its parent. Include reproduction steps for a bug fix and note any checks that require hardware.
 
-Use `docs:` for documentation changes. Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when documentation is the only change since the previous release.
+Keep deployment selections in private execution records, and sanitize logs and configuration before attaching them.
 
-Bring the branch up to date with its PR target and run `make check` locally before merge. Before the parent milestone PR merges, bring its integration branch up to date with `main` and repeat the required checks on the combined changes. For documentation changes, run `make docs-setup` and `make docs-build`.
+Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`, since the required PR title check validates the prefix before squash merge. The prefix sets the release impact, with `docs:` reserved for documentation changes.
 
-A maintainer reviews the PR and any manually requested CI results, then squash-merges it using the PR title. The `main` ruleset requires a PR and the automatic PR title check and blocks force pushes. GitHub deletes each branch at squash-merge.
+Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when a release contains only documentation changes.
 
-Address review comments on the same branch and rerun the relevant checks after editing.
+Before merge:
 
-Update the docs when a config field, route, journal field, metric, CLI flag or operator procedure changes.
+- Bring the branch up to date with its PR target and run `make check`.
+- For a parent milestone PR, update the integration branch from `main` and repeat the required checks.
+- For documentation changes, run the strict build in [Documentation preview](#documentation-preview).
+
+A maintainer reviews the PR and any manually requested CI results, then squash-merges it with the PR title. GitHub deletes each branch at squash-merge.
+
+The `main` ruleset requires a PR and the automatic PR title check, and blocks force pushes. Address review comments on the same branch and rerun the relevant checks.
 
 ## PyPI publishing
 
-Configure the `narwhal-inference` project on PyPI with a GitHub trusted publisher: owner `athrael-soju`, repository `Narwhal`, workflow `release.yml`, and environment `pypi`. The release job requests an OIDC token after the GitHub release artifacts pass the package and installed-wheel checks. Its PyPI check compares both artifact hashes before a retry; an existing version with different bytes stops the release.
+Configure a GitHub trusted publisher on PyPI:
 
-Check the latest PyPI version before preparing a release. When the target differs from the conventional commit bump, set it with a single `Release-As` footer in the preceding squash commit. Check that the generated release PR agrees on the package, citation, manifest and changelog versions before merge. The release workflow publishes the reviewed wheel and source archive to GitHub and PyPI after that release PR is merged.
+| Setting      | Value                  |
+| ------------ | ---------------------- |
+| PyPI project | `narwhal-inference`    |
+| Repository   | `athrael-soju/Narwhal` |
+| Workflow     | `release.yml`          |
+| Environment  | `pypi`                 |
+
+Prepare a release by checking the latest PyPI version, comparing the target version with the conventional commit bump, and, if they differ, putting one `Release-As` footer in the preceding squash commit. Confirm that the release PR's package, citation, manifest, and changelog versions all agree.
+
+After the release PR merges, the release workflow publishes the reviewed wheel and source archive to GitHub and PyPI.
 
 ## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request and add each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages. Run `make docs-build` locally to produce the same site under `site/`.
+Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.

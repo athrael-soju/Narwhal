@@ -389,6 +389,19 @@ class HealthEngineOut(BaseModel):
     prefill_pauses: int = 0
 
 
+class ResidencyOut(BaseModel):
+    """One engine's prefix-residency synchronisation state, without block identities."""
+
+    known: bool
+    reason: str
+    epoch: str | None = None
+    sequence: int | None = None
+    block_size: int | None = None
+    # Resident block count per KV cache group.
+    resident_blocks: dict[str, int] = {}
+    resyncs: int = 0
+
+
 class EngineStreaksOut(BaseModel):
     """One engine's consecutive breaker failure streaks, keyed by class."""
 
@@ -467,6 +480,8 @@ class StateOut(BaseModel):
     # Probation adds the configured penalty to placement cost.
     probation: list[str] = []
     health: dict[str, HealthEngineOut] = {}
+    # Prefix residency each attestation sidecar reports; unknown engines are priced cold.
+    residency: dict[str, ResidencyOut] = {}
     unserved: int
     panic_bypasses: int
     # Observed SLO outcome evidence retained in fixed-width time buckets.

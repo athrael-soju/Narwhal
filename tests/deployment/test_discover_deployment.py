@@ -1,6 +1,7 @@
 """Start deployment preparation from environment values and fresh host observations."""
 
 import copy
+import inspect
 import io
 import json
 import shlex
@@ -22,7 +23,7 @@ from tools.deployment.discover_deployment import (
 )
 from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, load_hosts
-from tools.deployment.launch_engine import build
+from tools.deployment.launch_engine import build, ds_conv_state_layout_required
 from tools.deployment.prepare_host_env import select_values
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -307,6 +308,21 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_remote_probe_is_valid_standalone_python(self):
         compile(PROBE, "remote discovery probe", "exec")
+
+    def test_probe_applies_the_launcher_convolutional_state_rule(self):
+        """Discovery and the launch check agree on gated-delta linear attention."""
+        rule = inspect.getsource(ds_conv_state_layout_required)
+        self.assertTrue(PROBE.startswith(rule))
+        namespace = {}
+        exec(compile(rule, "remote discovery rule", "exec"), namespace)
+        model = {
+            "text_config": {
+                "linear_conv_kernel_dim": 4,
+                "layer_types": ["linear_attention", "linear_attention", "full_attention"],
+            }
+        }
+        self.assertTrue(namespace["ds_conv_state_layout_required"](model))
+        self.assertFalse(namespace["ds_conv_state_layout_required"]({"layer_types": ["full"]}))
 
     def test_probe_maps_rocm_pci_ids_and_filters_image_environment(self):
         inputs = {

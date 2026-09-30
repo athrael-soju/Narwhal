@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -29,8 +30,16 @@ class EngineDialect(ABC):
         """Read a token count, or return None when the response has none."""
 
     @abstractmethod
+    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
+        """Read the prompt token IDs, or return None when the response has none."""
+
+    @abstractmethod
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Return fields that force a probe to emit exactly `tokens`."""
+
+    @abstractmethod
+    def cold_probe_extras(self) -> dict[str, Any]:
+        """Return fields that keep one probe from reusing any earlier cached prefix."""
 
 
 class VllmDialect(EngineDialect):
@@ -64,6 +73,9 @@ class VllmDialect(EngineDialect):
                     payload[field_name] = body[field_name]
         else:
             payload["prompt"] = body.get("prompt", "")
+            # The completion's own setting decides whether vLLM adds BOS and similar tokens.
+            if "add_special_tokens" in body:
+                payload["add_special_tokens"] = body["add_special_tokens"]
         return payload
 
     def tokenize_response(self, payload: dict[str, Any]) -> int | None:
@@ -73,9 +85,25 @@ class VllmDialect(EngineDialect):
         except (KeyError, TypeError, ValueError):
             return None
 
+    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
+        """Read vLLM's prompt token IDs when they agree with its count."""
+        tokens = payload.get("tokens")
+        if (
+            not isinstance(tokens, list)
+            or any(type(token) is not int or token < 0 for token in tokens)
+            or self.tokenize_response(payload) != len(tokens)
+        ):
+            return None
+        return tokens
+
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         """Force a decode probe to emit exactly `tokens` tokens."""
         return {"min_tokens": tokens, "ignore_eos": True}
+
+    def cold_probe_extras(self) -> dict[str, Any]:
+        """Salt the probe's first cache block with a fresh random value."""
+        # vLLM hashes cache_salt into the first block; later block hashes chain from it.
+        return {"cache_salt": secrets.token_urlsafe(32)}
 
 
 # Register a dialect only after the fleet checks pass against that build.

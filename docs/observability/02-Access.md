@@ -1,34 +1,42 @@
+---
+description: Open the Narwhal Grafana dashboard from a workstation and isolate a second monitoring stack.
+---
+
 # Access dashboards and isolate listeners
 
 ## Access the dashboard from a workstation
 
-Keep Grafana and Prometheus on router-side listeners and reach them through the deployment SSH path.
+An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
 
-Run the tunnel command from the management checkout with the workstation `.env` loaded.
+To open a monitoring tunnel:
 
-Reuse the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) when it is running with the monitoring forwards. For monitoring access by itself, open:
+1. Open a terminal in the management checkout with the workstation `.env` loaded.
+2. Open the tunnel:
 
-```bash
-python3 tools/deployment/deploy_hosts.py tunnel --role router \
-  --forward 13000:3000 --forward 19090:9090
-```
+    ```bash
+    python3 tools/deployment/deploy_hosts.py tunnel --role router \
+      --forward 13000:3000 --forward 19090:9090
+    ```
 
-Keep that terminal running while using the monitoring interfaces.
+3. Keep the tunnel terminal open.
 
-Open:
+| Interface | URL |
+| --- | --- |
+| Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
+| Prometheus | `http://127.0.0.1:19090` |
 
-- Grafana: `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`
-- Prometheus: `http://127.0.0.1:19090`
+Grafana grants anonymous Viewer access through the local tunnel.
 
-Grafana permits anonymous Viewer access through the local tunnel.
+The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
 
-If a deployment exposes Prometheus or Grafana through another route, apply that deployment's existing ingress, authentication, and TLS policy.
+## Isolate a second monitoring stack
 
-The [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) documents router and engine scope selection.
+| Variable | Default |
+| --- | --- |
+| `NARWHAL_GRAFANA_BIND_ADDRESS` | `127.0.0.1` |
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `127.0.0.1:9090` |
 
-## Isolate a second monitoring deployment
-
-When another monitoring deployment shares the router host, assign distinct loopback listeners:
+When another monitoring deployment shares the router host, run `make observe` with distinct loopback listeners:
 
 ```bash
 NARWHAL_GRAFANA_BIND_ADDRESS=127.0.0.2 \
@@ -36,9 +44,12 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-Grafana derives its `Prometheus` datasource URL from the selected listener. With a wildcard Prometheus bind, Narwhal points Grafana and readiness probes at loopback while the Prometheus socket keeps its configured wildcard address.
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus binds | Grafana `Prometheus` datasource and readiness probes use |
+| --- | --- | --- |
+| Specific address | That address | That address |
+| Wildcard (`0.0.0.0` or `::`) | The wildcard | Loopback |
 
-For the isolated listeners on `127.0.0.2`, open the workstation tunnel with:
+Tunnel to the `127.0.0.2` listeners:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \
@@ -46,4 +57,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-Review [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md) after confirming dashboard access.
+[![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)

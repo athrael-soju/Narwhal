@@ -11,84 +11,297 @@
 </p>
 
 <p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
-  <a href="https://athrael-soju.github.io/Narwhal/Deploy/">Deployment</a> |
-  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/">API reference</a> |
-  <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
-  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md">Contributing</a>
+  <a href="https://athrael-soju.github.io/Narwhal/"><img src="https://img.shields.io/badge/Documentation-0f766e" alt="Documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Deploy/"><img src="https://img.shields.io/badge/Deployment-0f766e" alt="Deployment"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/"><img src="https://img.shields.io/badge/API%20reference-0f766e" alt="API reference"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/issues"><img src="https://img.shields.io/badge/Issues-0f766e" alt="Issues"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributing-0f766e" alt="Contributing"></a>
 </p>
 
-## About
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/Recognition/"><img src="https://img.shields.io/badge/%F0%9F%8F%86%20Recognition-d4a017" alt="Recognition"></a>
+</p>
 
-Narwhal is an adaptive disaggregated inference framework that reallocates prefill and decode roles as demand changes, while model weights stay loaded.
+## What is Narwhal?
 
-Capabilities (as of v0.1.0):
+Narwhal is the first open-source LLM inference framework that automatically hot-swaps prefill and decode roles on both NVIDIA and AMD GPUs. It moves engines between roles as demand changes, on a fixed GPU fleet with model weights already loaded. It scales from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [distributed multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
-- Hot-swap prefill/decode role assignment across a fixed GPU fleet.
-- Separate prefill and decode routing with NIXL KV transfer.
-- Latency-aware admission and placement using measured per-engine profiles.
-- Streaming and non-streaming completion and chat APIs, including function tools and reasoning output where supported by the engine and model.
-- Request deadlines, disconnect cancellation, bounded queues and optional retries.
-- Engine health checks, transfer validation and warm-standby router failover.
-- Prometheus metrics, request journals and a Grafana dashboard.
+<table width="100%" align="center">
+  <thead>
+    <tr>
+      <th align="left" width="18%">Capability</th>
+      <th align="left" width="52%">Behavior</th>
+      <th align="left" width="30%">Guide</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Role hot-swap</td>
+      <td>Reassigns prefill and decode roles across a fixed GPU fleet, with NIXL key-value (KV) transfer between them.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Core-Concepts/"><img src="https://img.shields.io/badge/docs-Core%20concepts-0f766e" alt="Core concepts documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Serving</td>
+      <td>Serves streaming and buffered completion and chat requests with latency-aware admission.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/HTTP-API/"><img src="https://img.shields.io/badge/docs-HTTP%20API%20reference-0f766e" alt="HTTP API reference documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Fault tolerance</td>
+      <td>Fails over to a warm-standby router and readmits engines against their live process generation.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operate%20Narwhal-0f766e" alt="Operate Narwhal documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Measurement</td>
+      <td>Profiles engines and runs ordered benchmark points with retained evidence.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measure%20a%20fleet-0f766e" alt="Measure a fleet documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Observability</td>
+      <td>Exports router and engine metrics to Prometheus and a provisioned Grafana dashboard.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Observability/"><img src="https://img.shields.io/badge/docs-Set%20up%20observability-0f766e" alt="Set up observability documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Operator tooling</td>
+      <td>Validates fleet files offline and collects private diagnostic bundles.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/CLI-Reference/"><img src="https://img.shields.io/badge/docs-CLI%20reference-0f766e" alt="CLI reference documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Development mode</td>
+      <td>Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2.</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Narwhal%20dev-0f766e" alt="Narwhal dev documentation"></a></td>
+    </tr>
+  </tbody>
+</table>
 
-## Architecture
+## How engines change roles
 
-On regular controller passes, Narwhal estimates prefill and decode pressure against their SLOs for the current and adjacent role splits, using measured engine curves, offered demand, and resident work. It moves an eligible engine when a candidate improves the worst projected SLO ratio by the configured margin and passes role-floor, cooldown, and health checks. New requests follow the revised split while resident requests finish on their assigned engines.
+<table width="100%" align="center">
+  <thead>
+    <tr>
+      <th align="left" width="25%">Role controller pass</th>
+      <th align="left" width="75%">Behavior</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Inputs</td>
+      <td>Measured engine profiles, offered demand, and resident work</td>
+    </tr>
+    <tr>
+      <td>Candidates</td>
+      <td>The current role split and each adjacent split, one engine move away</td>
+    </tr>
+    <tr>
+      <td>Score</td>
+      <td>The worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing</td>
+    </tr>
+    <tr>
+      <td>Demand</td>
+      <td>Measured window demand, using the larger of the short- and long-horizon decode estimates for decode-to-prefill candidates</td>
+    </tr>
+    <tr>
+      <td>Evidence window</td>
+      <td>Closes after <code>controller.reactive.evidence_span_s</code> and the minimum arrivals, or after <code>controller.reactive.evidence_max_span_s</code> under sparse traffic</td>
+    </tr>
+    <tr>
+      <td>Move</td>
+      <td>To the adjacent split that improves the score by at least the configured margin</td>
+    </tr>
+    <tr>
+      <td>Decode to prefill</td>
+      <td>Requires a closed evidence window and stable decode demand</td>
+    </tr>
+    <tr>
+      <td>Prefill to decode</td>
+      <td>Proceeds with the evidence window open</td>
+    </tr>
+    <tr>
+      <td>Guards</td>
+      <td>Pinned engines, role floors, cooldown, dwell time, the resident-stream ceiling on decode donors, and engine lifecycle holds</td>
+    </tr>
+    <tr>
+      <td>Floor repair</td>
+      <td>One engine per monitor pass while a phase sits below its configured floor</td>
+    </tr>
+    <tr>
+      <td>New requests</td>
+      <td>Follow the revised split</td>
+    </tr>
+    <tr>
+      <td>Resident requests</td>
+      <td>Finish on their assigned engines</td>
+    </tr>
+  </tbody>
+</table>
 
-![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/concepts/02-Role-Control/"><img src="https://img.shields.io/badge/docs-Role%20control%20and%20capacity%20floors-0f766e" alt="Role control and capacity floors documentation"></a>
+</p>
 
-See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
+![Role controller changing engine roles with weights resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-## Benchmark snapshot
+## Evaluation
 
-AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix caching enabled across Narwhal v0.1.0, Dynamo Planner, and Ray Serve LLM.
+<h3 align="center"><a href="https://athrael.net/posts/evaluating-narwhal/">Read the full evaluation: Evaluating Narwhal</a></h3>
 
-![Completion rate, SLO-qualified requests, median time to first token and document answer quality for Narwhal, Dynamo Planner and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
+<p align="center">
+  <a href="https://github.com/ai-dynamo/aiperf/releases/tag/v0.12.0"><img src="https://img.shields.io/badge/client-AIPerf%20v0.12.0-0f766e" alt="AIPerf v0.12.0"></a>
+  <a href="https://huggingface.co/moonshotai/Kimi-K3"><img src="https://img.shields.io/badge/model-Kimi--K3-0f766e" alt="Kimi-K3 model"></a>
+  <a href="https://athrael.net/narwhal-evaluation-2026-09/chat-document-results/"><img src="https://img.shields.io/badge/workload-chat%2Fdocument-0f766e" alt="Chat/document workload results"></a>
+  <a href="https://athrael.net/narwhal-evaluation-2026-09/mixed-workload-results/"><img src="https://img.shields.io/badge/workload-mixed%20payload-0f766e" alt="Mixed-payload workload results"></a>
+  <a href="https://athrael.net/posts/evaluating-narwhal#prefix-caching"><img src="https://img.shields.io/badge/prefix%20caching-enabled-0f766e" alt="Prefix caching enabled"></a>
+</p>
 
-[Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/) describes the test setup, the results for each workload, the effect of prefix caching and the p95 time-to-first-token tail on mixed traffic.
+<p align="center">
+  <a href="https://github.com/athrael-soju/Narwhal"><img src="https://img.shields.io/badge/framework-Narwhal%20v0.1.0-0f766e" alt="Narwhal v0.1.0"></a>
+  <a href="https://github.com/ai-dynamo/dynamo"><img src="https://img.shields.io/badge/framework-Dynamo%20Planner-0f766e" alt="Dynamo Planner"></a>
+  <a href="https://github.com/ray-project/ray"><img src="https://img.shields.io/badge/framework-Ray%20Serve%20LLM-0f766e" alt="Ray Serve LLM"></a>
+</p>
 
-## Install from PyPI
+<p align="center">
+  <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM."></a>
+</p>
 
-Install the router commands on Linux with Python 3.11 or newer:
+## Get the commands
+
+Install on Linux with Python 3.11 or newer:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install narwhal-inference
-python -m pip show narwhal-inference
-narwhal-check --help
+narwhal-serve --version
+narwhal --help
 ```
 
-The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
+The wheel installs these commands:
 
-## Narwhal dev
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Dev/"><img src="https://img.shields.io/badge/cli-narwhal-0f766e" alt="narwhal"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Engine/"><img src="https://img.shields.io/badge/cli-narwhal--engine-0f766e" alt="narwhal-engine"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Serve/"><img src="https://img.shields.io/badge/cli-narwhal--serve-0f766e" alt="narwhal-serve"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Attest/"><img src="https://img.shields.io/badge/cli-narwhal--attest-0f766e" alt="narwhal-attest"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Profile/"><img src="https://img.shields.io/badge/cli-narwhal--profile-0f766e" alt="narwhal-profile"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Check/"><img src="https://img.shields.io/badge/cli-narwhal--check-0f766e" alt="narwhal-check"></a>
+</p>
 
-[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. Its installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
+For each deployment:
 
-## Deploy a fleet
+1. Record the `narwhal-serve --version` output with the fleet configuration, engine image, and profiles.
+2. Pin that version on every router host.
 
-Follow [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. Inspect the target hardware and model, install an approved source revision, and validate the running vLLM processes and KV paths. Then profile and run preflight before routing traffic.
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/Install-from-PyPI/"><img src="https://img.shields.io/badge/docs-Install%20from%20PyPI-0f766e" alt="Install from PyPI documentation"></a>
+</p>
 
-The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
+## Try it on one GPU
 
-## Reference
+Narwhal dev runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2.
 
-- [Architecture and scheduling](https://athrael-soju.github.io/Narwhal/Core-Concepts/)
-- [Fleet configuration](https://athrael-soju.github.io/Narwhal/Configuration/)
-- [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/)
-- [HTTP API](https://athrael-soju.github.io/Narwhal/HTTP-API/)
-- [Fleet measurement](https://athrael-soju.github.io/Narwhal/Measure/)
-- [Prometheus and Grafana](https://athrael-soju.github.io/Narwhal/Observability/)
-- [Ingress and maintenance](https://athrael-soju.github.io/Narwhal/Operate/)
-- [Troubleshooting](https://athrael-soju.github.io/Narwhal/Troubleshoot/)
+```bash
+narwhal dev init
+narwhal dev up
+narwhal dev verify
+narwhal dev status
+narwhal dev down
+```
+
+<table width="100%" align="center">
+  <thead>
+    <tr>
+      <th align="left" width="55%">GPU</th>
+      <th align="center" width="15%">Engines</th>
+      <th align="left" width="30%">Template</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>NVIDIA GPU with 8 GB of VRAM or less</td>
+      <td align="center">2</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Installed%20template-0f766e" alt="Installed template documentation"></a></td>
+    </tr>
+    <tr>
+      <td>RTX 5090</td>
+      <td align="center">4</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/dev/RTX-5090-Reference/"><img src="https://img.shields.io/badge/docs-RTX%205090%20reference-0f766e" alt="RTX 5090 reference documentation"></a></td>
+    </tr>
+  </tbody>
+</table>
+
+## Bring up a fleet
+
+Run these gates from a management workstation:
+
+<table width="100%" align="center">
+  <thead>
+    <tr>
+      <th align="left" width="80%">Step</th>
+      <th align="left" width="20%">Gate</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Freeze inputs and discover the deployment</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/01-Discover/"><img src="https://img.shields.io/badge/docs-Gate%20A-0f766e" alt="Gate A documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Package and install the approved revision</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/02-Install/"><img src="https://img.shields.io/badge/docs-Gate%20B-0f766e" alt="Gate B documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Validate and start every engine</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/03-Validate-Engines/"><img src="https://img.shields.io/badge/docs-Gate%20C-0f766e" alt="Gate C documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Qualify the transfer fabric</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/04-Qualify-Fabric/"><img src="https://img.shields.io/badge/docs-Gate%20D-0f766e" alt="Gate D documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Attest the live engines</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/05-Attest/"><img src="https://img.shields.io/badge/docs-Gate%20E-0f766e" alt="Gate E documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Profile the engines and run preflight</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/06-Profile-and-Preflight/"><img src="https://img.shields.io/badge/docs-Gate%20F-0f766e" alt="Gate F documentation"></a></td>
+    </tr>
+    <tr>
+      <td>Start the router and validate capacity through an SSH tunnel</td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/deploy/07-Serve-and-Measure/"><img src="https://img.shields.io/badge/docs-Gate%20G-0f766e" alt="Gate G documentation"></a></td>
+    </tr>
+  </tbody>
+</table>
+
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/Deploy/"><img src="https://img.shields.io/badge/docs-Deploy%20a%20fleet-0f766e" alt="Deploy a fleet documentation"></a>
+</p>
+
+## Documentation
+
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/Core-Concepts/"><img src="https://img.shields.io/badge/docs-Architecture-0f766e" alt="Architecture documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Configuration/"><img src="https://img.shields.io/badge/docs-Configuration-0f766e" alt="Configuration documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/CLI-Reference/"><img src="https://img.shields.io/badge/docs-CLI-0f766e" alt="CLI documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/"><img src="https://img.shields.io/badge/docs-HTTP%20API-0f766e" alt="HTTP API documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measurement-0f766e" alt="Measurement documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Observability/"><img src="https://img.shields.io/badge/docs-Observability-0f766e" alt="Observability documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operations-0f766e" alt="Operations documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Troubleshoot/"><img src="https://img.shields.io/badge/docs-Troubleshooting-0f766e" alt="Troubleshooting documentation"></a>
+</p>
 
 ## Contributing
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
+<p align="center">
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/community-Contributing-0f766e" alt="Contributing"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md"><img src="https://img.shields.io/badge/community-Code%20of%20conduct-0f766e" alt="Code of conduct"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/community-Security%20policy-0f766e" alt="Security policy"></a>
+</p>
 
-## Attribution and citation
+## Built on Arrow
 
-Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
+Narwhal's scheduling algorithms derive from Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture by Wu et al. (2025).
 
-License: [Apache-2.0](https://github.com/athrael-soju/Narwhal/blob/main/LICENSE).
+<p align="center">
+  <a href="https://arxiv.org/abs/2505.11916"><img src="https://img.shields.io/badge/paper-Arrow%20%C2%B7%20arXiv%202505.11916-0f766e" alt="Arrow paper on arXiv"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff"><img src="https://img.shields.io/badge/cite-CITATION.cff-0f766e" alt="Citation metadata for Arrow and Narwhal"></a>
+  <a href="https://github.com/athrael-soju/Narwhal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0f766e" alt="Apache-2.0 license"></a>
+</p>

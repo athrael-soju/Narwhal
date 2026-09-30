@@ -1,56 +1,157 @@
+---
+description: Run the narwhal-check deployment preflight gates, from engine reachability to live KV transfer probes.
+---
+
 # `narwhal-check`
 
-With `--fleet PATH`, `narwhal-check` runs deployment gates in this order:
+`narwhal-check --fleet PATH` runs these deployment preflight gates in order: `reach`, `contract`, `profile`, `model`, `pace`, `tokenize`, `produce`, `consume`, `slo`.
 
-`reach` → `contract` → `profile` → `model` → `pace` → `tokenize` → `produce` → `consume` → `slo`
+Text output prints each gate name followed by result lines marked `ok`, `FAIL`, `SKIP`, or `WARN`.
 
-| Option                      | Default                | Contract                                                                                    |
-| --------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
-| `--version`                 |                        | Print the installed distribution version. |
-| `--fleet PATH`              | required for preflight, calibration, or evidence verification | Native fleet config JSON |
-| `--ring`                    | mesh                   | Mesh tests every eligible ordered pair; `--ring` uses ring coverage for `consume`.           |
-| `--repeats N`               | `1`                    | Transfer probes per pair, clamped to a minimum of 1.                                        |
-| `--no-kv`                   | false                  | Runs `reach`, `contract`, `profile`, `model`, `pace`, `tokenize`, and `slo`.                |
-| `--evidence-out PATH` | gate output only | Write process-bound full-mesh KV evidence to a fresh JSON path. Requires a fleet `engine_contract`; exclusive with `--ring`, `--no-kv` and `--verify-evidence`. |
-| `--verify-evidence PATH` | run preflight | Verify saved directed KV evidence against current fleet/profile hashes and live process generations. Requires a fleet `engine_contract`; exclusive with `--evidence-out`. `--ring`, `--no-kv` and `--repeats` apply to new probes. |
-| `--calibrate-first-token` | false | Measure fresh directed handoffs across specified input lengths with a diagnostic first-token bound. Exclusive with directed KV evidence modes, `--ring`, `--no-kv`, and nondefault `--repeats`. |
-| `--input-tokens LIST` | required for calibration | Comma-separated positive target input lengths. Include the longest input admitted by the service. Each target must leave at least one output token within both engines' live context limits. |
-| `--samples N` | `100` | Fresh handoffs per pair and input length. At least 100 completed attempts per group are required for qualifying evidence. |
-| `--observation-timeout-s SECONDS` | required for calibration | Diagnostic bound above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
-| `--calibration-out PATH` | required for calibration | Write raw samples and group summaries to a fresh JSON path under `runs/`. |
-| `--print-example-config`    | false                  | Prints the packaged annotated config before resolving the input config, then exits. Takes precedence over `--print-contract-versions`. |
-| `--print-contract-versions` | false                  | Prints the versioned JSON interface registry before resolving the input config, then exits. |
+## Options
 
-KV checks use the fixed prompt `"benchmark " * 64`, whose token count depends on the model tokenizer. Each `consume` probe creates a fresh handoff and requests up to four output tokens from a distinct, role-permitted peer. Decode uses the fleet's `engine.first_token_timeout_s` and must return generated output followed by a valid stream termination. Prefill and decode together remain bounded by `serving.request_timeout_s`. The gate reports elapsed time to the first generated token. An expired first-token deadline leaves the transfer unconfirmed and names calibration as the next check.
+General options:
 
-When writing directed KV evidence, qualification requires each engine's
-process generation to match across all pairs and repeats and to retain its
-profile binding at the final identity check. The fleet and profile files
-must retain the hashes captured before qualification.
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fleet PATH` | optional | Fleet configuration file for preflight, calibration, and evidence verification. |
+| `--format` | `text` | `text` or `json` for [versioned command results](../Command-Results.md). |
+| `--version` | | Print the installed version. |
+| `--print-example-config` | off | Print the packaged, annotated config and exit. |
+| `--print-contract-versions` | off | Print the versioned JSON interface registry and exit. |
+
+`--print-example-config` takes precedence over `--print-contract-versions`.
+
+Transfer probe options for preflight:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--repeats N` | 1 | Probes per pair. |
+| `--ring` | off | Test `consume` in a ring. |
+| `--no-kv` | off | Skip `produce` and `consume`. |
+
+KV evidence options:
+
+| Option | Default | Description | Mutually exclusive with |
+| --- | --- | --- | --- |
+| `--evidence-out PATH` | optional | Save full-mesh KV evidence to a new JSON file. | `--ring`, `--no-kv`, `--verify-evidence` |
+| `--verify-evidence PATH` | optional | Check saved evidence against the current fleet, profiles, and engine processes. | `--evidence-out` |
+
+Both evidence options require an `engine_contract` in the fleet configuration.
+
+Options for first-token calibration:
+
+| Option | Default | Description | Valid values |
+| --- | --- | --- | --- |
+| `--calibrate-first-token` | off | Measure fresh KV handoffs at each input length and report a first-token deadline. | |
+| `--input-tokens LIST` | optional | Comma-separated input lengths. | Each leaves room for at least one output token within both engines' live context limits. |
+| `--samples N` | 100 | Fresh handoffs per pair and input length. | |
+| `--observation-timeout-s SECONDS` | optional | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
+| `--calibration-out PATH` | optional | Raw samples and group summaries file. | New JSON file under `runs/`. |
+
+`--calibrate-first-token` rules:
+
+| Rule | Options |
+| --- | --- |
+| Requires | `--input-tokens`, `--observation-timeout-s`, `--calibration-out` |
+| Mutually exclusive with | The evidence options, `--ring`, `--no-kv`, a `--repeats` value other than 1 |
+| Required by | `--samples`, `--input-tokens`, `--observation-timeout-s`, `--calibration-out` |
+| `--input-tokens` includes | The longest input the service admits |
+
+## What a KV probe does
+
+| Property | Value |
+| --- | --- |
+| Prompt | `"benchmark " * 64`, tokenized for the model under test |
+| `consume` input | A KV handoff from an eligible peer |
+| `consume` pairs | Every eligible ordered pair, or a ring with `--ring` |
+| Output tokens | Four |
+| Output flags | vLLM's `min_tokens` and `ignore_eos` |
+| Cache salt per probe | One unique `cache_salt` shared by both legs |
+| Cache salt per `pace` repeat | Fresh |
+| First-token deadline | `engine.first_token_timeout_s` |
+| Probe deadline | `serving.request_timeout_s` |
+| Probe success | A stream end before the probe deadline |
+| Missed first-token deadline | Elapsed time reported |
+| Transfer after a miss | Unconfirmed |
+| Next step after a miss | Calibration |
+
+## Recording and verifying KV evidence
+
+An engine restart or a config change invalidates recorded evidence.
 
 ```bash
 narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.json
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 ```
 
-`--verify-evidence` checks the retained qualification against current engine identities and configuration. Fresh transfer probes run through preflight, where `--evidence-out` records pair outcomes and requires every gate to pass for exit status 0.
+`--evidence-out` rejects evidence when:
 
-The `slo` gate prices each profile's smallest measured decode cohort,
-including its active-request and KV-token costs. Capacity output states the
-request count used for the TPOT calculation.
+- an engine's process generation changes between pairs or repeats
+- an engine has lost its profile binding by the final identity check
+- the fleet or profile files differ from the hashes taken at the start of the run
 
-Run [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before qualifying a fleet. The artifact contains raw attempts, group p99s and maxima, the candidate deadline, and engine generations.
+`--verify-evidence` rejects saved evidence when:
 
-Each group requires at least 100 completed attempts. Any failed attempt, generation change or generation-check error makes the artifact incomplete. The candidate must be strictly below `serving.request_timeout_s`. The command retains incomplete artifacts for diagnosis.
+- the saved run has failed or skipped gates
+- the fleet file, profile store, engine contract, or eligible pairs have changed
+- a pair has fewer passing transfer and token records than the saved repeat count
+- an engine's live process generation differs from the saved records
 
-`--observation-timeout-s` bounds the wait for first output; `serving.request_timeout_s` bounds the complete attempt.
+## First-token calibration
 
-Calibration requests up to four output tokens per handoff, reducing the count to fit the smaller live context limit of the producer and consumer. A target of `max_model_len - 1` requests one output token. Every successful sample must produce a generated token and finish a valid stream. Saved evidence must contain distinct attempt numbers covering the configured sample count in every group, stable engine generations, and successful final generation checks.
+Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before recording evidence for a fleet.
 
-In default text mode, exit status 1 indicates a failed gate or operation; exit status 2 indicates invalid arguments or a fleet config read or validation error. JSON mode maps outcomes through the [command result contract](../Command-Results.md).
+The `--calibration-out` file holds:
 
-Use gate tables to diagnose deployment failures and the contract registry and versioned artifacts for automation.
+- the raw attempts
+- the p99 and maximum for each group
+- the candidate deadline
+- the engines' process generations
 
-| Output option | Default | Purpose |
-| --- | --- | --- |
-| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |
+| Scope | Timeout |
+| --- | --- |
+| Wait for first output | `--observation-timeout-s` |
+| Whole attempt | `serving.request_timeout_s` |
+
+| Handoff property | Value |
+| --- | --- |
+| Forced output tokens | Four |
+| Forced output token cap | The producer's and consumer's live context limits |
+| Output tokens at a `max_model_len - 1` target | One |
+| Successful sample | A produced token and a valid stream end |
+
+The artifact is valid evidence when all of these hold:
+
+- every group has at least 100 completed attempts
+- the attempt numbers are distinct
+- the attempt numbers cover the configured sample count
+- the process generations are unchanged
+- the final checks passed
+- the candidate deadline is strictly below `serving.request_timeout_s`
+- `engine.first_token_timeout_s` is above the candidate deadline
+
+The artifact is incomplete when an attempt fails, a generation changes, or a generation check errors.
+
+## The `slo` gate
+
+| Check | Fails when |
+| --- | --- |
+| TPOT | The token interval at the profile's smallest measured decode cohort exceeds `slo.tpot_s`. |
+| TTFT | `slo.ttft_s` is at or below the profile's single-token prefill time. |
+| Decode bounds | The profile's measured decode request or KV-token bound is missing. |
+
+The capacity output shows the request count used for the TPOT calculation.
+
+## Exit codes
+
+Text mode uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-codes):
+
+| Outcome | Exit code |
+| --- | :--: |
+| A failed gate or operation | `1` |
+| A skipped gate with `--evidence-out` | `1` |
+| Invalid arguments | `2` |
+| A fleet config that fails to load or validate | `2` |
+
+JSON mode follows the [command result contract](../Command-Results.md).

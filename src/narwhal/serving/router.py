@@ -22,6 +22,7 @@ from ..observability.metrics import Histogram, buckets_for
 from ..profiling.store import ProfileStore
 from ..runtime.lifecycle import LifecycleManager
 from ..runtime.monitoring import MonitoringLedger
+from ..runtime.residency import ResidencySubscriptions
 from ..runtime.standby import ready as router_ready
 from ..scheduling.controller import ReactiveController
 from ..scheduling.health import DriftTracker
@@ -72,6 +73,7 @@ class NarwhalRouter:
         # Share one injectable monotonic clock across scheduling and measurement.
         self._clock = clock
         self.profiles = ProfileStore(cfg.profiles_path)
+        self.residency = ResidencySubscriptions(cfg.engines)
         self.monitor = InstanceMonitor(
             clock=clock,
             profiles=self.profiles,
@@ -140,6 +142,7 @@ class NarwhalRouter:
                 f"engine {iid} was excluded"
             )
         self.lifecycle_transport = transport
+        self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
         self.engines = EngineClient(
             timeout_s=cfg.request_timeout_s,
             prefill_timeout_s=cfg.prefill_timeout_s,
@@ -591,6 +594,8 @@ class NarwhalRouter:
             "quarantined": self.scheduler.quarantine_list(),
             # Engine failure streaks and active verification probes.
             "breaker": self.scheduler.breaker_snapshot(),
+            # Prefix residency each sidecar reports; unknown engines are priced cold.
+            "residency": self.residency.snapshot(),
             "probation": sorted(
                 self.scheduler.health.probation_set() if self.scheduler.health else []
             ),

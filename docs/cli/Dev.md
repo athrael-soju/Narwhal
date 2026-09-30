@@ -1,56 +1,21 @@
-# `narwhal`
+---
+description: Options, exit codes and run directories for narwhal dev on one NVIDIA CUDA GPU.
+---
 
-[Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on
-Ubuntu or Ubuntu under WSL2. Its installed template starts two engines on a
-selected NVIDIA GPU and targets 8 GB of VRAM or less. The optional
-[RTX 5090 reference](../dev/08-RTX-5090-Reference.md) records a measured
-four-engine configuration. Templates select the model, runtime and memory
-budget; `gpu.product` pins a model of card when a recipe requires one.
+# `narwhal dev`
 
-`narwhal dev init` writes a private instance containing its model and runtime
-pins, memory budget, unique ports, engine launch records and fleet config.
-The installed template assigns one prefill and one decode role. Repeating
-`init` preserves the existing files and operator edits,
-returning `status: reused` when explicitly supplied settings match the saved
-instance. Omitted settings retain their saved values. Conflicting flags exit
-2 and name the settings that differ. To change initialization settings,
-select a fresh directory with `narwhal dev init --instance runs/new-instance`
-and supply the desired template and flags.
+[Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.
 
-`up` checks the ports and runtime, starts each engine, captures live
-attestations, profiles every split with at least one prefill and one decode
-engine, and starts the router. It reports `launched`.
-`verify` runs full preflight across every eligible directed KV path, checks
-the profiles against current processes, sends an arithmetic request through
-the router, and retains router and engine metrics before reporting `ready`.
+A template selects the model, runtime, and memory budget.
 
-`status` reports `launched` while owned processes pass HTTP health checks,
-then reports `ready` after successful verification with current transfer
-evidence. A failed `verify` saves its reason, evidence directory and
-failure time in `lifecycle.json` and the attempt's `failure.json`. Subsequent
-`status` calls report `degraded`, include that record as `verification_failure`
-and add its reason to `problems` until a successful verification or completed
-`down` resolves the failure. A verification retry retains the earlier failure
-while its checks execute.
+| Template | Configuration |
+| --- | --- |
+| Installed template | One prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less |
+| Optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) | A measured four-engine configuration |
 
-`down` checks the recorded boot ID and start ticks, then waits for the group's
-workers through leader exit and escalates surviving owned processes to
-SIGKILL. Successful teardown reports `stopped`; a subsequent `up` creates
-another run directory with fresh profiles. Earlier logs and measurements
-stay beside it.
+## Lifecycle
 
-In default text mode, lifecycle commands write their returned state as one JSON
-document to stdout and send preparation progress, profiling progress and error
-diagnostics to stderr. Use `narwhal dev up > result.json` to retain that state
-while progress remains visible. `--format json` wraps the state in the versioned
-command result and maps its status to the documented exit code.
-
-In default text mode, commands exit 0 for `initialized`, `reused`, `starting`,
-`launched`, `ready` or `stopped`, 2 for argument, instance configuration or
-runtime package errors, and 1 for failed lifecycle operations or a `degraded`
-status. A failed `verify` and subsequent `status` both exit 1 while that failure
-is retained, including when HTTP checks pass. JSON mode returns 3 for a degraded
-status and 4 for an operational error.
+Run the subcommands from the directory that holds the instance.
 
 ```bash
 narwhal dev init --model /path/to/model.gguf --model-dir /path/to/tokenizer
@@ -60,49 +25,143 @@ narwhal dev status
 narwhal dev down
 ```
 
-| Flag | Default | Operation |
-| --- | --- | --- |
-| `--version` | Root command | Run as `narwhal --version` to print the installed distribution version. |
-| `--instance` | `runs/dev` | Select the private instance for any subcommand. |
-| `--template` | Installed small-GPU template | Supply versioned model, tokenizer, runtime, profiling and memory settings to `init`. |
-| `--model` | Pinned Hugging Face cache file | Select the GGUF file matching the template checksum. |
-| `--model-dir` | Pinned tokenizer cache directory | Select tokenizer and configuration files. |
-| `--gpu` | Single discovered GPU | Select a physical GPU UUID. |
-| `--engine-count` | Template value, two | Allocate independent engine processes. |
-| `--port-base` | Template ports: router 18000, engine 18101, attestation 18201, NIXL 5701 | `--port-base P` sets the router port to `P`, engine HTTP start to `P+1`, attestation start to `P+101` and NIXL start to `P+201`. All selected ports must be distinct and fit 1..65535. |
-| `--gpu-memory-utilization` | Template value, 0.35 | Finite per-engine fraction of total GPU memory, greater than zero and at most 1. |
-| `--device-allowance` | Template value, 0.8 | Finite fraction of total GPU memory, at most 1; bounds the sum of engine fractions and the aggregate observed startup memory increase. |
-| `--interface` | `"eth0"` | Select the local NIXL/UCX interface. |
+| Subcommand | Behaviour |
+| --- | --- |
+| `init` | Writes a private instance with model and runtime pins, memory budget, unique ports, engine launch records, and fleet configuration. |
+| `up` | Launches the fleet and reports `launched`. |
+| `verify` | Verifies the fleet and reports `ready`. |
+| `status` | Reports `starting`, `launched`, `ready`, `degraded`, or `stopped`. |
+| `down` | Stops the recorded process groups with SIGKILL for survivors and reports `stopped`. |
 
-Initialization accepts two to eight engines and compares the decimal total of
-their per-engine fractions with the device allowance: three engines at `0.1`
-fit an allowance of `0.3`; a total above the allowance rejects initialization.
-The free-memory check reserves the allowance times total device memory plus
-the template's `gpu.reserve_mib` (512 MiB in the installed template).
+| `status` report | Condition |
+| --- | --- |
+| `starting` | `up` is in progress |
+| `launched` | Supervised processes pass HTTP health checks |
+| `ready` | Verification succeeded with current transfer evidence |
+| `degraded` | `problems` lists a process, health, readiness, evidence, or verification failure |
+| `stopped` | The recorded processes have stopped |
 
-Model and runtime changes belong in a custom template, selected with
-`--template`. Runtime and tokenizer checksums bind the default template to
-its pinned GGUF loader. Model overrides require their matching template
-checksums and serving limits.
+Running `init` again on an existing instance keeps existing files, operator edits, and saved values of omitted settings.
 
-Export `NARWHAL_ENGINE_API_KEY` before `up` to authenticate engine requests.
-The generated fleet references that environment variable for profiling,
-verification and routing; keep it set when using those commands.
+| Explicitly supplied settings | Result |
+| --- | --- |
+| Match the saved instance | `status: reused` |
+| Conflict with a saved setting | Exit `2` listing the differing settings |
 
-The RTX 5090 reference also contains `role_cycle`, with deterministic
-workloads for 1P:3D, 2P:2D and 3P:1D. The checkout command
-`python -m tools.measurement.dev_cycle --instance runs/dev` replays these
-workloads through a verified fleet and saves transition and latency checks.
-See [Replay all three role splits](../dev/08-RTX-5090-Reference.md#replay-all-three-role-splits)
-for the workload order, output files and exit codes.
+To change initialization settings, run `narwhal dev init --instance runs/new-instance` with the desired template and flags.
 
-Each `run-*` directory contains the fleet used by the router, effective
-commands, engine logs, cache layouts, attestations, measured profiles,
-whole-device VRAM samples and request journal. A `verify-*` directory adds
-the preflight log, directed transfer evidence, routed response and metrics.
-On startup failure, inspect the named stage's log, repair the configuration
-or runtime, and run `up` again after `down` confirms teardown.
+For engine authentication:
 
-| Output option | Default | Purpose |
-| --- | --- | --- |
-| `--format` | `"text"` | Select `json` for [versioned command results](../Command-Results.md). |
+1. Export `NARWHAL_ENGINE_API_KEY` before `up`.
+2. Keep it set for profiling, verification, and routing.
+
+A failed `verify`:
+
+- saves its reason, evidence directory, and failure time in `lifecycle.json` and the attempt's `failure.json`
+- appears in later `status` output as `verification_failure`, with its reason in `problems`
+- remains on record until a successful `verify` or a completed `down`
+
+## Output and exit codes
+
+Text mode output:
+
+| Stream | Content |
+| --- | --- |
+| stdout | The returned state, as one JSON document |
+| stderr | Preparation progress, profiling progress, and error diagnostics |
+
+Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
+
+`narwhal dev` uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-codes), with these lifecycle cases:
+
+| Case | Exit code |
+| --- | :--: |
+| `initialized`, `reused`, `starting`, `launched`, `ready`, or `stopped` | `0` |
+| `degraded`, a failed `verify`, or a later `status` while the instance retains that failure | `1` |
+| An instance configuration error, a runtime package error, or a failed `init` check | `2` |
+
+With `--format json` the state is the versioned [command result](../Command-Results.md) with these added exit codes:
+
+| Case | Exit code |
+| --- | :--: |
+| `degraded` | `3` |
+| Operational error | `4` |
+
+## Options
+
+| Scope | Options |
+| --- | --- |
+| Every subcommand | `--instance` and `--format` |
+| `init` | Every other option below |
+
+Print the installed distribution version with `narwhal --version`.
+
+| Option | Default | Description | Valid values |
+| --- | --- | --- | --- |
+| `--instance` | `runs/dev` | Private instance directory. | |
+| `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). | |
+| `--template` | Installed small-GPU template | Template file with versioned model, tokenizer, runtime, profiling, and memory settings. | |
+| `--model` | Pinned Hugging Face cache file | GGUF file matching the template checksum. | |
+| `--model-dir` | Pinned tokenizer cache directory | Directory of tokenizer and configuration files. | |
+| `--gpu` | Single discovered GPU | Physical GPU UUID. | |
+| `--engine-count` | Template value, `2` | Number of independent engine processes. | 2 to 8 |
+| `--port-base` | Template ports (router 18000, engine 18101, attestation 18201, NIXL 5701) | Base port for the router, engine HTTP, attestation, and NIXL ports. | |
+| `--gpu-memory-utilization` | Template value, `0.35` | Per-engine fraction of total GPU memory. | Finite, above zero, at most 1 |
+| `--device-allowance` | Template value, `0.8` | Fraction of total GPU memory bounding the sum of engine fractions and the observed startup memory increase. | Finite, at most 1 |
+| `--interface` | `eth0` | Local NIXL/UCX network interface. | |
+
+`--port-base P` port layout:
+
+| Port | Value |
+| --- | --- |
+| Router | `P` |
+| Engine HTTP range start | `P+1` |
+| Attestation range start | `P+101` |
+| NIXL range start | `P+201` |
+
+Selected ports must be distinct and fit 1..65535.
+
+`init` GPU checks:
+
+| Check | Requirement |
+| --- | --- |
+| Engine fractions | The decimal product of `--engine-count` and `--gpu-memory-utilization` is at most `--device-allowance`. |
+| Free memory | Free VRAM covers `--device-allowance` times total device memory plus the template's `gpu.reserve_mib` (512 MiB in the installed template). |
+| GPU product | The GPU name matches the template's `gpu.product` when the template sets it. |
+| Total memory | Total VRAM is at least the template's `gpu.minimum_total_mib` when the template sets it. |
+
+Change the model or runtime:
+
+1. Write a custom template with the changes, including the matching checksums and serving limits for a model override.
+2. Select the template with `--template`.
+
+## Role-split replay
+
+The RTX 5090 reference's `role_cycle` holds deterministic workloads for three role splits:
+
+- 1P:3D, one prefill and three decode engines
+- 2P:2D, two prefill and two decode engines
+- 3P:1D, three prefill and one decode engine
+
+[Replay the workloads](../dev/RTX-5090-Reference.md#replay-all-three-role-splits) through a verified fleet from a checkout:
+
+```bash
+python -m tools.measurement.dev_cycle --instance runs/dev
+```
+
+The replay saves transition and latency checks.
+
+## Run directories and recovery
+
+| Directory | Contents |
+| --- | --- |
+| `run-*` | Per `up`: router fleet configuration, effective commands, engine logs, cache layouts, attestations, measured profiles, whole-device VRAM samples, and the request journal. |
+| `verify-*` | Preflight log, directed transfer evidence, routed response, and metrics. |
+
+If `up` fails:
+
+1. Inspect the log of the stage named in the error.
+2. Repair the configuration or runtime.
+3. Run `narwhal dev down`.
+4. Confirm that `down` reports `stopped`.
+5. Run `narwhal dev up` again.

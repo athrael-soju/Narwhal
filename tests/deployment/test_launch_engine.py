@@ -14,7 +14,13 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-from tests.deployment.fixtures import launcher_inputs, runtime
+import tools.deployment.launch_engine as launcher
+from tests.deployment.fixtures import (
+    cache_settings_line,
+    engine_config_modules,
+    launcher_inputs,
+    runtime,
+)
 from tools.deployment.launch_engine import (
     build,
     check,
@@ -30,7 +36,16 @@ from tools.deployment.launch_engine import (
 )
 
 IMAGE_CHECK_OUTPUT = (
-    'NARWHAL_TOKENIZER_READY=1\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
+    "NARWHAL_TOKENIZER_READY=1\n"
+    + cache_settings_line(
+        {
+            "kv_events": {
+                "endpoint": "ipc:///narwhal-kv-events/events.sock",
+                "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock",
+            }
+        }
+    )
+    + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
 )
 
 
@@ -54,7 +69,8 @@ class EngineLauncherTests(unittest.TestCase):
             output = (
                 '{"vllm": "0.29.0", "nixl": "1.0.0"}\n'
                 "NARWHAL_TOKENIZER_READY=1\n"
-                'NARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
+                + cache_settings_line(plan)
+                + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
             )
             with (
                 patch("tools.deployment.launch_engine.docker") as docker,
@@ -140,7 +156,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(values["VLLM_NIXL_SIDE_CHANNEL_HOST"], env["NARWHAL_NODE_1_IP"])
             self.assertEqual(values["UCX_TLS"], "tcp,sm,self,rocm")
             self.assertEqual(values["ROCR_VISIBLE_DEVICES"], "0,1")
-            self.assertIn("--no-enable-prefix-caching", plan["args"])
+            self.assertNotIn("--no-enable-prefix-caching", plan["args"])
             self.assertEqual(values["VLLM_API_KEY"], "engine-only-secret")
             self.assertNotIn("management-only-secret", json.dumps([plan, values]))
             self.assertNotIn("engine-only-secret", json.dumps(plan))
@@ -155,6 +171,144 @@ class EngineLauncherTests(unittest.TestCase):
         spec["environment"]["VLLM_NIXL_SKIP_COMPATIBILITY_CHECK"] = "1"
         with self.assertRaises(ValueError):
             validate_runtime(spec)
+
+    def test_default_launch_keeps_prefix_caching_and_publishes_events_on_run_sockets(self):
+        for backend in ("container", "native"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend=backend)
+                plan = load(run)
+                socket_dir = launcher.KV_EVENTS_ROOT / f"narwhal-{os.getuid()}" / plan["name"]
+                engine_dir = "/narwhal-kv-events" if backend == "container" else str(socket_dir)
+                self.assertEqual(
+                    plan["kv_events"],
+                    {
+                        "socket_dir": str(socket_dir),
+                        "endpoint": f"ipc://{engine_dir}/events.sock",
+                        "replay_endpoint": f"ipc://{engine_dir}/replay.sock",
+                    },
+                )
+                events = json.loads(plan["args"][plan["args"].index("--kv-events-config") + 1])
+                self.assertEqual(
+                    events,
+                    {
+                        "enable_kv_cache_events": True,
+                        "publisher": "zmq",
+                        "endpoint": plan["kv_events"]["endpoint"],
+                        "replay_endpoint": plan["kv_events"]["replay_endpoint"],
+                    },
+                )
+                self.assertNotIn("--no-enable-prefix-caching", plan["args"])
+                for directory in (socket_dir, socket_dir.parent):
+                    self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                mount = f"type=bind,src={socket_dir},dst=/narwhal-kv-events"
+                self.assertEqual(mount in plan["common"], backend == "container")
+                # A host restart clears /tmp; check and start recreate the directory.
+                socket_dir.rmdir()
+                launcher.kv_events_directory(plan)
+                self.assertTrue(socket_dir.is_dir())
+                socket_dir.chmod(0o755)
+                with self.assertRaisesRegex(ValueError, "private to the launching user"):
+                    launcher.kv_events_directory(plan)
+                socket_dir.chmod(0o700)
+
+    def test_sidecar_connects_to_the_socket_names_the_launcher_binds(self):
+        from narwhal.engines.attestation import EVENTS_SOCKET, REPLAY_SOCKET
+
+        self.assertEqual(
+            launcher.KV_EVENTS_SOCKETS,
+            {"endpoint": EVENTS_SOCKET, "replay_endpoint": REPLAY_SOCKET},
+        )
+
+    def test_backend_settings_disable_cache_event_publication(self):
+        for options in (
+            ["--no-enable-prefix-caching"],
+            ["--kv-events-config", '{"enable_kv_cache_events": false}'],
+        ):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                record, env = launcher_inputs(root)
+                record["runtime"]["extra_args"] += options
+                Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env)
+                plan = load(run)
+                self.assertIsNone(plan["kv_events"])
+                self.assertEqual(
+                    plan["args"].count("--kv-events-config"), options.count("--kv-events-config")
+                )
+                self.assertNotIn("/narwhal-kv-events", json.dumps(plan["common"]))
+
+    def test_cache_event_options_cannot_select_endpoints_or_conflict(self):
+        events = '{"enable_kv_cache_events": false}'
+        cases = {
+            "enabled": ["--kv-events-config", '{"enable_kv_cache_events": true}'],
+            "endpoint": [
+                "--kv-events-config",
+                '{"enable_kv_cache_events": false, "endpoint": "tcp://*:5557"}',
+            ],
+            "invalid": ["--kv-events-config", "{"],
+            "repeated": ["--kv-events-config", events, "--kv-events-config", events],
+            "conflicting": ["--enable-prefix-caching", "--no-enable-prefix-caching"],
+        }
+        for name, options in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
+                record, env = launcher_inputs(Path(folder))
+                record["runtime"]["extra_args"] += options
+                validate_runtime(record["runtime"])
+                with self.assertRaises(ValueError):
+                    build(record, env, Path(folder) / "launch")
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            with (
+                patch.object(launcher, "KV_EVENTS_ROOT", Path(folder) / ("d" * 80)),
+                self.assertRaisesRegex(ValueError, "exceeds 107 bytes"),
+            ):
+                build(record, env, Path(folder) / "launch")
+
+    def test_image_check_records_resolved_cache_settings(self):
+        for case in ("published", "caching_off", "endpoint_differs"):
+            with self.subTest(case), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env)
+                plan = load(run)
+                resolved = plan
+                if case == "endpoint_differs":
+                    resolved = {"kv_events": {**plan["kv_events"], "endpoint": "tcp://*:5557"}}
+                output = (
+                    "NARWHAL_TOKENIZER_READY=1\n"
+                    + cache_settings_line(resolved, prefix_caching=case != "caching_off")
+                    + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
+                )
+                image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+                with (
+                    patch("tools.deployment.launch_engine.docker", side_effect=[image, output]),
+                    contextlib.redirect_stdout(io.StringIO()) as printed,
+                ):
+                    if case == "endpoint_differs":
+                        with self.assertRaisesRegex(ValueError, "endpoints differ"):
+                            check(run, plan)
+                        self.assertFalse((run / "checked.json").exists())
+                        continue
+                    check(run, plan)
+                checked = json.loads((run / "checked.json").read_text())
+                self.assertEqual(checked["prefix_caching"], case == "published")
+                self.assertEqual(
+                    checked["kv_events"],
+                    {key: plan["kv_events"][key] for key in ("endpoint", "replay_endpoint")},
+                )
+                self.assertIn(
+                    "publishes no cache events" if case == "caching_off" else "cache events",
+                    printed.getvalue(),
+                )
 
     def test_launch_ports_and_shared_budget_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -391,6 +545,7 @@ class EngineLauncherTests(unittest.TestCase):
             factory_module.__name__: factory_module,
             version_module.__name__: version_module,
             transformers_module.__name__: transformers_module,
+            **engine_config_modules(),
         }
         for missing_dependency in (False, True):
             with (
@@ -432,6 +587,10 @@ class EngineLauncherTests(unittest.TestCase):
                         check(run, plan)
                         marker = json.loads((run / "checked.json").read_text())
                         self.assertEqual(marker["vllm_api_version"], "0.29.0")
+                        self.assertIs(marker["prefix_caching"], True)
+                        self.assertEqual(
+                            marker["kv_events"]["endpoint"], plan["kv_events"]["endpoint"]
+                        )
                         self.assertEqual(plan["expected_packages"]["vllm"], "0.29.0+rocm100")
                 self.assertEqual((run / "checked.json").exists(), not missing_dependency)
                 config_module.KVTransferConfig.assert_called_with(**plan["connector"])

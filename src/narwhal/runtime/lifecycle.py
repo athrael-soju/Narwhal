@@ -836,6 +836,7 @@ async def validate_readmission(
         "prompt": "narwhal lifecycle fabric check",
         "max_tokens": 2,
         "temperature": 0.0,
+        **router.engines.dialect.decode_probe_extras(2),
     }
     for source, target in pairs:
         if not await identities_unchanged():

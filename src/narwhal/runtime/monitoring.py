@@ -31,6 +31,7 @@ MONITOR_STAGES = (
     "rollover",
     "readmission",
     "liveness",
+    "residency",
     "handoff",
     # Floor-state refresh and loop logging can fail independently of the
     # controller. Account for those failures without stopping the monitor loop.
@@ -404,6 +405,12 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             router.monitoring.fail("liveness", exc)
         else:
             router.monitoring.ok("liveness")
+    try:
+        await router.residency.refresh(router.residency_client)
+    except Exception as exc:
+        router.monitoring.fail("residency", exc)
+    else:
+        router.monitoring.ok("residency")
     try:
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
