@@ -13,7 +13,7 @@ Prerequisites:
 | Active sequences per engine | 4 |
 | vLLM memory fraction per engine | 0.1 |
 | Device share for all four engines | Up to 0.5 |
-| Free VRAM required by `narwhal dev init` | 2,048 MiB |
+| Free VRAM required by `narwhal dev init` | Half the total VRAM plus 2,048 MiB |
 
 ## Select the RTX 5090 template
 
@@ -31,7 +31,7 @@ The template pins:
 
 - the GPU product, NVIDIA GeForce RTX 5090
 - a minimum of 30,000 MiB total VRAM
-- the same runtime and model hashes as the installed small-GPU template.
+- the same runtime and model hashes as the installed small-GPU template
 
 ## Launch and verify the reference
 
@@ -39,17 +39,17 @@ The template pins:
 2. Find the Linux network interface that carries a single IPv4 address.
 3. Replace `eth0` with that interface name in these commands:
 
-```bash
-narwhal dev init --interface eth0 --template runs/rtx5090-template.json
-narwhal dev up
-narwhal dev verify
-narwhal dev status
-```
+    ```bash
+    narwhal dev init --interface eth0 --template runs/rtx5090-template.json
+    narwhal dev up
+    narwhal dev verify
+    narwhal dev status
+    ```
 
 | Command | Result |
 | --- | --- |
 | `up` | Profiles the engines and starts the router |
-| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, then reports `ready` |
+| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, and reports `ready` |
 
 Run later lifecycle commands in the virtual environment that ran `init`.
 
@@ -90,7 +90,7 @@ Replay prerequisites:
 - a verified instance that starts with two prefill and two decode engines (2P:2D)
 - an active role controller
 - the matching Narwhal checkout as the working directory
-- the instance's virtual environment as the active environment.
+- the instance's virtual environment as the active environment
 
 Run the replay and stop the instance:
 
@@ -103,7 +103,7 @@ narwhal dev down --instance runs/dev
 Replay phases:
 
 | Phase | Input / output tokens | Requests | Requests/s | Maximum in flight |
-| --- | --- | --- | --- | --- |
+| --- | --- | :---: | :---: | :---: |
 | Decode | 256 / 128 | 24 | 0.5 | 8 |
 | Prefill steady | 3,840 / 1 | 35 | 1 | 8 |
 | Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
@@ -111,16 +111,22 @@ Replay phases:
 | Item | Value |
 | --- | --- |
 | Split sequence | 2P:2D, 1P:3D, 2P:2D, 3P:1D, 2P:2D |
-| Duration | About two minutes after `up` and `verify` |
+| Duration | About two minutes |
 
 Acceptance criteria:
 
-| Phase | Accepted outcome |
+| Scope | Accepted outcome |
 | --- | --- |
+| Role cycle | The observed splits match the split sequence, with every move made by the role controller on the same engine processes. |
 | Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
 | Prefill burst | Every request completes or returns an HTTP 429 response that cites the TTFT budget. |
 
-Replay records go to a `cycle-*` directory beneath the instance, or to the fresh directory passed with `--out`.
+Replay records directory:
+
+| Option | Directory |
+| --- | --- |
+| Default | A `cycle-*` directory beneath the instance |
+| `--out DIR` | `DIR`, a fresh directory |
 
 | Content | Holds |
 | --- | --- |
@@ -130,9 +136,11 @@ Replay records go to a `cycle-*` directory beneath the instance, or to the fresh
 
 Exit codes:
 
-- 0: the cycle and steady-phase budgets passed.
-- 1: setup or execution failed.
-- 2: a completed replay failed the cycle or steady-phase budgets.
+| Code | Meaning |
+| :--: | --- |
+| `0` | The role cycle and every phase passed. |
+| `1` | Setup or execution failed. |
+| `2` | A completed replay failed the role cycle or a phase. |
 
 ## Reference operating limits
 
@@ -158,7 +166,7 @@ curl http://127.0.0.1:18000/metrics
 | Demand window for ordinary moves | 30 seconds |
 | Confirmations for ordinary moves | 3 |
 
-Fill one 30-second demand window with representative traffic after `verify` and before assessing role changes.
+Fill one 30-second demand window with representative traffic between `verify` and any assessment of role changes.
 
 To change the engine count, model, context length, or memory fractions:
 

@@ -13,20 +13,23 @@ The engine deployment wrapper applies the stage budgets to Docker clients and na
 
 Each Docker create or run carries two labels:
 
-| Label                  | Value                                   |
-| ---------------------- | --------------------------------------- |
-| `io.narwhal.launch`    | Launch token from `docker-owner.json`   |
-| `io.narwhal.operation` | Unique operation token                  |
+| Label | Value |
+| --- | --- |
+| `io.narwhal.launch` | Launch token from `docker-owner.json` |
+| `io.narwhal.operation` | Unique operation token |
 
-After a Docker client timeout or cancellation, the wrapper reconciles with the daemon within `NARWHAL_DOCKER_RECONCILE_SECONDS`, 30 seconds by default:
+A Docker client timeout or cancellation starts a reconciliation with the daemon:
+
+| Setting | Value |
+| --- | --- |
+| Reconciliation budget | `NARWHAL_DOCKER_RECONCILE_SECONDS`, 30 seconds by default |
+| Final cleanup | Up to 15 seconds at default settings |
 
 | Resource | Reconciliation result |
 | --- | --- |
 | Containers the interrupted operation created | Removed |
 | Explicit target of an interrupted start | Removed |
 | Other containers in the launch directory | Kept, with their IDs recorded as preserved resources |
-
-Final cleanup adds up to 15 seconds at default settings.
 
 Each reconciliation writes a `docker-reconcile-*.json` report with:
 
@@ -54,31 +57,36 @@ The Linux recovery suite checks twelve barrier and signal combinations for:
 
 The twelve combinations:
 
-| Interruption barrier | Signals exercised | Cleanup and fresh `down` | Fresh `status` | Operator action |
+| Interruption barrier | Signal | Cleanup and fresh `down` | Fresh `status` | Operator action |
 | --- | --- | --- | --- | --- |
-| Child created, before identity capture | SIGINT and SIGKILL | With SIGINT a fresh `down` reports stopped, and with SIGKILL recovery uses the last committed process set. | | After SIGKILL, identify the newly created service from its command and log. |
-| Process record awaiting atomic replacement | SIGKILL | Previous complete document stays current. | | Inspect the service described by the pending write. |
-| Process record committed | SIGINT and SIGTERM | With SIGINT startup rolls back, and with SIGTERM a fresh `down` terminates the recorded group. | | |
-| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group. | Reports degraded. | |
-| Profiling helper active | SIGINT, SIGTERM, and SIGKILL | With SIGINT or SIGTERM startup rolls back, and with SIGKILL a fresh `down` recovers the helper and service records. | | |
-| Verification helper active | SIGTERM and SIGKILL | With SIGTERM a fresh `down` terminates the retained services, and with SIGKILL a fresh `down` terminates the helpers and services. | After SIGTERM, reports degraded verification. | |
+| Child created, before identity capture | SIGINT | A fresh `down` reports `stopped`. | | |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set. | | Identify the newly created service from its command and log. |
+| Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current. | | Inspect the service described by the pending write. |
+| Process record committed | SIGINT | Startup rolls back. | | |
+| Process record committed | SIGTERM | A fresh `down` terminates the recorded group. | | |
+| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group. | Reports `degraded`. | |
+| Profiling helper active | SIGINT | Startup rolls back. | | |
+| Profiling helper active | SIGTERM | Startup rolls back. | | |
+| Profiling helper active | SIGKILL | A fresh `down` recovers the helper and service records. | | |
+| Verification helper active | SIGTERM | A fresh `down` terminates the retained services. | Reports degraded verification. | |
+| Verification helper active | SIGKILL | A fresh `down` terminates the helpers and services. | | |
 | Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection. | Lists the surviving group. | Inspect the worker's identity. |
 
 Stage documents record each observed descendant's boot ID and process start ticks.
 
 When the `narwhal dev` process dies abruptly:
 
-| Command  | Behavior                                                 |
-| -------- | -------------------------------------------------------- |
-| `status` | Lists matching interrupted helpers in `stage_processes` and retains stdout, stderr, and command evidence. |
-| `down`   | Terminates the helper supervisor process tree and retains stdout, stderr, and command evidence. |
+| Command | Behavior | Stage evidence |
+| --- | --- | --- |
+| `status` | Lists matching interrupted helpers in `stage_processes`. | Retains stdout, stderr, and command evidence. |
+| `down` | Terminates the helper supervisor process tree. | Retains stdout, stderr, and command evidence. |
 
 | Recovery outcome | Stage record |
 | --- | --- |
 | Processes stopped | `recovered` |
 | Processes survive | `recovery_required`, with the surviving PIDs |
 
-Steps for a service whose command log predates its record after SIGKILL before the process or stage record commits:
+Recover a service left by a SIGKILL before its process or stage record commits:
 
 1. Inspect the log, kernel start ticks, and listening ports.
 2. Stop the confirmed process tree.
@@ -96,6 +104,7 @@ Prerequisites:
 - an Ubuntu shell on the reference GPU host
 - the pinned template
 - an instance you choose
+- a separately identified process that stays alive during the check
 
 1. From a successful process generation, retain the startup logs and
    `native-start-shared.log.*.stage.json`.
@@ -122,7 +131,7 @@ Prerequisites:
 10. Compare the device memory with the idle baseline.
 11. Retain `lifecycle.json` and the teardown, startup, memory, and stage
     artifacts.
-12. Confirm the unrelated process survives.
+12. Confirm the separately identified process survives.
 13. Start a fresh process generation with the normal budget.
 14. Verify the fresh process generation.
 

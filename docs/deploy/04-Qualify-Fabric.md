@@ -4,14 +4,17 @@ Measure each directed host edge against its source cache group's budget while th
 
 ## Build the source budget
 
-The initial trial uses these parameters:
+Initial trial parameters:
 
-- One remote KV handoff per second.
-- 1,024 prompt tokens per handoff.
-- A burst size of one.
-- A one-second transfer budget.
-- 25% bandwidth headroom.
-- Each outgoing directed edge from the cache group's roles carries the full handoff rate.
+| Parameter                     | Value | `calculate` flag        |
+| ----------------------------- | :---: | ----------------------- |
+| Remote KV handoffs per second | 1     | `--handoffs-per-s 1`    |
+| Prompt tokens per handoff     | 1,024 | `--prompt-tokens 1024`  |
+| Burst size                    | 1     | `--burst 1`             |
+| Transfer budget               | 1 s   | `--transfer-budget-s 1` |
+| Bandwidth headroom            | 25%   | `--headroom 1.25`       |
+
+Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
 1. In the representative's engine-role shell, calculate the budget:
 
@@ -82,13 +85,13 @@ The initial trial uses these parameters:
 
 5. Create a new `FABRIC_RUN` for each repeat comparison.
 
-Page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`, with extra blocks set by attention type:
+Page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`:
 
-| Attention type | Blocks counted |
-| --- | --- |
-| Full attention and multi-head latent attention (MLA) | The complete prompt |
-| Mamba | The complete prompt plus boundary state, speculative slots, and checkpoint slots |
-| Windowed attention | The complete prompt plus a boundary page |
+| Attention type                                       | `extra_blocks`                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| Full attention and multi-head latent attention (MLA) | `0`                                                          |
+| Mamba                                                | `1 + num_speculative_blocks + num_prefill_checkpoint_blocks` |
+| Sliding-window and chunked local attention           | `1`                                                          |
 
 Payload per handoff is page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout.
 
@@ -102,7 +105,7 @@ headroom / 1e9
 
 ## Bind each sample to a directed route
 
-The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
+Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 1. In both engine-role shells, run the edge variable setup and `TEST_PORT` listener check:
 
@@ -181,20 +184,20 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 `record-edge` takes the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`.
 
-`record-edge` exit codes:
-
-- 0: the budget is met.
-- 1: the measured rate is below the budget.
-- 2: the sample is invalid.
+| `record-edge` exit code | Meaning                                                      |
+| :---------------------: | ------------------------------------------------------------ |
+| 0                       | The measured rate meets the budget.                          |
+| 1                       | The measured rate is below the budget.                       |
+| 2                       | An input file is invalid, or the output file already exists. |
 
 ## Measure `ucx_rdma`
 
 The test measures one-way RDMA writes between host-memory buffers.
 
-| Fabric                                    | GID selection                                               |
-| ----------------------------------------- | ----------------------------------------------------------- |
-| RDMA over Converged Ethernet (RoCE)       | A global identifier (GID) index, selected in steps 4 to 7   |
-| Native InfiniBand                         | The site's active port and GID selection                    |
+| Fabric                              | GID selection                                             |
+| ----------------------------------- | --------------------------------------------------------- |
+| RDMA over Converged Ethernet (RoCE) | A global identifier (GID) index, selected in steps 4 to 7 |
+| Native InfiniBand                   | The site's active port and GID selection                  |
 
 1. Install `perftest` on each host that is missing it:
 
@@ -203,7 +206,7 @@ The test measures one-way RDMA writes between host-memory buffers.
     ```
 
 2. Record `ib_write_bw --version`.
-3. On each host, set `HCA` and `HCA_PORT` from `transfer.net_devices`, where `mlx5_0:1` gives `HCA=mlx5_0` and `HCA_PORT=1`.
+3. On each host, set `HCA` and `HCA_PORT` from `transfer.net_devices`, such as `HCA=mlx5_0` and `HCA_PORT=1` for `mlx5_0:1`.
 4. For RoCE, inspect:
 
     ```text
@@ -268,10 +271,10 @@ The test measures one-way RDMA writes between host-memory buffers.
 
 ## Complete the matrix and match retained evidence
 
-| KV handoff           | Qualified by                                                        |
-| -------------------- | ------------------------------------------------------------------- |
-| Between engine hosts | This matrix                                                         |
-| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight)   |
+| KV handoff           | Qualified by                                                      |
+| -------------------- | ----------------------------------------------------------------- |
+| Between engine hosts | This matrix                                                       |
+| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight) |
 
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
@@ -296,10 +299,10 @@ Link inputs:
 - The utility version
 - The measurement parameters
 
-| Link inputs    | Action                             |
-| -------------- | ---------------------------------- |
-| Any changed    | Collect a new directed sample.     |
-| All unchanged  | Reuse the retained sample.         |
+| Link inputs   | Action                         |
+| ------------- | ------------------------------ |
+| Any changed   | Collect a new directed sample. |
+| All identical | Reuse the retained sample.     |
 
 Reuse a retained sample:
 
@@ -308,27 +311,27 @@ Reuse a retained sample:
 3. Recreate the current link fingerprint with `link`.
 4. Compare the retained sample with the recalculated budget:
 
-```bash
-python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
-  --link "$CURRENT_EDGE_PREFIX.link.json" \
-  --evidence "$RETAINED_EDGE_PREFIX.evidence.json" \
-  --sample "$RETAINED_EDGE_PREFIX.json" \
-  --budget "$FABRIC_RUN/budget.json" \
-  --out "$CURRENT_EDGE_PREFIX.comparison.json"
-```
+    ```bash
+    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
+      --link "$CURRENT_EDGE_PREFIX.link.json" \
+      --evidence "$RETAINED_EDGE_PREFIX.evidence.json" \
+      --sample "$RETAINED_EDGE_PREFIX.json" \
+      --budget "$FABRIC_RUN/budget.json" \
+      --out "$CURRENT_EDGE_PREFIX.comparison.json"
+    ```
 
 `--sample` value by transport:
 
-| Transport  | `--sample` value              |
-| ---------- | ----------------------------- |
-| `ucx_tcp`  | The retained `iperf3` JSON    |
-| `ucx_rdma` | The retained `.txt` report    |
+| Transport  | `--sample` value           |
+| ---------- | -------------------------- |
+| `ucx_tcp`  | The retained `iperf3` JSON |
+| `ucx_rdma` | The retained `.txt` report |
 
-`reuse-edge` exit codes:
-
-- 0: the retained sample meets the recalculated budget.
-- 1: the retained sample is below that budget.
-- 2: the current link fingerprint or the retained sample differs from the recorded evidence.
+| `reuse-edge` exit code | Meaning                                                                                 |
+| :--------------------: | --------------------------------------------------------------------------------------- |
+| 0                      | The retained sample meets the recalculated budget.                                      |
+| 1                      | The retained sample is below the recalculated budget.                                   |
+| 2                      | The current link fingerprint or the retained sample differs from the recorded evidence. |
 
 ## Troubleshoot an edge below its budget
 
@@ -338,4 +341,4 @@ When `record-edge` or `reuse-edge` exits 1:
 2. Fix the cause.
 3. Resample the directed edge until `record-edge` exits 0.
 
-Next: [Gate E: Attest the live engine processes](05-Attest.md).
+[![Next: Gate E: Attest the live engine processes](https://img.shields.io/badge/next-Gate%20E%3A%20Attest%20the%20live%20engine%20processes-0f766e)](05-Attest.md)

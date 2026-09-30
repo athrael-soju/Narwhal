@@ -2,51 +2,64 @@
 
 ## 17. Fabric workload qualification
 
-| Command                                       | Fabric helper result                                                    |
-| --------------------------------------------- | ----------------------------------------------------------------------- |
-| `deploy_hosts.py prepare`                     | Snapshot of `tools/deployment/fabric_budget.py` for every engine host   |
-| `deploy_hosts.py prepare` (manifest)          | SHA-256 of the snapshot recorded in the manifest                        |
-| `deploy_hosts.py prepare` (role environment)  | SHA-256 of the snapshot recorded in the engine role environment         |
-| `install`                                     | Verified snapshot in `runs/deployment-tools/`                           |
+| Fabric helper property | Value                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| Snapshot               | `tools/deployment/fabric_budget.py`, copied by `deploy_hosts.py prepare` for every engine host |
+| Snapshot hash          | SHA-256 in the prepared manifest and in `NARWHAL_FABRIC_BUDGET_SHA256`                         |
+| Installed path         | `runs/deployment-tools/fabric_budget.py`, verified by `deploy_hosts.py install`                |
+| Path variable          | `NARWHAL_FABRIC_BUDGET_TOOL`                                                                   |
 
 If the helper changes, start a new preparation directory.
 
 ### 17.1 Calculate the workload budget
 
-[Fabric qualification](../deploy/04-Qualify-Fabric.md) groups engine roles by:
+[Cache-equivalence grouping](../deploy/03-Validate-Engines.md#derive-cache-equivalence-groups) groups engine roles by:
 
 - discovered image
-- model
+- model configuration
 - accelerator
-- tensor parallel (TP) shape
+- tensor parallel (TP) size
+- GPU visibility variable
 - runtime inputs
+- transfer transport
 
 Engines with matching captured cache layouts share one budget from a representative engine.
 
 To compute the budget:
 
-1. Capture each engine's `cache-layout.json` with `launch_engine.py capture-cache`.
-2. Run `calculate` with `--runtime-layout` in the shell of each representative engine role:
+1. Capture each engine's `cache-layout.json` in its engine-role shell:
 
     ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate
+    python3 "$NARWHAL_ENGINE_LAUNCHER" capture-cache --run "$ENGINE_RUN"
+    ```
+
+2. Run `calculate` in the shell of each representative engine role:
+
+    ```bash
+    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
+      --model-config "$NARWHAL_MODEL_DIR/config.json" \
+      --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
+      --runtime-layout "$ENGINE_RUN/cache-layout.json" \
+      --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
+      --transfer-budget-s 1 --headroom 1.25 \
+      --out "$FABRIC_RUN/budget.json"
     ```
 
 3. Compare each directed host edge with its group budget using the [link evidence](#174-link-evidence).
 
 `calculate` accepts these options:
 
-| Option                        | Default                    | Description                                                     |
-| ----------------------------- | -------------------------- | --------------------------------------------------------------- |
-| `--model-config PATH`         | required                   | Model configuration file whose hash matches the runtime layout. |
-| `--launch-config PATH`        | required                   | Engine launch record whose hash matches the runtime layout.     |
-| `--runtime-layout PATH`       | one of three cache sources | Captured `cache-layout.json`.                                   |
-| `--prompt-tokens N`           | required                   | Prompt length, in tokens.                                       |
-| `--handoffs-per-s RATE`       | required                   | Peak remote KV handoff rate, in handoffs per second.            |
-| `--burst N`                   | required                   | Number of KV handoffs in a burst.                               |
-| `--transfer-budget-s SECONDS` | required                   | Time budget for transferring one burst.                         |
-| `--headroom FACTOR`           | required                   | Multiplier of at least 1 applied to the required rate.          |
-| `--out PATH`                  | required                   | Fresh private output path for the budget.                       |
+| Option                        | Default          | Description                                                                         |
+| ----------------------------- | ---------------- | ----------------------------------------------------------------------------------- |
+| `--model-config PATH`         | required         | Model configuration file whose hash matches the runtime layout.                     |
+| `--launch-config PATH`        | required         | Engine launch record that supplies the TP size and matches the runtime layout hash. |
+| `--runtime-layout PATH`       | one cache source | Captured `cache-layout.json`.                                                       |
+| `--prompt-tokens N`           | required         | Prompt length, in tokens.                                                           |
+| `--handoffs-per-s RATE`       | required         | Peak remote KV handoff rate, in handoffs per second.                                |
+| `--burst N`                   | required         | Number of KV handoffs in a burst.                                                   |
+| `--transfer-budget-s SECONDS` | required         | Time budget for transferring one burst.                                             |
+| `--headroom FACTOR`           | required         | Multiplier of at least 1 applied to the required rate.                              |
+| `--out PATH`                  | required         | Fresh private output path for the budget.                                           |
 
 Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--bytes-per-token`.
 
@@ -56,42 +69,43 @@ Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engin
 
 The budget file holds:
 
-- the input and runtime-layout hashes
+- the model, launch, and runtime-layout hashes
+- the image identity, launch-plan hash, and TP size
 - the prompt length
-- the padded-page payload bound
+- the padded-page payload bound per handoff
 - the sizing assumptions
 - the required decimal Gbit/s
 
 The budget is the total rate over all TP ranks that one directed host edge must carry at the recorded workload.
 
-Each matching source role's private comparison file holds the budget rate and hash.
+Each matching source role's private comparison budget holds the representative's budget rate and hash.
 
 The captured layout holds:
 
-| Layout group     | Items                                                                                  |
-| ---------------- | -------------------------------------------------------------------------------------- |
-| Page sizing      | per-rank page bytes, per-layer page bytes, token block size, state allowance, boundary allowance |
-| Image and launch | image identity, package versions, application revision, launch-plan hash               |
+| Layout group     | Items                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| Page sizing      | Per-layer page bytes for each TP rank, token block size, and extra blocks for state and boundary allowance |
+| Image and launch | Image identity, package versions, application revision, launch-plan hash                                   |
 
 ### 17.3 Uniform-cache options
 
-Deployments use the runtime page record for every model.
+Deployments use `--runtime-layout` for every model.
 
-Offline estimates use these options:
+Offline estimates use these cache sources:
 
-| Option              | Cache source                                                       | Requires                               |
-| ------------------- | ------------------------------------------------------------------ | -------------------------------------- |
-| `--uniform-cache`   | Analytical attention or multi-head latent attention (MLA) estimate | `--element-bytes` and `--block-tokens` |
-| `--bytes-per-token` | Measured override                                                  | `--element-bytes` and `--block-tokens` |
+| Option                | Cache source                                                       | Requires                                                    |
+| --------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `--uniform-cache`     | Analytical attention or multi-head latent attention (MLA) estimate | `--element-bytes` of `1`, `2`, or `4`, and `--block-tokens` |
+| `--bytes-per-token N` | Measured override                                                  | `--element-bytes` of `1`, `2`, or `4`, and `--block-tokens` |
 
 ### 17.4 Link evidence
 
-| Transport | Measured rate                                               |
-| --------- | ----------------------------------------------------------- |
-| TCP       | Aggregate received bitrate that the iperf3 receiver reports |
-| RDMA      | Average Gbit/s from the retained perftest report            |
+| Transport  | Measured rate                                               | `record-edge` input                     |
+| ---------- | ----------------------------------------------------------- | --------------------------------------- |
+| `ucx_tcp`  | Aggregate received bitrate that the iperf3 receiver reports | iperf3 JSON as `--sample`               |
+| `ucx_rdma` | Average Gbit/s from the retained perftest report            | `--gbps`, with the report as `--sample` |
 
-Link fingerprint (SHA-256, per directed pair) fields, printed by `fabric_budget.py link`:
+`fabric_budget.py link` prints a SHA-256 link fingerprint per directed pair over these inputs:
 
 - roles
 - addresses
@@ -101,10 +115,11 @@ Link fingerprint (SHA-256, per directed pair) fields, printed by `fabric_budget.
 - utility version
 - test parameters
 
-| Command       | Result                                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                  |
-| `reuse-edge`  | New private comparison of the retained sample against a corrected budget, for a matching link fingerprint.        |
+| Command       | Result                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `compare`     | Compares one sample, from `--iperf` or `--gbps`, with a budget.                                                     |
+| `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                   |
+| `reuse-edge`  | Writes a new private comparison of the retained sample against a corrected budget, for a matching link fingerprint. |
 
 ---
 
@@ -116,21 +131,22 @@ Link fingerprint (SHA-256, per directed pair) fields, printed by `fabric_budget.
 
 Options that default to a fleet field:
 
-| Option                       | Default                      | Description                                                              |
-| ---------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
-| `--max-concurrent N`         | `serving.max_connections`    | Sets the router admission capacity, capped at `serving.max_connections`. |
-| `--graceful-timeout SECONDS` | `serving.graceful_timeout_s` | Uvicorn shutdown drain time in zero or more whole seconds.               |
-| `--resume`                   | `recovery.resume`            | Turns resume on.                                                         |
+| Option                       | Default                      | Description                                                     |
+| ---------------------------- | ---------------------------- | --------------------------------------------------------------- |
+| `--max-concurrent N`         | `serving.max_connections`    | Router admission capacity, from 1 to `serving.max_connections`. |
+| `--graceful-timeout SECONDS` | `serving.graceful_timeout_s` | Uvicorn shutdown drain time in zero or more whole seconds.      |
+| `--resume`                   | `recovery.resume`            | Turns resume on.                                                |
 
-To turn resume off, set `recovery.resume` to `false`.
+To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
 ---
 
 ## 19. Request journal
 
-Request timing records: [`journal.jsonl`](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) beside [`profiles.path`](01-Fleet-Schema.md#12-paths).
-
-`narwhal-serve --journal PATH` selects another location.
+| `narwhal-serve` option | Request timing records                                                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Default                | [`journal.jsonl`](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation) |
+| `--journal PATH`       | `PATH`                                                                                                                                                          |
 
 ---
 
@@ -142,7 +158,7 @@ Request timing records: [`journal.jsonl`](../telemetry/01-Journal.md#diagnose-a-
 | Data                                                                 | Location                                                   |
 | -------------------------------------------------------------------- | ---------------------------------------------------------- |
 | Live fleet files                                                     | A Git-ignored path, such as `runs/` or `config/fleet.json` |
-| Real host allocations, credentials, runtime evidence, launch records | Ignored private paths                                      |
+| Real host allocations, credentials, runtime evidence, launch records | Git-ignored private paths                                  |
 
 ---
 

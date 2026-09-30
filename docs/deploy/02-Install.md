@@ -1,9 +1,9 @@
 # Gate B: Package and install the approved revision
 
-| Command   | Action                                                        |
-| --------- | ------------------------------------------------------------- |
+| Command   | Action                                                         |
+| --------- | -------------------------------------------------------------- |
 | `prepare` | Bundles the approved commit, role files, and helper snapshots. |
-| `install` | Installs the approved commit on each host.                    |
+| `install` | Installs the approved commit on each host.                     |
 
 ## Build an immutable deployment package
 
@@ -14,9 +14,9 @@ In the management checkout:
 3. Set management credentials in the workstation environment.
 4. Prepare the package into a new `--out` directory:
 
-```bash
-python3 tools/deployment/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
-```
+    ```bash
+    python3 tools/deployment/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
+    ```
 
 On success the command prints:
 
@@ -26,20 +26,23 @@ Prepared <n> hosts in runs/deployment-env/first-deploy; private manifest and inp
 
 Keep the `--out` directory until the deployment finishes.
 
-The prepared run holds:
+Prepared run, files at mode 0600:
 
-- `.env.router`
-- one `.env.engine-<n>` per engine
-- the fleet configuration from discovery
-- profiling limits from each engine's `--max-num-seqs`
-- one selected `engine-launch.engine-<n>.json` per engine
-- a mode-0600 manifest
+| Path                                                                      | Content                                                                  |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `source.bundle`                                                           | Git bundle of the approved commit                                        |
+| `<host-id>/.env.<role>`                                                   | One role environment per role on the host                                |
+| `<host-id>/engine-launch.engine-<n>.json`                                 | The selected launch record for each engine role                          |
+| `<host-id>/fleet.local.json`                                              | The fleet configuration from discovery, on the router host               |
+| `<host-id>/profiling-limits.json`                                         | Profiling limits from each engine's `--max-num-seqs`, on the router host |
+| `<host-id>/fabric_budget.py`, `launch_engine.py`, `cache_capture_hook.py` | Helper snapshots, on engine hosts                                        |
+| `manifest.json`                                                           | The private manifest                                                     |
 
 The manifest records:
 
 - the approved revision
 - the role-to-host mapping
-- the input hashes
+- SHA-256 hashes of the SSH destinations
 - a unique install path under `~/Narwhal-deploy/`
 - SHA-256 hashes for the source bundle, helper snapshots, and role files
 
@@ -51,39 +54,39 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | `tools/deployment/launch_engine.py`      | `NARWHAL_ENGINE_LAUNCHER`    | `NARWHAL_ENGINE_LAUNCHER_SHA256`    |
 | `tools/deployment/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
-## Install one host, then fan out
+## Install engine 1 and the remaining hosts
 
 1. Install the engine 1 host:
 
-```bash
-python3 tools/deployment/deploy_hosts.py install \
-  --run runs/deployment-env/first-deploy --role engine-1
-```
+    ```bash
+    python3 tools/deployment/deploy_hosts.py install \
+      --run runs/deployment-env/first-deploy --role engine-1
+    ```
 
-On success the installer prints `<host-id>: installation ready`.
+2. Confirm that the installer prints `<host-id>: installation ready`.
+3. Install the remaining hosts:
 
-A host with router and engine roles gets both role environments from one install.
+    ```bash
+    python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
+    ```
 
-2. Install the remaining hosts after engine 1 is ready:
+`install` behaviour on each host:
 
-```bash
-python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
-```
-
-`install` across hosts:
-
-- Reuses finished installations and matching transferred files.
-- Stops at the first host where the source checkout changed.
-- Stops at the first host where a file differs.
+| Host state                                         | `install` action                          |
+| -------------------------------------------------- | ----------------------------------------- |
+| Finished installation or matching transferred file | Reuses it.                                |
+| Changed source checkout                            | Stops at that host.                       |
+| Differing file                                     | Stops at that host.                       |
+| Router and engine roles on one host                | Installs every role environment together. |
 
 ## Recover a failed installation
 
-| Failure                                   | Recovery                                                                                     |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Transfer validation fails                 | Compare the prepared hashes with the existing remote artifact before modifying it.           |
-| Revision validation fails                 | Check that the bundle and role files came from the same prepared run.                        |
-| A dependency installation stops early     | Rerun the same `install --run` until the installed `narwhal-check --help` responds.          |
-| A `.install-lock` remains                 | Remove it after the installer that created it has exited.                                    |
+| Failure                               | Recovery                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------- |
+| Transfer validation fails             | Compare the prepared hashes with the existing remote artifact before modifying it.  |
+| Revision validation fails             | Check that the bundle and role files came from the same prepared run.               |
+| A dependency installation stops early | Rerun the same `install --run` until the installed `narwhal-check --help` responds. |
+| A `.install-lock` remains             | Remove it after the installer that created it has exited.                           |
 
 ## Open installed role shells
 
@@ -107,4 +110,4 @@ Each shell opens with:
 - the role environment loaded
 - `.venv` active
 
-Next: [Gate C: Validate and start every engine](03-Validate-Engines.md).
+[![Next: Gate C: Validate and start every engine](https://img.shields.io/badge/next-Gate%20C%3A%20Validate%20and%20start%20every%20engine-0f766e)](03-Validate-Engines.md)

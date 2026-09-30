@@ -17,7 +17,7 @@ Remote decode receives:
 
 Same-engine decode:
 
-- strips transfer parameters, including client-provided values
+- strips `kv_transfer_params` from the request
 - uses engine prefix caching or prompt recomputation
 
 ### Descriptor validation
@@ -66,15 +66,15 @@ from narwhal.engines.connector import PrefillResult
 ## Engine failure handling
 
 | Engine fault   | HTTP  |
-| -------------- | ----- |
+| -------------- | :---: |
 | Timeout-shaped | `504` |
 | Other          | `502` |
 
-| Failure                                                     | Client response                                     |
-| ----------------------------------------------------------- | --------------------------------------------------- |
-| Prefill, streaming or non-streaming                         | HTTP error status                                   |
-| Decode, non-streaming                                       | HTTP error status                                   |
-| Decode, streaming, outside the [retry conditions](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
+| Failure                                             | Client response                                     |
+| --------------------------------------------------- | --------------------------------------------------- |
+| Prefill, streaming or non-streaming                 | HTTP error status                                   |
+| Decode, non-streaming                               | HTTP error status                                   |
+| Decode, streaming, on the final [attempt](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
 
 ```text
 data: {"error": ...}
@@ -95,12 +95,13 @@ data: {"error": ...}
 
 Tokenization failures return the [engine-fault mapping](#engine-failure-handling) status before placement.
 
-### Breaker readmission
+### Breaker ejection and readmission
 
-| Event                                              | Breaker action      |
-| -------------------------------------------------- | ------------------- |
-| `recovery.eject_after` consecutive stream failures | Ejects the engine   |
-| Successful inference probe                         | Readmits the engine |
+| Event                                              | Breaker action                                           |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| `recovery.eject_after` consecutive stream failures | Holds the engine out of placement for an inference probe |
+| Failed inference probe                             | Ejects the engine                                        |
+| Successful inference probe                         | Readmits the engine                                      |
 
 Stream failures:
 
@@ -115,36 +116,29 @@ Inference probes apply `engine.first_token_timeout_s` to each leg.
 
 A valid engine stream ends with `data: [DONE]` after generated output.
 
-| Stream                                              | Result                                                      |
-| --------------------------------------------------- | ----------------------------------------------------------- |
-| Closes before `[DONE]`                              | Engine failure                                              |
-| `[DONE]` before the first generated token           | HTTP `502`                                                  |
-| Upstream HTTP `200` carrying an error object        | Engine failure with status `code`, an integer in 400 to 599 |
-| Upstream HTTP `200` carrying any other error object | Engine failure with status `500`                            |
-
-Journal `error` for an early `[DONE]`:
-
-```text
-stream ended with [DONE] before any token arrived
-```
+| Stream                                                                              | Result                            | Journal `error` contains                            |
+| ----------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------- |
+| Closes before `[DONE]`                                                              | Engine failure                    | `stream ended before the [DONE] terminator`         |
+| `[DONE]` before the first generated token                                           | HTTP `502`                        | `stream ended with [DONE] before any token arrived` |
+| Upstream HTTP `200` carrying an error object with an integer `code` from 400 to 599 | Engine failure with status `code` | Engine error message                                |
+| Upstream HTTP `200` carrying any other error object                                 | Engine failure with status `500`  | Engine error message                                |
 
 ### Decode timeouts
 
-| Timeout                           | Window                                                                                            |
-| --------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `engine.first_token_timeout_s`    | Decode request start to the first generated token, connection and response-header delays included |
-| `engine.decode_read_timeout_s`    | Silence between transport chunks after the first token, metadata chunks included                  |
-| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound                                                     |
+| Timeout                           | Window                                                                                          |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `engine.first_token_timeout_s`    | From decode request start, across connection and response headers, to the first generated token |
+| `engine.decode_read_timeout_s`    | Silence between any two transport chunks after the first token                                  |
+| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound                                                   |
 
-`engine.decode_read_timeout_s` expiry returns HTTP `504` with detail beginning:
-
-```text
-engine went silent between tokens
-```
+| Expiry                         | HTTP  | Journal `error` contains            |
+| ------------------------------ | :---: | ----------------------------------- |
+| `engine.first_token_timeout_s` | `504` | `no first token within`             |
+| `engine.decode_read_timeout_s` | `504` | `engine went silent between tokens` |
 
 ### Retries
 
-Each admitted request receives one prefill/decode attempt by default.
+`serving.max_attempts` sets the prefill/decode attempts per admitted request, from `1` (default) to `3`.
 
 A fresh attempt starts for a transient fault before visible output when:
 

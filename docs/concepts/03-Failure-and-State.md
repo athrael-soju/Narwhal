@@ -48,14 +48,14 @@ These events reset the streak:
 
 When an engine's failure streak for one class reaches `recovery.eject_after`, the action depends on the class:
 
-| Failure                                                                 | Class              | Action                                         |
-| ----------------------------------------------------------------------- | ------------------ | ---------------------------------------------- |
-| Connection error                                                        | `connection`       | Eject the engine                               |
-| Transport timeout                                                       | `timeout`          | Run a health probe                             |
-| First-token deadline, mid-stream silence, or invalid stream termination | `stream`           | Pause new requests and run an inference probe  |
-| HTTP 408 or 429                                                         | `overload`         | Run a health probe                             |
-| Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and run an inference probe  |
-| Unreadable KV handoff from prefill                                      | `kv_handoff`       | Pause new requests and run an inference probe  |
+| Failure | Class | Action |
+| --- | --- | --- |
+| Connection error | `connection` | Eject the engine |
+| Transport timeout | `timeout` | Run a health probe |
+| First-token deadline, mid-stream silence, or invalid stream termination | `stream` | Pause new requests and run an inference probe |
+| HTTP 408 or 429 | `overload` | Run a health probe |
+| Other HTTP 5xx response | `inference_status` | Pause new requests and run an inference probe |
+| Unreadable KV handoff from prefill | `kv_handoff` | Pause new requests and run an inference probe |
 
 The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
@@ -86,12 +86,12 @@ At zero serving capacity, `/ready` and new completion requests return HTTP 503.
 
 ### Clearing failure evidence
 
-| Successful response                        | Failure evidence cleared                     |
-| ------------------------------------------ | -------------------------------------------- |
-| 4xx response other than 408 or 429         | Connection and inference-status              |
-| Health 200                                 | Connection, timeout, overload, and liveness  |
-| Prefill with an extracted KV handoff       | Connection, inference-status, and KV-handoff |
-| Decode stream reaching its terminal marker | Connection, inference-status, and stream     |
+| Successful response | Failure evidence cleared |
+| --- | --- |
+| 4xx response other than 408 or 429 | Connection and inference-status |
+| Health 200 | Connection, timeout, overload, and liveness |
+| Prefill with an extracted KV handoff | Connection, inference-status, and KV-handoff |
+| Decode stream reaching its terminal marker | Connection, inference-status, and stream |
 
 ### Failure quarantine
 
@@ -112,11 +112,10 @@ Readmission checks, in order:
 2. Attestation.
 3. Loaded profile generations.
 4. Model identity.
-5. The `generation` check, a direct completion probe.
-6. A role-permitted KV transfer.
-7. A final health check.
-
-A planned restart requires the engine's process start to be newer than the one in its drain record.
+5. Process identity, with a process start newer than the drain record for a planned restart.
+6. The `generation` check, a direct completion probe.
+7. A role-permitted KV transfer.
+8. A final health check.
 
 Profile checks cover every loaded variant:
 

@@ -5,7 +5,7 @@
 ### 8.1 Breaker and drift settings
 
 | Field                                 | Default | Meaning                                                                                             | Valid values                                                                |
-| ------------------------------------- | ------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| ------------------------------------- | :-----: | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `recovery.eject_after`                | `3`     | Consecutive failures of one class on one engine before breaker action                               | At least 1                                                                  |
 | `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines                                                 | At least 1                                                                  |
 | `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks | `0` disables idle sweeps                                                    |
@@ -29,13 +29,13 @@ Probation penalty by placement cost:
 
 Compare the penalty with the time to first token (TTFT) target and the measured healthy placement cost.
 
-Breaker action by [failure class](../concepts/03-Failure-and-State.md#failure-evidence):
+Breaker action at `recovery.eject_after` consecutive failures of one [failure class](../concepts/03-Failure-and-State.md#failure-evidence):
 
-| Failure class                           | Breaker action                                                      |
-| --------------------------------------- | ------------------------------------------------------------------- |
-| Connection failure                      | Counts immediately toward `recovery.eject_after`                    |
-| Transport timeout                       | Triggers a health probe                                             |
-| First-token timeout or mid-stream stall | Triggers an inference probe of the engine's prefill and decode legs |
+| Failure class                                 | Breaker action                                                  |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| `connection`                                  | Ejects the engine                                               |
+| `timeout` or `overload`                       | Runs a health probe                                             |
+| `stream`, `inference_status`, or `kv_handoff` | Runs an inference probe of the engine's prefill and decode legs |
 
 An inconclusive inference probe:
 
@@ -59,7 +59,7 @@ Drift tracker handling by observation:
 | Gap that crosses a prefill boundary                 | Pauses decode correction and drift scoring                                         |
 | First pure decode observation after a pause         | Starts a new scoring window with the previous healthy baseline and probation state |
 
-`/narwhal/state` reports pauses in `health.prefill_paused` and `health.prefill_pauses`.
+`/narwhal/state` reports pauses in `health.<iid>.prefill_paused` and `health.<iid>.prefill_pauses`.
 
 The fleet-wide surge veto withholds an engine's drift verdict when all of these are true:
 
@@ -70,10 +70,10 @@ The fleet-wide surge veto withholds an engine's drift verdict when all of these 
 
 A window that closes with at least one observation and fewer than `recovery.health.min_samples` is `undersampled`.
 
-| Evidence                              | Reported in                                                        |
-| ------------------------------------- | ------------------------------------------------------------------ |
-| Scored and undersampled windows       | `/narwhal/state` and the `narwhal_health_windows_*_total` counters |
-| Age of the most recent health verdict | `last_scored_s_ago`                                                |
+| Evidence                             | `/narwhal/state` field                                | Prometheus counter                                                                    |
+| ------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Scored and undersampled windows      | `health.<iid>.scored` and `health.<iid>.undersampled` | `narwhal_health_windows_scored_total` and `narwhal_health_windows_undersampled_total` |
+| Age of the most recent scored window | `health.<iid>.last_scored_s_ago`                      |                                                                                       |
 
 ### 8.3 Engine restart policy
 
@@ -120,7 +120,7 @@ Contracted resume and automatic takeover require:
 | State                                                            | On successful resume                                  |
 | ---------------------------------------------------------------- | ----------------------------------------------------- |
 | Roles, ejections, lifecycle holds, complete-backend-outage state | Restored                                              |
-| Per-engine dwell timestamps                                      | Restart from process startup                          |
+| Per-engine dwell timestamps                                      | Cleared                                               |
 | Prefill-to-decode cooldown                                       | Begins when Narwhal creates the replacement scheduler |
 
 Configure warm-standby takeover with the `narwhal-serve` options in [Start a router pair](../operate/01-Start-Routers.md#4-start-a-router-pair).
@@ -150,12 +150,10 @@ Set the credential variable under `engine`:
 | --------------------------- | ------- | ---------------------------------------------------------------- |
 | `engine.engine_api_key_env` | `""`    | Environment variable that must hold the engine Bearer credential |
 
-Serving, profiling, preflight, cache-reset, and lifecycle requests:
-
-- Target the engine URL.
-- Carry the engine credential in a Bearer header.
-
-Attestation requests target the attestation sidecar URL on the trusted control network.
+| Requests                                                  | Target                                                 | Credential               |
+| --------------------------------------------------------- | ------------------------------------------------------ | ------------------------ |
+| Serving, profiling, preflight, cache-reset, and lifecycle | Engine URL                                             | Engine Bearer credential |
+| Attestation                                               | Attestation sidecar URL on the trusted control network |                          |
 
 When `engine.engine_api_key_env` names a variable at deployment export, the credential reaches the engine as:
 
@@ -163,6 +161,7 @@ When `engine.engine_api_key_env` names a variable at deployment export, the cred
 | --------------------------------------------------------------------- | ------------------------ |
 | Engine role environment                                               | `NARWHAL_ENGINE_API_KEY` |
 | Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           |
+| Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           |
 
 `/narwhal/state` reports the authentication mode in `admission.engine_auth`:
 
@@ -184,22 +183,11 @@ Protocol fields:
 
 ## 11. Profile validation
 
-`profiles.path`:
-
-- Defaults to `"runs/profiles.json"`.
-- Names the profile store read by the router and written by `narwhal-profile`.
-
-`profiles.max_decode_fit_mape`:
-
-- Defaults to `0.05`.
-- Sets the maximum in-sample decode-fit error that `narwhal-check` accepts.
-- Accepts positive, finite values at most `controller.reactive.movement_margin`.
-
-`profiles.max_decode_cv_mape`:
-
-- Defaults to `0.13`.
-- Sets the maximum leave-one-out cross-validation error that `narwhal-check` accepts.
-- Accepts positive, finite values.
+| Field                          | Default                | Meaning                                                                   | Values                                                  |
+| ------------------------------ | ---------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `profiles.path`                | `"runs/profiles.json"` | Profile store read by the router and written by `narwhal-profile`         |                                                         |
+| `profiles.max_decode_fit_mape` | `0.05`                 | Maximum in-sample decode-fit error that `narwhal-check` accepts           | Positive, at most `controller.reactive.movement_margin` |
+| `profiles.max_decode_cv_mape`  | `0.13`                 | Maximum leave-one-out cross-validation error that `narwhal-check` accepts | Positive                                                |
 
 Profiles must cover the context and concurrency range used by the deployment.
 

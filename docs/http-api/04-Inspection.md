@@ -21,21 +21,21 @@ Returns the configured model in OpenAI list format:
 
 Returns HTTP `200` in every router state.
 
-| Field                 | Meaning                                                                          |
-| --------------------- | -------------------------------------------------------------------------------- |
-| `status`              | Router state                                                                     |
-| `instances`           | Configured fleet size                                                            |
-| `available_instances` | Engines eligible for placement, excluding ejected, draining, and quarantined engines |
+| Field                 | Meaning                        |
+| --------------------- | ------------------------------ |
+| `status`              | Router state                   |
+| `instances`           | Configured fleet size          |
+| `available_instances` | Engines eligible for placement |
 
-First matching `status` value, top to bottom:
+The earliest matching row sets `status`:
 
-| `status`      | Meaning                                                                                                   |
-| ------------- | --------------------------------------------------------------------------------------------------------- |
-| `ok`          | Router admits new client requests                                                                         |
-| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, or an invalid active-router lease       |
-| `maintenance` | Lifecycle hold, such as a whole-wave drain                                                                |
-| `standby`     | Standby router                                                                                            |
-| `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement   |
+| `status`      | Meaning                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| `ok`          | Router admits new client requests                                                                      |
+| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, or an invalid active-router lease    |
+| `maintenance` | Whole-wave drain, recovery, or restart hold                                                            |
+| `standby`     | Standby router                                                                                         |
+| `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement |
 
 ```json
 {
@@ -49,23 +49,27 @@ First matching `status` value, top to bottom:
 
 Returns HTTP `200` when this router controls the fleet and admits new work.
 
-Returns HTTP `503` with `Retry-After: 1` in these cases:
+Returns HTTP `503` with `Retry-After: 1` otherwise.
 
-- standby state
-- fencing
-- lease-storage failure
-- lifecycle hold
-- pending engine identity validation
-- zero engines eligible for placement
-- engine-monitoring degradation
-
-| Field           | Meaning                                                                                             |
-| --------------- | --------------------------------------------------------------------------------------------------- |
-| `status`        | `ready` or `not_ready`                                                                              |
+| Field           | Meaning                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------- |
+| `status`        | `ready` or `not_ready`                                                                                   |
 | `control_ready` | `true` when this router controls the fleet and `/narwhal/state` reports `monitoring.degraded` as `false` |
-| `epoch`         | Lease epoch                                                                                         |
-| `holder`        | Lease-holder token                                                                                  |
-| `reason`        | Cause of `not_ready`, empty when `status` is `ready`                                                |
+| `epoch`         | Lease epoch                                                                                              |
+| `holder`        | Lease-holder token                                                                                       |
+| `reason`        | Cause of `not_ready`, empty when `status` is `ready`                                                     |
+
+The earliest matching row sets `reason`:
+
+| Cause                               | `reason`                                                                                       |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Fencing or lease-storage failure    | Failover block, such as `lease renewal failed`                                                 |
+| Whole-wave hold                     | `whole-wave drain <id>`, `whole-wave recovery <id>`, or `whole-wave restart required: <cause>` |
+| Engine-monitoring degradation       | `monitoring degraded: <stage> <class>`                                                         |
+| Standby state                       | `shadowing`                                                                                    |
+| Expired lease                       | `lease expired`                                                                                |
+| Pending engine identity validation  | `engine identity validation pending`                                                           |
+| Zero engines eligible for placement | `no available engines`                                                                         |
 
 `monitoring.degraded` transitions:
 
@@ -73,12 +77,6 @@ Returns HTTP `503` with `Retry-After: 1` in these cases:
 | ---------- | ------------------------------------------------------------ |
 | To `true`  | `controller.monitor_failure_limit` consecutive failed passes |
 | To `false` | One fully successful pass                                    |
-
-Degraded monitoring reports this `reason`:
-
-```text
-monitoring degraded: <stage> <class>
-```
 
 A standby router counts each `control_ready: false` response from the active router's `/ready` as a missed takeover probe.
 
@@ -93,8 +91,6 @@ With zero eligible engines, the response is:
   "reason": "no available engines"
 }
 ```
-
-`reason` reports an active lifecycle or control hold before `no available engines`.
 
 During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
 

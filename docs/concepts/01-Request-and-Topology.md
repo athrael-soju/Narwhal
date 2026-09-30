@@ -17,11 +17,11 @@ The fleet's `engine_contract` lists the [compatibility fields](../configuration/
 
 KV transfer across the configured ring or mesh is allowed for a vLLM engine with the effective `kv_both` role when all three requirements hold:
 
-| Requirement                                                          | Provider                                                        |
-| -------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Attestation inputs captured from the live process                    | [Gate E](../deploy/05-Attest.md#capture-the-attestation-inputs) |
-| The process bound to its image, NIXL connector, and runtime features | Attestation sidecar                                             |
-| The attested process validated                                       | [`narwhal-check`](../cli/Check.md)                              |
+| Requirement | Provider |
+| --- | --- |
+| Attestation inputs captured from the live process | [Gate E](../deploy/05-Attest.md#capture-the-attestation-inputs) |
+| The process bound to its image, NIXL connector, and runtime features | Attestation sidecar |
+| The attested process validated | [`narwhal-check`](../cli/Check.md) |
 
 ## How a request executes
 
@@ -47,12 +47,12 @@ A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concu
 
 ## Fleet topology
 
-| Topology              | How roles are assigned                                        | In practice                                                          |
-| --------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Aggregated serving    | Every engine does both prefill and decode, with local KV      | Long prefills share a scheduler with decode batches                  |
-| Static disaggregation | Fixed prefill pool and fixed decode pool                      | An operator changes pool membership by hand                          |
-| Adaptive cold-swap    | Engines change pools by draining and relaunching              | Capacity arrives after restart, weight load, and validation          |
-| Adaptive hot-swap     | Dual-capability engines form logical prefill and decode pools | Weights stay loaded                                                  |
+| Topology | How roles are assigned | In practice |
+| --- | --- | --- |
+| Aggregated serving | Every engine does both prefill and decode, with local KV | Long prefills share a scheduler with decode batches |
+| Static disaggregation | Fixed prefill pool and fixed decode pool | An operator changes pool membership by hand |
+| Adaptive cold-swap | Engines change pools by draining and relaunching | Capacity arrives after restart, weight load, and validation |
+| Adaptive hot-swap | Dual-capability engines form logical prefill and decode pools | Weights stay loaded |
 
 ### Aggregated serving
 

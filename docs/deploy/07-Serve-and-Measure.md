@@ -27,13 +27,13 @@ Replace `<served-model>` with the fleet model.
 
 3. Retain these responses before load:
 
-| Response          | Shows                                              |
-| ----------------- | -------------------------------------------------- |
-| `/health`         | Liveness and cached instance counts.               |
-| `/ready`          | Admission state.                                   |
-| `/narwhal/state`  | Engine inventory and role split.                   |
-| `/metrics`        | Router metrics.                                    |
-| `/v1/completions` | One successful completion that increments `served`. |
+    | Response          | Shows                                                                   |
+    | ----------------- | ----------------------------------------------------------------------- |
+    | `/health`         | Liveness status and instance counts.                                    |
+    | `/ready`          | Admission state.                                                        |
+    | `/narwhal/state`  | Engine inventory and role split.                                        |
+    | `/metrics`        | Router metrics.                                                         |
+    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`. |
 
 ## Start the monitoring stack on the router
 
@@ -85,56 +85,58 @@ Retain the target-discovery and dashboard-verification output.
 
 Tunnel settings:
 
-| Tunnel property  | Value                                                  |
-| ---------------- | ------------------------------------------------------ |
-| Local ports      | Workstation loopback.                                  |
-| Remote address   | `127.0.0.1` on the router.                             |
-| Host key         | Verified against the recorded SSH host key.            |
-| Authentication   | The router role's configured password, key, or agent.  |
-| Log              | `runs/access-<id>/`                                    |
-| Latency          | Includes SSH network and encryption overhead.          |
+| Tunnel property | Value                                                 |
+| --------------- | ----------------------------------------------------- |
+| Local ports     | Workstation loopback.                                 |
+| Remote address  | `127.0.0.1` on the router.                            |
+| Host key        | Verified against the recorded SSH host key.           |
+| Authentication  | The router role's configured password, key, or agent. |
+| Log             | `runs/access-<id>/`                                   |
+| Latency         | Includes SSH network and encryption overhead.         |
 
 ### Troubleshoot the tunnel
 
-| Symptom                                                              | Fix                                                                                   |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| A workstation port is already in use                                 | Match the client URL to the changed local side of `--forward`.                        |
-| A forwarded request fails after SSH connects                         | Inspect the listener on the router host.                                              |
-| A service listens on an address other than the router's `127.0.0.1` | Pass one tunnel per remote address, each with `--remote-address`.                     |
+| Symptom                                                             | Fix                                                                          |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| A workstation port is already in use                                | 1. Pick another local port in `--forward`.<br>2. Match the client URL to it. |
+| A forwarded request fails after SSH connects                        | Inspect the listener on the router host.                                     |
+| A service listens on an address other than the router's `127.0.0.1` | Pass one tunnel per remote address, each with `--remote-address`.            |
 
 ## Run the initial capacity trial
 
-Before launch in [Gate C: Prepare, check, and start each engine](03-Validate-Engines.md#prepare-check-and-start-each-engine):
-
-1. Set `--no-enable-prefix-caching` in `runtime.extra_args` on every engine.
-2. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
+The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#prepare-check-and-start-each-engine) on every engine.
 
 Candidate thresholds:
 
-| Candidate threshold           | Value   |
-| ----------------------------- | ------- |
-| Time to first token (TTFT)    | 2 s     |
-| Time per output token (TPOT)  | 33.3 ms |
-| Attainment                    | 95%     |
+| Candidate threshold          | Value   |
+| ---------------------------- | :-----: |
+| Time to first token (TTFT)   | 2 s     |
+| Time per output token (TPOT) | 33.3 ms |
+| Attainment                   | 95%     |
 
-1. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test) under a new deployment identifier.
-2. Attach Gate F's passing preflight to the deployment evidence.
-3. Retain the monitoring startup output and the router and engine scrape evidence.
-4. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
-5. Retain the workload definition, the request-level records, and the summaries.
-6. Capture the client CPU, memory, network, and scheduler behaviour.
-7. Confirm the drained, idle router state in `state-after.json`.
-8. [Reconcile](../measure/04-Reconcile-and-Accept.md) every offer against the client and router terminal classes.
-9. Query the engine, request, token, role, and pool-load series in Grafana.
-10. Run the post-load KV ring on the router:
+Run the trial:
+
+1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
+2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test) under a new deployment identifier.
+3. Attach Gate F's passing preflight to the deployment evidence.
+4. Retain the monitoring startup output and the router and engine scrape evidence.
+5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
+6. Retain the workload definition, the request-level records, and the summaries.
+7. Capture the client CPU, memory, network, and scheduler behaviour.
+8. Confirm the drained, idle router state in `state-after.json`.
+9. [Reconcile](../measure/04-Reconcile-and-Accept.md) every offer against the client and router terminal classes.
+10. Query the engine, request, token, role, and pool-load series in Grafana.
+11. Run the post-load KV ring on the router:
 
     ```bash
     .venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
     ```
 
-The trial passes when steps 4 to 10 succeed.
+The trial passes when steps 5 to 11 succeed.
 
-11. Retain with the private deployment record:
+Close the trial:
+
+1. Retain with the private deployment record:
 
     - The service locations.
     - The approved source revision.
@@ -143,7 +145,8 @@ The trial passes when steps 4 to 10 succeed.
     - The router journal.
     - The monitoring endpoints.
 
-12. Stop the client when its records and the post-load KV ring output are saved.
-13. Press Ctrl+C in the tunnel terminal when private access ends.
-14. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
-15. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).
+2. Save the client records and the post-load KV ring output.
+3. Stop the client.
+4. Press Ctrl+C in the tunnel terminal when private access ends.
+5. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
+6. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).

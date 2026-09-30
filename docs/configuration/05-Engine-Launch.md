@@ -26,21 +26,21 @@ NARWHAL_ENGINE_PORT
 NARWHAL_ATTEST_PORT
 ```
 
-Discovery writes these values to `config/deployment.env` for each engine host:
+Discovery writes these values to `config/deployment.env` for each engine `<n>`:
 
-| Variable                                                      | Value                                                     |
-| ------------------------------------------------------------- | --------------------------------------------------------- |
-| `NARWHAL_NODE_<n>_IP`                                         | Unique global address of the chosen interface             |
-| `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` | URLs on that address, with brackets around IPv6 hosts     |
+| Variable                                                      | Value                                                 |
+| ------------------------------------------------------------- | ----------------------------------------------------- |
+| `NARWHAL_NODE_<n>_IP`                                         | Unique global address of the chosen interface         |
+| `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` | URLs on that address, with brackets around IPv6 hosts |
 
 Per-node overrides:
 
-| Condition                                              | Set                                                                                                                               |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| The interface has multiple global addresses            | `NARWHAL_NODE_<n>_IP` to an address on the selected fabric interface                                                              |
-| The engine service uses another reachable address      | `NARWHAL_NODE_<n>_URL` to the full engine URL, using `http` and an explicit port                                                  |
-| The attestation service uses another reachable address | `NARWHAL_NODE_<n>_ATTESTATION_URL` to the full attestation URL, using `http` and an explicit port and ending in `/v1/attestation` |
-| A service port changes                                 | The matching per-node port override, `NARWHAL_NODE_<n>_ENGINE_PORT` or `NARWHAL_NODE_<n>_ATTEST_PORT`                             |
+| Condition                                              | Set                                                                                                   |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| The interface has multiple global addresses            | `NARWHAL_NODE_<n>_IP` to a global address on the selected fabric interface                            |
+| The engine service uses another reachable address      | `NARWHAL_NODE_<n>_URL` to `http://<host>:<port>`                                                      |
+| The attestation service uses another reachable address | `NARWHAL_NODE_<n>_ATTESTATION_URL` to `http://<host>:<port>/v1/attestation`                           |
+| A service port changes                                 | The matching per-node port override, `NARWHAL_NODE_<n>_ENGINE_PORT` or `NARWHAL_NODE_<n>_ATTEST_PORT` |
 
 The generated fleet references the derived variables:
 
@@ -53,7 +53,7 @@ The generated fleet references the derived variables:
 }
 ```
 
-Discovery needs at least two engines with the same GPU and tensor parallel (TP) shape, as in the two engine blocks of `.env.example`.
+Discovery needs at least two engines with the same accelerator product, GPU count, and tensor parallel (TP) size.
 
 Discovery adds one fleet record per engine:
 
@@ -68,7 +68,7 @@ Store per-site fleet files in a [Git-ignored path](06-Fabric-and-Operations.md#2
 
 For the profiling, preflight, and serving commands:
 
-1. Load `.env`.
+1. Load `.env` and `config/deployment.env`.
 2. Pass `--fleet "$NARWHAL_FLEET"`.
 
 The monitoring stack's scrape-target generator, `tools/observability/make_targets.py`, resolves endpoint URLs with the fleet's [whole-value substitution rules](01-Fleet-Schema.md#13-environment-loading).
@@ -77,11 +77,16 @@ The monitoring stack's scrape-target generator, `tools/observability/make_target
 
 ## 15. Engine launch records
 
-`NARWHAL_LAUNCH_CONFIG` selects the discovery-generated launch-record file on the management workstation, which defaults to `config/engine-launch.local.json`.
+`NARWHAL_LAUNCH_CONFIG` selects the discovery-generated launch-record file on the management workstation (default `config/engine-launch.local.json`).
 
-Discovery builds one launch record per assigned `engine-<n>` role from the detected GPUs, their device paths, the image package versions, and the launch policy chosen in `.env`.
+Discovery builds one launch record per assigned `engine-<n>` role from these inputs:
 
-`config/engine-launch.sources.json` indexes the `sources` of every record.
+- the detected GPUs
+- their device paths
+- the image package versions
+- the launch policy chosen in `.env`
+
+`config/engine-launch.sources.json` maps each role to its inspection file and launch-policy source.
 
 The [launch-record example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-launch.example.json) documents allocation, transport, and runtime fields.
 
@@ -92,25 +97,25 @@ To change GPU allocation or runtime policy:
 
 ### 15.1 Allocation and transport fields
 
-| Field                  | Deployment meaning                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `accelerator`          | Product identity to compare against host inspection and fleet hardware fields.                                                       |
-| `gpu_ids`              | Selected GPU indices or UUIDs for the replica.                                                                                       |
-| `tensor_parallel_size` | TP size for the replica.                                                                                                             |
-| `gpu_visibility_env`   | GPU visibility variable, `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`.                                                           |
-| `accelerator_devices`  | Host device paths mapped into the container, which on ROCm include `/dev/kfd` and DRI mappings for allocated GPUs.                   |
-| `network_mode`         | Uses `host` for the recorded network and port allocation.                                                                            |
-| `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                             |
-| `transfer.net_devices` | Ethernet interfaces for TCP, such as `${NARWHAL_FABRIC_INTERFACE}` from the selected engine environment, or HCA:port names for RDMA. |
-| `transfer.devices`     | Transport device paths mapped into the container: the RDMA character devices for RDMA, or an empty list for TCP.                     |
-| `sources`              | Allocation, device, and transfer definitions that produced the record.                                                              |
+| Field                  | Deployment meaning                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `accelerator`          | Product identity to compare against host inspection and fleet hardware fields.                                 |
+| `gpu_ids`              | Selected GPU indices or UUIDs for the replica.                                                                 |
+| `tensor_parallel_size` | TP size for the replica.                                                                                       |
+| `gpu_visibility_env`   | GPU visibility variable, `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`.                                     |
+| `accelerator_devices`  | Host device paths mapped into the container, including `/dev/kfd` and DRI mappings for allocated GPUs on ROCm. |
+| `network_mode`         | `host`, for the recorded network and port allocation.                                                          |
+| `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                       |
+| `transfer.net_devices` | Ethernet interface names for TCP, or HCA:port names for RDMA.                                                  |
+| `transfer.devices`     | Transport device paths mapped into the container, required for RDMA.                                           |
+| `sources`              | Allocation, device, transfer, and runtime definitions that produced the record.                                |
 
-`prepare` derives these record values:
+`deploy_hosts.py prepare` derives these record values:
 
-| Record section | Derived value                        |
-| -------------- | ------------------------------------ |
-| `environment`  | GPU visibility and `UCX_NET_DEVICES` |
-| `vllm_args`    | Value of `--tensor-parallel-size`    |
+| Record section | Derived value                                      |
+| -------------- | -------------------------------------------------- |
+| `environment`  | GPU visibility and `UCX_NET_DEVICES`               |
+| `vllm_args`    | `--tensor-parallel-size` with the record's TP size |
 
 `install` copies the selected launch record into the engine checkout's `config/` directory.
 
@@ -137,16 +142,25 @@ Discovery fills the `runtime` object from these sources:
 
 Operator input for each `runtime` field:
 
-| Runtime field       | Operator input                                                                                                                                                                                                                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `expected_packages` | Exact installed versions for `vllm`, `nixl` or `nixl-rocm`, and each image package whose identity `narwhal-engine check` must verify.                                                                                                                                                                  |
-| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                                                                                                                                                               |
-| `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                   |
-| `block_size`        | Requested runtime block size.                                                                                                                                                                                                                                                                          |
-| `environment`       | Image-local ROCm or CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                        |
-| `extra_args`        | vLLM arguments for the model, such as context and batching limits, memory utilization, the reasoning parser, the attention backend, remote model code, language-only loading, eager execution, async scheduling, hybrid-cache policy, and the [cache opt-outs](#161-prefix-caching-and-cache-events). |
+| Runtime field       | Operator input                                                                                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expected_packages` | Exact installed versions for `vllm`, `nixl` or `nixl-rocm`, and each image package whose identity `narwhal-engine check` must verify.                                |
+| `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                             |
+| `kv_cache_dtype`    | `auto`.                                                                                                                                                              |
+| `block_size`        | Positive runtime block size.                                                                                                                                         |
+| `environment`       | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_`, or `SAFETENSORS_` prefix. |
+| `extra_args`        | vLLM options from the `extra_args` allowlist.                                                                                                                        |
 
-The launcher rejects `extra_args` that override these settings:
+The `extra_args` allowlist:
+
+| Form             | Options                                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Option and value | `--max-model-len`, `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--max-num-seqs`, `--reasoning-parser`, `--attention-backend`, `--tokenizer`, `--hf-config-path`, `--load-format`, `--kv-events-config`            |
+| Flag             | `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager`, `--no-disable-hybrid-kv-cache-manager`, `--enable-prefix-caching`, `--no-enable-prefix-caching` |
+
+The launcher rejects every other `extra_args` option.
+
+The launcher sets these values itself:
 
 | Setting                                                                                    | Source           |
 | ------------------------------------------------------------------------------------------ | ---------------- |
@@ -155,24 +169,31 @@ The launcher rejects `extra_args` that override these settings:
 | `NixlConnector` with `kv_both`, UCX, and failure propagation                               | Launcher         |
 | GPU visibility, advertised addresses and ports, transport selection, engine authentication | Launcher         |
 
-Discovery-derived settings take precedence over values in `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV`:
+`runtime.environment` rejects these names:
 
-| Metadata condition                                                             | Derived setting                 |
-| ------------------------------------------------------------------------------ | ------------------------------- |
-| Checkpoint model or tokenizer metadata contains an `auto_map`                  | `--trust-remote-code`           |
-| Model metadata identifies convolutional state-space model (SSM) transfer state | `VLLM_SSM_CONV_STATE_LAYOUT=DS` |
+| Group                       | Names                                                                                                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Launcher-managed variables  | `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, `VLLM_API_KEY` |
+| Credential and access names | Names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH`, or `SKIP_COMPAT`                                                                                                               |
+
+Discovery derives these settings from checkpoint metadata:
+
+| Metadata condition                                                             | Derived setting                 | Value in `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` |
+| ------------------------------------------------------------------------------ | ------------------------------- | ------------------------------------------------------ |
+| Checkpoint model or tokenizer metadata contains an `auto_map`                  | `--trust-remote-code`           | Added to the configured arguments                      |
+| Model metadata identifies convolutional state-space model (SSM) transfer state | `VLLM_SSM_CONV_STATE_LAYOUT=DS` | Any other layout value fails discovery                 |
 
 Checks that `narwhal-engine check` runs before model startup:
 
 - `--trust-remote-code` against the mounted checkpoint
-- image identity
+- image identity, for the container backend
 - exact distribution versions
 - connector configuration and import
 - checkpoint tokenizer construction
 - convolutional-state layout of the pinned image, for SSM models
 - resolution of the serving arguments into vLLM's engine configuration
 
-`checked.json` records the launch-plan hash, the image ID, and these values:
+`checked.json` records the launch-plan hash, the container image ID, and these values:
 
 | Field              | Value                                                                                 |
 | ------------------ | ------------------------------------------------------------------------------------- |
@@ -186,7 +207,7 @@ The [live HTTP process check](../deploy/03-Validate-Engines.md#prove-the-live-ht
 
 The image's NIXL connector must implement the fleet's required `kv_both` behavior.
 
-Launch directories, environment files, and runtime captures live under the ignored `runs/`.
+Launch directories, environment files, and runtime captures live under the Git-ignored `runs/`.
 
 Record the application revision, launcher digest, and container ID with each deployment.
 
@@ -208,6 +229,11 @@ With prefix caching on, vLLM publishes KV cache events over two ZeroMQ IPC socke
 | `events.sock` | Published event batches, each with a sequence number     |
 | `replay.sock` | Replay requests for batches held in vLLM's replay buffer |
 
+| Path part     | Value                                   |
+| ------------- | --------------------------------------- |
+| `<uid>`       | Effective user ID of the launching user |
+| `<plan name>` | `narwhal-engine-<n>-<12 hex>`           |
+
 Socket directories:
 
 | Property                  | Value                                                                              |
@@ -216,10 +242,10 @@ Socket directories:
 | Created by                | Preparation, the check, and each engine start                                      |
 | Container mount           | Plan directory at `/narwhal-kv-events`                                             |
 | Record                    | `kv_events` in `launch.json`, with the host directory and the endpoints vLLM binds |
-| Removal, native engine    | Stopping the engine removes its directory                                          |
+| Removal, native engine    | Stopping the engine removes its plan directory                                     |
 | Removal, container engine | Remove the directory after removing the container                                  |
 
-The check and engine start fail when either directory belongs to another user or grants group or other access.
+Preparation, the check, and engine start fail when either directory belongs to another user or grants group or other access.
 
 To keep prefix caching on and turn event publishing off, add vLLM's event setting to `extra_args`:
 

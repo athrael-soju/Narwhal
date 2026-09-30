@@ -10,9 +10,9 @@ On the router, confirm that `runs/deployment/fleet.json` lists:
 - The SLO values.
 - The profile path.
 
-Later steps read these inputs:
+Gate C inputs in each engine's `ENGINE_RUN` directory:
 
-- The container ID and logs in each engine's Gate C `ENGINE_RUN` directory.
+- `container.id` and the container logs.
 - `cache-layout.json`.
 
 ## Capture the attestation inputs
@@ -26,6 +26,8 @@ export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
 export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 (set -o noclobber; docker logs "$ENGINE_CONTAINER" > "$ENGINE_STARTUP_LOG" 2>&1)
 ```
+
+The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
 ### 2. Capture the NIXL connector version
 
@@ -46,23 +48,23 @@ umask 077
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-The live container's plan and launcher hashes match `launch.json`.
+The capture requires the live container's plan and launcher hashes to match `launch.json`.
 
-| Dimension            | Source                                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `head_size`          | `ModelConfig.get_head_size()`, or `kv_lora_rank + qk_rope_head_dim` on a DeepSeek-style model with MLA enabled                 |
-| `kv_heads`           | `get_total_num_kv_heads()`                                                                                                     |
-| `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                                |
-| `model_architecture` | Resolved architecture                                                                                                          |
+| Dimension            | Source                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `head_size`          | `ModelConfig.get_head_size()`, or `kv_lora_rank + qk_rope_head_dim` on a DeepSeek-style model with MLA enabled |
+| `kv_heads`           | `get_total_num_kv_heads()`                                                                                     |
+| `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
+| `model_architecture` | Resolved architecture                                                                                          |
 
 ### 4. Capture the cache grouping
 
-Sources for `cache-registration`, one final capture per `ENGINE_RUN`:
+`cache-registration` writes one `cache-registration.json` per `ENGINE_RUN` from either source:
 
-| Source                          | Requirement                                                                   |
-| ------------------------------- | ----------------------------------------------------------------------------- |
-| Startup log (the usual choice)  | Names exactly one layout across its `Using <layout> KV cache layout.` lines.  |
-| `cache-layout.json`             | Holds the resolved layout.                                                    |
+| Source                         | Requirement                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| Startup log (the usual choice) | Names exactly one layout across its `Using <layout> KV cache layout.` lines. |
+| `cache-layout.json`            | Holds one resolved layout across every TP rank.                              |
 
 From the startup log:
 
@@ -79,10 +81,12 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-| Layouts in vLLM v0.29.0         | Block grouping                    |
-| ------------------------------- | --------------------------------- |
-| `BLHNC`, `BLNHC`, and `BHLNC`   | `is_block_outermost=true`         |
-| `LBHNC`, `LBNHC`, and `LHBNC`   | `is_block_outermost` is `false`   |
+| Layouts in vLLM v0.29.0       | `is_block_outermost` |
+| ----------------------------- | -------------------- |
+| `BLHNC`, `BLNHC`, and `BHLNC` | `true`               |
+| `LBHNC`, `LBNHC`, and `LHBNC` | `false`              |
+
+`cache-registration.json` records the value as `cross_layers_blocks`.
 
 ### 5. Compare the layout with the representative's
 
@@ -102,10 +106,10 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-| Comparison with the representative                           | Fabric budget                                                                                                   |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Comparison with the representative                            | Fabric budget                                                                                                  |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Group signature, resolved layout, and page geometry all match | The engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). |
-| Layout or page geometry differs                              | The engine needs a separate serving capture, budget, and edge comparisons.                                        |
+| Layout or page geometry differs                               | The engine needs a separate serving capture, budget, and edge comparisons.                                     |
 
 ### 6. Capture the transfer direction
 
@@ -157,12 +161,12 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-| Pinned API term  | Meaning                                  |
-| ---------------- | ---------------------------------------- |
-| `NixlConnector`  | Alias for `NixlPullConnector`.           |
-| `kv_both`        | The engine produces and consumes KV.     |
+| Pinned API term | Meaning                              |
+| --------------- | ------------------------------------ |
+| `NixlConnector` | Alias for `NixlPullConnector`.       |
+| `kv_both`       | The engine produces and consumes KV. |
 
-If the script finds zero or several connector classes in `image-check.log`, rerun the connector resolution with the pinned image check.
+When the script finds zero or several connector classes in `image-check.log`, rerun the launcher's `check` for this launch plan.
 
 ### 7. Confirm the connector in the startup log
 
@@ -198,7 +202,7 @@ When the capture fails:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
-### 2. Confirm which process you're attesting
+### 2. Confirm the attested process
 
 1. Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`.
 2. Confirm the document describes the running process.
@@ -286,12 +290,14 @@ Run once from the router shell after every sidecar passes:
 `finalize-fleet` writes:
 
 - `engine_contract` in `runs/deployment/fleet.json`.
-- A copy of the previous fleet file under `runs/`.
+- A copy of the previous fleet file at `runs/fleet.before-attestation-<id>.json`.
 
-| Failure               | Diagnosis                                                               |
-| --------------------- | ----------------------------------------------------------------------- |
-| A sidecar fails       | Error output lists the engine and the failed checks.                    |
-| Two engines disagree  | The differing field identifies the engine with the bad input.           |
+On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
+
+| Failure                                      | Diagnosis                                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------- |
+| A sidecar fails                              | The error output names the engine and the failed checks.                   |
+| `Engine sidecars report different contracts` | Compare the `contract` objects in each engine's `engine-attestation.json`. |
 
 Recovery:
 
@@ -301,4 +307,4 @@ Recovery:
 
 Leave every engine and sidecar running through profiling, preflight, and the trial.
 
-Next: [Gate F: Profile once and run the live KV contract](06-Profile-and-Preflight.md).
+[![Next: Gate F: Profile once and run the live KV contract](https://img.shields.io/badge/next-Gate%20F%3A%20Profile%20once%20and%20run%20the%20live%20KV%20contract-0f766e)](06-Profile-and-Preflight.md)

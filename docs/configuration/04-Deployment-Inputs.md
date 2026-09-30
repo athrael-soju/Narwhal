@@ -2,28 +2,26 @@
 
 ## 12. Deployment inputs and generated artifacts
 
-A fresh management checkout starts from `.env`, which holds the [launch-policy environment overrides](../deploy/01-Discover.md#confirm-the-launch-policy).
+The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirm-the-launch-policy).
 
 Discovery writes one private set of files per fleet at mode 0600:
 
-```text
-config/hosts.local.json
-config/ssh.known_hosts
-config/engine-launch.local.json
-config/engine-launch.sources.json
-config/fleet.json
-config/deployment.env
-```
+| File                         | Selected by               | Default path                                           |
+| ---------------------------- | ------------------------- | ------------------------------------------------------ |
+| Host inventory               | `NARWHAL_HOSTS`           | `config/hosts.local.json`                              |
+| SSH known-hosts store        | `NARWHAL_SSH_KNOWN_HOSTS` | `config/ssh.known_hosts`                               |
+| Launch records               | `NARWHAL_LAUNCH_CONFIG`   | `config/engine-launch.local.json`                      |
+| Launch-record sources        |                           | `engine-launch.sources.json` beside the launch records |
+| Fleet                        | `NARWHAL_FLEET`           | `config/fleet.json`                                    |
+| Derived deployment variables |                           | `deployment.env` beside the fleet                      |
 
-| Directory               | Contents                                                                                  |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `runs/discovery/<run>/` | Per-engine checkpoint file hashes, a matching tree digest, observations, and command logs |
-| `runs/deployment-env/`  | Prepared workstation files, Git-ignored                                                   |
-| `runs/deployment/`      | Remote role environments and the effective fleet                                          |
+| Directory                    | Host            | Contents                                                                                  |
+| ---------------------------- | --------------- | ----------------------------------------------------------------------------------------- |
+| `runs/discovery/<run>/`      | Workstation     | Per-engine checkpoint file hashes, a matching tree digest, observations, and command logs |
+| `runs/deployment-env/<run>/` | Workstation     | Prepared source bundle, role files by host ID, manifest, and command logs                 |
+| `runs/deployment/`           | Remote checkout | Role environments, the effective fleet, and `profiling-limits.json`                       |
 
 Load `.env` and `config/deployment.env` before reusing saved discovery inputs.
-
-Each engine host is [inspected](../deploy/03-Validate-Engines.md#inspect-every-engine-host) against its generated launch record.
 
 ### 12.1 Source revision and deployment bundle
 
@@ -35,11 +33,11 @@ Prepare deployment inputs for [host installation](../deploy/02-Install.md):
 python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 ```
 
-| Command                                | Output                                                                                              |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `prepare`                              | `source.bundle` with the selected revision, next to the role environments in `runs/deployment-env/` |
-| `tools/deployment/prepare_host_env.py` | Role files at mode 0600 and shell literals copied through unchanged                                 |
-| `deploy_hosts.py install`              | The bundle and a checkout cloned from it on each selected host                                      |
+| Command                                | Output                                                                                                |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `deploy_hosts.py prepare`              | `<directory>/source.bundle` with the selected revision, and role files under `<directory>/<host-id>/` |
+| `tools/deployment/prepare_host_env.py` | Role files at mode 0600, with shell literals copied through unchanged                                 |
+| `deploy_hosts.py install`              | The bundle and a checkout cloned from it on each selected host                                        |
 
 ### 12.2 Generated host-side files
 
@@ -51,11 +49,13 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 | `runs/deployment-tools/launch_engine.py`      | Standalone launcher snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                                  | Management-checkout `tools/deployment/launch_engine.py`.                                                                                                                                                 |
 | `runs/deployment-tools/fabric_budget.py`      | Standalone fabric calculator snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                         | Management-checkout `tools/deployment/fabric_budget.py`.                                                                                                                                                 |
 | `runs/deployment-tools/cache_capture_hook.py` | Serving cache-capture snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                                | Management-checkout `tools/deployment/cache_capture_hook.py`.                                                                                                                                            |
-| `runs/deployment/fleet.json`                  | Effective generated fleet copied before deployment edits.                                                                                                                    | Workstation file selected by `NARWHAL_FLEET`.                                                                                                                                                            |
+| `runs/deployment/fleet.json`                  | Effective generated fleet copied before deployment edits.                                                                                                                      | Workstation file selected by `NARWHAL_FLEET`.                                                                                                                                                            |
+| `runs/deployment/profiling-limits.json`       | One `--max-num-seqs` per engine ID, on the router host.                                                                                                                        | Each engine's generated launch record.                                                                                                                                                                   |
 
 Engine export requires:
 
 ```text
+NARWHAL_DEPLOYMENT_REVISION
 NARWHAL_ENGINE_IMAGE
 NARWHAL_ENGINE_MODEL_NAME
 NARWHAL_MODEL_DIR
@@ -68,24 +68,30 @@ NARWHAL_NIXL_SIDE_CHANNEL_PORT
 NARWHAL_UCX_TCP_PORT_RANGE
 ```
 
+With `engine.engine_api_key_env` set, engine export requires the variable it names.
+
 Each `.env.engine-<n>` sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json`.
 
-Per-node overrides insert `NODE_<n>_` after `NARWHAL_`, for example `NARWHAL_NODE_2_ENGINE_PORT` for `NARWHAL_ENGINE_PORT` in `.env.engine-2`.
+Per-node overrides insert `NODE_<n>_` after `NARWHAL_`:
+
+| Shared variable       | Override for `.env.engine-2` |
+| --------------------- | ---------------------------- |
+| `NARWHAL_ENGINE_PORT` | `NARWHAL_NODE_2_ENGINE_PORT` |
 
 Export fails when:
 
-- a required field's override is empty
+- a required value is unset or empty
+- a per-node override is set to an empty value
+- `NARWHAL_DEPLOYMENT_REVISION` fails to match a full 40- or 64-hex commit SHA
 - a variable name contains `SSH`
 - a variable name matches an access variable from the host inventory
 
 ### 12.3 Profiling limits
 
-`profiling-limits.json` holds each engine's `--max-num-seqs` from its generated launch record.
-
-Profile with the generated limits:
+Profile with the generated limits from the router shell:
 
 ```bash
-narwhal-profile --limits runs/deployment/profiling-limits.json
+.venv/bin/narwhal-profile --fleet runs/deployment/fleet.json --limits runs/deployment/profiling-limits.json
 ```
 
 ### 12.4 Role shells
@@ -93,7 +99,7 @@ narwhal-profile --limits runs/deployment/profiling-limits.json
 Load a generated role environment:
 
 ```bash
-deploy_hosts.py shell --run <directory> --role <role>
+python3 tools/deployment/deploy_hosts.py shell --run <directory> --role <role>
 ```
 
 A host with both roles holds both role files in one checkout.
@@ -108,10 +114,12 @@ Roles with identical `NARWHAL_NODE_<n>_SSH` or `NARWHAL_ROUTER_SSH` destinations
 
 Each `hosts` entry contains:
 
-- unique `id`
-- `ssh_env`, naming the environment variable holding the management destination, an alias or `user@management-host`
-- optional `password_env`
-- assigned `roles`
+| Field          | Value                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `id`           | Unique lowercase host ID                                                                       |
+| `ssh_env`      | Environment variable that holds the management destination, an alias or `user@management-host` |
+| `password_env` | Optional environment variable that holds the SSH password                                      |
+| `roles`        | Assigned roles                                                                                 |
 
 Role names:
 
@@ -135,23 +143,23 @@ The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config
 Validate the inventory:
 
 ```bash
-tools/deployment/deploy_hosts.py plan
+python3 tools/deployment/deploy_hosts.py plan
 ```
 
-| Command               | Action                                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `plan`                | Checks for unique host IDs, one host per role, distinct destination entries, and set access variables |
-| `check-access`        | Verifies one connection per host                                                                      |
-| `shell --role <role>` | Resolves the role's host from the inventory                                                           |
+| Command               | Action                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `plan`                | Checks for unique host IDs, one host per role, a `router` role, at least one engine role, distinct destination entries, and set access variables |
+| `check-access`        | Verifies one connection per host                                                                                                                 |
+| `shell --role <role>` | Resolves the role's host from the inventory                                                                                                      |
 
 ### 13.2 Known-hosts handling
 
-`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file (default `config/ssh.known_hosts`).
+`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file.
 
-| Command             | Host-key checking                          |
-| ------------------- | ------------------------------------------ |
-| Discovery           | OpenSSH `accept-new`                       |
-| Deployment commands | Strict host-key checking against this file |
+| Command             | `NARWHAL_SSH_KNOWN_HOSTS`                     | Host-key checking                          |
+| ------------------- | --------------------------------------------- | ------------------------------------------ |
+| Discovery           | Optional, default `config/ssh.known_hosts`    | OpenSSH `accept-new`                       |
+| Deployment commands | Required, loaded from `config/deployment.env` | Strict host-key checking against this file |
 
 Under `accept-new`:
 
@@ -180,30 +188,38 @@ To replace the key of a changed server:
 
 - one verified source bundle
 - role files grouped by host ID
-- a private manifest containing revision, host assignments, destination fingerprints, and file hashes
+- a private manifest containing revision, host assignments, destination fingerprints, remote run directory, and file hashes
 
-Use a new output directory for each deployment.
+`--out` takes a new directory for each deployment.
 
 `install --run <directory>` installs the prepared run once on each selected host.
 
-Host selection:
+| `install` option | Selected hosts                                      |
+| ---------------- | --------------------------------------------------- |
+| `--role <role>`  | The host that runs `<role>` and its colocated roles |
+| `--host <id>`    | One physical host by inventory ID                   |
+| Neither          | Every inventory host                                |
 
-- `--role engine-1` selects the host running `engine-1`, colocated roles included.
-- `--host <id>` selects one physical host directly.
-
-Re-running install reuses existing content when the completion marker matches the approved revision.
-
-Each remote run at `~/Narwhal-deploy/<id>/` holds:
+Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 
 - source bundle
 - role files
 - `checkout/`
 - installation lock
-- completion marker
+- `installed` completion marker
 
-A source or configuration mismatch stops the helper at that host.
+`<run-id>` is a random 32-hex ID that `prepare` records in the manifest.
 
-The run's private local `logs/` directory holds executed scripts, exit status, and host output.
+Re-running `install` on a host:
+
+| Existing remote content                                 | Result                     |
+| ------------------------------------------------------- | -------------------------- |
+| File with the manifest SHA-256                          | Reused                     |
+| `checkout/` at the approved revision                    | Reused                     |
+| `installed` marker at the approved revision             | Virtual environment reused |
+| Changed file, or checkout or marker at another revision | Install stops at that host |
+
+The run's private `logs/` directory holds one log per host with executed scripts, exit status, and host output.
 
 A role shell opened with `--run` has:
 

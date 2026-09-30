@@ -20,21 +20,21 @@ Non-streaming calls return:
 
 ## Request contract
 
-Fields outside the validated set reach the engine as sent.
-
 ### Validated field types
 
 Non-null values of these fields have these required types:
 
-| Field        | Required type              |
-| ------------ | -------------------------- |
-| `model`      | String                     |
-| `stream`     | Boolean                    |
-| `n`          | Integer excluding booleans |
-| `best_of`    | Integer excluding booleans |
-| `max_tokens` | Integer excluding booleans |
-| `prompt`     | String or array            |
-| `messages`   | Array of objects           |
+| Field        | Required type    |
+| ------------ | ---------------- |
+| `model`      | String           |
+| `stream`     | Boolean          |
+| `n`          | Integer          |
+| `best_of`    | Integer          |
+| `max_tokens` | Integer          |
+| `prompt`     | String or array  |
+| `messages`   | Array of objects |
+
+Other fields reach the engine as sent.
 
 Invalid requests return HTTP `400` in an OpenAI error envelope:
 
@@ -59,10 +59,10 @@ A rejected `max_tokens` returns:
 
 ### Model handling
 
-| Requested `model` | Result                            |
-| ----------------- | --------------------------------- |
-| Configured model  | Forwarded with that name          |
-| Any other model   | HTTP `404` with `model_not_found` |
+| Requested `model`           | Result                            |
+| --------------------------- | --------------------------------- |
+| Configured model, or absent | Forwarded as the configured model |
+| Any other model             | HTTP `404` with `model_not_found` |
 
 ### Sampling width
 
@@ -70,15 +70,13 @@ A rejected `max_tokens` returns:
 
 ### Output and tool restrictions
 
-Streaming requests forward `audio`, `modalities`, and `tools` unchanged.
+| Option       | Streaming request   | Accepted non-streaming values         |
+| ------------ | ------------------- | ------------------------------------- |
+| `audio`      | Forwarded unchanged | `null`                                |
+| `modalities` | Forwarded unchanged | `["text"]`                            |
+| `tools`      | Forwarded unchanged | Array of objects with type `function` |
 
-Non-streaming requests accept:
-
-- `modalities: ["text"]`
-- `tools` as an array of objects
-- tools of type `function`
-
-A non-streaming request with an `audio` value or any other value for these options returns HTTP `400` `invalid_request_error` with the rejected option in `param`.
+Other non-streaming values return HTTP `400` `invalid_request_error` with the option in `param`.
 
 ## Request identity and authentication
 

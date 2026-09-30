@@ -4,12 +4,12 @@
 
 ### 4.1 Global admission
 
-| Field                        | Default        | Meaning                                                                | Values                                                            |
-| ---------------------------- | -------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                            |
-| `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget.                           | Zero or greater                                                       |
-| `serving.max_connections`    | `512`          | Global admitted-request limit and data connection pool size.           | At least 1                                                        |
-| `engine.control_connections` | `0`            | Control connection pool size, reserved for health and recovery probes. | `0` for two per engine with a minimum of four, or a positive size |
+| Field                        | Default        | Meaning                                                                | Values                                                 |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
+| `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
+| `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
+| `serving.max_connections`    | `512`          | Global admitted-request limit and data connection pool size.           | At least 1                                             |
+| `engine.control_connections` | `0`            | Control connection pool size, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 Admission modes:
 
@@ -18,48 +18,46 @@ Admission modes:
 | `predictive` | Returns HTTP 429 when the least expensive prefill path exceeds the time to first token (TTFT) budget. |
 | `open`       | Disables predictive refusals.                                                                         |
 
-| Refusal                                         | Response                                                                            |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Backlog-driven                                  | `Retry-After` header with the projected wait                                        |
-| Projected TTFT above the target at zero backlog | Error envelope that tells the caller to shorten the prompt or raise the TTFT target |
+| Refusal                                                       | Response                                                                            |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Backlog-driven                                                | `Retry-After` header with the projected wait beyond the budget                      |
+| Prefill of the prompt alone exceeds the TTFT budget           | Error envelope that tells the caller to shorten the prompt or raise the TTFT budget |
+| Aggregate prefill while every live engine carries decode work | `Retry-After: 1`                                                                    |
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
-
-`narwhal-serve --max-concurrent` sets a per-router admission limit of at most `serving.max_connections`.
 
 ### 4.2 Waiting, phase concurrency, and retries
 
 | Field                         | Default    | Meaning                                                                                             | Values                                                                     |
-| ----------------------------- | ---------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                             | `0` rejects immediately at saturation                                      |
 | `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline.                                    | Positive when `serving.queue_capacity` is positive                         |
 | `serving.prefill_concurrency` | `0`        | Maximum resident prefill requests per engine.                                                       | Positive when `serving.queue_capacity` is positive                         |
 | `serving.decode_concurrency`  | `0`        | Maximum resident decode requests per engine.                                                        | Positive when `serving.queue_capacity` is positive                         |
 | `serving.handoff_timeout_s`   | `0.0`      | Maximum KV handoff age from the start of the prefill HTTP request, or the request deadline at `0`.  | Positive and below the verified backend KV lease when queueing or retrying |
 | `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                  | 1 to 3                                                                     |
-| `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                |                                                                            |
+| `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                | Positive                                                                   |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                            | At least `serving.retry_base_s`                                            |
-| `serving.retry_budget`        | `10`       | Initial and maximum retry-credit pool, at one credit per retry.                                     |                                                                            |
+| `serving.retry_budget`        | `10`       | Initial and maximum retry-credit pool, at one credit per retry.                                     | Zero or greater                                                            |
 | `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request.                                               | 0 to 1                                                                     |
-| `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                     |                                                                            |
-| `serving.max_response_bytes`  | `16777216` | Maximum retained bytes for each non-streaming attempt and the streaming pre-output metadata buffer. |                                                                            |
+| `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                     | At least 1                                                                 |
+| `serving.max_response_bytes`  | `16777216` | Maximum retained bytes for each non-streaming attempt and the streaming pre-output metadata buffer. | At least 1                                                                 |
 
 Retained completion requests:
 
-- The admission limit is `--max-concurrent` when set, otherwise `serving.max_connections`.
-- The retained-request ceiling is the admission limit plus `serving.queue_capacity` completion requests.
-- A new completion request at that ceiling gets HTTP 429 before body parsing.
-- Each refusal counts as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers).
+| Quantity                   | Value                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Admission limit            | [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections` |
+| Retained-request ceiling   | Admission limit plus `serving.queue_capacity`                                                                                   |
+| New request at the ceiling | HTTP 429 before body parsing, counted as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers)                    |
 
-| Failure                                                    | Result                                                |
-| ---------------------------------------------------------- | ----------------------------------------------------- |
-| Transient transport error before visible output            | Retried when `serving.max_attempts` is greater than 1 |
-| HTTP 408, 429, 500, 502, 503, or 504 before visible output | Retried when `serving.max_attempts` is greater than 1 |
-| Expired KV handoff                                         | Retried when `serving.max_attempts` is greater than 1 |
-| Permanent error                                            | Ends the request                                      |
-| Local data connection pool starvation                      | Ends the request                                      |
-| Cancellation                                               | Ends the request                                      |
-| Any failure after visible output                           | Ends the request                                      |
+| Failure                                                                 | Result                                                |
+| ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| Transient transport error before visible output                         | Retried when `serving.max_attempts` is greater than 1 |
+| HTTP 408, 429, 500, 502, 503, or 504 before visible output              | Retried when `serving.max_attempts` is greater than 1 |
+| Expired KV handoff                                                      | Retried when `serving.max_attempts` is greater than 1 |
+| Permanent error, local data connection pool starvation, or cancellation | Ends the request                                      |
+| Any failure after visible output                                        | Ends the request                                      |
 
 The original request deadline covers:
 
@@ -85,7 +83,7 @@ Streaming responses commit HTTP 200 before decode starts.
 | Non-streaming decode failure                                             | HTTP error                                       |
 | Streaming decode failure, including one before the first generated token | Terminal stream error event                      |
 | Request deadline expiry during a stream                                  | Terminal stream error event with `code: expired` |
-| Client backpressure                                                      | Immediate connection drop                        |
+| Request deadline expiry while client writes are blocked                  | Immediate connection drop                        |
 
 Treat an error event, or a stream that ends before the success terminator, as a failed response.
 
@@ -107,27 +105,26 @@ A live role change:
 
 ## 6. Request deadlines and engine HTTP behaviour
 
-| Field                                 | Default                | Meaning                                                                           | Values                                        |
-| ------------------------------------- | ---------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
-| `profiles.path`                       | `"runs/profiles.json"` | Profile store read by the router and written by `narwhal-profile`.                |                                               |
-| `serving.request_timeout_s`           | `600.0`                | End-to-end completion deadline from HTTP ingress through response delivery.       | Positive                                      |
-| `serving.prefill_timeout_s`           | `120.0`                | Elapsed prefill-leg deadline.                                                     | Positive, at most `serving.request_timeout_s` |
-| `recovery.failure_quarantine_s`       | `0.0`                  | Time a failed engine remains excluded from placement.                             | `0` disables quarantine                       |
-| `engine.first_token_timeout_s`        | `2.5`                  | Deadline to the first decode token.                                               | Positive, at most `serving.request_timeout_s` |
-| `engine.first_token_calibration_path` | `""`                   | Path to a completed first-token calibration artifact under `runs/`.               |                                               |
-| `engine.decode_read_timeout_s`        | `60.0`                 | Maximum silent interval between decode chunks after the first token.             | `0` disables the gap limit                    |
-| `engine.tokenize`                     | `true`                 | Requests exact text and chat input length from the dialect tokenization endpoint. |                                               |
-| `engine.tokenize_timeout_s`           | `2.0`                  | Elapsed exact-token-count deadline.                                               | Positive                                      |
-| `engine.chars_per_token`              | `3.8`                  | Character-to-token fallback ratio.                                                | Positive                                      |
-| `engine.connect_timeout_s`            | `10.0`                 | TCP-connect deadline for engine requests.                                         | Positive                                      |
-| `engine.pool_timeout_s`               | `5.0`                  | Maximum wait for a connection from the data or control connection pool.           | Positive                                      |
-| `engine.health_timeout_s`             | `5.0`                  | HTTP I/O timeout for preflight, breaker, and readmission health probes.           | Positive                                      |
+| Field                                 | Default | Meaning                                                                           | Values                                        |
+| ------------------------------------- | ------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
+| `serving.request_timeout_s`           | `600.0` | End-to-end completion deadline from HTTP ingress through response delivery.       | Positive                                      |
+| `serving.prefill_timeout_s`           | `120.0` | Elapsed prefill-leg deadline.                                                     | Positive, at most `serving.request_timeout_s` |
+| `engine.first_token_timeout_s`        | `2.5`   | Deadline to the first decode token.                                               | Positive, at most `serving.request_timeout_s` |
+| `engine.first_token_calibration_path` | `""`    | Path to a completed first-token calibration artifact under `runs/`.               |                                               |
+| `engine.decode_read_timeout_s`        | `60.0`  | Maximum silent interval between decode chunks after the first token.              | `0` disables the gap limit                    |
+| `engine.tokenize`                     | `true`  | Requests exact text and chat input length from the dialect tokenization endpoint. |                                               |
+| `engine.tokenize_timeout_s`           | `2.0`   | Elapsed exact-token-count deadline.                                               | Positive                                      |
+| `engine.chars_per_token`              | `3.8`   | Character-to-token fallback ratio.                                                | Positive                                      |
+| `engine.connect_timeout_s`            | `10.0`  | TCP-connect deadline for engine requests.                                         | Positive                                      |
+| `engine.pool_timeout_s`               | `5.0`   | Maximum wait for a connection from the data or control connection pool.           | Positive                                      |
+| `engine.health_timeout_s`             | `5.0`   | HTTP I/O timeout for preflight, breaker, and readmission health probes.           | Positive                                      |
 
 ### 6.1 Request and prefill deadlines
 
-Set `serving.request_timeout_s` from the supported output length and client deadline.
-
-Set `serving.prefill_timeout_s` from measurements of the longest admitted inputs under the supported load.
+| Field                       | Set from                                                             |
+| --------------------------- | -------------------------------------------------------------------- |
+| `serving.request_timeout_s` | Supported output length and client deadline                          |
+| `serving.prefill_timeout_s` | Measurements of the longest admitted inputs under the supported load |
 
 For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the probe HTTP timeout.
 
@@ -135,7 +132,7 @@ Prefill, tokenization, and health calls end when the first of their phase, conne
 
 ### 6.2 First-token deadline and calibration
 
-The `engine.first_token_timeout_s` window starts before the decode HTTP stream opens and ends at the first generated token.
+The `engine.first_token_timeout_s` window runs from before the decode HTTP stream opens to the first generated token.
 
 The inference probe applies `engine.first_token_timeout_s` independently to each complete leg, prefill and decode.
 
@@ -150,7 +147,7 @@ An engine process restart makes the calibration artifact stale.
 | Calibration artifact  | Preflight      | Router startup |
 | --------------------- | -------------- | -------------- |
 | Empty path            | Logs a warning | Logs a warning |
-| Stale or insufficient | Fails          | Blocked        |
+| Stale or insufficient | Fails          | Fails          |
 
 ### 6.3 Decode stream gaps
 
@@ -168,9 +165,9 @@ Disable the gap limit:
 
 ### 6.4 Token counting
 
-| Input                                                                                    | Token count                                     |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Completion prompt that is a nonempty, flat list of nonnegative integer token IDs         | Local array length                            |
+| Input                                                                                    | Token count                                    |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Completion prompt that is a nonempty, flat list of nonnegative integer token IDs         | Local array length                             |
 | Text or chat input, with `engine.tokenize` set to `true` and a dialect exact-count route | That route, within `engine.tokenize_timeout_s` |
 | Text or chat input whose exact-count call fails                                          | Engine error to the client before placement    |
 | Other text or chat input                                                                 | Estimate from `engine.chars_per_token`         |
@@ -194,27 +191,21 @@ Set these timeouts from latency measured under the intended load:
 
 ## 7. Role control
 
-| Field                                       | Default | Meaning                                                                                               | Values                           |
-| ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `controller.advisory`                       | `false` | Holds current roles and records proposed role splits with reasons.                           |                                  |
-| `controller.monitor_interval_s`             | `1.0`   | Delay between engine monitoring passes.                                                               | Positive                         |
-| `controller.monitor_failure_limit`          | `5`     | Consecutive passes with an engine monitoring stage failure before degraded state stops new admission. | At least 1                       |
-| `controller.min_prefill`                    | `1`     | Minimum live prefill engines preserved by role-controller moves.                                      | At least 1                       |
-| `controller.min_decode`                     | `1`     | Minimum live decode engines preserved by role-controller moves.                                       | At least 1                       |
-| `controller.thresholds.expand`              | `1.0`   | SLO-relative pool load that starts reactive expansion.                                                | Positive                         |
+| Field                                       | Default | Meaning                                                                                               | Values                               |
+| ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `controller.advisory`                       | `false` | Holds current roles and records proposed role splits with reasons.                                    |                                      |
+| `controller.monitor_interval_s`             | `1.0`   | Delay between engine monitoring passes.                                                               | Positive                             |
+| `controller.monitor_failure_limit`          | `5`     | Consecutive passes with an engine monitoring stage failure before degraded state stops new admission. | At least 1                           |
+| `controller.min_prefill`                    | `1`     | Minimum live prefill engines preserved by role-controller moves.                                      | At least 1                           |
+| `controller.min_decode`                     | `1`     | Minimum live decode engines preserved by role-controller moves.                                       | At least 1                           |
+| `controller.thresholds.expand`              | `1.0`   | SLO-relative pool load that starts reactive expansion.                                                | Positive                             |
 | `controller.thresholds.shrink`              | `0.5`   | Maximum projected source load for ordinary consolidation.                                             | Zero or greater, lower than `expand` |
 | `controller.thresholds.cooldown_s`          | `10.0`  | Minimum time between prefill-to-decode moves.                                                         | Zero or greater                      |
-| `controller.thresholds.sustained_intervals` | `3`     | Confirmations required for moves that need them.                                                      | At least 1                       |
+| `controller.thresholds.sustained_intervals` | `3`     | Confirmations required for moves that need them.                                                      | At least 1                           |
 | `controller.thresholds.dwell_s`             | `0.0`   | Minimum residence time after an engine changes role.                                                  | Zero or greater                      |
-| `controller.thresholds.panic_ratio`         | `0.0`   | Multiple of `expand` for the prefill-to-decode cooldown bypass.                                       | `0` for off, or at least 1       |
-| `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a decode-to-prefill donor.                                 | `0` disables the guard           |
-| `controller.flip_history`                   | `1000`  | Maximum retained role-change records exposed by `/narwhal/state`.                                     | At least 1                       |
-
-The maximum `recovery.health.min_samples` in [breaker and drift settings](03-Recovery-and-Validation.md#81-breaker-and-drift-settings) is:
-
-```text
-floor(recovery.health.window_s / controller.monitor_interval_s)
-```
+| `controller.thresholds.panic_ratio`         | `0.0`   | Multiple of `expand` for the prefill-to-decode cooldown bypass.                                       | `0` for off, or at least 1           |
+| `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a decode-to-prefill donor.                                 | `0` disables the guard               |
+| `controller.flip_history`                   | `1000`  | Maximum retained role-change records exposed by `/narwhal/state`.                                     | At least 1                           |
 
 ### 7.1 Load definitions
 
@@ -235,14 +226,14 @@ predicted prefill work / TTFT target
 
 A load of `1.0` means the phase has reached its target.
 
-`/narwhal/state` fields and decision reasons call load pressure, for example `mixed_pressure` and `source_pressure_safe`.
+Controller decision details name load as pressure, such as the `mixed_pressure` eligibility rule and the `source_pressure_safe` flag.
 
 ### 7.2 Role floors
 
 | Fleet               | Floor rule                                                                     |
 | ------------------- | ------------------------------------------------------------------------------ |
 | Two or more engines | `controller.min_prefill` plus `controller.min_decode` at most the engine count |
-| One engine          | Both floors at `1`                                    |
+| One engine          | Both floors at `1`                                                             |
 
 When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
 
@@ -358,7 +349,7 @@ State and metrics expose:
 ### 7.7 Reactive-controller parameters
 
 | Field                                               | Default | Meaning                                                                             | Values                                                   |
-| --------------------------------------------------- | ------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| --------------------------------------------------- | :-----: | ----------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `controller.reactive.window_s`                      | `120.0` | Demand-estimation window.                                                           | Positive                                                 |
 | `controller.reactive.confirmations`                 | `2`     | Required consecutive identical adjacent proposals for moves that need confirmation. | At least 1                                               |
 | `controller.reactive.utilization`                   | `0.8`   | Fraction of each engine treated as usable capacity.                                 | Greater than 0, at most 1                                |
@@ -369,10 +360,8 @@ State and metrics expose:
 | `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for decode-to-prefill consolidation.           | Positive, at most `evidence_max_span_s`                  |
 | `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                     | Positive, at least `evidence_span_s`, at most `window_s` |
 | `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.    | At least 1                                               |
-| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand.                | Finite, zero or greater                                      |
+| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand.                | Zero or greater                                          |
 | `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live-to-profile decode correction.                               | Positive                                                 |
 | `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live-to-profile decode correction.                               | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction.           | `(0, 1]`                                                 |
 | `controller.reactive.decode_correction_min_samples` | `8`     | Required decode gaps before a window updates the correction.                        | At least 1                                               |
-
-Rerun preflight and deployment-load measurements after an engine build or serving policy change.
