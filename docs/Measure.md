@@ -11,8 +11,8 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
 
 ## Automate benchmark points
 
-- [Ordered benchmark points](measure/05-Benchmark-Runner.md): a plan's trial points in order, with readiness and drain checks around each point.
-- [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md): journal rows, metrics samples, file digests, and a shareable summary for each point.
+- [Ordered benchmark points](measure/05-Benchmark-Runner.md): a plan's trial points with readiness and drain checks per point.
+- [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md): journal rows, metrics samples, file digests, and a shareable summary per point.
 
 ## Qualification results
 

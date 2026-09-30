@@ -4,7 +4,7 @@ Narwhal dev runs several independent inference engines on one NVIDIA CUDA GPU, o
 
 An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities.
 
-Engines load model files from the Hugging Face cache or from paths passed to `narwhal dev init`.
+Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
 For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefill and one decode engine running the Qwen3.5-0.8B GGUF model.
 
@@ -32,7 +32,7 @@ nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
 ip -brief -4 address
 ```
 
-Record the name of an interface with exactly one IPv4 address for NIXL/UCX, which uses `eth0` by default.
+Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
 
 ## Install the runtime and model
 
@@ -58,14 +58,14 @@ Replace these placeholder targets with values measured on your card.
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve.
 
-Two template fields pin the hardware:
+Template fields that pin the hardware:
 
 | Field | Effect |
 | --- | --- |
-| `gpu.product` | Pins the GPU product name |
-| `gpu.minimum_total_mib` | Sets the minimum total VRAM |
+| `gpu.product` | GPU product name |
+| `gpu.minimum_total_mib` | Minimum total VRAM |
 
-Export the installed template as a starting recipe:
+Export the installed template:
 
 ```bash
 mkdir -p runs
@@ -81,7 +81,7 @@ PYTHON
 
 ## Initialize and verify an instance
 
-Create, start, and verify an instance with the interface name from `ip`:
+Run the lifecycle commands with the interface name from `ip`:
 
 ```bash
 interface=eth0  # replace with the interface reported by ip
@@ -91,11 +91,25 @@ narwhal dev verify
 narwhal dev status
 ```
 
-| Command | Action |
-| --- | --- |
-| `init` | Selects a CUDA GPU by UUID, checks the model, runtime, and GPU allocation, and writes the private instance. |
-| `up` | Checks that the ports are free, starts and profiles the engines, captures attestations, and starts the router. |
-| `verify` | Runs preflight over every eligible directed KV path, sends a routed arithmetic request, and reports `ready` when every check passes. |
+`init` runs these steps:
+
+1. Selects a CUDA GPU by UUID.
+2. Checks the model, runtime, and GPU allocation.
+3. Writes the private instance.
+
+`up` runs these steps:
+
+1. Checks that the ports are free.
+2. Starts the engines.
+3. Profiles the engines.
+4. Captures attestations.
+5. Starts the router.
+
+`verify` runs these steps:
+
+1. Runs preflight over every eligible directed KV path.
+2. Sends a routed arithmetic request.
+3. Reports `ready` when every check passes.
 
 Run every later lifecycle command in the Python environment that ran `init`.
 
@@ -115,7 +129,7 @@ curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-The optional [WSL2 monitoring example](observability/04-WSL2.md) forwards these metrics to a separate Prometheus and Grafana host.
+Optional: [forward these metrics to a Prometheus and Grafana host](observability/04-WSL2.md).
 
 | Option | Effect |
 | --- | --- |
@@ -124,7 +138,13 @@ The optional [WSL2 monitoring example](observability/04-WSL2.md) forwards these 
 
 ## Inspect and stop the instance
 
-The run directory that `status` prints holds the routed response, memory samples, the request journal, `teardown.json`, and these logs:
+The run directory that `status` prints holds:
+
+- the routed response
+- memory samples
+- the request journal
+- `teardown.json`
+- the logs below
 
 | Log | Content |
 | --- | --- |
@@ -132,18 +152,18 @@ The run directory that `status` prints holds the routed response, memory samples
 | `profile-*.log` | Probe and fit outcomes |
 | `verify-*/preflight.log` | Runtime, profile, and transfer checks |
 
-Stop the instance and confirm its status:
+Stop the instance:
 
 ```bash
 narwhal dev down
 narwhal dev status
 ```
 
-`down` reports `stopped` after it stops the recorded process groups.
+`down` reports `stopped` for the recorded process groups.
 
 Each `up` writes a new run directory.
 
-After a runtime change or engine restart:
+For a runtime change or engine restart:
 
 1. Run `down`.
 2. Run `up`.
@@ -151,7 +171,7 @@ After a runtime change or engine restart:
 
 ## Stage deadlines and recovery
 
-`dev up` and `dev verify` run their work as subprocess stages, each with its own time budget.
+`dev up` and `dev verify` run subprocess stages with time budgets.
 
 | Variable | Default | Scope |
 | --- | --- | --- |
@@ -185,17 +205,22 @@ Budgets and fixed limits:
 | Engine health check in native shared startup | 180 seconds per engine |
 | HTTP health request | 2-second timeout per request |
 | Routed verification request | 30-second timeout |
+| Cleanup grace periods | Added to the execution budget |
 
-When a budget expires, or a helper stage receives SIGINT from Ctrl-C or a SIGTERM, `narwhal dev` stops that stage's supervised processes:
+`narwhal dev` stops the stage's supervised processes when:
+
+- a budget expires
+- a helper stage receives SIGINT from Ctrl-C
+- a helper stage receives SIGTERM
+
+Cleanup steps:
 
 | Step | Signal | Wait | Variable |
 | --- | --- | --- | --- |
 | 1 | SIGTERM | Up to 10 seconds | `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` |
 | 2 | SIGKILL to surviving processes | Up to 5 seconds | `NARWHAL_STAGE_KILL_GRACE_SECONDS` |
 
-Both grace periods add to the execution budget.
-
-Every stage writes evidence next to its log:
+Files next to each stage log:
 
 | File | Content |
 | --- | --- |
@@ -203,7 +228,7 @@ Every stage writes evidence next to its log:
 | `*.stdout`, `*.stderr` | The private partial output |
 | `*.stage.json` | The budget, wall-clock start, elapsed time, exit status, process identities, cleanup escalation, and surviving PIDs |
 
-A failed command leaves this state:
+Failed command outcomes:
 
 | Failed command | Result | Report |
 | --- | --- | --- |
@@ -233,4 +258,7 @@ The qualification evidence records:
 - both directed KV transfers;
 - the routed completion.
 
-A contribution for a GPU from another vendor includes a measured template and can add discovery, memory accounting, engine launch, and a compatible transfer runtime.
+A contribution for a GPU from another vendor includes:
+
+- a measured template
+- optionally discovery, memory accounting, engine launch, and a compatible transfer runtime

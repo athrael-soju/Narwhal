@@ -20,9 +20,7 @@ narwhal dev status --instance runs/dev --format json >status-result.json
 
 `narwhal-serve` and `narwhal-attest` report through logs, exit status, HTTP endpoints, and persisted artifacts.
 
-Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes).
-
-Exit codes with `--format json`:
+Exit codes with `--format json` (text mode: [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes)):
 
 | Status          | Exit code | Operation state                                                                                                        |
 | --------------- | --------: | ---------------------------------------------------------------------------------------------------------------------- |
@@ -31,7 +29,7 @@ Exit codes with `--format json`:
 | `invalid_input` |         2 | Arguments, configuration, or required inputs failed validation.                                                        |
 | `degraded`      |         3 | The operation completed with skipped preflight gates, a degraded development instance, or a partial diagnostic bundle. |
 | `error`         |         4 | An operational failure or stage deadline interrupted completion.                                                       |
-| `interrupted`   |       130 | The command handled cancellation.                                                                                      |
+| `interrupted`   |       130 | The command received cancellation.                                                                                     |
 
 Result fields:
 
@@ -40,9 +38,9 @@ Result fields:
 | `schema`, `schema_version` | `narwhal.command-result`, `1`.                                                                                                 |
 | `command`, `operation`     | Installed command and selected operation, such as `narwhal` and `dev status`.                                                  |
 | `status`, `exit_code`      | Status and matching exit code from the status table.                                                                           |
-| `data`                     | Operation-specific output.                                                                                                     |
+| `data`                     | Output of the selected operation.                                                                                              |
 | `artifacts`                | References with `kind`, absolute `path`, and a `state` of `created`, `updated`, `existing`, or `missing`.                      |
-| `errors`                   | Entries with stable `code`, diagnostic `message`, `command`, and optional `stage`, `engine`, `field`, and `context`.            |
+| `errors`                   | Entries with `code`, `message`, `command`, and optional `stage`, `engine`, `field`, and `context`.                             |
 
 `data` contents:
 
@@ -61,11 +59,11 @@ Error codes:
 | `invalid_arguments`       | `invalid_input`           | `input_missing`          |
 | `output_exists`           | `permission_denied`       | `gate_failed`            |
 | `evidence_gate_failed`    | `gates_skipped`           | `engine_selection_empty` |
-| `engine_unhealthy`        | `instance_degraded`       | `runtime_package_missing`|
+| `engine_unhealthy`        | `instance_degraded`       | `runtime_package_missing` |
 | `collection_partial`      | `engine_http_error`       | `operation_failed`       |
 | `stage_timeout`           | `stage_cancelled`         | `interrupted`            |
 
-Branch on `status`, `code`, and the recovery data that stage failures put in `context`.
+Branch on `status`, `code`, and the recovery data for stage failures in `context`.
 
 JSON results and diagnostics redact:
 

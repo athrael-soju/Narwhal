@@ -3,7 +3,6 @@
 `narwhal-inference` installs `narwhal` and the five `narwhal-*` commands.
 
 - Each executable accepts `-h`, `--help`, and `--version`.
-- `narwhal --help` lists the six executables.
 - Relative paths resolve from the process working directory.
 - `python -m narwhal.cli` starts a router.
 
@@ -25,10 +24,10 @@
 | Exit code | Outcome                                                                                                               |
 | --------: | --------------------------------------------------------------------------------------------------------------------- |
 |       `0` | Success.                                                                                                              |
-|       `1` | Operation failure, such as a failed engine HTTP request, runtime inspection, listener bind, verification, or teardown. |
+|       `1` | Operation failure: engine HTTP request, runtime inspection, listener bind, verification, or teardown.                 |
 |       `2` | Invalid arguments or configuration inputs.                                                                            |
 
-Command-specific cases, listed in full under [`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-codes) and [`narwhal diagnostics` exit statuses](Diagnostic-Bundles.md#manifest-and-exit-status):
+Exit codes by command ([`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-codes), [`narwhal diagnostics` exit statuses](Diagnostic-Bundles.md#manifest-and-exit-status)):
 
 | Command                       | Exit code | Case                               |
 | ----------------------------- | --------: | ---------------------------------- |

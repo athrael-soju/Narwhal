@@ -5,16 +5,7 @@
 | One     | One router process and one engine fleet                                |
 | Several | One router and one fleet per model, with the model selected at ingress |
 
-A fleet JSON file configures:
-
-- Serving
-- Profiling
-- Validation
-- Role control
-- Recovery
-- Engine compatibility checks
-
-Start a new fleet from the annotated example:
+Annotated example fleet file:
 
 ```bash
 .venv/bin/narwhal-check --print-example-config
@@ -27,7 +18,7 @@ Fleet file path:
 | `narwhal-serve`, `narwhal-profile`, `narwhal-check` | `--fleet`                            |
 | `create_app()`                                      | `NARWHAL_FLEET` environment variable |
 
-Every fleet file declares its schema identity and version:
+Fleet file header:
 
 ```json
 {

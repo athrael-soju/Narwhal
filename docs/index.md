@@ -1,6 +1,6 @@
 # Narwhal documentation
 
-Narwhal runs disaggregated LLM inference and, as demand changes, [reassigns prefill and decode roles](Core-Concepts.md) among engines that keep their model weights loaded.
+Narwhal runs disaggregated LLM inference and [reassigns prefill and decode roles](Core-Concepts.md) among engines with loaded model weights.
 
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark">
@@ -20,12 +20,12 @@ Narwhal runs disaggregated LLM inference and, as demand changes, [reassigns pref
 
 ## Concepts and reference
 
-- [Core concepts](Core-Concepts.md): the contracts that govern engines, request placement, role control, and fleet state.
+- [Core concepts](Core-Concepts.md): engine, request placement, role control, and fleet state contracts.
 - [Configuration](Configuration.md): fleet configuration fields, environment inputs, and their defaults.
-- [CLI reference](CLI-Reference.md): commands, options, and exit behaviour.
+- [CLI reference](CLI-Reference.md): commands, options, and exit codes.
 - [HTTP API reference](HTTP-API.md): completion, inspection, and lifecycle endpoints.
 - [Telemetry and artifact reference](Telemetry-and-Artifacts.md): journals, profiles, metrics, and persisted contract versions.
 
 ## Development
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers development environment setup, the local test workflow, and the pull request process.
+- [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md): development environment setup, the local test workflow, and the pull request process.

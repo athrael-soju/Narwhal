@@ -2,11 +2,11 @@
 
 ## Capture router and engine state
 
-Before changing router or engine state, collect one bundle per incident router, each with:
+Collect one bundle per incident router, with:
 
-- a fresh output path;
-- that router's fleet configuration;
-- that router's run directory.
+- a fresh output path
+- that router's fleet configuration
+- that router's run directory
 
 Collect a bundle:
 
@@ -19,14 +19,14 @@ narwhal diagnostics collect \
   --out runs/diagnostics/router-incident-001
 ```
 
-On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md) before retrying individual reads.
+On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md).
 
 | Option | Adds |
 | --- | --- |
 | `--artifact PATH` | Ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run |
 | `--include-request-content` | Journal and completion content |
 
-On a release that predates `narwhal diagnostics collect`, capture the endpoints manually:
+Manual capture for releases that predate `narwhal diagnostics collect`:
 
 ```bash
 umask 077
@@ -41,12 +41,12 @@ for endpoint in health ready narwhal/state narwhal/lifecycle metrics; do
 done
 ```
 
-For local artifacts:
+Local artifacts:
 
 1. Filter them with site tooling per the [Content policy](Diagnostic-Bundles.md#content-policy).
 2. Place them beside these snapshots.
 
-Before stopping an engine, capture the evidence required by its planned lifecycle restart or unplanned-failure procedure.
+Before stopping an engine, capture evidence per the [planned restart or unplanned-failure procedure](troubleshoot/01-Engine-Recovery.md).
 
 ## Router, admission, and lifecycle signals
 
@@ -65,21 +65,21 @@ Before stopping an engine, capture the evidence required by its planned lifecycl
 
 Procedures by path:
 
-- [Fleet overload with healthy engines](#fleet-overload-with-healthy-engines): HTTP 429 or 504 responses increase while engines stay healthy.
+- [Fleet overload with healthy engines](#fleet-overload-with-healthy-engines): HTTP 429 or 504 increases.
 - [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md): an engine failed unexpectedly, or the fleet needs a whole-wave restart.
 - [Router failover and rollback](troubleshoot/02-Router-Recovery.md): the primary router failed, or a standby reports a stale or incompatible state handoff.
 
 ## Fleet overload with healthy engines
 
 1. Classify the overload from `admission`, `serving`, `resident`, and pool load in `/narwhal/state`:
-    - immediate concurrency rejection;
-    - queue-full shedding;
-    - queue expiry;
-    - predictive refusal.
+    - immediate concurrency rejection
+    - queue-full shedding
+    - queue expiry
+    - predictive refusal
 2. Keep the request mix, `serving.max_connections`, queue depth, and timeouts fixed.
 3. Test two offered rates under those conditions.
 4. Compare completed throughput and the share of requests meeting the service-level objective.
-5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit that risks TTFT budgets.
+5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
 
 | Ratio | Numerator | Denominator |
 | --- | --- | --- |
@@ -88,4 +88,4 @@ Procedures by path:
 
 ## After recovery
 
-Run the drills in [Validate every release](operate/04-Upgrade-and-Validate.md#11-validate-every-release).
+Run the [release validation drills](operate/04-Upgrade-and-Validate.md#11-validate-every-release).

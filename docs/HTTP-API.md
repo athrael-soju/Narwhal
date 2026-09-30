@@ -13,7 +13,7 @@
 | Metrics              | `/metrics`                                |
 | Router state         | `/narwhal/state`                          |
 | State handoff        | `/narwhal/handoff`                        |
-| Lifecycle control    | `/narwhal/lifecycle` and its actions      |
+| Lifecycle control    | `/narwhal/lifecycle`, `/narwhal/lifecycle/drain`, `/narwhal/lifecycle/readmit` |
 | Router telemetry     | `narwhal_*`                               |
 | Persisted schemas    | `narwhal.*`, versioned per document       |
 | OpenAPI schema       | `/openapi.json`                           |
@@ -46,15 +46,14 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 
 Probe responses:
 
-| Probe     | Response                                                                                                  |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `/health` | HTTP 200 in every state, with the router's status and engine counts                                       |
-| `/ready`  | HTTP 200 while the router accepts client requests                                                         |
-| `/ready`  | HTTP 503 with `Retry-After: 1` while admission is closed                                                  |
+| Probe     | Response                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------- |
+| `/health` | HTTP 200 in every state, with the router's status and engine counts                                            |
+| `/ready`  | HTTP 200 while the router accepts client requests and HTTP 503 with `Retry-After: 1` while admission is closed |
 
 !!! warning
     Keep `/narwhal/state`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.
 
 ## Citing this work
 
-Arrow research attribution is in [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).
+Citation metadata for Narwhal and the Arrow paper is in [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).

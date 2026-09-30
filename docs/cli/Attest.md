@@ -21,17 +21,18 @@ Identity checks:
 | Option                | Default     | Description                                                              |
 | --------------------- | ----------- | ------------------------------------------------------------------------ |
 | `--version`           |             | Print the installed distribution version.                                |
-| `--document PATH`     | required    | The attestation document: contract values, plus a source for each field. |
+| `--document PATH`     | required    | Attestation document holding contract values and a source per field.     |
 | `--engine-base URL`   | required    | vLLM base URL that serves `/version` and `/metrics`.                     |
 | `--host HOST`         | `127.0.0.1` | Address to bind.                                                         |
 | `--port PORT`         | `8010`      | Port to listen on.                                                       |
 | `--timeout-s SECONDS` | `5.0`       | Timeout for reading the engine's identity.                               |
-| `--kv-events DIR`     |             | Engine cache-event socket directory that turns on residency.             |
+| `--kv-events DIR`     |             | Engine cache-event socket directory that turns on residency, requires `--model`. |
 | `--model NAME`        |             | Served model name, used in block identities.                             |
 
-`--kv-events` requires `--model`.
+The contract tool's `serve` action passes `--kv-events` and `--model` when both hold:
 
-The contract tool's `serve` action passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events.
+- the checked launch has prefix caching on
+- the checked launch publishes cache events
 
 | Install           | Contract tool command                                     |
 | ----------------- | --------------------------------------------------------- |
@@ -40,33 +41,34 @@ The contract tool's `serve` action passes `--kv-events` and `--model` when the c
 
 ## Residency
 
-With `--kv-events` set, the sidecar serves a bounded index of the prefix blocks on the engine's GPU.
+With `--kv-events` set, the sidecar serves a bounded index of prefix blocks on the engine's GPU.
 
 ### Routes
 
-`GET /v1/residency` returns a snapshot:
+| Route                              | Returns                                |
+| ---------------------------------- | -------------------------------------- |
+| `GET /v1/residency`                | A snapshot                             |
+| `GET /v1/residency/events?after=N` | The sidecar's `epoch` and the changes applied after sequence `N` |
+
+Snapshot fields:
 
 | Level               | Fields                                                                             |
 | ------------------- | ---------------------------------------------------------------------------------- |
 | Top level           | `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds` |
 | Each KV cache group | `kind`, `sliding_window`, block `identities`, and the count of `unnamed` blocks    |
 
-`GET /v1/residency/events?after=N` returns the changes applied after sequence `N` and the sidecar's `epoch`.
-
 The events route returns HTTP 410 when any of these holds:
 
-- residency is unknown;
-- `N` is ahead of the last applied sequence;
-- the oldest change in the bounded change log is later than `N + 1`.
+- residency is unknown
+- `N` is ahead of the last applied sequence
+- the oldest change in the bounded change log is later than `N + 1`
 
 On HTTP 410, resume from a new snapshot.
 
 | Sidecar state                       | Both routes return |
 | ----------------------------------- | ------------------ |
-| Residency off (`--kv-events` unset) | HTTP 404           |
+| Residency off (`--kv-events` unset) | HTTP 404, read by a router as an empty prefix cache |
 | Engine process changed              | HTTP 503           |
-
-On HTTP 404, a router treats the engine's prefix cache as empty.
 
 ### When residency is known
 
@@ -76,7 +78,7 @@ Residency is known when the sidecar has applied every event batch since one of t
 - an empty replay buffer at subscription
 - a cache reset
 
-Residency becomes unknown, with empty block lists in every group, when any of these happens:
+Residency becomes unknown when any of these happens:
 
 - a sequence gap remains after replay
 - the first batch arrives after sequence 0
@@ -84,23 +86,30 @@ Residency becomes unknown, with empty block lists in every group, when any of th
 - the index grows past 1,000,000 blocks
 - replay or subscription fails
 
+Every group then has empty block lists.
+
 To restore residency, reset the engine's prefix cache.
 
 ### Block identities
 
-Each block identity chains the block's token IDs onto a parent value:
+Parent value of each block identity:
 
 | Block             | Parent value                           |
 | ----------------- | -------------------------------------- |
 | First block       | The block size and the cache namespace |
 | Every later block | The previous block's identity          |
 
-The cache namespace is the served model name, the engine contract fingerprint, the LoRA adapter name, and the request cache salt.
+The cache namespace holds:
+
+- the served model name
+- the engine contract fingerprint
+- the LoRA adapter name
+- the request cache salt
 
 | Term                              | Meaning                                                                          |
 | --------------------------------- | -------------------------------------------------------------------------------- |
 | Boundary group                    | A group holding only boundary state, such as Mamba state in vLLM's `align` mode |
-| `identities` in a boundary group  | The identities of a group that reported every block in the same run             |
+| `identities` in a boundary group  | Names taken from complete groups stored in the same run                          |
 | `unnamed` count                   | Blocks keyed by multimodal or prompt-embedding hashes                           |
 
 ### Reusable prefixes
@@ -112,4 +121,4 @@ A prefix is reusable when every KV cache group holds the blocks its kind require
 | Full attention                               | Every leading block                                  |
 | Sliding window                               | The blocks covering the window before the prefix end |
 | Boundary                                     | The block at the prefix end                          |
-| Other kinds, such as chunked local attention | The router treats the engine's prefix cache as empty |
+| Other kinds, such as chunked local attention | Zero reusable prefixes                               |
