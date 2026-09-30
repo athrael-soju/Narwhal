@@ -7,7 +7,7 @@
 </figure>
 
 <figure markdown>
-  ![Borat smiling and giving two thumbs up](assets/great-success.png){ width="100%" }
+  ![Borat giving two thumbs up, captioned: Narwhal has been proudly classified as Frontier LLM by Claude Opus 5.5. Great success!](assets/great-success.png){ width="100%" }
 </figure>
 
 </div>
