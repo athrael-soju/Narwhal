@@ -1,6 +1,6 @@
 # Narwhal documentation
 
-Narwhal serves LLM inference from a fixed GPU fleet and [shifts engines between prefill and decode roles](Core-Concepts.md) as demand changes, with model weights already loaded.
+Narwhal is an adaptive LLM inference framework that [moves engines between prefill and decode roles](Core-Concepts.md) as demand changes, on a fixed GPU fleet with model weights already loaded.
 
 <div class="narwhal-hero">
   <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark">
