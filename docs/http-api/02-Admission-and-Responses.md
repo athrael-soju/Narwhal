@@ -2,16 +2,14 @@
 
 ## Admission and refusal semantics
 
-The `error` object in the response body carries the `type` listed below.
-
 The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_margin)`.
 
 | Condition                                                                         |  HTTP | Error `type`                                     | `Retry-After`                                |
 | --------------------------------------------------------------------------------- | ----: | ------------------------------------------------ | -------------------------------------------- |
-| Malformed JSON or a wrong type in a field the router reads                        | `400` | `invalid_request_error`; `param` names the field |                                              |
+| Malformed JSON or a wrong type in a field the router reads                        | `400` | `invalid_request_error` with the field in `param` |                                              |
 | Requested model differs from the configured model                                 | `404` | `invalid_request_error`, code `model_not_found`  |                                              |
 | `n > 1` or `best_of > 1`                                                          | `400` | `invalid_request_error`                          |                                              |
-| Unsupported non-streaming audio, modality, or tool request                        | `400` | `invalid_request_error`; `param` names the option |                                             |
+| Unsupported non-streaming audio, modality, or tool request                        | `400` | `invalid_request_error` with the option in `param` |                                             |
 | Request exceeds `serving.max_request_bytes`                                       | `413` | `request_too_large`                              |                                              |
 | HTTP retention limit is full                                                      | `429` | `server_overloaded_error`                        | `1`                                          |
 | Admission queue is full                                                           | `429` | `server_overloaded_error`                        | `1`                                          |
@@ -61,7 +59,8 @@ Narwhal assembles the engine stream into one response:
 | Chat `reasoning`         | String deltas concatenate under `reasoning`                                                                               |
 | Chat `reasoning_content` | String deltas concatenate under `reasoning_content`                                                                       |
 | Chat `refusal`           | String deltas concatenate under `refusal`                                                                                 |
-| `tool_calls`             | Calls are grouped by stream index and returned in index order. ID, function name, and arguments concatenate separately |
+| `tool_calls`             | One call per stream index, returned in index order                                                                        |
+| Tool call fields         | ID, function name, and arguments concatenate separately per call                                                          |
 | Legacy `function_call`   | Function name and argument fragments concatenate into one message field                                                   |
 | Chat logprobs            | Content and refusal arrays concatenate in stream order                                                                    |
 | Text-completion logprobs | Token, logprob, and offset arrays concatenate in stream order                                                             |
@@ -76,11 +75,11 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembly keeps the response metadata and derives the fields below.
+Assembled responses carry the engine's response metadata plus these derived fields:
 
 | Field                              | Source                                                                                  |
 | ---------------------------------- | --------------------------------------------------------------------------------------- |
-| `finish_reason`, `stop_reason`     | Last choice that reports each; `stop_reason` is optional                                |
+| `finish_reason`, `stop_reason`     | Last choice that reports each                                                           |
 | `usage`                            | Non-null engine `usage`, including a later usage-only frame                             |
 | `usage`, when the engine omits it  | Computed from input length and measured output token count                              |
 
@@ -97,9 +96,14 @@ Decode requests to supporting engines include:
 }
 ```
 
-Every event with text, reasoning, tool calls, or refusals must carry a list of nonnegative integer token IDs. A missing or malformed list, including a Boolean ID, fails the decode attempt or profiling measurement.
+Every event with text, reasoning, tool calls, or refusals carries a token-ID list:
 
-Validated IDs feed output length, time per output token (TPOT) timing, decode correction, drift scoring, and output-length learning.
+| Token-ID list                                | Result                                          |
+| -------------------------------------------- | ----------------------------------------------- |
+| Nonnegative integers                         | Accepted                                        |
+| Missing or malformed, including a Boolean ID | Decode attempt or profiling measurement fails   |
+
+`token_accounting` by engine:
 
 | Engine                   | Router reports                   |
 | ------------------------ | -------------------------------- |

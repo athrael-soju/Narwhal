@@ -1,9 +1,5 @@
 # Gate G: Start the service and validate capacity through the private path
 
-1. Start the router and monitoring stack on the router host.
-2. Tunnel them to the management workstation.
-3. Run the initial capacity trial through that tunnel.
-
 ## Start and locally verify the router
 
 Replace `<served-model>` with the fleet model.
@@ -39,16 +35,9 @@ Replace `<served-model>` with the fleet model.
 | `/metrics`        | Router metrics.                                    |
 | `/v1/completions` | One successful completion, which increments `served`. |
 
-The router listens on loopback. Workstation trial traffic reaches it through the [SSH tunnel](#tunnel-router-prometheus-and-grafana-to-the-workstation).
+Workstation trial traffic reaches the loopback router through the [SSH tunnel](#tunnel-router-prometheus-and-grafana-to-the-workstation).
 
 ## Start the monitoring stack on the router
-
-`make observe` reads these variables:
-
-| Variable              | `make observe` input |
-| --------------------- | -------------------- |
-| `NARWHAL_FLEET`       | Fleet file.          |
-| `NARWHAL_ROUTER_URL`  | Router URL.          |
 
 Start Prometheus and Grafana in the router shell:
 
@@ -58,7 +47,7 @@ export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 make observe
 ```
 
-Prometheus scrapes the router locally and resolves the engine targets from the fleet configuration. Retain the target-discovery and dashboard-verification output.
+Retain the target-discovery and dashboard-verification output.
 
 ## Tunnel router, Prometheus, and Grafana to the workstation
 
@@ -107,15 +96,28 @@ Client latency includes SSH network and encryption overhead.
 
 | Symptom                                                              | Fix                                                                                   |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| A workstation port is already in use                                 | Change the local side of `--forward` and update the client URL to match.              |
+| A workstation port is already in use                                 | Change the local side of `--forward` and the client URL to match.                     |
 | A forwarded request fails after SSH connects                         | Inspect the listener on the router host.                                              |
-| A service listens on an address other than the router's `127.0.0.1` | Pass the address with `--remote-address`. Run one tunnel per remote address.          |
+| A service listens on an address other than the router's `127.0.0.1` | Pass each address with `--remote-address`, one tunnel per remote address.             |
 
 ## Run the initial capacity trial
 
-Before launch, set `--no-enable-prefix-caching` in `runtime.extra_args` on every engine in [Gate C: Prepare, check, and start each engine](03-Validate-Engines.md#prepare-check-and-start-each-engine). Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
+Before launch in [Gate C: Prepare, check, and start each engine](03-Validate-Engines.md#prepare-check-and-start-each-engine):
 
-1. Create a deployment identifier and [freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
+1. Set `--no-enable-prefix-caching` in `runtime.extra_args` on every engine.
+2. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
+
+The trial uses these candidate thresholds:
+
+| Candidate threshold           | Value   |
+| ----------------------------- | ------- |
+| Time to first token (TTFT)    | 2 s     |
+| Time per output token (TPOT)  | 33.3 ms |
+| Attainment                    | 95%     |
+
+Acceptance follows measured performance against the service requirements.
+
+1. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test) under a new deployment identifier.
 2. Attach Gate F's passing preflight to the deployment evidence.
 3. Retain the monitoring startup output and the router and engine scrape evidence.
 4. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
@@ -129,16 +131,6 @@ Before launch, set `--no-enable-prefix-caching` in `runtime.extra_args` on every
     ```bash
     .venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
     ```
-
-The trial uses these candidate thresholds:
-
-| Candidate threshold           | Value   |
-| ----------------------------- | ------- |
-| Time to first token (TTFT)    | 2 s     |
-| Time per output token (TPOT)  | 33.3 ms |
-| Attainment                    | 95%     |
-
-Acceptance follows measured performance against the service requirements.
 
 The trial passes when steps 4 to 10 succeed.
 

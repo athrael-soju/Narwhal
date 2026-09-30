@@ -1,15 +1,8 @@
 # Gate C: Validate and start every engine
 
-Gate C covers every engine host:
-
-1. Check the accelerators, devices, and listeners.
-2. Start each engine from its checked launch plan.
-3. Prove each live HTTP endpoint.
-4. Capture each engine's cache layout for Gate D.
-
 ## Inspect every engine host
 
-Run the host inspection in the installed engine-role shell on every engine host. In that shell, `NARWHAL_ENGINE_LAUNCH_CONFIG` points at the transferred role-specific launch record.
+Run the host inspection in the installed engine-role shell on every engine host, where `NARWHAL_ENGINE_LAUNCH_CONFIG` points at the role's launch record.
 
 Print the allocation and launch policy:
 
@@ -25,7 +18,9 @@ for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
 PY_LAUNCH
 ```
 
-Retain this output. The `sources` object in the launch record identifies the records used to derive the allocation and device configuration.
+Retain this output.
+
+The launch record's `sources` object names the records behind the allocation and device configuration.
 
 Read the physical accelerator identity and count:
 
@@ -57,7 +52,9 @@ Read the physical accelerator identity and count:
 )
 ```
 
-Record the accelerator product and the visible physical GPU count. On ROCm, read both from `rocminfo`:
+Record the accelerator product and the visible physical GPU count.
+
+On ROCm, read both from `rocminfo`:
 
 | Value     | `rocminfo` source                      |
 | --------- | -------------------------------------- |
@@ -72,7 +69,7 @@ In the router shell, check the `hardware` fields in `runs/deployment/fleet.json`
 | `hardware.accelerators_per_engine` | The number of `gpu_ids` in each replica's launch record |
 | `hardware.tensor_parallel`         | Each replica's `tensor_parallel_size`                   |
 
-Every selected index or UUID must be visible on its engine host. The replica allocation defines the tensor parallel (TP) shape Narwhal uses.
+Every selected index or UUID must be visible on its engine host.
 
 Verify the local artifacts and planned listeners before launch:
 
@@ -86,7 +83,7 @@ ss -ltnp
 
 A passing `test` command is silent and exits with status 0.
 
-- Free any planned HTTP, attestation, NIXL side-channel, or transfer port that `ss -ltnp` shows in use.
+- Free each planned HTTP, attestation, NIXL side-channel, or transfer port that `ss -ltnp` shows in use.
 - When `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest with the configured one.
 - Rerun discovery after changing the provisioned checkpoint.
 
@@ -145,10 +142,6 @@ for signature, roles in sorted(groups.items()):
 PY_CACHE_GROUPS
 ```
 
-The signature groups engines by image ID, model-config hash, accelerator product, TP size, GPU visibility policy, runtime packages, cache policy, model arguments, image environment, and transport. Engines in one group can use different GPU indices, addresses, and device paths.
-
-Gate D calculates the fabric budget from one representative cache layout per group. Capture the live cache layout of every engine in every group.
-
 ## Prepare, check, and start each engine
 
 Launch plan properties:
@@ -161,11 +154,11 @@ Launch plan properties:
 | KV connector                  | `NixlConnector` with `kv_role=kv_both`, UCX, and `kv_load_failure_policy=fail`         |
 | Side-channel address and port | The role environment                                                                   |
 | Transport                     | TCP or RDMA through `UCX_TLS`                                                          |
-| Prefix caching                | On by default. `runtime.extra_args` turns it off.                                      |
+| Prefix caching                | On by default, turned off through `runtime.extra_args`                                 |
 | Cache events                  | Published by vLLM over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on |
 | Cache event opt-out           | [Prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) |
 
-Discovery writes `runtime.extra_args` from `NARWHAL_ENGINE_ARGS` ([Gate A](01-Discover.md#confirm-the-launch-policy)). For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args` before you prepare the launch plans.
+For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args`, which discovery writes from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirm-the-launch-policy), before you prepare the launch plans.
 
 To add the flag after launch:
 
@@ -194,7 +187,9 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
 python3 -m json.tool "$ENGINE_RUN/launch.json"
 ```
 
-The launcher prints `Prepared <role>; review launch.json and run the image check.` Inspect `launch.json` for:
+The launcher prints `Prepared <role>; review launch.json and run the image check.`
+
+Inspect `launch.json` for:
 
 - the immutable image
 - the complete serving command
@@ -203,7 +198,7 @@ The launcher prints `Prepared <role>; review launch.json and run the image check
 - the application revision
 - the source hashes
 
-`container.env` can hold the engine API key. Keep it private.
+Keep `container.env` private.
 
 Validate the image and plan:
 
@@ -211,7 +206,7 @@ Validate the image and plan:
 python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
 ```
 
-A passing check confirms these properties in a temporary container:
+A passing check confirms:
 
 - the immutable image identity and runtime identity
 - the pinned package versions
@@ -222,7 +217,9 @@ A passing check confirms these properties in a temporary container:
 - the plan hash
 - zero published cache events, with prefix caching off
 
-The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`. A failed check names the failing package, tokenizer, or identity check.
+The check records `vllm.version.__version__` as `vllm_api_version` in `checked.json`.
+
+A failed check names the failing package, tokenizer, or identity check.
 
 The checked tokenizer is the final `--tokenizer` value in the serving arguments, or the model directory by default.
 
@@ -249,7 +246,7 @@ export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
 docker logs --follow "$ENGINE_CONTAINER"
 ```
 
-Watch the logs until the HTTP endpoints come up. Ctrl+C stops only the log follower.
+Watch the logs until the HTTP endpoints come up, then stop the log follower with Ctrl+C.
 
 If startup fails, inspect the container named by `container.id`:
 
@@ -331,9 +328,10 @@ PY_ENGINE
 | Situation                             | Action                                                                                   |
 | ------------------------------------- | ---------------------------------------------------------------------------------------- |
 | The probe reports another API version | Compare the container that serves the endpoint with the recorded image and container ID. |
-| Rerun after a repair                  | The probe writes each capture once. Use new capture filenames or a new launch directory. |
+| Rerun after a repair                  | Use new capture filenames or a new launch directory.                                     |
 
-Leave each serving container running through the workload trial. Keep the engines idle during fabric qualification and profiling.
+- Leave each serving container running through the workload trial.
+- Keep the engines idle during fabric qualification and profiling.
 
 ## Capture the live cache layout
 
@@ -347,6 +345,13 @@ export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
 test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 ```
 
-`capture-cache` writes `cache-layout.json` from the live process for every TP rank. Compare the resolved layouts and page geometry within each signature group. An engine whose layout or page geometry differs gets its own Gate D budget.
+`capture-cache` writes `cache-layout.json` for every TP rank.
+
+Compare the resolved layouts and page geometry within each signature group:
+
+| Result                            | Gate D budget                     |
+| --------------------------------- | --------------------------------- |
+| Every engine in the group matches | One budget for the group          |
+| An engine differs                 | A separate budget for that engine |
 
 Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Qualify-Fabric.md).

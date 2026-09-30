@@ -2,15 +2,11 @@
 
 Each running engine needs an attestation document and a sidecar that serves it.
 
-1. Capture the attestation inputs from each live engine.
-2. Generate each engine's document and start its sidecar.
-3. Finalize the fleet contract from the router.
-
 ## Check the router inventory
 
-On the router, `.env.router` resolves the endpoint references in `runs/deployment/fleet.json`. Confirm that `runs/deployment/fleet.json` lists:
+On the router, confirm that `runs/deployment/fleet.json` lists:
 
-- each running engine with its URL and attestation URL;
+- each running engine with URL and attestation URL references that resolve in `.env.router`;
 - the model;
 - the initial roles;
 - the SLO values;
@@ -58,16 +54,16 @@ The command requires the live container's plan and launcher hashes to match `lau
 
 | Dimension            | Source                                                                                                                         |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `head_size`          | `ModelConfig.get_head_size()`. On a DeepSeek-style model with MLA enabled, `kv_lora_rank + qk_rope_head_dim`.                  |
+| `head_size`          | `ModelConfig.get_head_size()`, or `kv_lora_rank + qk_rope_head_dim` on a DeepSeek-style model with MLA enabled                 |
 | `kv_heads`           | `get_total_num_kv_heads()`                                                                                                     |
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                                |
 | `model_architecture` | Resolved architecture                                                                                                          |
 
-The record also holds `use_mla` and the identifying hashes.
+The record holds `use_mla` and the identifying hashes.
 
 ### 4. Capture the cache grouping
 
-`cache-registration` writes one capture per `ENGINE_RUN`, and that capture is final. Choose the source before you run it.
+`cache-registration` writes one final capture per `ENGINE_RUN` from one of these sources:
 
 | Source                          | Requirement                                                                   |
 | ------------------------------- | ----------------------------------------------------------------------------- |
@@ -187,7 +183,12 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/handshake-policy.json"
 ```
 
-The capture passes when the effective `enforce_handshake_compat` value is Boolean `true`. The effective value is the plan's transfer config setting, or the pinned NIXL worker default of `True`.
+The effective `enforce_handshake_compat` value is:
+
+- the plan's transfer config setting, when set;
+- otherwise the pinned NIXL worker default of `True`.
+
+The capture passes when the effective value is Boolean `true`.
 
 When the capture fails:
 
@@ -207,7 +208,8 @@ export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 
 ### 2. Confirm which process you're attesting
 
-Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`. Confirm the document describes the process that is running now.
+1. Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`.
+2. Confirm the document describes the running process.
 
 ### 3. Start the sidecar
 
@@ -217,11 +219,11 @@ Run it as the engine's user, or as root for container engines.
 .venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
-When `checked.json` shows prefix caching on and cache events published, the sidecar subscribes to the engine's cache events and serves the [residency routes](../cli/Attest.md#residency). `GET /v1/residency` reports `"known": true` when the sidecar has applied the engine's full event history.
+When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
 
 ### 4. Check the sidecar from the router
 
-The fleet file holds the role's attestation URL from discovery. From the router, request the sidecar's `/health` and `/v1/attestation` over the trusted control network.
+From the router, request the sidecar's `/health` and `/v1/attestation` over the trusted control network.
 
 ### 5. Verify the sidecar against the engine
 
@@ -289,7 +291,10 @@ When every sidecar has passed, run this once from the router shell:
 - each sidecar's attestation to match its engine's live identity;
 - every engine to carry the same complete contract.
 
-It writes `engine_contract` into `runs/deployment/fleet.json` and saves the previous fleet file under `runs/`.
+`finalize-fleet` writes:
+
+- `engine_contract` into `runs/deployment/fleet.json`;
+- a copy of the previous fleet file under `runs/`.
 
 | Failure               | Diagnosis                                                               |
 | --------------------- | ----------------------------------------------------------------------- |

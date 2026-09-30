@@ -1,6 +1,6 @@
 # Gate D: Prove the transfer fabric against the serving cache
 
-Each Gate C cache group has one fabric budget, calculated from its representative engine's resolved cache layout. Measure each directed host edge against its source group's budget while the fleet is idle.
+Measure each directed host edge against its source cache group's budget while the fleet is idle.
 
 ## Build the source budget
 
@@ -75,7 +75,7 @@ Each representative's budget applies the full handoff rate to every outgoing dir
 
 5. Create a new `FABRIC_RUN` for each repeat comparison.
 
-The calculator counts page demand for every layer and TP rank as `ceil(prompt_tokens / block_tokens) + extra_blocks`. The extra blocks depend on the attention type:
+Page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`, with extra blocks set by attention type:
 
 | Attention type | Blocks counted |
 | --- | --- |
@@ -83,7 +83,7 @@ The calculator counts page demand for every layer and TP rank as `ceil(prompt_to
 | Mamba | The complete prompt plus boundary state, speculative slots, and checkpoint slots |
 | Windowed attention | The complete prompt plus a boundary page |
 
-Payload per handoff is the padded cache: page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout.
+Payload per handoff is page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout.
 
 The required link rate, in decimal Gbit/s, is:
 
@@ -95,7 +95,7 @@ headroom / 1e9
 
 ## Bind each sample to a directed route
 
-The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`. Start with engine 1 as source and engine 2 as destination.
+The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 1. In both engine-role shells, set the edge variables and check `TEST_PORT`:
 
@@ -172,7 +172,9 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 6. Stop the temporary `iperf3` server.
 7. Measure the reverse edge against the new source's budget.
 
-`record-edge` takes the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`. Its exit codes are:
+`record-edge` takes the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`.
+
+`record-edge` exit codes:
 
 - 0: the budget is met.
 - 1: the measured rate is below the budget.
@@ -194,7 +196,7 @@ This test measures one-way RDMA writes between host-memory buffers.
     ```
 
 2. Record `ib_write_bw --version`.
-3. On each host, set `HCA` and `HCA_PORT` to the host channel adapter and port named in `transfer.net_devices`. For `mlx5_0:1`, use `HCA=mlx5_0` and `HCA_PORT=1`.
+3. On each host, set `HCA` and `HCA_PORT` to the host channel adapter and port named in `transfer.net_devices`, for example `HCA=mlx5_0` and `HCA_PORT=1` for `mlx5_0:1`.
 4. For RoCE, inspect:
 
     ```text
@@ -264,7 +266,7 @@ This test measures one-way RDMA writes between host-memory buffers.
 | Between engine hosts | This matrix                                                         |
 | Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight)   |
 
-For `n` distinct engine hosts, qualify all `n * (n - 1)` directed host pairs.
+For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
 For every edge, retain:
 
@@ -316,7 +318,7 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
 
 ## Troubleshoot an edge below its budget
 
-An exit code of 1 from `record-edge` or `reuse-edge` means the edge is below budget.
+When `record-edge` or `reuse-edge` exits 1:
 
 1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
 2. Fix the cause.

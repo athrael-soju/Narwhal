@@ -28,8 +28,11 @@ print(files('narwhal.dev').joinpath('reference-v1.json').read_text())
 PYTHON
 ```
 
-The template pins the GPU product and a 30,000 MiB minimum. Its runtime and
-model hashes match the installed small-GPU template.
+The template pins:
+
+- the GPU product;
+- a minimum of 30,000 MiB total VRAM;
+- the same runtime and model hashes as the installed small-GPU template.
 
 ## Launch and verify the reference
 
@@ -47,10 +50,9 @@ narwhal dev status
 | Command | Result |
 | --- | --- |
 | `up` | Profiles the engines and starts the router. |
-| `verify` | Checks all 12 eligible directed KV transfers and one routed arithmetic request, then reports `ready`. |
+| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, then reports `ready`. |
 
-The instance records its interpreter. Run later lifecycle commands in the same
-virtual environment.
+Run later lifecycle commands in the virtual environment that ran `init`.
 
 Default ports:
 
@@ -111,14 +113,16 @@ Replay phases:
 | Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
 
 The role controller moves through the splits 2P:2D, 1P:3D, 2P:2D, 3P:1D, and
-2P:2D. The workload takes about two minutes after `up` and `verify`.
+2P:2D.
+
+The workload takes about two minutes after `up` and `verify`.
 
 Acceptance criteria:
 
 | Phase | Accepted outcome |
 | --- | --- |
 | Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
-| Prefill burst | Completed requests and HTTP 429 responses that cite the TTFT budget. The runner records burst latency attainment separately. |
+| Prefill burst | Completed requests and HTTP 429 responses that cite the TTFT budget. |
 
 Each replay writes a `cycle-*` directory beneath the instance, or the fresh
 directory passed with `--out`.

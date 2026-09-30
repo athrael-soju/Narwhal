@@ -20,7 +20,7 @@ Each Docker create or run carries two labels:
 | `io.narwhal.operation` | Unique operation token                  |
 
 After a Docker client timeout or cancellation, the wrapper reconciles with the
-daemon within `NARWHAL_DOCKER_RECONCILE_SECONDS` (30 seconds):
+daemon within `NARWHAL_DOCKER_RECONCILE_SECONDS`, 30 seconds by default:
 
 | Resource | Reconciliation result |
 | --- | --- |
@@ -28,8 +28,7 @@ daemon within `NARWHAL_DOCKER_RECONCILE_SECONDS` (30 seconds):
 | Explicit target of an interrupted start | Removed |
 | Other containers in the launch directory | Kept, with their IDs recorded as preserved resources |
 
-Reconciliation clients share the remaining budget and the same termination
-grace periods. At default settings, final cleanup adds up to 15 seconds.
+At default settings, final cleanup adds up to 15 seconds.
 
 Each reconciliation writes a `docker-reconcile-*.json` report with:
 
@@ -39,8 +38,7 @@ Each reconciliation writes a `docker-reconcile-*.json` report with:
 - inspection errors;
 - the observation time.
 
-If the daemon stalls, the report result is `inspection_required`. Handle it
-with these steps:
+For an `inspection_required` report result from a stalled daemon:
 
 1. Inspect the persisted launch-token label and the recorded IDs before a retry.
 2. After the daemon recovers, inspect it for creates completed after cancellation.
@@ -48,8 +46,7 @@ with these steps:
 
 ## Interrupted `narwhal dev` process
 
-The Linux recovery suite tests twelve barrier and signal combinations. Each
-combination checks for:
+The Linux recovery suite checks twelve barrier and signal combinations for:
 
 - complete committed JSON documents;
 - released locks;
@@ -57,30 +54,30 @@ combination checks for:
 - idempotent teardown;
 - survival of an unrelated process.
 
-| Interruption barrier | Signals exercised | Cleanup and fresh `down` |
-| --- | --- | --- |
-| Child created, before identity capture | SIGINT | Startup stops the child tree and retains spawn cleanup evidence. `down` reports stopped. |
-| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set. The operator identifies the newly created service from its command and log. |
-| Process record awaiting atomic replacement | SIGKILL | Readers see the previous complete document. The operator inspects the service described by the pending write. |
-| Process record committed | SIGINT, SIGTERM | SIGINT rolls startup back. SIGTERM ends the `narwhal dev` process, and a fresh `down` terminates the recorded group. |
-| Service readiness wait | SIGKILL | A fresh `status` reports degraded, and `down` terminates the recorded group. |
-| Profiling helper active | SIGINT, SIGTERM, SIGKILL | SIGINT and SIGTERM stop the helper and roll startup back. After SIGKILL, a fresh `down` recovers the helper and service records. |
-| Verification helper active | SIGTERM, SIGKILL | SIGTERM records degraded verification and retains services. SIGKILL leaves interrupted helper evidence. A fresh `down` terminates the helpers and services. |
-| Recorded service leader exited, delayed worker surviving | SIGKILL | `status` lists the surviving group. Teardown requests operator inspection of the worker's identity. |
-
-Each helper runs beneath a dedicated Linux subreaper, the helper supervisor.
-The supervisor adopts the workers of exited helpers and runs until cleanup
-finishes.
+| Interruption barrier | Signals exercised | Cleanup and fresh `down` | Fresh `status` | Operator action |
+| --- | --- | --- | --- | --- |
+| Child created, before identity capture | SIGINT | A fresh `down` reports stopped. | | |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set. | | Identify the newly created service from its command and log. |
+| Process record awaiting atomic replacement | SIGKILL | Readers see the previous complete document. | | Inspect the service described by the pending write. |
+| Process record committed | SIGINT | Startup rolls back. | | |
+| Process record committed | SIGTERM | A fresh `down` terminates the recorded group. | | |
+| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group. | Reports degraded. | |
+| Profiling helper active | SIGINT, SIGTERM | Startup rolls back. | | |
+| Profiling helper active | SIGKILL | A fresh `down` recovers the helper and service records. | | |
+| Verification helper active | SIGTERM | A fresh `down` terminates the retained services. | Reports degraded verification. | |
+| Verification helper active | SIGKILL | A fresh `down` terminates the helpers and services. | | |
+| Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection. | Lists the surviving group. | Inspect the worker's identity. |
 
 Stage documents record each observed descendant's boot ID and process start
-ticks. When the `narwhal dev` process dies abruptly:
+ticks.
 
-| Command  | Behavior                                                                                      |
-| -------- | --------------------------------------------------------------------------------------------- |
-| `status` | Lists matching interrupted helpers in `stage_processes`.                                      |
-| `down`   | Terminates the supervisor's process tree from the stage records and the surviving supervisor. |
+When the `narwhal dev` process dies abruptly:
 
-Recovery signals a process when its boot ID and start tick match the record.
+| Command  | Behavior                                                 |
+| -------- | -------------------------------------------------------- |
+| `status` | Lists matching interrupted helpers in `stage_processes`. |
+| `down`   | Terminates the helper supervisor's process tree.         |
+
 The stdout, stderr, and command evidence stay in place.
 
 | Recovery outcome | Stage record |
@@ -88,8 +85,8 @@ The stdout, stderr, and command evidence stay in place.
 | Processes stopped | `recovered` |
 | Processes survive | `recovery_required`, with the surviving PIDs |
 
-Supervision begins with a committed process or stage record. A SIGKILL before
-that commit can leave a service whose command log predates its record.
+A SIGKILL before the process or stage record commits can leave a service whose
+command log predates its record.
 
 Recover such a service:
 
@@ -104,9 +101,8 @@ If the service leader exited before teardown recorded its workers:
 
 ## Reference GPU timeout check
 
-This optional check exercises vLLM workers and CUDA cleanup. Run it in the
-Ubuntu shell on the reference GPU host, with the pinned template and an
-instance you choose.
+Run this check in the Ubuntu shell on the reference GPU host, with the pinned
+template and an instance you choose.
 
 1. From a successful process generation, retain the startup logs and
    `native-start-shared.log.*.stage.json`.
@@ -137,9 +133,6 @@ instance you choose.
 13. Start and verify a fresh process generation with the normal budget.
 
 ## Reference GPU interruption check
-
-This optional procedure collects vLLM, CUDA, and port-release evidence on the
-reference GPU.
 
 Prerequisites:
 
@@ -177,5 +170,5 @@ Prerequisites:
     - the stage and teardown documents;
     - vLLM logs and GPU process listings;
     - timestamped memory and port observations.
-4. Investigate the PID of any surviving CUDA allocation or engine port before
+4. Investigate the PID of each surviving CUDA allocation or engine port before
    you start another process generation.

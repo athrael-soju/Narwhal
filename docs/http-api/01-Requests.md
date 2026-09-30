@@ -10,13 +10,15 @@ Non-streaming calls return `object: "text_completion"`, with the text in `choice
 
 ### `POST /v1/chat/completions`
 
-Non-streaming calls return `object: "chat.completion"` and the assistant message in `choices[0].message`. `content` is `null` when the reply is only reasoning or tool calls.
+Non-streaming calls return `object: "chat.completion"`, with the assistant message in `choices[0].message`.
+
+`content` is `null` when the reply holds only reasoning or tool calls.
 
 ---
 
 ## Request contract
 
-The body is a JSON object. The router passes fields outside the validated set to the engine as sent.
+Fields outside the validated set reach the engine as sent.
 
 ### Validated field types
 
@@ -26,9 +28,9 @@ The router type-checks non-null values of these fields before admission:
 | ------------ | ----------------------------- |
 | `model`      | String                        |
 | `stream`     | Boolean                       |
-| `n`          | Integer; booleans are invalid |
-| `best_of`    | Integer; booleans are invalid |
-| `max_tokens` | Integer; booleans are invalid |
+| `n`          | Non-boolean integer           |
+| `best_of`    | Non-boolean integer           |
+| `max_tokens` | Non-boolean integer           |
 | `prompt`     | String or array               |
 | `messages`   | Array of objects              |
 
@@ -64,13 +66,15 @@ A rejected `max_tokens` returns:
 
 ### Output and tool restrictions
 
-Streaming requests pass these options to the engine as sent. Non-streaming requests accept:
+Streaming requests reach the engine with `audio`, `modalities`, and `tools` as sent.
+
+Non-streaming requests accept:
 
 - `modalities: ["text"]`
 - `tools` as an array of objects
 - tools of type `function`
 
-A non-streaming request with an `audio` value, or any other value for these options, returns HTTP `400` with `invalid_request_error` before engine dispatch. `param` names the rejected option.
+A non-streaming request with an `audio` value, or another value for these options, returns an HTTP `400` `invalid_request_error` that names the rejected option in `param`.
 
 ---
 
@@ -85,7 +89,7 @@ A non-streaming request with an `audio` value, or any other value for these opti
 [Configure ingress](../operate/01-Start-Routers.md#3-configure-the-client-path) to:
 
 1. Authenticate the client.
-2. Strip the client's credentials and any internal IDs it sent.
+2. Strip the client's credentials and the internal IDs it sent.
 3. Set the trusted identity values.
 
 With [`engine.engine_api_key_env`](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) set, Narwhal sends that credential on serving and control requests to the engine.

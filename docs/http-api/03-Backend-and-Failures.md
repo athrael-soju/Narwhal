@@ -4,9 +4,7 @@
 
 ### Prefill
 
-The prefill leg is a non-streaming, one-token completion request to the producer. Narwhal keeps the resulting KV handoff descriptor and discards the generated token.
-
-`PrefillResult` holds the KV handoff descriptor, producer URL, endpoint, and backend request ID.
+The prefill leg is a non-streaming, one-token completion request to the producer.
 
 ### Decode
 
@@ -19,13 +17,16 @@ Remote decode receives:
 
 Decode generates every client-visible output token.
 
-Same-engine decode strips transfer parameters, including client-provided values, and uses engine prefix caching or prompt recomputation.
+Same-engine decode:
+
+- strips transfer parameters, including client-provided values
+- uses engine prefix caching or prompt recomputation
 
 ### Descriptor validation
 
-[Preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) validates the pinned engine contract and probes role-permitted KV transfers.
+Run [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) to validate the pinned engine contract and role-permitted KV transfers.
 
-Narwhal validates the KV handoff descriptor before each decode HTTP request. It keeps opaque runtime fields and rejects a descriptor with:
+Decode rejects a KV handoff descriptor with:
 
 - missing engine identity
 - malformed block IDs
@@ -41,7 +42,7 @@ These are scoped to the original client request:
 - retries
 - cleanup
 
-Handoff age begins when the producer HTTP leg starts. Each retry gets fresh backend request IDs and a new KV handoff.
+`serving.handoff_timeout_s` counts handoff age from the start of the producer HTTP leg.
 
 Durations in the [measurement contract](../measure/01-Profile.md):
 
@@ -60,7 +61,11 @@ from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import PrefillResult
 ```
 
-Pass the `EngineClient.prefill()` result to `EngineClient.decode()`. `result.parameters()` returns a detached dictionary.
+| Object                   | Contract                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `EngineClient.prefill()` | Returns a `PrefillResult` to pass to `EngineClient.decode()`                    |
+| `PrefillResult`          | Holds the KV handoff descriptor, producer URL, endpoint, and backend request ID |
+| `result.parameters()`    | Returns a detached dictionary                                                   |
 
 ---
 
@@ -73,7 +78,7 @@ Engine faults map to HTTP status codes:
 | Timeout-shaped | `504` |
 | Other          | `502` |
 
-A streaming response commits HTTP `200` before decode starts.
+Client response by failure:
 
 | Failure                                                     | Client response                                     |
 | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -86,8 +91,6 @@ Terminal SSE event:
 ```text
 data: {"error": ...}
 ```
-
-The decode status codes below apply to non-streaming requests.
 
 Failure detail by destination:
 
@@ -104,22 +107,23 @@ Failure detail by destination:
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
-A tokenization timeout returns HTTP `504` before placement. Other tokenization failures follow the [engine-fault mapping](#engine-failure-handling).
+Tokenization failures return the [engine-fault mapping](#engine-failure-handling) status before placement.
 
 ### Breaker readmission
 
-Narwhal ejects an engine at `recovery.eject_after` consecutive stream failures and readmits it when an inference probe succeeds. Stream failures are:
+| Event                                              | Breaker action      |
+| -------------------------------------------------- | ------------------- |
+| `recovery.eject_after` consecutive stream failures | Ejects the engine   |
+| Successful inference probe                         | Readmits the engine |
+
+Stream failures:
 
 - first-token timeout
 - mid-stream silence
 - stream closed before `[DONE]`
-- `[DONE]` before any token
+- `[DONE]` before the first token
 
-Inference probes:
-
-- use a new handoff from the original producer for a crossed-decode failure
-- apply `engine.first_token_timeout_s` to each leg
-- return to the normal readmission cadence when inconclusive
+Inference probes apply `engine.first_token_timeout_s` to each leg.
 
 ### Successful stream termination
 
@@ -129,7 +133,7 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 | -------------------------------------------- | ----------------------------------------------------------------------- |
 | Closes before `[DONE]`                       | Engine failure                                                          |
 | `[DONE]` before the first generated token    | HTTP `502`                                                              |
-| Upstream HTTP `200` carrying an error object | Engine failure; status from integer `code` in 400 to 599, otherwise 500 |
+| Upstream HTTP `200` carrying an error object | Engine failure with status from integer `code` in 400 to 599, otherwise 500 |
 
 Journal `error` for an early `[DONE]`:
 
@@ -141,8 +145,9 @@ stream ended with [DONE] before any token arrived
 
 | Timeout                        | Window                                                                                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine.first_token_timeout_s` | Starts before the decode HTTP stream opens and ends at the first generated token; connection and response-header delays count against it |
-| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token; metadata chunks reset the timer; a zero value uses the original request deadline as the stream bound |
+| `engine.first_token_timeout_s` | Decode request start to the first generated token, including connection and response-header delays |
+| `engine.decode_read_timeout_s` | Silence between transport chunks after the first token, including metadata chunks |
+| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound |
 
 `engine.decode_read_timeout_s` expiry returns HTTP `504` with detail beginning:
 
@@ -159,10 +164,6 @@ Before visible output, Narwhal may start a fresh attempt for a transient fault w
 - the original request deadline permits it
 - retry budget remains
 
+Each retry gets fresh backend request IDs and a new KV handoff.
+
 With `recovery.failure_quarantine_s > 0`, Narwhal excludes the failed engine from new placement for that many seconds.
-
-A decode failure after HTTP `200` is committed emits a terminal SSE event:
-
-```text
-data: {"error": ...}
-```

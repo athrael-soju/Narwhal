@@ -19,15 +19,15 @@ Returns the configured model in OpenAI list format:
 
 ## `GET /health`
 
-Reports router process liveness. It returns HTTP `200` in every state.
+Returns router process liveness with HTTP `200` in every state.
 
 | Field                 | Meaning                                                                          |
 | --------------------- | -------------------------------------------------------------------------------- |
 | `status`              | Router state                                                                     |
 | `instances`           | Configured fleet size                                                            |
-| `available_instances` | Engines eligible for placement; excludes ejected, draining, and quarantined engines |
+| `available_instances` | Engines eligible for placement, excluding ejected, draining, and quarantined engines |
 
-`status` takes the first value that matches, checked in order:
+`status` takes the first matching value in this order:
 
 | `status`      | Meaning                                                                                                   |
 | ------------- | --------------------------------------------------------------------------------------------------------- |
@@ -47,13 +47,11 @@ Example:
 }
 ```
 
-Engine-level liveness comes from Prometheus scrape targets and breaker state.
-
 ## `GET /ready`
 
 Returns HTTP `200` when this router controls the fleet and admits new work.
 
-It returns HTTP `503` with `Retry-After: 1` in any of these cases:
+Returns HTTP `503` with `Retry-After: 1` in these cases:
 
 - standby state
 - fencing
@@ -69,17 +67,22 @@ It returns HTTP `503` with `Retry-After: 1` in any of these cases:
 | `control_ready` | `true` when this router controls the fleet and `/narwhal/state` reports `monitoring.degraded` as `false` |
 | `epoch`         | Lease epoch                                                                                         |
 | `holder`        | Lease-holder token                                                                                  |
-| `reason`        | Cause of `not_ready`; empty when `status` is `ready`                                                |
+| `reason`        | Cause of `not_ready`, empty when `status` is `ready`                                                |
 
-`control_ready` stays `true` through backend loss or managed maintenance while the router holds the lease and monitoring is healthy.
+`monitoring.degraded` transitions:
 
-Engine monitoring degrades after `controller.monitor_failure_limit` consecutive failed passes and clears after one fully successful pass. A degraded monitoring state reports this `reason`:
+| Transition | Condition                                                    |
+| ---------- | ------------------------------------------------------------ |
+| To `true`  | `controller.monitor_failure_limit` consecutive failed passes |
+| To `false` | One fully successful pass                                    |
+
+Degraded monitoring reports this `reason`:
 
 ```text
 monitoring degraded: <stage> <class>
 ```
 
-A standby router polls the active router's `/ready` and counts each `control_ready: false` response as a missed takeover probe.
+A standby router counts each `control_ready: false` response from the active router's `/ready` as a missed takeover probe.
 
 With zero eligible engines, the response is:
 

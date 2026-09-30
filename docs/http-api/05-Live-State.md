@@ -16,16 +16,16 @@ Fields:
 | Field                   | Meaning                                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |
 | `schema`                | `narwhal.state`                                                                                 |
-| `schema_version`        | State schema version, currently `1`                                                             |
+| `schema_version`        | State schema version, `1`                                                             |
 | `journal_run`           | Request-journal run ID of the current router process, carried by every journal row              |
 | `served`                | Completed requests                                                                              |
 | `failed`                | Requests ending in error                                                                        |
-| `offered`               | Completion arrivals; current process                                                            |
-| `unsized_offered`       | Arrivals that terminated before workload sizing; current process                                |
-| `expired`               | Deadline expiries; current process                                                              |
+| `offered`               | Completion arrivals in the current process                                                            |
+| `unsized_offered`       | Arrivals in the current process that terminated before workload sizing                                |
+| `expired`               | Deadline expiries in the current process                                                              |
 | `cancelled`             | Client disconnects                                                                              |
-| `invalid_requests`      | Malformed requests rejected before admission; current process                                   |
-| `controller`            | Active role controller (`reactive`)                                                             |
+| `invalid_requests`      | Malformed requests the current process rejected before admission                                   |
+| `controller`            | Active role controller, `reactive`                                                             |
 | `token_accounting`      | `token_ids` for exact token identity, otherwise `unavailable`                                   |
 | `control`               | Role-controller mode and its decision counts                                                    |
 | `monitoring`            | Engine-monitoring loop timing and failure state                                                 |
@@ -35,7 +35,7 @@ Fields:
 | `serving`               | Retained HTTP work, attempts, and retry state                                                   |
 | `http_pools`            | Data and control connection pools and pool-wait timeout                                         |
 | `pools`                 | Engines grouped by prefill or decode role                                                       |
-| `load`                  | Per-pool load relative to the service-level objective (SLO); `1.0` equals the configured target |
+| `load`                  | Per-pool load relative to the service-level objective (SLO), where `1.0` equals the configured target |
 | `thresholds`            | Active reactive-controller thresholds                                                           |
 | `slo`                   | Time to first token (TTFT) and time per output token (TPOT) targets                             |
 | `first_token_timeout_s` | Decode first-token deadline                                                                     |
@@ -56,7 +56,7 @@ Fields:
 | `demand_history`        | Retained demand, shape counts, and overflow state                                               |
 | `demand_evidence`       | Consolidation evidence used by decode-to-prefill gates                                          |
 | `unserved`              | Phase placements where every eligible candidate exceeded the configured SLO                     |
-| `panic_bypasses`        | Prefill-to-decode moves allowed through cooldown by panic logic; current process                |
+| `panic_bypasses`        | Prefill-to-decode moves the current process allowed through cooldown by panic logic                |
 | `flips_refused`         | The 20 most recent rejected role changes                                                        |
 | `flips`                 | Role changes retained up to `flip_history`                                                      |
 
@@ -70,13 +70,11 @@ Related references:
 
 ### `health`
 
-Per-engine drift-window accounting:
-
 | Field               | Meaning                                                              |
 | ------------------- | -------------------------------------------------------------------- |
 | `scored`            | Closed drift windows that produced a score                           |
 | `undersampled`      | Closed drift windows whose evidence was too sparse to score          |
-| `last_scored_s_ago` | Seconds since the last scored window; `null` until a window scores   |
+| `last_scored_s_ago` | Seconds since the last scored window, `null` until a window scores   |
 | `prefill_paused`    | `true` while local prefill interference suspends evidence collection |
 | `prefill_pauses`    | Transitions into the paused condition                                |
 
@@ -89,16 +87,9 @@ Confirmed ejection clears the engine's drift-window record.
 | `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` |
 | `verifying` | Engines with a health or inference probe in flight, each as `iid` and probe `kind`                                                                      |
 
-Each class keeps a separate streak. `liveness` counts missed sweeps.
+`liveness` counts missed sweeps.
 
 ### `residency`
-
-Each engine-monitoring pass refreshes one record per engine from its attestation sidecar. The router takes a new residency snapshot when:
-
-- the sidecar reports the requested changes are gone
-- the sidecar epoch changes
-- the change sequence skips a number
-- a refresh fails
 
 | Field             | Meaning                                                      |
 | ----------------- | ------------------------------------------------------------ |
@@ -109,6 +100,13 @@ Each engine-monitoring pass refreshes one record per engine from its attestation
 | `block_size`      | Tokens per cache block                                       |
 | `resident_blocks` | Count of resident blocks per KV cache group                  |
 | `resyncs`         | Snapshots taken since router start                           |
+
+`resyncs` counts a new snapshot after each of these events:
+
+- the sidecar reports the requested changes are gone
+- the sidecar epoch changes
+- the change sequence skips a number
+- a refresh fails
 
 `known` is `false` when the sidecar is absent or answers the residency routes with HTTP 404.
 
@@ -164,17 +162,17 @@ Each engine-monitoring pass refreshes one record per engine from its attestation
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
 
-Each role move keeps `min_prefill` and `min_decode`. Floor counts cover engines eligible for placement.
+Floor counts cover engines eligible for placement.
 
-Below the prefill floor, the role controller moves healthy decode engines to prefill and keeps `min_decode`.
+Below the prefill floor, the role controller moves healthy decode engines to prefill down to `min_decode`.
 
 Breach tracking starts when prefill first reaches `min_prefill`.
 
 | Field                      | Meaning                                                                    |
 | -------------------------- | -------------------------------------------------------------------------- |
-| `below_floor.active`       | `true` during a prefill-floor breach; clears when prefill recovers         |
+| `below_floor.active`       | `true` during a prefill-floor breach         |
 | `below_floor.live_prefill` | Eligible prefill engines                                                   |
-| `below_floor.since`        | Process-monotonic time the open breach began; clears when prefill recovers |
+| `below_floor.since`        | Process-monotonic start time of the open breach |
 | `below_floor.breaches`     | Breaches since tracking started                                            |
 | `below_floor.cumulative_s` | Total breach seconds, including the open breach                            |
 
@@ -185,7 +183,7 @@ Breach tracking starts when prefill first reaches `min_prefill`.
 | Field            | Meaning                                                                                      |
 | ---------------- | -------------------------------------------------------------------------------------------- |
 | `advisory`       | `true` when the role controller records proposed role changes and keeps the live split fixed |
-| `last_decision`  | Most recent proposed or applied split; `null` before the first decision                      |
+| `last_decision`  | Most recent proposed or applied split, `null` before the first decision                      |
 | `decisions`      | Cumulative decision counts keyed `<by>:<result>`                                             |
 | `flips`          | Cumulative role-change counts keyed `<by>:<to>`                                              |
 | `flip_reversals` | Role changes that reverse the same engine's previous role change                             |
@@ -216,7 +214,7 @@ Optional fields, by evaluation stage:
 | `projected_ttft_ratio`                            | Demand model's projected TTFT ratio to its target for the candidate split                                  |
 | `projected_tpot_ratio`                            | Demand model's projected TPOT ratio to its target for the candidate split                                  |
 | `objective`                                       | Candidate split's objective                                                                                |
-| `objective_delta`                                 | Current objective minus candidate objective; a positive value is an improvement                            |
+| `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                            |
 | `decode_request_limit`                            | Applied decode request limit                                                                               |
 | `decode_profile_covered`                          | Whether decode profiles cover the candidate split                                                          |
 | `decode_correction`                               | Fleet median of the bounded live-to-profile decode ratio                                                   |
@@ -241,8 +239,6 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 
 #### Projected-TTFT recovery fields
 
-Projected-TTFT recovery records include:
-
 | Field                          | Meaning                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------- |
 | `trigger_rid`                  | Router request ID of the queued prefill request that triggered the evaluation |
@@ -256,7 +252,7 @@ Projected-TTFT recovery records include:
 | `urgent_signals`               | Urgent signals coalesced into this evaluation                                 |
 | `event_to_evaluation_s`        | Seconds from the urgent signal to this evaluation                             |
 
-The candidate split moves one engine from decode to prefill. A scored candidate adds:
+A scored candidate moving one engine from decode to prefill adds:
 
 | Field                            | Meaning                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -266,7 +262,9 @@ The candidate split moves one engine from decode to prefill. A scored candidate 
 
 Scored projected-TTFT recovery decisions set `decision_basis=projected_ttft_recovery`.
 
-Blocked and held decisions keep the proposed split and objective change. `reason` names the constraint that stopped the move:
+Blocked and held decisions keep the proposed split and objective change.
+
+`reason` names the constraint that stopped the move:
 
 - consolidation evidence
 - profile coverage
@@ -304,6 +302,6 @@ A role-change record has this form:
 | `by`               | Caller: `reactive`, `decode_floor`, or `floor_recovery`                       |
 | `prefill_inflight` | Resident prefill work when the role label changes                             |
 | `decode_inflight`  | Resident decode work when the role label changes                              |
-| `drained_s`        | Drain duration, set when that resident work finishes; `null` while it remains |
+| `drained_s`        | Drain duration once that resident work finishes, `null` while it remains |
 
 Each `flips_refused[]` record contains `at`, `to`, and `why`.
