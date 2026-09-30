@@ -142,6 +142,8 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 
 ## Narwhal against Dynamo Planner and Ray Serve LLM
 
+<h3 align="center"><a href="https://athrael.net/posts/evaluating-narwhal/">Read the full evaluation: Evaluating Narwhal</a></h3>
+
 <p align="center">
   <a href="https://github.com/ai-dynamo/aiperf/releases/tag/v0.12.0"><img src="https://img.shields.io/badge/client-AIPerf%20v0.12.0-0f766e" alt="AIPerf v0.12.0"></a>
   <a href="https://huggingface.co/moonshotai/Kimi-K3"><img src="https://img.shields.io/badge/model-Kimi--K3-0f766e" alt="Kimi-K3 model"></a>
@@ -157,11 +159,7 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM.">
-</p>
-
-<p align="center">
-  <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://img.shields.io/badge/write--up-Evaluating%20Narwhal-0f766e" alt="Evaluating Narwhal write-up"></a>
+  <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM."></a>
 </p>
 
 ## Get the commands
