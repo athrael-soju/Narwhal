@@ -87,13 +87,13 @@ narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 
 `--evidence-out` rejects evidence when:
 
-- an engine's process generation changes between pairs or repeats;
-- an engine has lost its profile binding by the final identity check;
+- an engine's process generation changes between pairs or repeats
+- an engine has lost its profile binding by the final identity check
 - the fleet or profile files differ from the hashes taken at the start of the run.
 
 A `--verify-evidence` run:
 
-- repeats these checks against the current engines;
+- repeats these checks against the current engines
 - runs preflight's fresh transfer probes.
 
 ## First-token calibration
@@ -102,9 +102,9 @@ Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrate-the-
 
 The `--calibration-out` file holds:
 
-- the raw attempts;
-- the p99 and maximum for each group;
-- the candidate deadline;
+- the raw attempts
+- the p99 and maximum for each group
+- the candidate deadline
 - the engines' process generations.
 
 | Scope                 | Timeout                     |
@@ -122,11 +122,11 @@ The `--calibration-out` file holds:
 
 The artifact is valid evidence when all of these hold:
 
-- every group has at least 100 completed attempts;
-- the attempt numbers are distinct;
-- the attempt numbers cover the configured sample count;
-- the process generations are unchanged;
-- the final checks passed;
+- every group has at least 100 completed attempts
+- the attempt numbers are distinct
+- the attempt numbers cover the configured sample count
+- the process generations are unchanged
+- the final checks passed
 - the candidate deadline is strictly below `serving.request_timeout_s`.
 
 The artifact is incomplete when an attempt fails, a generation changes, or a generation check errors.

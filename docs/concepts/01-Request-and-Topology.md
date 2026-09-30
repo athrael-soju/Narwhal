@@ -84,10 +84,10 @@ Hot-swap changes the scheduler role of an eligible dual-capability engine in pla
 
 [Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 
-- a cooldown;
-- a minimum dwell time;
-- confirmation rules;
-- minimum role floors;
-- a check on resident work;
-- exclusion of unhealthy engines;
+- a cooldown
+- a minimum dwell time
+- confirmation rules
+- minimum role floors
+- a check on resident work
+- exclusion of unhealthy engines
 - exclusion of engines in a lifecycle event.

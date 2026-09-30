@@ -29,8 +29,8 @@ PYTHON
 
 The template pins:
 
-- the GPU product, NVIDIA GeForce RTX 5090;
-- a minimum of 30,000 MiB total VRAM;
+- the GPU product, NVIDIA GeForce RTX 5090
+- a minimum of 30,000 MiB total VRAM
 - the same runtime and model hashes as the installed small-GPU template.
 
 ## Launch and verify the reference
@@ -88,9 +88,9 @@ The `role_cycle` in the reference template fixes the token pool, random seeds, a
 Replay prerequisites:
 
 - a verified instance that starts with two prefill and two decode engines
-  (2P:2D);
-- an active role controller;
-- the matching Narwhal checkout as the working directory;
+  (2P:2D)
+- an active role controller
+- the matching Narwhal checkout as the working directory
 - the instance's virtual environment, active.
 
 Run the replay and stop the instance:

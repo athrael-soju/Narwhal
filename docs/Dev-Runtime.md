@@ -253,9 +253,9 @@ Contribute a template for a new small CUDA GPU:
 
 The qualification evidence records:
 
-- the GPU, driver, model, and runtime versions;
-- the free-memory reserve and peak startup memory;
-- both directed KV transfers;
+- the GPU, driver, model, and runtime versions
+- the free-memory reserve and peak startup memory
+- both directed KV transfers
 - the routed completion.
 
 A contribution for a GPU from another vendor includes:

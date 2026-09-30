@@ -4,10 +4,10 @@
 
 Fleet requirements:
 
-- one model on vLLM engines that share a compatible KV layout;
-- KV transfer through NIXL with effective `kv_both` behaviour;
-- transfer from every eligible KV producer to every eligible consumer;
-- one active role controller per fleet.
+- one model on vLLM engines that share a compatible KV layout
+- KV transfer through NIXL with effective `kv_both` behaviour
+- transfer from every eligible KV producer to every eligible consumer
+- one active role controller per fleet
 
 | Role                          | Responsibilities                                                                                                                                                                           | Inputs that must already exist                                                                                                                                         |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -46,11 +46,11 @@ Create a private deployment record before the first command.
 
 For every gate, retain:
 
-- host or stable host alias;
-- full source revision;
-- starting state;
-- commands executed;
-- exit status;
+- host or stable host alias
+- full source revision
+- starting state
+- commands executed
+- exit status
 - generated artifacts and paths.
 
 When a gate fails:

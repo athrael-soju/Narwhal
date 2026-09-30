@@ -16,10 +16,10 @@
 
 Install on both router hosts, with the same release identifier:
 
-- the Narwhal release;
-- the fleet configuration;
-- the profile store;
-- the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory;
+- the Narwhal release
+- the fleet configuration
+- the profile store
+- the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
 - the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
 
 After an engine replacement, match the calibration artifact to the live engine's process generation:
@@ -53,17 +53,17 @@ narwhal-check --print-contract-versions
 
 Ingress must:
 
-- remove client-supplied internal credentials and request IDs;
-- insert trusted replacements;
-- authenticate clients;
-- apply identity policy and rate limits;
-- route each model to its router pair;
-- forward streaming chunks as they arrive;
+- remove client-supplied internal credentials and request IDs
+- insert trusted replacements
+- authenticate clients
+- apply identity policy and rate limits
+- route each model to its router pair
+- forward streaming chunks as they arrive
 - enforce connect and idle timeouts derived from the service budget.
 
 Each engine leg receives:
 
-- a request ID per attempt and phase;
+- a request ID per attempt and phase
 - the engine credential identified by `engine.engine_api_key_env`.
 
 Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg).

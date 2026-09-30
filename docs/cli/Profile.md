@@ -99,10 +99,10 @@ The sample sidecar records each neighbour's role, completion count, achieved rat
 
 A profiling run aborts when any of these conditions occurs:
 
-- the `--only` selection matches zero configured engines;
-- `/health` fails its HTTP 200 check;
-- the `/tokenize` response fails `max_model_len` validation;
-- engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels;
+- the `--only` selection matches zero configured engines
+- `/health` fails its HTTP 200 check
+- the `/tokenize` response fails `max_model_len` validation
+- engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
 - the representative prefill fit exceeds 20% mean error or 50% worst-point error.
 
 | Mode | Success output |

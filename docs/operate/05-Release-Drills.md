@@ -10,16 +10,32 @@ Run the release drills on an idle fleet with external admission closed:
 
 Keep the release, fleet configuration, profiles, engine build, supervisor commands, and drill results in the private deployment directory.
 
-Reuse earlier drill results that meet the pass conditions, and test the production supervisor when an earlier run used another launcher.
+Earlier drill results count when they meet the pass conditions.
+
+Test the production supervisor when an earlier run used another launcher.
 
 ### Release drill pass conditions
 
-| Drill | Passes when |
-| --- | --- |
-| Individual engine restart | The drain completes, stale profiles block readmission, fresh profiles load with the hold preserved, and a routed request reaches the returned engine. |
-| Whole-wave restart | The router withdraws readiness before the first stop, one failed member holds the whole wave, and every member returns together after validation. |
-| Unplanned whole-wave hold | The drain records current identities for the whole excluded wave before member replacement and readmission. |
-| Router failover | The load balancer selects one lease holder, roles and cumulative counters survive takeover, and the previous primary stays fenced. |
+The individual engine restart drill passes when:
+
+- The drain completes.
+- Stale profiles block readmission.
+- Fresh profiles load with the hold preserved.
+- A routed request reaches the returned engine.
+
+The whole-wave restart drill passes when:
+
+- The router withdraws readiness before the first stop.
+- One failed member holds the whole wave.
+- Every member returns together after validation.
+
+The unplanned whole-wave hold drill passes when the drain records current identities for the whole excluded wave before member replacement and readmission.
+
+The router failover drill passes when:
+
+- The load balancer selects one lease holder.
+- Roles and cumulative counters survive takeover.
+- The previous primary stays fenced.
 
 ### Individual restart drill
 
