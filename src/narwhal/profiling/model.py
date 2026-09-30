@@ -357,15 +357,18 @@ class Profile:
         bounds = [b for b in (self.kv_capacity_tokens, self.decode_max_kv_tokens) if b is not None]
         return min(bounds) if bounds else None
 
-    def decode_request_limit(self, context_tokens: float) -> int:
+    def decode_request_limit(self, context_tokens: float, request_cap: int = 0) -> int:
         """Return the concurrent decode-request limit for the context length.
 
-        Return 0 for an invalid context or missing measured request bound.
+        A positive `request_cap` bounds the limit. Return 0 for an invalid
+        context or missing measured request bound.
         """
         measured = self.decode_max_requests
         if context_tokens <= 0 or measured is None or measured <= 0:
             return 0
         limits = [measured]
+        if request_cap > 0:
+            limits.append(request_cap)
         token_limit = self.decode_token_limit
         if token_limit is not None:
             limits.append(max(1, int(token_limit / context_tokens)))
@@ -378,6 +381,7 @@ class Profile:
         output_tokens: float,
         *,
         correction: float = 1.0,
+        request_cap: int = 0,
     ) -> float:
         """Return measured-domain request capacity for one decode engine."""
         if (
@@ -387,7 +391,7 @@ class Profile:
             or not self.covers_output(output_tokens)
         ):
             return 0.0
-        hi = self.decode_request_limit(context_tokens)
+        hi = self.decode_request_limit(context_tokens, request_cap)
         if hi <= 0:
             return 0.0
         lo = 1

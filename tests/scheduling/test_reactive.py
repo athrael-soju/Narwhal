@@ -443,6 +443,46 @@ class MixedPressureTests(unittest.TestCase):
             fleet.controller.safety.consolidation_evidence_snapshot()
             rebuild.assert_called_once()
 
+    def test_a_decode_concurrency_cap_raises_priced_decode_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        uncapped = price()
+        fleet.scheduler.decode_concurrency = 1
+        self.assertGreater(price(), uncapped)
+
+    def test_full_capped_decode_slots_move_an_engine_to_decode(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.scheduler.decode_concurrency = 2
+        fleet.controller.demand.unsized_pending = 1
+        fleet.pressure = {Role.PREFILL: 0.1, Role.DECODE: 0.1}
+        for iid in ("e3", "e4", "e5"):
+            for index in range(2):
+                request = Request(f"{iid}-{index}", 100, wanted_len=10)
+                request.phase = Phase.DECODE
+                fleet.monitor.dispatched(iid, request)
+        for index in range(4):
+            waiting = Request(f"waiting{index}", 100, wanted_len=10)
+            waiting.phase = Phase.DECODE
+            fleet.monitor.waiting[waiting.rid] = waiting
+        fleet.controller.demand.sample()
+        self.assertGreaterEqual(fleet.controller.demand.resident_demand(fleet.now, 60.0), 3.0)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.1, 0.1)
+        )
+        self.assertAlmostEqual(snapshot.decode_recovery_ratio, (6 + 4) / (3 * 2))
+        self.assertIsNotNone(fleet.confirm())
+        self.assertEqual(sum(i.role is Role.PREFILL for i in fleet.monitor.instances.values()), 2)
+
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
         fleet.profiles._by_id.pop("e5")

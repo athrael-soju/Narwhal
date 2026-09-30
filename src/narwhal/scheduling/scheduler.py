@@ -43,8 +43,10 @@ class GlobalScheduler:
         on_control_event: Callable[[dict], None] | None = None,
         outcome_bucket_s: float = 1.0,
         outcome_retained_s: float = 480.0,
+        decode_concurrency: int = 0,
     ) -> None:
         self.monitor = monitor
+        self.decode_concurrency = decode_concurrency
         self.profiles = profiles
         self.slo = slo
         self.th = thresholds or Thresholds()

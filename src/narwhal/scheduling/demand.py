@@ -158,7 +158,9 @@ class DemandModel:
                 len(inst.decode),
             )
             if ceiling > 0:
-                resident += inst.decode_tokens() / ceiling
+                share = inst.decode_tokens() / ceiling
+                cap = self.scheduler.decode_concurrency
+                resident += max(share, len(inst.decode) / cap) if cap > 0 else share
         self.residency.add(resident)
 
     def _decode_correction(self) -> float:
@@ -269,6 +271,7 @@ class DemandModel:
                         context,
                         bucket_output,
                         correction=correction,
+                        request_cap=self.scheduler.decode_concurrency,
                     )
                     for p in profiles
                 ]

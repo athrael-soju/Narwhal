@@ -111,6 +111,8 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertGreater(row.decode_rps(1, 256, 32), 0)
         self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
         self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)
+        self.assertEqual(row.decode_request_limit(256, request_cap=1), 1)
+        self.assertLess(row.decode_rps(1, 256, 32, request_cap=1), row.decode_rps(1, 256, 32))
         with self.assertRaisesRegex(ValueError, "colocated role mix"):
             replace(row, colocated_decode_rps=None)
 

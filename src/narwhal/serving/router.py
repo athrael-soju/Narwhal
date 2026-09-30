@@ -160,6 +160,7 @@ class NarwhalRouter:
             # controller windows, the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
+            decode_concurrency=cfg.serving.decode_concurrency,
             health=DriftTracker(
                 clock=clock,
                 window_s=cfg.health_window_s,
