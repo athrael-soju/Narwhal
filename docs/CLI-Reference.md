@@ -1,10 +1,10 @@
 # Narwhal CLI reference
 
-Installing `narwhal-inference` gives you the commands below. `narwhal --help` lists all six installed commands.
+Installing `narwhal-inference` provides six executables: `narwhal`, `narwhal-engine`, `narwhal-check`, `narwhal-attest`, `narwhal-serve`, and `narwhal-profile`. The `config`, `diagnostics`, and `dev` commands are subcommands of `narwhal`. `narwhal --help` lists all six installed commands.
 
-Every installed executable accepts `-h`, `--help`, and `--version`. Subcommands such as `narwhal config` accept `-h` and `--help`; put `--version` straight after the executable name. Relative paths are resolved from the directory you run the command in.
+Every executable accepts `-h`, `--help`, and `--version`. Subcommands such as `narwhal config` accept only `-h` and `--help`, so place `--version` directly after the executable name. Relative paths are resolved from the directory you run the command in.
 
-In deployment scripts, call the installed `narwhal-*` commands rather than Python module paths, because module paths can change between releases. (`python -m narwhal.cli` also starts a router.)
+In deployment scripts, call the installed commands (`narwhal`, `narwhal-*`) instead of Python module paths. Module paths can change between releases. `python -m narwhal.cli` also starts a router.
 
 | Command                                        | Purpose                                                                      |
 | ---------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -21,16 +21,16 @@ In deployment scripts, call the installed `narwhal-*` commands rather than Pytho
 
 In the default text mode, the deployment and lifecycle commands use these exit codes:
 
-| Code | Meaning                                                                                                                                                                                                      |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0    | Success.                                                                                                                                                                                                     |
-| 1    | An operation failed, such as an engine HTTP request, a runtime inspection, a listener bind, a verification gate, or teardown. `narwhal dev status` also returns 1 when the development instance is degraded. |
-| 2    | Invalid arguments or configuration input.                                                                                                                                                                    |
+| Code | Meaning                                                                                        |
+| ---- | ---------------------------------------------------------------------------------------------- |
+| 0    | Success.                                                                                       |
+| 1    | A runtime operation failed (engine HTTP request, runtime inspection, listener bind, verification gate, teardown). |
+| 2    | Invalid arguments or configuration input.                                                      |
 
-`narwhal diagnostics collect` also returns 3 for a partial bundle and 4 for an I/O error. See [Manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status).
+`narwhal dev status` also returns 1 when the development instance is degraded. `narwhal diagnostics collect` also returns 3 for a partial bundle and 4 for an I/O error. See [Manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status).
 
-When a failure is expected, the command prints the command name, the operation, and the path or value involved to stderr. Unexpected failures print a Python traceback. If an engine inspection fails, its subprocess output is kept in the run's diagnostic logs.
+Handled errors print the command name, the operation, and the offending path or value to stderr. Unhandled errors print a Python traceback. When an engine inspection fails, its subprocess output is kept in the run's diagnostic logs.
 
 ## JSON output
 
-Commands that exit on their own, rather than running as a server, accept `--format json`. They then return a [versioned command result](Command-Results.md), which covers failures and artifact references and defines how each status maps to an exit code.
+Commands that run to completion accept `--format json` and return a [versioned command result](Command-Results.md). That page defines failures, artifact references, and how each status maps to an exit code.

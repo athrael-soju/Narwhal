@@ -2,15 +2,15 @@
 
 ## Check interface compatibility before deployment
 
-Every Narwhal reader checks the schema name and version of each document it reads, and rejects the document if either one doesn't match what the reader supports. In this release, each reader supports only the version its build writes, so documents with an older or a newer schema version are both rejected.
+Each reader accepts the schema name and version its build writes and rejects any other document, older or newer.
 
-To see which contracts shipped with the installed package, run:
+To list the interface versions of the installed build, run:
 
 ```bash
 narwhal-check --print-contract-versions
 ```
 
-The manifest lists each interface's `schema`, the version the build writes (`write`), and the versions it reads (`read`). The current versions are:
+The command prints a contract manifest with `schema`, `write` and `read` for each interface. `write` is the version the build writes. `read` lists the versions it accepts, which in this release is the same version. Current versions:
 
 | Interface              | Schema                      | Version |
 | ---------------------- | --------------------------- | ------: |
@@ -28,6 +28,11 @@ The manifest lists each interface's `schema`, the version the build writes (`wri
 | Contract manifest      | `narwhal.contract-manifest` |       1 |
 | Diagnostic bundle      | `narwhal.diagnostic-bundle` |       1 |
 
-Prometheus output has no document header. Narwhal reports the metrics contract version in the `version` label of `narwhal_contract_info{contract="metrics"}`.
+Prometheus output has no document header. Narwhal reports the metrics version in the `version` label of `narwhal_contract_info{contract="metrics"}`.
 
-Before you upgrade, compare the installed contract manifest with the candidate's. A field change that would break an existing reader needs a new schema version for that interface. Keep the previous code, configuration, profiles, and compatible state together so you can roll all of it back at once.
+Narwhal bumps an interface's schema version for any change that would break an existing reader.
+
+To upgrade:
+
+1. Save the output of `narwhal-check --print-contract-versions` from the installed build and from the new one, then diff them.
+2. Keep the previous code, config, profiles and compatible state to roll back together.

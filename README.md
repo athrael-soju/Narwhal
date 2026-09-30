@@ -12,17 +12,17 @@
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/">Documentation</a> |
-  <a href="https://athrael-soju.github.io/Narwhal/Deploy/">Deployment</a> |
-  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/">API reference</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/Deploy/">Deploy a fleet</a> |
+  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/">HTTP API</a> |
   <a href="https://github.com/athrael-soju/Narwhal/issues">Issues</a> |
   <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
 
 ## About
 
-Narwhal is an adaptive disaggregated inference framework that reallocates prefill and decode roles as demand changes, while model weights stay loaded.
+Narwhal is a disaggregated LLM inference framework that switches engines between prefill and decode roles as load shifts, without reloading model weights.
 
-Capabilities (as of v0.1.0):
+Features (v0.1.0):
 
 - Hot-swap prefill/decode role assignment across a fixed GPU fleet.
 - Separate prefill and decode routing with NIXL KV transfer.
@@ -38,7 +38,7 @@ On regular controller passes, Narwhal estimates prefill and decode pressure agai
 
 ![Narwhal's reactive controller changes engine roles while model weights remain resident.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/architectures/hotswap.svg)
 
-See [Core concepts](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
+See [Architecture and scheduling](https://athrael-soju.github.io/Narwhal/Core-Concepts/) for request flow and scheduling, and [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/) for controller settings.
 
 ## Benchmark snapshot
 
@@ -46,7 +46,7 @@ AIPerf v0.12.0 ran chat/document and mixed-payload Kimi-K3 workloads with prefix
 
 ![Completion rate, SLO-qualified requests, median time to first token, and document answer quality for Narwhal, Dynamo Planner, and Ray Serve LLM across chat/document and mixed-payload workloads.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
 
-[Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/) describes the test setup, the results for each workload, the effect of prefix caching, and the p95 time-to-first-token tail on mixed traffic.
+[Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/) covers the setup, per-workload results, prefix-caching effects, and p95 time-to-first-token tail on mixed traffic.
 
 ## Install from PyPI
 
@@ -60,22 +60,24 @@ python -m pip show narwhal-inference
 narwhal-check --help
 ```
 
-The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. Record the version reported by `pip show` with the fleet configuration and engine image, then pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`.
+
+Record the version reported by `pip show` alongside the fleet configuration and engine image, and pin it across router hosts. The [PyPI installation guide](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) covers the engine and profile inputs required before serving requests.
 
 ## Narwhal dev
 
-[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2 with `narwhal dev init/up/verify/status/down`. Its installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
+[Narwhal dev](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) runs a local NVIDIA CUDA fleet on Ubuntu, including Ubuntu on WSL2, with `narwhal dev init/up/verify/status/down`. The installed two-engine template targets GPUs with 8 GB of VRAM or less and checks available memory at initialization. A separate RTX 5090 template records the measured four-engine configuration. Contributors can add qualified CUDA recipes and support for other GPU vendors.
 
 ## Deploy a fleet
 
 Follow [Deploy a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. Inspect the target hardware and model, install an approved source revision, and validate the running vLLM processes and KV paths. Then profile and run preflight before routing traffic.
 
-The final gate measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
+The final gate in [Fleet measurement](https://athrael-soju.github.io/Narwhal/Measure/) measures the workload through the private path, reconciles client outcomes with the router journal, and checks Prometheus and Grafana.
 
 ## Reference
 
 - [Architecture and scheduling](https://athrael-soju.github.io/Narwhal/Core-Concepts/)
-- [Fleet configuration](https://athrael-soju.github.io/Narwhal/Configuration/)
+- [Configuration](https://athrael-soju.github.io/Narwhal/Configuration/)
 - [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/)
 - [HTTP API](https://athrael-soju.github.io/Narwhal/HTTP-API/)
 - [Fleet measurement](https://athrael-soju.github.io/Narwhal/Measure/)
@@ -85,10 +87,10 @@ The final gate measures the workload through the private path, reconciles client
 
 ## Contributing
 
-[Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) covers checkout setup, local checks, and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
+See [CONTRIBUTING.md](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md) for checkout setup, local checks, and the pull request flow. Participation follows the [code of conduct](https://github.com/athrael-soju/Narwhal/blob/main/CODE_OF_CONDUCT.md), and the [security policy](https://github.com/athrael-soju/Narwhal/blob/main/SECURITY.md) covers vulnerability reports.
 
 ## Attribution and citation
 
-Narwhal's scheduling algorithms derive from [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
+Narwhal's scheduling algorithms are based on [Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture](https://arxiv.org/abs/2505.11916) by Wu et al. (2025). Cite Arrow for those algorithms and Narwhal for this software. [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff) contains both references.
 
 License: [Apache-2.0](https://github.com/athrael-soju/Narwhal/blob/main/LICENSE).

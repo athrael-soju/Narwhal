@@ -1,12 +1,12 @@
 # Gate E: Attest the live engine processes
 
-Attestation records what each running engine actually is: its NIXL protocol version, model dimensions, cache layout, transfer mode, and handshake policy. A sidecar then serves that record so the router can check it against the live process. Every engine goes through the same steps, and they can run concurrently.
+Attestation records what each running engine is: its NIXL protocol version, model dimensions, cache layout, transfer mode, and handshake policy. A sidecar serves that record so the router can check it against the live process. Run the capture and sidecar steps on each engine (engines can be attested in parallel), then finalize the fleet once from the router.
 
 ## Confirm router inventory
 
 On the router, check that `runs/deployment/fleet.json` lists the running engines with their URLs and attestation URLs, the model, the initial roles, the SLO values, and the profile path. `.env.router` fills in the endpoint references.
 
-Each engine's inputs are the `ENGINE_RUN` directory from Gate C and the `cache-layout.json` captured there. Keep the container ID and logs in that directory as well.
+Each engine needs its `ENGINE_RUN` directory from Gate C, containing `cache-layout.json`, `launch.json`, and `checked.json`, plus the container ID and check logs.
 
 ## Capture attestation inputs
 
@@ -24,7 +24,7 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 .venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-This saves the installed connector's `NIXL_CONNECTOR_VERSION` to `nixl-connector-version.json`, and it becomes `contract.nixl_connector_version` in the attestation. Don't confuse it with the pinned `nixl_version` package. It's a different number, and it's the one that goes into the peer compatibility hash. The image ID and serving container ID tie the capture to the build you deployed.
+This saves the installed connector's `NIXL_CONNECTOR_VERSION` to `nixl-connector-version.json`, and it becomes `contract.nixl_connector_version` in the attestation. It differs from the pinned `nixl_version` package version and goes into the peer compatibility hash. The capture records the image ID and serving container ID.
 
 ### Model dimensions
 
@@ -36,13 +36,13 @@ umask 077
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-You should see `head_size`, `kv_heads`, `hidden_layers`, and `model_architecture`. They come from `ModelConfig.get_head_size()`, `get_total_num_kv_heads()`, and `get_total_num_hidden_layers()`, plus the resolved architecture. For DeepSeek-style MLA with MLA enabled, the head size works out as `kv_lora_rank + qk_rope_head_dim`.
+The file contains `head_size`, `kv_heads`, `hidden_layers`, and `model_architecture`. They come from `ModelConfig.get_head_size()`, `get_total_num_kv_heads()`, and `get_total_num_hidden_layers()`, plus the resolved architecture. For DeepSeek-style MLA with MLA enabled, the head size is `kv_lora_rank + qk_rope_head_dim`.
 
-The command reads the plan and launcher from inside the live container, checks their hashes against `launch.json`, and writes private logs. Keep the output alongside `use_mla`, the model-config hash, the image identity, the application revision, and the serving plan hash. Run it on every engine.
+The command reads the plan and launcher from inside the live container, checks their hashes against `launch.json`, and writes private logs. The output also records `use_mla`, the model-config hash, the image identity, the application revision, and the serving plan hash. Run it on every engine.
 
 ### Cache registration
 
-`cache-registration` records how the engine groups its physical cache. It can read either the startup log or the layout you captured in Gate C. Run it once per `ENGINE_RUN`, because it won't overwrite an existing capture.
+`cache-registration` records how the engine groups its physical cache. It reads either the startup log or the layout captured in Gate C. Run it once per `ENGINE_RUN`; it leaves an existing capture unchanged.
 
 From the startup log:
 
@@ -61,7 +61,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-In vLLM v0.29.0, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`, while `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The record keeps `cross_layers_blocks`, the layout name, the hash of the enum source, the input hash, the checked plan hash, and the image identity.
+In vLLM v0.29.0, `BLHNC`, `BLNHC`, and `BHLNC` have `is_block_outermost=true`, while `LBHNC`, `LBNHC`, and `LHBNC` have `is_block_outermost=false`. The record contains `cross_layers_blocks`, the layout name, the hash of the enum source, the input hash, the checked plan hash, and the image identity.
 
 Then compare the engine's layout with its group's representative:
 
@@ -81,11 +81,11 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-If the group signature, layout, and page geometry all match, the engine can keep using its group's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). If the layout or page geometry differs, the engine needs its own serving capture, budget, and edge comparisons.
+If the group signature, layout, and page geometry all match, the engine uses its group's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). If the layout or page geometry differs, the engine needs its own serving capture, budget, and edge comparisons.
 
 ### Transfer mode
 
-The transfer direction comes from the connector class that the image check resolved. In the pinned API, `NixlConnector` is an alias for `NixlPullConnector`, and `kv_both` only means the engine can both produce and consume KV. It doesn't say which side initiates a transfer.
+The transfer direction comes from the connector class that the image check resolved. In the pinned API, `NixlConnector` is an alias for `NixlPullConnector`, and `kv_both` only means the engine can both produce and consume KV. It does not say which side initiates a transfer.
 
 ```bash
 python3 - <<'PY_TRANSFER_MODE'
@@ -135,7 +135,7 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-Check the connector class against the serving startup log too. If the log shows no connector class, or more than one, resolve the connector again with the pinned image check.
+Check the connector class against the serving startup log too. If the log shows no connector class, or more than one, rerun the pinned image check.
 
 ### Handshake enforcement
 
@@ -144,7 +144,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/handshake-policy.json"
 ```
 
-The pinned NIXL worker reads `kv_transfer_config.get_from_extra_config("enforce_handshake_compat", True)` into `self.enforce_compat_hash`. Plans from the current launcher set `enforce_handshake_compat=true` explicitly, and older plans fall back to the installed worker's default. Only a Boolean `true` is accepted. Anything else means fixing the launch configuration and restarting the engine from a newly checked plan.
+The pinned NIXL worker reads `kv_transfer_config.get_from_extra_config("enforce_handshake_compat", True)` into `self.enforce_compat_hash`. Plans from the current launcher set `enforce_handshake_compat=true`, and older plans fall back to the installed worker's default. Only a Boolean `true` is accepted. For any other value, fix the launch configuration and restart the engine from a newly checked plan.
 
 ## Generate and serve the attestation
 
@@ -156,15 +156,15 @@ Generate the engine's attestation document:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
-Before starting the sidecar, check the engine's `/health`, `/version`, and `process_start_time_seconds` again, so you know exactly which process you're attesting. Then start it:
+Before starting the sidecar, confirm that the engine's `/health`, `/version`, and `process_start_time_seconds` match the process you are attesting. Then start it:
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
 ```
 
-Discovery already put this engine's attestation URL into the router's fleet document. From the router, check `/health` and `/v1/attestation` over the trusted control network.
+Discovery already put this engine's attestation URL into the router's fleet document. The check below fetches `/health` and `/v1/attestation` from that URL over the trusted control network.
 
-In a second shell for the same role, check the sidecar and the engine together:
+In a second shell for the same engine, check the sidecar and the engine together:
 
 ```bash
 export ENGINE_ROLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["role"])' "$ENGINE_RUN/launch.json")"
@@ -211,7 +211,7 @@ print("Both sidecar endpoints passed; attestation matches the live engine and co
 PY_ATTEST_CHECK
 ```
 
-Do this for every engine. Once they've all passed, finalize the fleet once, from the router shell:
+After every engine passes, finalize the fleet from the router shell:
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
@@ -219,5 +219,8 @@ Do this for every engine. Once they've all passed, finalize the fleet once, from
 
 Finalizing reads every engine and sidecar, checks each process identity and full contract, and requires all engines to share the same contract. It then saves the previous fleet document under `runs/` and writes `engine_contract` into `runs/deployment/fleet.json`.
 
-If an engine fails its identity or contract check, inspect the corresponding `engine-attestation.json` and sidecar captures to diagnose the issue before attempting to finalize the fleet. Leave all engines and sidecars running through profiling, preflight, and the trial.
+If an engine fails its identity or contract check, inspect its `engine-attestation.json` and sidecar captures before finalizing.
+
+Leave all engines and sidecars running through profiling, preflight, and the trial.
+
 Next: [Gate F: Profile the engines and run the live KV contract](06-Profile-and-Preflight.md).

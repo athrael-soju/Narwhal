@@ -1,10 +1,8 @@
-# Narwhal fleet configuration and deployment reference
+# Fleet configuration
 
-A router process serves one model from one engine fleet. To serve a second model, run a separate fleet and router and choose between them at ingress.
+The fleet file is JSON. It configures serving, profiling, validation, role control, recovery, and the compatibility checks run against engines. `narwhal-serve`, `narwhal-profile`, and `narwhal-check` read it. The deployment tooling combines it with the workstation environment to generate private inputs for each host.
 
-The fleet is a JSON document. It configures serving, profiling, validation, role control, recovery, and the compatibility checks run against engines. The deployment tooling reads it alongside the workstation's environment to generate private inputs for each host.
-
-Start a new fleet from the annotated example:
+Print an annotated example config:
 
 ```bash
 .venv/bin/narwhal-check --print-example-config
@@ -12,7 +10,7 @@ Start a new fleet from the annotated example:
 
 `narwhal-serve`, `narwhal-profile`, and `narwhal-check` take the fleet path through `--fleet`. Python code that calls `create_app()` can set `NARWHAL_FLEET` instead.
 
-Every fleet file declares its schema and version, and Narwhal checks both before it reads any other field:
+Every fleet file starts with a schema name and version. Narwhal checks both before reading other fields:
 
 ```json
 {
@@ -21,9 +19,15 @@ Every fleet file declares its schema and version, and Narwhal checks both before
 }
 ```
 
-Version 1 leaves client identity and content capture to ingress. Inside Narwhal there is a single global admission budget, and requests are measured in tokens and durations. The schemas used by fleets, profiles, and runtime artifacts are listed under [interface versions](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment).
+The schemas used by fleets, profiles, and runtime artifacts are listed under [interface versions](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment).
 
-## Fleet and deployment contracts
+## Limits
+
+- A router process serves one model from one engine fleet. To serve a second model, run a separate fleet and router and choose between them at ingress.
+- Schema version 1 leaves client identity and content capture to ingress. The fleet file does not configure them.
+- Admission uses a single global budget. Requests are measured in tokens and durations.
+
+## Reference pages
 
 - [Fleet schema and engine contract](configuration/01-Fleet-Schema.md)
 - [Serving and role control](configuration/02-Serving-and-Role-Control.md)

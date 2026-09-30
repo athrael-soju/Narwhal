@@ -2,12 +2,11 @@
 
 A template describes what an instance runs: the model and runtime, the
 context length, the profiling sweep, how GPU memory is divided, how much
-memory to keep free, and the latency budgets Narwhal works to.
+memory to keep free, and the TTFT and TPOT latency budgets.
 
-Memory is the part you're most likely to change. Each engine gets a
-fraction of the card's total VRAM, and that fraction has to hold the model
-weights, the runtime's own overhead, and the KV cache. A second setting, the
-device allowance, caps how much the engines may use between them.
+Memory allocation is the setting changed most often. Each engine gets a
+fraction of total VRAM for model weights, runtime overhead and KV cache. The
+device allowance caps the combined use of all engines.
 
 | Setting                         | Installed template  | Template field                      | `narwhal dev init` flag    |
 | ------------------------------- | ------------------- | ----------------------------------- | -------------------------- |
@@ -19,29 +18,28 @@ device allowance, caps how much the engines may use between them.
 | TTFT budget                     | 5 s                 | `slo.ttft_s`                        | —                          |
 | TPOT budget                     | 500 ms              | `slo.tpot_s`                        | —                          |
 
-Two more fields, `gpu.product` and `gpu.minimum_total_mib`, let a template
-refuse to run on the wrong card. The installed template leaves them unset.
-The [RTX 5090 reference](08-RTX-5090-Reference.md) uses both.
+Two more fields, `gpu.product` and `gpu.minimum_total_mib`, restrict a
+template to a specific card. The installed template leaves them unset. The
+[RTX 5090 reference](08-RTX-5090-Reference.md) sets both.
 
 `init` also checks that the GPU has at least
-`device_allowance × total VRAM + gpu.reserve_mib` free. On an 8 GB card with
-the defaults, that comes to about 6.9 GiB, which is most of the card. If
-`init` complains about free memory, close whatever else is using the GPU
-before you start changing numbers.
+`device_allowance × total VRAM + gpu.reserve_mib` free. On an 8 GiB card with
+the installed template values, that is about 6.9 GiB, most of the card. If `init` reports
+insufficient free memory, stop other processes that use the GPU.
 
 ## Tuning an allocation
 
 1. Check how much memory is free with the `nvidia-smi` query in
    [Prepare Ubuntu or WSL2](01-Prepare-Host.md).
 2. Initialize a fresh instance with the `--gpu-memory-utilization` and
-   `--device-allowance` values you want to try.
+   `--device-allowance` values to try.
 3. Measure TTFT and TPOT on that card.
-4. Put budgets based on those measurements into `slo.ttft_s` and
-   `slo.tpot_s` in a custom template.
+4. Set `slo.ttft_s` and `slo.tpot_s` from the measured values in a
+   [custom template](#building-a-custom-template).
 
 ## Building a custom template
 
-Start by exporting the installed template:
+Export the installed template:
 
 ```bash
 mkdir -p runs

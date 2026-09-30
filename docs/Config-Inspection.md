@@ -1,51 +1,51 @@
 # Offline fleet configuration
 
-You can check a fleet file without any engines running. `narwhal config validate` runs the same checks the router runs when it starts serving: the schema, each individual field, endpoint references, and the rules that tie fields to each other.
+`narwhal config validate` checks a fleet file without running engines. It runs the same checks the router runs at startup: schema, field values, endpoint references, and cross-field rules.
 
-It only reads the fleet file and the environment variables its endpoints refer to. That means it works before you've collected any profiles, and it doesn't care whether the engine addresses are reachable yet.
+It reads only the fleet file and the environment variables that endpoints reference, so it works before profiles exist and does not check engine reachability.
 
 ```bash
 narwhal config validate --fleet config/fleet.json
 narwhal config inspect --fleet config/fleet.json --format json
 ```
 
-| Option                | What it does                                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `--fleet PATH`        | The fleet file to validate or inspect.                                                                      |
-| `--format text\|json` | `text` prints a readable result. `json` wraps the result in a versioned [command result](CLI-Reference.md). |
+| Option                | What it does                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--fleet PATH`        | The fleet file to validate or inspect.                                                                           |
+| `--format text\|json` | `text` prints human-readable output. `json` wraps the result in a versioned [command result](CLI-Reference.md). |
 
-With `inspect --format json`, the command result's `data` field holds a `narwhal.effective-config` version 1 document. In text mode, `inspect` prints that same document on its own. `validate --format json` gives you the same data, but only when validation passes.
+With `inspect --format json`, the command result's `data` field holds a `narwhal.effective-config` version 1 document. In text mode, `inspect` prints that document on its own. `validate --format json` emits the same data, but only when validation passes.
 
-The output is deterministic. If you run `inspect` twice with the same file, environment, working directory, and filesystem paths, you'll get byte-for-byte identical JSON, so you can diff two runs to see exactly what changed.
+Output is deterministic: the same file, environment, working directory, and filesystem paths produce byte-identical JSON, so runs can be diffed.
 
 ## Fleet-file values and serving defaults
 
-The document is marked `scope: "fleet_file"` because it shows the fleet file as the loader sees it, with defaults filled in. `settings` follows the `narwhal.fleet` layout with every default populated. You'll see optional engine fields you never set, and `null` for any optional contract, hardware, or shared-device declarations. Any `${VARIABLE}` references in endpoint fields are shown with their values substituted.
+The `narwhal.effective-config` document has `scope: "fleet_file"`: it shows the fleet file as the loader sees it, with defaults filled in. `settings` follows the `narwhal.fleet` layout with every default populated. Optional engine fields left unset appear with their defaults; unset contract, hardware, and shared-device declarations are `null`. `${VARIABLE}` references in endpoint fields are shown with their values substituted.
 
-The engine API key is handled differently. `engine.engine_api_key_env` shows the name of the environment variable, never its value. Engine clients only read the key when they're created, so you can inspect a configuration before the credential even exists.
+The engine API key is the exception. `engine.engine_api_key_env` shows the name of the environment variable, never its value. The key is read only when engine clients are created, so `inspect` works before the credential exists.
 
-`derived` holds values the loader works out rather than reads directly: the engine count, connection-pool and keepalive limits, default admission concurrency, the retained HTTP request limit, and the Uvicorn shutdown timeout (as a whole number of seconds). Two of these are worth understanding:
+`derived` holds values the loader computes: the engine count, connection-pool and keepalive limits, default admission concurrency, the retained HTTP request limit, and the Uvicorn shutdown timeout (in whole seconds). Two defaults:
 
-- If you leave `engine.control_connections` at zero, the loader sets it to `max(4, 2 * engine_count)`. Any positive value you set is used as written.
+- If `engine.control_connections` is zero, the loader sets it to `max(4, 2 * engine_count)`. Any positive value is used as written.
 - Admission concurrency defaults to `serving.max_connections`. The retained HTTP request limit is that number plus `serving.queue_capacity`.
 
-> **Note:** `inspect` shows what's in the fleet file, which isn't necessarily what the running router uses. Flags passed to `narwhal-serve` (`--max-concurrent`, `--journal`, `--graceful-timeout`, and `--resume`) are applied when the router starts and can override these values. To see what a live router is actually using, look at the command line it was started with.
+> **Note:** `inspect` reports fleet-file values. `narwhal-serve` flags (`--max-concurrent`, `--journal`, `--graceful-timeout`, `--resume`) are applied at startup and can override these values. To see what a live router uses, check its command line.
 
 ## Artifact paths
 
-`source` and everything under `artifact_paths` are absolute paths, with any existing symlinks resolved.
+`source` and everything under `artifact_paths` are absolute paths, with existing symlinks resolved.
 
-> **Warning:** Relative paths in the fleet file are resolved from your current working directory, which the output reports as `working_directory`. They are *not* resolved relative to the fleet file's own location. `narwhal-serve` works the same way, so run `inspect` from the directory you'll serve from, or the paths it shows won't match what the router opens.
+> **Warning:** Relative paths in the fleet file are resolved from the current working directory, which the output reports as `working_directory`. They are not resolved relative to the fleet file. `narwhal-serve` behaves the same way, so run `inspect` from the directory you serve from. From any other directory the reported paths differ from the ones the router opens.
 
-`~` and environment variables inside path strings are kept as literal text and aren't expanded.
+`~` and environment variables in path strings stay literal text.
 
-`artifact_paths.profiles` comes from `profiles.path`, and `artifact_paths.state` comes from `recovery.state_path`. The journal defaults to `journal.jsonl` in the same directory as the profiles.
+`artifact_paths.profiles` comes from `profiles.path`, and `artifact_paths.state` comes from `recovery.state_path`. The journal defaults to `journal.jsonl` in the profiles directory.
 
-`inspect` only touches the filesystem to resolve these paths. It doesn't open the profiles or the state file, and it doesn't create anything. The commands that actually use those files take care of that.
+`inspect` only touches the filesystem to resolve these paths. It does not open the profiles or state file and does not create anything.
 
 ## Checking the running fleet
 
-Offline validation tells you the configuration is well-formed and consistent. It can't tell you whether the fleet actually works. Once the engines are up and you've collected profiles, run [`narwhal-check`](cli/Check.md) to test reachability, engine contracts, profile bindings, transfer paths, and SLO gates against the live fleet:
+Offline validation checks that the configuration is well-formed and consistent. It does not test reachability or health. With engines running and profiles collected, run [`narwhal-check`](cli/Check.md) to test reachability, engine contracts, profile bindings, transfer paths, and SLO gates:
 
 ```bash
 narwhal-check --fleet config/fleet.json

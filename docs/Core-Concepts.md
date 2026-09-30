@@ -1,8 +1,8 @@
 # Core concepts
 
-Every engine in a Narwhal fleet serves the same model, and every engine can do either prefill or decode. Narwhal decides which role each one plays at any given moment.
+Every engine in a Narwhal fleet serves the same model, and every engine can perform prefill or decode. Narwhal assigns each engine a role and changes it at runtime.
 
-When Narwhal moves an engine to a different role, the only thing that changes is where new requests go. The model weights stay loaded, the KV paths stay in place, and requests already running on that engine finish where they started.
+A role change redirects new requests. Model weights stay loaded, KV paths stay in place, and requests already running on the engine finish where they started.
 
 ## Concepts
 
@@ -12,9 +12,9 @@ When Narwhal moves an engine to a different role, the only thing that changes is
 
 ## Related reference
 
-- [Backend continuation contract](http-api/03-Backend-and-Failures.md#disaggregated-backend-execution) explains who owns the KV handoff, how same-worker decode works, how descriptors are validated, and where the timing boundaries fall.
-- [Configuration](Configuration.md) covers placement policy, role guards, serving limits, and engine health.
-- [Measure a fleet](Measure.md) shows how to build performance profiles, check transfers, apply deployment load, and collect acceptance evidence.
-- [HTTP API](HTTP-API.md) defines the state documents.
-- [Operate Narwhal](Operate.md) walks through lifecycle and failover procedures.
-- [Source responsibilities](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#source-responsibilities) describes which package owns what, and the rules for importing between them.
+- [Disaggregated backend execution](http-api/03-Backend-and-Failures.md#disaggregated-backend-execution): KV handoff ownership, same-worker decode, descriptor validation, timing boundaries.
+- [Configuration](Configuration.md): placement policy, role guards, serving limits, engine health.
+- [Measure a fleet](Measure.md): performance profiles, transfer checks, deployment load, acceptance evidence.
+- [HTTP API](HTTP-API.md): state documents.
+- [Operate Narwhal](Operate.md): lifecycle and failover procedures.
+- [Source responsibilities](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#source-responsibilities): which package owns what, and import rules between packages.

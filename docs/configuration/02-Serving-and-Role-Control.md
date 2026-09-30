@@ -2,7 +2,7 @@
 
 ## 4. Request admission and bounded serving
 
-By default, Narwhal dispatches each admitted request straight away, with one prefill attempt and one decode attempt. The bounded-serving settings below add waiting for admission, per-phase concurrency limits, and retries.
+By default, Narwhal dispatches each admitted request immediately with one prefill attempt and one decode attempt. The bounded-serving settings add admission waiting, per-phase concurrency limits, and retries.
 
 ### 4.1 Global admission
 
@@ -15,7 +15,7 @@ By default, Narwhal dispatches each admitted request straight away, with one pre
 
 Under predictive admission, a request gets HTTP 429 when even its cheapest prefill path would exceed the TTFT budget. If backlog caused the refusal, the response carries `Retry-After` with the projected wait. If the prompt would miss the target with no backlog at all, the error envelope tells the caller to shorten the prompt or raise the TTFT target.
 
-`narwhal-serve` rejects a `--max-concurrent` override above `serving.max_connections`, which keeps admission inside the dispatch pool. Before raising that limit, measure how much in-flight load the fleet can sustain while staying healthy.
+`narwhal-serve` rejects a `--max-concurrent` override above `serving.max_connections`, which keeps admission inside the dispatch pool.
 
 ### 4.2 Waiting, phase concurrency, and retries
 
@@ -40,11 +40,11 @@ Retries happen only before any output has reached the client, and only for trans
 
 The original deadline covers the whole request: tokenization, queue wait, retry backoff, engine work, and writes to the client.
 
-Set `serving.handoff_timeout_s` below the producer's KV lease, and check separately that the backend releases abandoned handoffs when the lease expires. Queue capacity, phase concurrency, and deadlines should come from measured workload latency and capacity, while the byte limits simply cap how much data the router holds. Every one of these settings changes deployment capacity, so repeat the workload measurement after changing any of them.
+Set `serving.handoff_timeout_s` below the producer's KV lease, and check separately that the backend releases abandoned KV handoffs when the lease expires. Derive queue capacity, phase concurrency, and deadlines from measured workload latency and capacity, and measure how much in-flight load the fleet sustains while healthy before raising `serving.max_connections`. The byte limits only cap how much data the router holds. Re-measure after changing any of these settings.
 
 ### 4.3 Streaming failure semantics
 
-Prefill failures and non-streaming decode failures come back as HTTP errors. Streaming works differently, because the response commits to HTTP 200 before decode starts. A decode failure after that point, even one before the first generated token, arrives as a terminal error event in the stream. When the request deadline runs out, Narwhal sends `code: expired` and closes the stream. Client backpressure closes the connection immediately.
+Prefill failures and non-streaming decode failures come back as HTTP errors. Streaming responses commit to HTTP 200 before decode starts, so a decode failure after that point, including one before the first generated token, arrives as a terminal error event in the stream. When the request deadline runs out, Narwhal sends `code: expired` and closes the stream. Client backpressure closes the connection immediately.
 
 Clients should treat an error event, or a stream that ends without the success terminator, as a failed response. Any client-side retry has to fit within what is left of the caller's deadline.
 
@@ -52,9 +52,9 @@ Clients should treat an error event, or a stream that ends without the success t
 
 ## 5. Placement
 
-Placement narrows the candidate engines by role, then availability, then exclusions, then projected SLO compliance, and picks the cheapest engine that remains. Ties between equal-cost candidates are broken deterministically by instance ID. If every candidate would miss its projected SLO, Narwhal records the placement as unserved and falls back to the cheapest candidate. Engine-side prefix caching plays no part in these decisions.
+Placement narrows the candidate engines by role, then availability, then exclusions, then projected SLO compliance, and picks the cheapest engine that remains. Ties between equal-cost candidates are broken deterministically by instance ID. If every candidate would miss its projected SLO, Narwhal records the placement as unserved and falls back to the cheapest candidate. Placement does not model engine-side prefix caching.
 
-A live role change applies to new placements straight away. Requests already resident keep their engine and reservation until they complete or are canceled, and lifecycle drains, quarantine, ejection, and restart holds all stay in force while roles change.
+A live role change applies to new placements immediately. Requests already resident keep their engine and reservation until they complete or are canceled, and lifecycle drains, quarantine, ejection, and restart holds all stay in force while roles change.
 
 Being admitted does not guarantee completion. If the fleet admits more work than its engines can drain before KV handoffs expire, decode can fail for requests that admission accepted.
 
@@ -78,11 +78,11 @@ Being admitted does not guarantee completion. If the fleet admits more work than
 | `engine.connect_timeout_s`            | `10.0`                 | TCP-connect deadline for engine requests. Positive.                                                                                                                  |
 | `engine.health_timeout_s`             | `5.0`                  | HTTP I/O timeout for preflight, breaker, and readmission health probes. Positive.                                                                                    |
 
-Set `engine.first_token_timeout_s` above the candidate value from a [completed crossed-handoff calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and point `engine.first_token_calibration_path` at that artifact. `narwhal-check` compares the artifact with the configured value and the current engine generations. A stale or insufficient artifact fails preflight and blocks router startup. An empty path is allowed, but preflight warns about it and so does the router's startup log.
+Set `engine.first_token_timeout_s` above the candidate value from a [completed crossed-handoff calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and point `engine.first_token_calibration_path` at that artifact. `narwhal-check` compares the artifact with the configured value and the current engine generations. A stale or insufficient artifact fails preflight and blocks router startup. An empty path is allowed; preflight and the router startup log both warn about it.
 
-The first-token clock starts before the decode HTTP stream is opened and stops when the first generated token arrives, so connection setup and response-header delays come out of the same budget. Breaker verification applies the limit separately to each complete prefill and decode verification leg.
+The first-token clock starts before the decode HTTP stream is opened and stops when the first generated token arrives, and includes connection setup and response-header delays. Breaker verification applies the limit separately to each complete prefill and decode verification leg.
 
-After the first token, `engine.decode_read_timeout_s` limits the silent gap between transport chunks. Partial SSE lines and metadata chunks both reset the timer. Choose the value from measured inter-chunk gaps and the service's failure budget, or set it to `0` so that the overall request deadline bounds the stream after the first token:
+After the first token, `engine.decode_read_timeout_s` limits the silent gap between transport chunks. Partial SSE lines and metadata chunks both reset the timer. Choose the value from measured inter-chunk gaps and the service's failure budget. At `0`, only the overall request deadline bounds the stream after the first token:
 
 ```json
 {
@@ -94,9 +94,9 @@ After the first token, `engine.decode_read_timeout_s` limits the silent gap betw
 
 `serving.request_timeout_s` covers the entire request, including decode streaming, so derive it from the supported output length and the client's deadline. The prefill and first-token limits cannot exceed it. Set `serving.prefill_timeout_s` from measurements of the longest admitted inputs under the supported load. For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the probe's HTTP timeout instead.
 
-When prefill, tokenization, and health calls apply their own phase timeout, the connection and pool limits still apply, and whichever budget expires first ends the call. Base `engine.connect_timeout_s` and `engine.pool_timeout_s` on connection setup times and pool waits measured under the intended load, and base `engine.health_timeout_s` on the health and identity latency you see under that same load. A health probe that times out counts as a failed liveness observation.
+When prefill, tokenization, and health calls apply their own phase timeout, the connection and pool limits still apply, and whichever budget expires first ends the call. Set `engine.connect_timeout_s` and `engine.pool_timeout_s` from connection setup times and pool waits measured under the intended load, and set `engine.health_timeout_s` from the health and identity latency measured under that same load. A health probe that times out counts as a failed liveness observation.
 
-For text and chat inputs with `engine.tokenize` enabled, Narwhal asks the dialect's exact-count route for the input length. That route must answer within `engine.tokenize_timeout_s`, and if the call fails the client gets an engine error. When counting is disabled, or the dialect has no exact-count route, Narwhal estimates the length with `engine.chars_per_token`. The same ratio feeds the quadratic prefill estimate, so measure it for the served tokenizer and for every dialect that relies on the fallback. A completion prompt given as a nonempty, flat list of nonnegative integer token IDs is always counted locally by its length, whatever `engine.tokenize` is set to.
+For text and chat inputs with `engine.tokenize` enabled, Narwhal asks the dialect's exact-count route for the input length. That route must answer within `engine.tokenize_timeout_s`, and a failed call returns an engine error to the client. When counting is disabled, or the dialect has no exact-count route, Narwhal estimates the length with `engine.chars_per_token`. The same ratio feeds the quadratic prefill estimate, so measure it for the served tokenizer and for every dialect that relies on the fallback. A completion prompt given as a nonempty, flat list of nonnegative integer token IDs is always counted locally by its length, whatever `engine.tokenize` is set to.
 
 ---
 
@@ -118,13 +118,13 @@ For text and chat inputs with `engine.tokenize` enabled, Narwhal asks the dialec
 | `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a D-to-P candidate. `0` disables the guard.                                                    |
 | `controller.flip_history`                   | `1000`  | Maximum number of role-change records kept and exposed by `/narwhal/state`. At least 1.                                                   |
 
-`recovery.health.min_samples` must not exceed `floor(recovery.health.window_s / controller.monitor_interval_s)`, because each monitor pass contributes at most one residual per engine. Even within that bound, delayed passes can leave a window undersampled.
+`recovery.health.min_samples` must not exceed `floor(recovery.health.window_s / controller.monitor_interval_s)`, because each monitor pass contributes at most one residual per engine. Delayed passes can undersample a window even within that bound.
 
 ### 7.1 Load definitions
 
 Prefill load is predicted prefill work divided by the TTFT target.
 
-Decode load needs a little more setup. The corrected idle floor is the profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) multiplied by the engine's bounded ratio of live to profiled decode latency. Subtracting that floor from the TPOT target gives the remaining TPOT budget. Decode load is the observed token interval above the floor divided by the remaining budget, and it never goes below zero. If the idle floor alone reaches the TPOT target, Narwhal uses the raw ratio of interval to target instead.
+Decode load is computed from a corrected idle floor. The corrected idle floor is the profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) multiplied by the engine's bounded ratio of live to profiled decode latency. Subtracting that floor from the TPOT target gives the remaining TPOT budget. Decode load is the observed token interval above the floor divided by the remaining budget, and it never goes below zero. If the idle floor alone reaches the TPOT target, Narwhal uses the raw ratio of interval to target instead.
 
 For either phase, a load of `1.0` means the target has been reached.
 
@@ -134,11 +134,17 @@ For either phase, a load of `1.0` means the target has been reached.
 
 Pins, drains, quarantine, and health ejections can leave too few movable engines to satisfy a floor. When that happens, Narwhal reports the breach and keeps the safest split it can reach. No role change ever takes the fleet below `controller.min_decode`.
 
-If live decode capacity falls below its floor, the monitor skips the normal cooldown and restores one eligible engine per pass, though it still respects each engine's dwell time. Prefill-floor recovery ignores both cooldown and dwell, but pins, engine availability, both floors, and advisory mode still apply. Every floor recovery records a dwell timestamp and counts toward the `controller.flip_history` limit like any other role change. Once capacity returns, the split goes back through the ordinary adjacent-split decision.
+If live decode capacity falls below its floor, the monitor skips the normal cooldown and restores one eligible engine per pass, though it still respects each engine's dwell time. Prefill-floor recovery ignores cooldown and dwell. Pins, engine availability, the role floors, and advisory mode still apply. Every floor recovery records a dwell timestamp and counts toward the `controller.flip_history` limit like any other role change. Once capacity returns, the split goes back through the ordinary adjacent-split decision.
 
 ### 7.3 Resident work during role changes
 
-Before turning decode capacity into prefill capacity, the controller checks three things: the proposed split stays inside the measured profile domain, the resident decode batches stay inside it too, and there is enough KV capacity to hold the resident work. Engine restarts and operator drains take an engine out of consideration by marking it unavailable.
+Before turning decode capacity into prefill capacity, the controller checks that:
+
+- the proposed split is inside the measured profile domain,
+- the resident decode batches are inside it too, and
+- there is enough KV capacity to hold the resident work.
+
+Engine restarts and operator drains mark an engine unavailable, which removes it from consideration.
 
 ### 7.4 Advisory rollout
 
@@ -164,19 +170,19 @@ A nonurgent proposal must be confirmed `max(controller.reactive.confirmations, c
 
 Prefill-to-decode moves require prefill pressure at or below `shrink` and must respect the decode cooldown.
 
-During overload, the movement margin, confirmations, consolidation evidence, and dwell stop roles from flipping back and forth. They do not cure the overload. Meeting SLOs under sustained overload takes less offered demand or more serving capacity.
+During overload, the movement margin, confirmations, consolidation evidence, and dwell prevent role oscillation. Restoring SLO attainment requires lower offered demand or more serving capacity.
 
 ### 7.6 Evidence gating for D-to-P consolidation
 
-Decode-to-prefill consolidation waits for a closed arrival-evidence window. The window closes once `controller.reactive.evidence_span_s` has passed with at least `controller.reactive.evidence_min_arrivals` samples, or, when traffic is sparse, once `controller.reactive.evidence_max_span_s` has passed.
+Decode-to-prefill (D-to-P) consolidation waits for a closed arrival-evidence window. The window closes once `controller.reactive.evidence_span_s` has passed with at least `controller.reactive.evidence_min_arrivals` samples, or, when traffic is sparse, once `controller.reactive.evidence_max_span_s` has passed.
 
-Decode demand also has to be stable. As soon as the short horizon holds at least `controller.reactive.evidence_min_arrivals` samples, consolidation pauses whenever:
+Decode demand must also be stable. Once the short horizon holds at least `controller.reactive.evidence_min_arrivals` samples, consolidation pauses while:
 
 ```text
 short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_rise_tolerance)
 ```
 
-Candidates are priced with the larger of the two demand estimates, counting both resident and pending decode work. A first-token timeout or a prefill-to-decode recovery move resets the evidence window. Moves toward decode, including emergency floor restoration, don't have to wait for the window to close. While it is still filling, predictive admission refusals count toward offered demand and attainment misses.
+Candidates are priced with the larger of the two demand estimates, counting both resident and pending decode work. A first-token timeout or a prefill-to-decode recovery move resets the evidence window. Moves toward decode, including emergency floor restoration, proceed without waiting for the window to close. While the window is filling, predictive admission refusals count toward offered demand and attainment misses.
 
 State and metrics show the short and long demand estimates, the state of the evidence window, and whichever gate is currently blocking movement.
 
@@ -200,4 +206,4 @@ State and metrics show the short and long demand estimates, the state of the evi
 | `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction. Range `(0, 1]`.                                                                                    |
 | `controller.reactive.decode_correction_min_samples` | `8`     | Decode gaps a window needs before it updates the correction. At least 1.                                                                                                     |
 
-Demand is priced with the mean profile across the configured engines. Decode profiles treat active requests and resident KV tokens as separate inputs, and recent token intervals apply a bounded correction to the profile's estimate. Every configured engine shares one hardware and TP shape, so these measurements describe the whole fleet. After changing the engine build or serving policy, repeat preflight and the deployment-load measurements.
+Demand is priced with the mean profile across the configured engines. Decode profiles treat active requests and resident KV tokens as separate inputs. Recent token intervals correct the profile's estimate, clamped to `decode_correction_min` through `decode_correction_max` and updated with `decode_correction_alpha`. Every configured engine shares one hardware and TP shape, so these measurements describe the whole fleet. After changing the engine build or serving policy, repeat preflight and the deployment-load measurements.

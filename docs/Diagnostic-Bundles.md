@@ -1,8 +1,8 @@
 # Collect diagnostic bundles
 
-When something goes wrong, `narwhal diagnostics collect` gathers what you need to investigate into one private directory. It queries the router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics` endpoints, and copies the local files you point it at.
+`narwhal diagnostics collect` writes a private directory containing the router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics` responses, plus copies of the local files you name.
 
-It only reads. Every HTTP call is a GET, and local files are copied without being changed. It won't restart or manage the router or engines either. Whatever supervises them at your site is still responsible for that.
+The command is read-only. It issues only GET requests, copies local files unchanged, and does not restart or manage the router or engines.
 
 ```bash
 mkdir -p runs/diagnostics
@@ -14,7 +14,7 @@ narwhal diagnostics collect \
   --format json
 ```
 
-The parent directory has to exist already, and the `--out` directory must not. If `--out` already exists, the command stops before collecting anything, so use a new path for each router. The bundle directory is created with mode `0700` and its files with `0600`, which keeps them readable only by you. Relative paths resolve from your working directory.
+`--out` must not exist, and its parent must. If `--out` exists, the command stops before collecting anything. Use a new path for each router. The bundle directory is created with mode `0700` and its files with `0600`. Relative paths resolve from the working directory.
 
 ## Source selection
 
@@ -23,7 +23,7 @@ The parent directory has to exist already, and the `--out` directory must not. I
 | `--router URL`              | Required. The router's HTTP or HTTPS base URL: host, port, and optionally a path.                                                                                                                       |
 | `--out PATH`                | Required. A new directory, inside a parent that already exists.                                                                                                                                         |
 | `--fleet PATH`              | A fleet JSON file.                                                                                                                                                                                      |
-| `--instance PATH`           | A dev instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run recorded in its lifecycle state. That run has to live inside the instance directory. Can't be combined with `--run`. |
+| `--instance PATH`           | A dev instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run recorded in its lifecycle state. That run must live inside the instance directory. Can't be combined with `--run`. |
 | `--run PATH`                | One existing run directory. Can't be combined with `--instance`.                                                                                                                                        |
 | `--artifact PATH`           | Any other regular file. Repeat the option to add more.                                                                                                                                                  |
 | `--source-timeout SECONDS`  | How long to wait for each source. Default `5`.                                                                                                                                                          |
@@ -32,48 +32,66 @@ The parent directory has to exist already, and the `--out` directory must not. I
 | `--include-request-content` | Also export prompts, completions, and journal entries. See [Content policy](#content-policy).                                                                                                           |
 | `--format text\|json`       | A readable summary, or a [command result](Command-Results.md).                                                                                                                                          |
 
-When you select a run, the bundle gets `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, the command and stage records, process logs, and each stage's stdout and stderr. It also picks up JSON files, logs, and stage output sitting directly inside any `engine-*` or `verify-*` directory. `journal.jsonl` and completion files are only included with `--include-request-content`.
+A selected run contributes:
 
-For anything kept elsewhere, such as supervisor status, ingress logs, or deployment evidence, use `--artifact`. Each one has to be a regular file, and the collector refuses any path that passes through a symbolic link.
+- `fleet.json`, `profiles.json`, `teardown.json`, and `router-state.json`
+- the command and stage records, process logs, and each stage's stdout and stderr
+- JSON files, logs, and stage output directly inside any `engine-*` or `verify-*` directory
+
+`journal.jsonl` and `completion.json` are included only with `--include-request-content`.
+
+For anything kept elsewhere, such as supervisor status, ingress logs, or deployment evidence, use `--artifact`. Each one must be a regular file. The collector refuses any path that passes through a symbolic link.
 
 ### Size and time limits
 
-If a source is larger than `--max-source-bytes`, the collector keeps that many bytes, marks the source `truncated`, and moves on to the next one while there's time left in the overall budget.
+If a source is larger than `--max-source-bytes`, the collector keeps that many bytes, marks the source `truncated`, and moves on to the next source while time remains in the overall budget.
 
-The per-source timeout covers the whole HTTP response, body included. If a response stalls halfway through, you still get its status code and whatever part of the body had arrived.
+The per-source timeout covers the whole HTTP response, body included. If a response stalls partway through, the bundle keeps its status code and the part of the body that arrived.
 
-> **Warning:** Collect from local disks where you can. The collector checks the deadline between reads, but it can't interrupt a read that's already blocked. If a network mount stops responding, a single read can hang well past `--source-timeout` and `--timeout`.
+> **Warning:** Timeouts are checked between reads and cannot interrupt a read that is already blocked. A hung network mount can exceed `--source-timeout` and `--timeout`. Collect from local disks.
 
 ## Manifest and exit status
 
-Every bundle contains a `manifest.json` (format `narwhal.diagnostic-bundle`, version 1). It records when collection started and finished, how long it took, the package version and source digest, and which inclusion policy was in effect. It then has one row per source with the path or URL, when it was collected, the outcome, and the error if there was one. Rows for HTTP sources also carry the status code and content type.
+Every bundle contains a `manifest.json` (format `narwhal.diagnostic-bundle`, version 1). It records:
 
-Every exported file has its size and SHA-256 hash recorded. Each local file's row also stores the original's modification time and, if the file was read all the way through, the original's hash, so you can tell later whether the file has changed since. Output filenames are generated rather than copied from the source, which stops a path or credential from leaking out through a filename.
+- when collection started and finished, and how long it took
+- the package version and source digest
+- which inclusion policy was in effect
+- one row per source: path or URL, collection time, outcome, and the error if there was one. HTTP rows also carry the status code and content type.
 
-The manifest's `status` is `success` only if every selected source was collected in full. If anything failed, returned an HTTP error status, timed out, hit the byte limit, or was excluded by the content policy, the status is `partial`. A router that isn't ready answers `/ready` with `503`, so a bundle collected from it is always partial. A single oversized log is enough to make a bundle partial, so check the individual rows before assuming something is broken.
+Every exported file has its size and SHA-256 hash recorded. Each local file's row also stores the original's modification time and, if the file was read completely, the original's hash, so you can tell later whether the file has changed. Output filenames are generated, which keeps source paths and credentials out of filenames.
 
-If writing one exported file fails, that source gets a `write_error` row and collection carries on with the rest. If the manifest itself can't be written, the command exits with status `4`.
+The manifest's `status` is `success` only if every selected source was collected in full. Any of the following makes it `partial`:
 
-| Exit status | Meaning                                                             | What to do                                                                                           |
-| ----------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `0`         | The bundle is complete.                                             | Start investigating, or hand the bundle over.                                                        |
-| `2`         | The arguments are invalid, `--out` already exists, or its parent directory doesn't. | Fix the arguments. Check that the parent directory exists and `--out` doesn't.         |
-| `3`         | The bundle is partial.                                              | Look at each source's outcome in `manifest.json` to see what's missing and why.                      |
-| `4`         | An I/O error, such as a permission error, stopped the command.      | Read the error, check that you can write to the parent directory, then look at what was left in the output directory. |
+- a source failed or timed out
+- an HTTP source returned an error status
+- a source hit the byte limit (`truncated`)
+- a source was `excluded` (see [Content policy](#content-policy))
 
-With `--format json`, the command result gives you the bundle path, the manifest path, the collection status, and the number of sources. Its artifact entry tells you whether this particular run created the manifest. A partial bundle (exit `3`) is reported with command status `degraded` and error code `collection_partial`.
+A router that isn't ready answers `/ready` with `503`, so a bundle collected from it is always partial.
+
+If writing one exported file fails, that source gets a `write_error` row and collection continues. If the manifest itself can't be written, the command exits with status `4`.
+
+| Exit status | Meaning                                                                             | What to do                                                                  |
+| ----------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `0`         | The bundle is complete.                                                             | None.                                                                       |
+| `2`         | The arguments are invalid, `--out` already exists, or its parent doesn't.           | Fix the arguments.                                                          |
+| `3`         | The bundle is partial.                                                              | Check each source's outcome in `manifest.json` to see what's missing and why. |
+| `4`         | An I/O error, such as a permission error, stopped the command.                      | Read the error, check write access to the parent directory, then inspect the output directory. |
+
+With `--format json`, the command result reports the bundle path, manifest path, collection status, and source count. The artifact entry indicates whether this run created the manifest. A partial bundle (exit `3`) is reported with command status `degraded` and error code `collection_partial`.
 
 ## Content policy
 
-By default, bundles leave out request content. `journal.jsonl` and `completion.json` aren't exported. Any structured field named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output` is replaced with `[REDACTED]`. Pass `--include-request-content` if you need them. Credentials are redacted either way.
+By default, bundles leave out request content. `journal.jsonl` and `completion.json` aren't exported. Any structured field named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output` is replaced with `[REDACTED]`. Pass `--include-request-content` to keep them. Credentials are redacted either way.
 
-The collector removes credential values from known credential fields, authorization headers, URLs with embedded credentials, credential query parameters, and launch arguments. When a JSON source refers to a secret with a `*_env` field, the collector looks up that variable so it knows which value to remove, then leaves the variable's name in the export. It also scrubs the value of any environment variable whose name marks it as a credential.
+The collector removes credential values from known credential fields, authorization headers, URLs with embedded credentials, credential query parameters, and launch arguments. When a JSON source refers to a secret with a `*_env` field, the collector looks up that variable to identify the value to remove, and leaves the variable's name in the export. It also scrubs the value of any environment variable whose name marks it as a credential.
 
-Some files are never exported, even if you name them explicitly: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`. They appear in the manifest with the outcome `excluded`.
+Some files are never exported, even when you name them explicitly: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`. They appear in the manifest with the outcome `excluded`.
 
-JSON and JSONL files keep their structure after redaction. Free-text logs and incomplete JSON are harder to redact safely, so the collector is blunter with them. When it finds a labeled credential or request field, the retained text stops at that point, and nothing after it in that source is exported. That way a value spread over several lines, or cut off by truncation, can't slip through. Ordinary log lines before that point are kept.
+JSON and JSONL files keep their structure after redaction. For free-text logs and incomplete JSON, output is cut at the first labeled credential or request field, and nothing after it in that source is exported. This covers values that span several lines or are cut off by truncation. Ordinary log lines before that point are kept.
 
-> **Warning:** Redaction only recognizes the labeled fields and formats described above. If your application writes credentials or request content into logs some other way, the collector won't catch them. Filter those logs yourself and pass the filtered copies with `--artifact`.
+> **Warning:** Redaction covers only the fields and formats above. The collector does not catch credentials or request content that an application writes into logs in other ways. Filter those logs yourself and pass the filtered copies with `--artifact`.
 
 ## Manual collection
 

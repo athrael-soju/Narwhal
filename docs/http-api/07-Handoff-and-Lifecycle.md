@@ -1,10 +1,10 @@
 # Failover handoff and engine restarts
 
-## HA handoff
+## Failover handoff
 
 ### `GET /narwhal/handoff`
 
-Standby routers poll this endpoint to copy the active router's roles, counters, lifecycle state, and demand risk, so they're up to date if they have to take over. Operators can read it too. Serve it only on the trusted control network.
+Standby routers poll this endpoint to copy the active router's roles, counters, lifecycle state, and demand risk, so they are up to date if they have to take over. Operators can also read it. Expose it on the trusted control network only.
 
 ### Handoff fields
 
@@ -27,31 +27,53 @@ Standby routers poll this endpoint to copy the active router's roles, counters, 
 
 `demand_risk` holds the event's `kind`, its age in `age_s`, and `events`, a count for each kind. The receiving router converts `age_s` to its own clock and starts gathering fresh arrival evidence.
 
-Package and Git provenance aren't in the handoff. They live in the request-journal header.
+Package and Git provenance are not in the handoff. They live in the request-journal header.
 
 ### Restored and process-local state
 
-A handoff carries over the running totals `served`, `failed`, `unserved`, `refused`, `rejected`, and `cancelled`, along with the roles, ejections, lifecycle state, and demand risk listed above. These start fresh in the new process: resident tracking, flip history, role-change and controller-decision counters, latency histograms, floor history, and monitoring-failure counters.
+A handoff carries over the running totals `served`, `failed`, `unserved`, `refused`, `rejected`, and `cancelled`, along with the roles, ejections, lifecycle state, and demand risk. These start fresh in the new process: resident tracking, flip history, role-change and controller-decision counters, latency histograms, floor history, and monitoring-failure counters.
 
-Narwhal also writes the current handoff to `recovery.state_path`, and `narwhal-serve --resume` reads it back after a restart. A warm standby instead polls `/narwhal/handoff`, keeps the latest snapshot that passes lease validation, and applies it when it takes control.
+Narwhal also writes the current handoff to `recovery.state_path`, and `narwhal-serve --resume` reads it back after a restart. A warm standby polls `/narwhal/handoff`, keeps the latest snapshot that passes lease validation, and applies it when it takes control.
 
 ## Lifecycle API
 
 ### `GET /narwhal/lifecycle`
 
-Returns a `narwhal.lifecycle` document, schema version `1`. `router.controls_fleet` is `true` only on the router that controls the fleet; it's `false` on a standby or a fenced router. `router.ready` shows whether the router is admitting clients.
+Returns a `narwhal.lifecycle` document, schema version `1`.
 
-Each engine record shows the engine's `state` (`active`, `draining`, `drained`, `deadline_exceeded`, `validating`, or `blocked`), whether it's `draining`, whether the scheduler will give it new work (`accepts_new`), and `ready_to_stop`. It also has the resident prefill and decode counts, the deadline, whether a restart is required, the wave ID, the process-start timestamps before and after the restart, the validation checks, and any error.
+| Field                     | Meaning                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `router.controls_fleet`   | `true` only on the router that controls the fleet; `false` on a standby or a fenced router                                     |
+| `router.ready`            | Whether the router is admitting clients                                                                                        |
+| `wave.id`, `wave.active`  | The current wave ID and whether a wave is active                                                                               |
+| `wave.ready_to_stop`      | Whether every engine in the wave is safe for the external supervisor to stop                                                   |
+| `engines`                 | Per-engine records, keyed by engine ID (see below)                                                                             |
+| `engine_restart_policy`   | The configured restart policy                                                                                                  |
+| `process_starts`          | Each engine ID mapped to its last accepted process-start timestamp                                                             |
+| `events`                  | Up to 200 recent lifecycle events                                                                                              |
+| `error`                   | Empty on success; on a non-2xx response, the reason the action was rejected                                                    |
 
-The wave record shows whether router-wide readiness has been withdrawn and whether every engine in the wave is safe for the external supervisor to stop.
+Each engine record has these fields:
 
-At the top level, `engine_restart_policy` is the configured restart policy, `process_starts` maps each engine ID to its last accepted process-start timestamp, and `events` lists up to 200 recent lifecycle events. `error` is empty on success; on a non-2xx response it holds the reason the action was rejected.
+| Field                                     | Meaning                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `state`                                   | `active`, `draining`, `drained`, `deadline_exceeded`, `validating`, or `blocked`            |
+| `draining`                                | Whether the engine is draining                                                              |
+| `accepts_new`                             | Whether the scheduler will give the engine new work                                         |
+| `ready_to_stop`                           | Whether the engine is safe for the external supervisor to stop                              |
+| `resident`                                | Resident prefill and decode counts                                                          |
+| `deadline_at`                             | Drain deadline                                                                              |
+| `restart_required`                        | Whether a restart is required                                                               |
+| `wave_id`                                 | ID of the wave the engine belongs to                                                        |
+| `old_process_start`, `new_process_start`  | Process-start timestamps before and after the restart                                       |
+| `checks`                                  | Validation checks that have run                                                             |
+| `error`                                   | The engine's last error, if any                                                             |
 
-## Draining engines
+## Drain
 
 ### `POST /narwhal/lifecycle/drain`
 
-Starts a drain on a single engine, or on the whole fleet as a wave. Targets are taken out of placement before Narwhal records their process identity. Draining the whole fleet also withdraws the router's `/ready`.
+Starts a drain on a single engine, or on the whole fleet as a wave. Narwhal removes the targets from placement first, then records their process identity. Draining the whole fleet also withdraws the router's `/ready`.
 
 ```json
 {
@@ -74,11 +96,11 @@ A successful drain returns HTTP `200` with the lifecycle document.
 | `503` | This router doesn't control the fleet, or lost control during the drain                                                                                                                                     |
 | `503` | Process identity couldn't be captured. The target stays out of placement; send the same drain request again to retry                                                                                        |
 
-## Readmitting engines
+## Readmit
 
 ### `POST /narwhal/lifecycle/readmit`
 
-Readmission needs a complete `engine_contract`. Send the ID of the engine to bring back:
+Readmission requires a complete `engine_contract`. Send the ID of the engine to bring back:
 
 ```json
 {
@@ -86,21 +108,24 @@ Readmission needs a complete `engine_contract`. Send the ID of the engine to bri
 }
 ```
 
-Name exactly one drained or blocked engine. While a wave is active, set `"wave": true` and name the wave's complete engine set, or leave `engines` out to select every configured engine. A successful readmission returns HTTP `200` with the lifecycle document. A request that doesn't fit these rules gets HTTP `409`, and a router that doesn't control the fleet, or loses control during validation, returns `503`.
+Name exactly one drained or blocked engine. While a wave is active, set `"wave": true` and name the wave's complete engine set, or leave `engines` out to select every configured engine. A successful readmission returns HTTP `200` with the lifecycle document.
+
+|  HTTP | Meaning                                                                                                        |
+| ----: | -------------------------------------------------------------------------------------------------------------- |
+| `409` | The request violates the rules above, or the candidate failed validation and stays blocked                     |
+| `503` | This router doesn't control the fleet, or lost control during validation                                       |
 
 Before lifting the engine's lifecycle hold, Narwhal runs these checks in order:
 
 1. health
 2. process-bound attestation
-3. loaded profile generations against the verified live generation
+3. loaded profile generations against the verified live generation. This covers every loaded profile variant for the candidate and for each peer its role is allowed to exchange KV with. A missing profile, missing generation evidence, or a digest mismatch fails validation, and the error names the engine that needs reprofiling.
 4. configured model
-5. direct generation
+5. `generation`, a direct completion probe
 6. role-compatible KV transfer
 7. final health
 
-The profile-generation check looks at every loaded profile variant for the candidate and for each peer its role is allowed to exchange KV with. A missing profile, missing generation evidence, or a digest mismatch keeps the candidate out, and the error names the engine that needs reprofiling. The `generation` check is the direct completion probe.
-
-After a planned restart, the hold is released only once the engine reports a process start newer than the drain record. After a transient breaker ejection, the running process can be validated and readmitted as it is. Candidates that fail validation stay blocked, and the request returns HTTP `409`.
+After a planned restart, the hold is released only once the engine reports a process start newer than the drain record. After a transient breaker ejection, the running process can be validated and readmitted as it is, without a restart.
 
 To pick up updated profiles, restart the router with its lifecycle hold preserved, as described in [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles), then send the readmission request again.
 
@@ -108,4 +133,4 @@ To pick up updated profiles, restart the router with its lifecycle hold preserve
 
 With `recovery.engine_restart_policy: whole_wave`, drain and readmission always act on the entire fleet. The drain records each engine's process start. Once `wave.ready_to_stop` is true, restart the fleet through its supervisor. Readmission brings the wave back into service only after every replacement passes validation with a newer process start.
 
-[Operate Narwhal](../operate/03-Restart-Engines.md#7-restart-one-engine) walks through the external-supervisor restart sequence and the whole-wave requirements.
+For the external-supervisor restart sequence and the whole-wave requirements, see [Restart one engine](../operate/03-Restart-Engines.md#7-restart-one-engine).

@@ -22,15 +22,18 @@
 
 ### Both routers return 503
 
-Each router reports a refusal reason, and that tells you what to fix. If the cause is lease storage or clock bounds, repair it without deleting the lease or unfencing a router just to get traffic moving. Shortcuts like that are how you end up with two primaries. The fix is done when exactly one router is active.
+Each router reports a refusal reason. Use it to find the fault. If the cause is lease storage or clock bounds, repair it. Do not delete the lease or unfence a router to restore traffic, because this can produce two active primaries. Recovery is complete when exactly one router is active.
 
 ### Handoff is stale or incompatible
 
-A standby reports `no fresh handoff` in two cases: the handoff from the previous lease epoch has expired, or the previous router exited before it wrote one. A router will also hold `/ready` at HTTP 503 if the handoff has an incompatible contract version or the wrong epoch.
+A standby holds `/ready` at HTTP 503 for these reasons:
 
-Keep client traffic stopped while you restore a router release and a state set that are compatible with each other.
+- `no fresh handoff`: the handoff from the previous lease epoch has expired, or the previous router exited before it wrote one.
+- The handoff has an incompatible contract version or the wrong epoch.
 
-If the handoff can't be recovered, schedule a maintenance window and start a single router from its configured opening roles. Before you let traffic in, confirm that the previous router process is stopped or fenced.
+Keep client traffic stopped. Restore a router release and a state set that are compatible with each other.
+
+If the handoff cannot be recovered, schedule a maintenance window and start a single router from its configured opening roles. Before you route traffic to it, confirm that the previous router process is stopped or fenced.
 
 ## Router rollback
 
@@ -42,16 +45,16 @@ If the handoff can't be recovered, schedule a maintenance window and start a sin
    narwhal-check --print-contract-versions
    ```
 
-4. Restore configuration, profiles, and a handoff version the rollback build can read.
+4. Restore the configuration, profiles, and a handoff whose contract version the rollback build supports.
 
-   If you'd rather start from the configured opening roles and reset cumulative counters, set `recovery.resume` to `false` in the fleet config and start the router without `--resume`.
+   To start from the configured opening roles and reset cumulative counters, set `recovery.resume` to `false` in the fleet config and start the router without `--resume`.
 
 5. Before it serves traffic, confirm that fleet control belongs to the rollback router or to its HA peer.
    <!-- TODO: The original said "its fenced HA peer". A fenced router shouldn't control the fleet, so confirm what this check is meant to verify. -->
 
-6. Start the rollback build and check its health, readiness, roles, cumulative counters, and one completion request. Roles and counters should match the handoff you restored, unless you set `resume: false`.
+6. Start the rollback build and check its health, readiness, roles, cumulative counters, and one completion request. Roles and counters should match the handoff you restored, unless you set `recovery.resume` to `false`.
 
 7. Once those checks pass, put it back in service. Restore its standby after the active router is stable.
    <!-- TODO: Define "stable" (time window, error rate, or specific signal). -->
 
-After the router is back in service, run the [post-recovery drills](../Troubleshoot.md#after-recovery).
+Then run the [post-recovery drills](../Troubleshoot.md#after-recovery).

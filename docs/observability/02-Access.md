@@ -1,24 +1,24 @@
 # Open the dashboards
 
-By default, Grafana and Prometheus listen only on the router host's loopback address. To use them from your workstation, reach them over SSH.
+Grafana and Prometheus listen on the router host's loopback address by default. Reach them from your workstation through an SSH tunnel.
 
 ## From your workstation
 
-If the tunnel from [Serve and Measure](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) is already running with the monitoring ports forwarded, you can use it. Otherwise, open one just for monitoring. Run this from your management checkout with the workstation `.env` loaded:
+If the tunnel from [Serve and Measure](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards the monitoring ports, reuse it. Otherwise open one from your management checkout with the workstation `.env` loaded:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:9090
 ```
 
-Leave it running, then open:
+With the tunnel running, open:
 
 - Grafana: `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`
 - Prometheus: `http://127.0.0.1:19090`
 
-Grafana allows anonymous Viewer access, so you won't need to log in through the tunnel. If you expose Grafana or Prometheus any other way, put it behind the same ingress, authentication, and TLS setup as the rest of the deployment.
+Grafana allows anonymous Viewer access, so the tunnel requires no login. Prometheus has no authentication. Binding either service to a non-loopback address exposes it to anyone who can reach that address. Put any other exposure behind ingress with authentication and TLS.
 
-The [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) explains how to choose which routers and engines the dashboard shows.
+To select the routers and engines the dashboard shows, see the [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard).
 
 ## Run a second monitoring stack on the same host
 
@@ -30,9 +30,9 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-You don't need to update Grafana's Prometheus datasource by hand; it follows whatever listener you set. If you bind Prometheus to a wildcard address, Grafana and the readiness checks connect to it over loopback.
+Grafana's Prometheus datasource follows the configured listener. If you bind Prometheus to a wildcard address such as `0.0.0.0`, Grafana and the readiness checks connect to it over loopback.
 
-Then point your tunnel at the new address. Prometheus is on port 19090 in this example, so the second forward changes too:
+Point the tunnel at the new address. Prometheus now listens on 19090, so the remote side of its forward changes from 9090 to 19090:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \

@@ -20,8 +20,8 @@ Returns the router's and scheduler's live state as a `narwhal.state` document, s
 | `expired`               | Deadline expiries since this process started                                       |
 | `cancelled`             | Client disconnects; carried over on resume and takeover                            |
 | `invalid_requests`      | Malformed requests rejected before admission in this run                           |
-| `controller`            | The active role controller, which is always `reactive`                             |
-| `token_accounting`      | `token_ids` when exact token identity is available, otherwise `unavailable`        |
+| `controller`            | Active role controller; always `reactive`                                          |
+| `token_accounting`      | `token_ids` when exact token identity is available, otherwise `unavailable`            |
 | `control`               | Controller mode, decisions, flips, refusals, reversals, and role-change accounting |
 | `monitoring`            | Monitoring-loop timing and failures                                                |
 | `ha`                    | Readiness, standby state, lease epoch and holder, and why the router was fenced    |
@@ -35,34 +35,34 @@ Returns the router's and scheduler's live state as a `narwhal.state` document, s
 | `slo`                   | TTFT and TPOT targets                                                              |
 | `first_token_timeout_s` | Deadline for the first decode token                                                |
 | `resident`              | In-flight prefill and decode work on each engine                                   |
-| `pinned`                | Engines that can't change role                                                     |
+| `pinned`                | Engines that cannot change role                                                     |
 | `min_prefill`           | Configured minimum number of live prefill engines                                  |
 | `min_decode`            | Configured minimum number of live decode engines                                   |
-| `below_floor`           | Whether prefill is under its floor now, and how often and how long it has been     |
+| `below_floor`           | Whether prefill is below its floor now, plus breach count and cumulative time      |
 | `ejected`               | Engines the breaker has removed                                                    |
-| `draining`              | Engines held out by a lifecycle action                                             |
-| `probation`             | Engines placed with a predictive-health penalty                                    |
+| `draining`              | Engines excluded from placement by a lifecycle action                                             |
+| `probation`             | Engines whose placement carries a predictive-health penalty                                    |
 | `health`                | Drift-window accounting for each engine                                            |
-| `quarantined`           | Engines briefly held out after an engine failure                                   |
+| `quarantined`           | Engines briefly held out from placement after an engine failure                                   |
 | `breaker`               | Consecutive failure streaks and probe state for each engine                        |
 | `decode_floor`          | Decode floor state and how many restoration moves it has made                      |
 | `attainment`            | Bounded diagnostic buckets of SLO outcomes                                         |
 | `demand_history`        | Retained demand, shape counts, and overflow                                        |
 | `demand_evidence`       | The consolidation evidence behind decode-to-prefill gates                          |
 | `unserved`              | Phase placements where every eligible candidate was over the configured SLO        |
-| `panic_bypasses`        | Prefill-to-decode moves that panic logic let through during cooldown               |
-| `flips_refused`         | The last 20 rejected role changes                                                  |
+| `panic_bypasses`        | Prefill-to-decode moves allowed by panic logic during cooldown               |
+| `flips_refused`         | The last 20 refused role changes                                               |
 | `flips`                 | Role changes, keeping up to `flip_history`                                         |
 
 #### `health`
 
 Each engine's `health` record tracks its drift windows: how many closed windows were `scored`, how many closed `undersampled`, and `last_scored_s_ago`.
 
-`prefill_paused` shows whether evidence collection is suspended because local prefill work is interfering with it, and `prefill_pauses` counts how many times collection has entered that state. A confirmed ejection wipes the record, so an engine that gets readmitted starts with a clean health window.
+`prefill_paused` shows whether evidence collection is suspended because local prefill work is interfering with it, and `prefill_pauses` counts how many times collection has entered that state. A confirmed ejection clears the record, so a readmitted engine starts with a clean health window.
 
 #### `breaker`
 
-Failure streaks are kept separately for each kind of fault: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness`. The record also shows which engines have a health or inference probe in flight.
+`breaker` tracks consecutive failures per fault kind: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness`. The record also shows which engines have a health or inference probe in flight.
 
 ## Admission and serving state
 
@@ -77,8 +77,8 @@ Failure streaks are kept separately for each kind of fault: `connection`, `timeo
 | `waiting_prefill`  | Requests waiting for prefill dispatch                       |
 | `waiting_decode`   | Requests waiting for decode dispatch                        |
 | `limit`            | Effective router limit, after `--max-concurrent` is applied |
-| `rejected`         | Capacity rejections, global                                 |
-| `refused`          | Predictive-admission refusals, global                       |
+| `rejected`         | Capacity rejections, router-wide                                 |
+| `refused`          | Predictive-admission refusals, router-wide                       |
 | `engine_auth`      | `boundary` or `engine-credential`                           |
 
 `serving` reports:
@@ -93,7 +93,7 @@ Failure streaks are kept separately for each kind of fault: `connection`, `timeo
 | `retry_attempts`           | Extra prefill attempts from retries                                           |
 | `retry_credits`            | Shared retry credit available now                                             |
 | `retry_credits_spent`      | Shared retry credit used so far                                               |
-| `retry_denied`             | Retries turned down because the budget ran out                                |
+| `retry_denied`             | Retries denied because the budget ran out                                |
 | `decode_tokens_observed`   | Decode tokens seen                                                            |
 | `upstream_seconds`         | Total HTTP leg time per phase, failed attempts included                       |
 
@@ -112,11 +112,9 @@ Failure streaks are kept separately for each kind of fault: `connection`, `timeo
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
 
-Every proposed role move has to respect `min_prefill` and `min_decode`. "Live" here means eligible for placement, so an ejection or an operator hold can push a pool under its floor without any role change at all. If prefill drops below its floor, the controller moves healthy decode engines over to prefill as long as decode stays at or above `min_decode`. While that recovery is underway, `below_floor.live_prefill` shows how many prefill engines are eligible.
+Every proposed role move must keep `min_prefill` and `min_decode`. A live engine is one eligible for placement, so ejection or an operator hold can push a pool below its floor without a role change. If prefill drops below its floor, the controller moves healthy decode engines to prefill while decode stays at or above `min_decode`. While that recovery is underway, `below_floor.live_prefill` shows how many prefill engines are eligible. In aggregate mode, a fleet that starts with no prefill engines treats that as its baseline.
 
-In aggregate mode, a fleet that starts with no prefill engines treats that as its baseline.
-
-Floor tracking begins the first time prefill reaches `min_prefill`. After that, each drop below the floor sets `active` and records the process-monotonic time in `below_floor.since`. Both clear when the pool recovers. `below_floor.cumulative_s` includes the current breach while it's still open.
+Floor tracking begins the first time prefill reaches `min_prefill`. After that, each drop below the floor sets `active` and records the process-monotonic time in `below_floor.since`. Both clear when the pool recovers. `below_floor.cumulative_s` includes the current breach while it is still open.
 
 ### Controller decisions
 
@@ -128,7 +126,7 @@ Floor tracking begins the first time prefill reaches `min_prefill`. After that, 
 - `flips_refused`, the total number of refused role changes
 - `flip_inflight`, the prefill and decode work that was resident on engines when they changed role
 
-`control.last_decision` describes the most recent decision. Depending on how far it got, it can include the current and proposed splits, the demand reference, phase work, projected SLO ratios, the decode request limit that was applied, decode profile coverage, decode correction, the change in objective, the reason, and the result. Decode-to-prefill decisions also carry a snapshot of the consolidation evidence.
+`control.last_decision` describes the most recent decision. It contains the fields reached before the decision ended: the current and proposed splits, demand reference, phase work, projected SLO ratios, applied decode request limit, decode profile coverage, decode correction, objective change, reason, and result. Decode-to-prefill decisions also carry a snapshot of the consolidation evidence.
 
 Scored reactive decisions record which rule made them eligible in `eligibility_rule`:
 
@@ -157,7 +155,7 @@ urgent_signals
 event_to_evaluation_s
 ```
 
-The candidate it scores is the neighboring split, with one more prefill engine and one fewer decode engine than now. Scoring that candidate adds:
+The scored candidate is the neighboring split: one more prefill engine, one fewer decode engine. Scoring adds these fields:
 
 ```text
 candidate_projected_ttft_s
@@ -168,9 +166,9 @@ role_floors_safe
 source_pressure_safe
 ```
 
-These decisions set `decision_basis=projected_ttft_recovery`. `projected_ttft_ratio` keeps its usual meaning, the demand model's ratio for the candidate split.
+These decisions set `decision_basis=projected_ttft_recovery`. `projected_ttft_ratio` is the demand model's ratio for the candidate split.
 
-A blocked or held decision keeps its proposed split and objective change, along with the constraint that stopped it: consolidation evidence, profile coverage, KV capacity, role floors, pins, cooldown, dwell, or the resident guard. If a decision stops before candidates are scored, because there isn't enough demand history or fleet health changed, `last_decision` holds whatever inputs existed at that point.
+A blocked or held decision keeps its proposed split and objective change, along with the constraint that stopped it: consolidation evidence, profile coverage, KV capacity, role floors, pins, cooldown, dwell, or the resident guard. If a decision stops before candidates are scored, because there is not enough demand history or fleet health changed, `last_decision` holds whatever inputs existed at that point.
 
 ### Role-change history
 
@@ -190,6 +188,6 @@ Each role change is recorded like this:
 
 `by` is the caller that made the change: `reactive`, `decode_floor`, or `floor_recovery`. `prefill_inflight` and `decode_inflight` are the resident work on the engine at the moment its role label changed, and `drained_s` is filled in with how long that work took to finish.
 
-Refused changes go in `flips_refused[]`, each with `at`, `to`, and `why`.
+Refused changes are listed in `flips_refused[]`, each with `at`, `to`, and `why`.
 
 For evidence about individual requests, see the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).

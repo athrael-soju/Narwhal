@@ -29,15 +29,22 @@ Six request-outcome counters carry over through a resume or standby takeover: `n
 
 Everything else starts fresh in the new router process. That includes the offered, unsized, expired, and invalid-request counters, the attempt counters and retry quota, all histograms, and the controller decision, role-change, and floor counters. The one exception is consolidation risk: the handoff carries the newest risk event and the per-kind counts, so `narwhal_demand_evidence_risk_events_total` and `narwhal_demand_evidence_risk_age_seconds` continue from the old process.
 
-After a restart, then, the restored outcome counts and the fresh offered count cover different stretches of time. Use the journal's `run` field to find the process boundary when you reconcile them.
+After a restart, the restored outcome counters and the fresh offered counter cover different periods. Use the journal's `run` field to find the process boundary when reconciling them.
 
 ## Role changes
 
-Role-change counters start accumulating when the scheduler starts.
+The metrics call a role change a "flip". Role-change counters start accumulating when the scheduler starts.
 
-`narwhal_flip_reversals_total` goes up when an engine is sent toward a different role than its previous recorded move targeted. An engine's first move never counts as a reversal.
+`narwhal_flip_reversals_total` increments when an engine's role change targets a different role than its previous recorded change. An engine's first role change never counts as a reversal.
 
-`narwhal_flips_refused_total` counts role changes that were blocked, whether by timing, availability, a role pin, a role floor, the resident guard, or advisory mode.
+`narwhal_flips_refused_total` counts role changes that were blocked by any of these:
+
+- timing
+- availability
+- a role pin
+- a role floor
+- the resident guard
+- advisory mode
 
 `narwhal_pool_load` is normalized per phase, as described under [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control). A value of `1.0` means that phase has reached its target.
 
@@ -47,11 +54,11 @@ Role-change counters start accumulating when the scheduler starts.
 
 The TTFT and TPOT histograms place their bucket edges at fixed multiples of the matching budget: 0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0, and `+Inf`. The queue-wait and seat-time histograms (`narwhal_queue_wait_seconds` and `narwhal_seat_seconds`) use the same multiples. Queue wait scales them to `serving.queue_timeout_s`, or to the TTFT budget when no queue timeout is set. Seat time scales them to the TTFT budget.
 
-To compute quantiles, take bucket rates grouped by `instance` and `le`. Only aggregate router histograms whose bucket edges match exactly. Since the edges scale with the SLO budget, that means routers configured with the same budgets.
+To compute quantiles, take bucket rates grouped by `instance` and `le`. Aggregate only router histograms with identical bucket edges. The edges scale with the SLO budget, so these are routers configured with the same budgets.
 
 ## Attainment evidence
 
-`narwhal_attainment_evidence_pruned_total` doesn't show up until Narwhal first drops buckets that have aged out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is either `buckets` or `outcomes`.
+`narwhal_attainment_evidence_pruned_total` is absent until Narwhal first prunes buckets that have aged out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment). Its `kind` label is either `buckets` or `outcomes`.
 
 ## Demand history and the decode floor
 
@@ -76,7 +83,7 @@ These metrics show the demand evidence behind consolidation and which gate, if a
 | `narwhal_demand_evidence_closed`                  | `1` while the evidence window is closed. A new risk event reopens it.                                                             | none                                             |
 | `narwhal_demand_evidence_risk_age_seconds`        | Age of the most recent risk event, in seconds. `0` until one is recorded.                                                         | none                                             |
 | `narwhal_demand_evidence_short_decode_engines`    | Short-horizon decode demand, in engine equivalents.                                                                               | none                                             |
-| `narwhal_demand_evidence_envelope_decode_engines` | A conservative envelope on decode demand: the larger of the short- and long-horizon estimates, in engine equivalents.             | none                                             |
-| `narwhal_demand_evidence_trend_ratio`             | Short-horizon demand divided by long-horizon demand. Missing while the long-horizon estimate is zero.                             | none                                             |
-| `narwhal_demand_evidence_refused`                 | `1` on the one gate blocking consolidation right now, and `0` on the others. When consolidation is allowed, every gate reads `0`. | `gate`: `risk`, `evidence`, `trend`              |
-| `narwhal_demand_evidence_risk_events_total`       | Number of risk events. Missing until the first one occurs.                                                                        | `kind`: `first_token_timeout`, `p_to_d_recovery` |
+| `narwhal_demand_evidence_envelope_decode_engines` | A conservative envelope on decode demand: the larger of the short- and long-horizon estimates, in engine equivalents.                                         | none                                             |
+| `narwhal_demand_evidence_trend_ratio`             | Short-horizon demand divided by long-horizon demand. Absent while the long-horizon estimate is zero.                              | none                                             |
+| `narwhal_demand_evidence_refused`                 | `1` for the gate currently blocking consolidation, `0` for the others. All `0` when consolidation is allowed.                     | `gate`: `risk`, `evidence`, `trend`              |
+| `narwhal_demand_evidence_risk_events_total`       | Number of risk events. Absent until the first one occurs.                                                                         | `kind`: `first_token_timeout`, `p_to_d_recovery` |

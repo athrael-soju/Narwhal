@@ -1,14 +1,18 @@
 # Install the CUDA runtime and model
 
 The installed template pins exact versions of vLLM, Torch, NIXL,
-Transformers, and the GGUF loader, as well as specific revisions of the
-Qwen3.5-0.8B GGUF model and its tokenizer. `narwhal dev init` checks all of
-them, so install exactly what's listed here.
+Transformers, and the GGUF loader, and specific revisions of the
+Qwen3.5-0.8B GGUF model and its tokenizer. `narwhal dev init` checks each of
+them, so install exactly the versions listed here.
 
-You'll need an x86-64 machine running native Ubuntu or Ubuntu under WSL2,
-Python 3.12, and an NVIDIA GPU whose driver supports the pinned CUDA
-runtime. Run everything below from the root of a Narwhal checkout on the
-Linux filesystem.
+Requirements:
+
+- x86-64 machine running native Ubuntu or Ubuntu under WSL2
+- Python 3.12
+- NVIDIA GPU whose driver supports the pinned CUDA runtime
+
+Run all commands from the root of a Narwhal checkout on the Linux
+filesystem (under WSL2, outside `/mnt/c`).
 
 ## Install the Python packages
 
@@ -22,13 +26,10 @@ python -m pip install \
   'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
 ```
 
-The last command installs the GGUF plugin from its release wheel. The next
-step replaces part of it.
-
 ## Apply the pinned GGUF loader sources
 
-The template expects the loader code from a particular plugin commit, not
-the code that ships in the wheel. Clone the plugin at that commit and copy
+The template expects the loader sources at plugin commit `d4c1f0d`, which
+differ from the ones in the wheel. Clone the plugin at that commit and copy
 its Python files over the installed package:
 
 ```bash
@@ -50,11 +51,14 @@ PY
 ```
 
 `narwhal dev init` hashes these files and compares them with the template.
-Reinstalling the wheel puts the original files back, so if you ever
-reinstall it, run the copy step again or `init` and `up` will refuse to
-continue.
+Reinstalling the wheel restores the original files. Re-run the copy script
+afterward, or `narwhal dev init` and `narwhal dev up` refuse to continue
+because the hash check fails.
 
 ## Download the model and tokenizer
+
+Download the quantized weights and the tokenizer and config files (JSON, text,
+and Jinja only) from the original model repository:
 
 ```bash
 hf download unsloth/Qwen3.5-0.8B-GGUF \
@@ -65,11 +69,7 @@ hf download Qwen/Qwen3.5-0.8B \
   --include '*.json' '*.txt' '*.jinja'
 ```
 
-The first command fetches the quantized weights. The second pulls only the
-tokenizer and config files from the original model repository.
-
-If you leave both in the default Hugging Face cache
-(`~/.cache/huggingface/hub`), `narwhal dev init` finds them without any
-extra flags. It looks only there, even if you've set `HF_HOME`. If you put
-them somewhere else, pass the GGUF file with `--model` and the tokenizer
-directory with `--model-dir`.
+If both stay in the default Hugging Face cache (`~/.cache/huggingface/hub`),
+`narwhal dev init` finds them without extra flags. It reads only that path
+and ignores `HF_HOME`. For any other location, pass the GGUF file with
+`--model` and the tokenizer directory with `--model-dir`.

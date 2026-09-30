@@ -1,23 +1,20 @@
 # Controller interruption recovery
 
-If a `narwhal dev` command was stopped partway through, whether by Ctrl+C,
-a SIGTERM from a supervisor, or `kill -9`, open a new shell and run:
+If a `narwhal dev` command was stopped partway through (SIGINT, SIGTERM or
+SIGKILL), open a new shell and run:
 
 ```bash
 narwhal dev status
 narwhal dev down
 ```
 
-Most of the time that's all you need. The rest of this page explains what
-Narwhal can and can't clean up on its own, and what to do in the cases
-where it needs help.
+These two commands recover most interruptions. Cases that need manual steps
+are listed under "Cleaning up by hand".
 
 ## What happens in each case
 
-These are the interruptions the Linux recovery test suite exercises. The
-important distinction is whether Narwhal had already written down the
-process it just started. If it had, `down` can find it. If it hadn't, you
-may have to find it yourself.
+The Linux recovery tests cover the behavior in this table. `down` finds a process only
+if Narwhal recorded it before the interruption.
 
 | The controller was…                                             | Signal          | What happens                                                                                                             |
 | --------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -35,27 +32,26 @@ may have to find it yourself.
 
 ## Helpers that outlive the controller
 
-Stage records note the boot ID and start ticks of every helper process
-Narwhal saw, including the helper's own children. After an abrupt exit,
-`status` lists any interrupted helpers under `stage_processes`. `down` then
-signals only the processes whose boot ID and start tick match those
-records, and leaves their stdout, stderr, and command files in place.
+Stage records store the boot ID and start ticks of every helper process,
+including its children. After an abrupt exit, `status` lists interrupted
+helpers under `stage_processes`. `down` stops only the processes whose boot ID
+and start ticks match those records and leaves their stdout, stderr, and
+command files in place.
 
-Once `down` finishes, each interrupted helper's stage record ends up in one
-of two states.
-`recovered` means every recorded helper was stopped. `recovery_required`
-means something survived, and the record lists the PIDs.
+After `down`, each interrupted helper's stage record is `recovered` (every
+recorded helper was stopped) or `recovery_required` (a process survived; the
+record lists the PIDs).
 
 ## Cleaning up by hand
 
-You'll need to step in yourself in three situations:
+Manual cleanup is required when:
 
-- The controller got SIGKILL before it recorded a new process. The
-  service's command log will show a process that isn't in the records.
+- The controller received SIGKILL before it recorded a new process. The
+  service's command log shows a process that is not in the records.
 - A service leader exited before teardown could record its workers. The
-  status and teardown documents will show a surviving group.
-- A stage record says `recovery_required`. It lists the surviving PIDs.
+  `status` and `down` output shows a surviving group.
+- A stage record is `recovery_required`. It lists the surviving PIDs.
 
-In each case, use the command log, the kernel start ticks, and the listening
-ports to confirm which processes belong to Narwhal. Stop that process tree,
-then run `narwhal dev down` again so the records catch up.
+In each case, compare the command log, the kernel start ticks, and the
+listening ports against the process to confirm it belongs to Narwhal. Stop its
+process tree, then run `narwhal dev down` again to update the records.

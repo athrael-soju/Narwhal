@@ -1,10 +1,9 @@
 # Machine-readable command results
 
-If you run Narwhal from CI or a script, add `--format json` to the command.
-Instead of scraping log output, you get a single JSON object on stdout that says
-what happened, which files were touched, and what went wrong. Everything meant for
-people, such as progress messages, diagnostics, and subprocess output, goes to
-stderr, so you can redirect stdout straight into a file or a parser.
+To run Narwhal from CI or a script, add `--format json` to the command.
+The command prints one JSON object to stdout with the status, the files touched,
+and any errors. Progress messages, diagnostics, and subprocess output go to
+stderr, so stdout can be redirected into a file or a parser.
 
 The flag works with `narwhal-check`, `narwhal-profile`, `narwhal-engine`,
 `narwhal dev`, `narwhal config`, and `narwhal diagnostics`, and it can go anywhere
@@ -17,21 +16,21 @@ narwhal-engine check --run runs/engine-1 --format json >engine-result.json
 narwhal dev status --instance runs/dev --format json >status-result.json
 ```
 
-You get a result object even when the command fails, including when it fails
-because of bad arguments. The one oddity is `--help`: with `--format json`, the
-help text goes to stderr and the result reports success.
+Every invocation returns a result object, including invocations that fail on bad
+arguments. With `--help` and `--format json`, the help text goes to stderr and the result reports
+success.
 
-Narwhal's own progress messages appear on stderr as they happen. Output from
-subprocesses does not. It is collected while the command runs and written to
-stderr in one piece when the command finishes.
+Narwhal's own progress messages appear on stderr as they happen. Subprocess
+output is collected while the command runs and written to stderr in one piece
+when the command finishes.
 
 Without `--format json`, commands print their usual output and use their own exit
-codes, which can differ from the ones below. `narwhal dev` also prints lifecycle JSON
-by default. That is a separate format from the result object described here.
+codes, which differ from the ones below. `narwhal dev` also prints lifecycle JSON
+by default, in a separate format from the result object described here.
 
-`narwhal-serve` and `narwhal-attest` don't accept `--format json`. They run until
-you stop them, so there is no single result to report. While they're running,
-query their HTTP endpoints or read the files they write.
+`narwhal-serve` and `narwhal-attest` reject `--format json`. They run until
+stopped, so no single result exists. While they run, query their HTTP endpoints or
+read the files they write.
 
 ## Statuses and exit codes
 
@@ -44,13 +43,12 @@ query their HTTP endpoints or read the files they write.
 | `error`         |         4 | Something broke partway through, a stage ran past its deadline, or a file couldn't be accessed.                 |
 | `interrupted`   |       130 | The command was canceled, for example with Ctrl+C, and still reported its result.                               |
 
-If all you need is pass or fail, the exit code is enough. Read the JSON when you
-need to know why.
+The exit code gives pass/fail. The JSON gives the reason.
 
 ## What a result looks like
 
-Here is the result of running `narwhal dev status` against an instance directory
-that doesn't exist. It's formatted here for reading; the command prints it on one
+This is the result of running `narwhal dev status` against an instance directory
+that doesn't exist. It's formatted for reading; the command prints it on one
 line with its keys sorted.
 
 ```json
@@ -80,17 +78,17 @@ line with its keys sorted.
 
 | Field                      | What it holds                                                                                                                                                                                                                                                        |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`, `schema_version` | Always `narwhal.command-result` and `1` for this version. Check these before reading anything else.                                                                                                                                                                  |
-| `command`, `operation`     | The executable you ran and the operation within it, such as `narwhal` and `dev status`. If the arguments were too broken to tell which operation you meant, `operation` is the command's default.                                                                    |
-| `status`, `exit_code`      | One of the statuses above and the exit code that goes with it.                                                                                                                                                                                                       |
+| `schema`, `schema_version` | `narwhal.command-result` and `1` for this version.                                                                                                                                                                  |
+| `command`, `operation`     | The executable you ran and the operation within it, such as `narwhal` and `dev status`. If the arguments are too broken to identify the operation, `operation` is the command's default.                                                                    |
+| `status`, `exit_code`      | One of the statuses above and its exit code.                                                                                                                                                                                                       |
 | `data`                     | Results for the operation you ran. Depending on the command, this is the dev instance's lifecycle state, the preflight results (failures, skips, warnings, and pairs), the engines chosen for profiling, the engine launch directories, the resolved fleet configuration, the diagnostic bundle summary, or a manifest you asked for. |
 | `artifacts`                | Files the command wrote or depends on. See below.                                                                                                                                                                                                                    |
-| `errors`                   | What went wrong, if anything. See below.                                                                                                                                                                                                                             |
+| `errors`                   | Errors the command recorded. See below.                                                                                                                                                                                                                             |
 
 ## Artifacts
 
-Each entry in `artifacts` has a `kind`, an absolute `path`, and a `state` that says
-what happened to the file during the run:
+Each entry in `artifacts` has a `kind`, an absolute `path`, and a `state` that
+records what happened to the file during the run:
 
 | State      | Meaning                                       |
 | ---------- | --------------------------------------------- |
@@ -99,22 +97,21 @@ what happened to the file during the run:
 | `existing` | The file existed and was left alone.          |
 | `missing`  | The file doesn't exist after the run.         |
 
-Narwhal works this out by comparing each file's metadata before and after the run.
+Narwhal compares each file's metadata before and after the run to set the state.
 
-When a command fails, `artifacts` lists what is actually on disk afterward.
-Being listed doesn't make a file usable: something left behind by a failed run may
-still fail its own schema check or gates. Validate a file on its own terms before
-you rely on it to qualify an engine. Profile, evidence, and lifecycle files each
-have their own formats, documented separately.
+When a command fails, `artifacts` lists what is on disk afterward.
+Files left by a failed run can fail their own schema checks or gates, so validate
+them before using them to qualify an engine. Profile, evidence, and lifecycle files
+each have their own formats, documented separately.
 
 ## Errors
 
 Every error has a `code`, a `message`, and the `command` that raised it. Some also
 include `stage`, `engine`, `field`, or `context`. When a stage fails, the error
-names the stage and uses `context` to describe what you need to recover.
+names the stage and uses `context` to describe the recovery steps.
 
-Build your logic on `code`, `status`, and those extra fields. The `message` is
-written for people and its wording can change between releases.
+Build logic on `code`, `status`, and those extra fields. The `message` is
+written for people and its wording changes between releases.
 
 | Status          | Error codes                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -124,19 +121,18 @@ written for people and its wording can change between releases.
 | `error`         | `engine_http_error`, `operation_failed`, `permission_denied`, `stage_timeout`                                       |
 | `interrupted`   | `stage_cancelled`, `interrupted`                                                                                    |
 
-If a command exits with a failure status but doesn't record a specific error, the
+If a command exits with a failure status and records no specific error, the
 error's `code` is the status name, such as `failed_gate` or `error`.
 
-Future releases may add error codes. If you see one you don't recognize, log it
-and fall back on `status` to decide what to do.
+Future releases may add error codes. For an unrecognized code, log it and use `status` to decide what to do.
 
-Secrets are scrubbed from results. Credentials taken from environment variables,
-usernames and passwords embedded in HTTP URLs, and bearer tokens are all redacted,
-both in the result itself and in any diagnostics it includes.
+Narwhal redacts secrets in results and in any diagnostics they include:
+credentials taken from environment variables, usernames and passwords embedded in
+HTTP URLs, and bearer tokens.
 
 ## Reading results safely
 
-Check `schema_version` before you touch any other field, and refuse versions you
+Check `schema_version` before reading any other field, and refuse versions you
 don't support. `validate_document` checks a result against the contract:
 
 ```python
@@ -148,9 +144,9 @@ with open("check-result.json") as source:
 validate_document(result, COMMAND_RESULT)
 ```
 
-To see which versions your installation produces, run
-`narwhal-check --print-contract-versions`. It lists the result schema along with
+To list the versions your installation produces, run
+`narwhal-check --print-contract-versions`. It lists the result schema and
 the versions of Narwhal's other file formats.
 
 Version 1 can gain new `data` fields and new error codes without a version bump.
-Any change that would break an existing reader gets a new version number.
+Any change that breaks an existing reader gets a new version number.

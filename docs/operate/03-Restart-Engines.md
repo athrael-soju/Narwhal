@@ -1,8 +1,8 @@
 # Engine restart and process replacement
 
-Run everything on this page from a management host that has `curl`, Python 3, and access to the router's private control endpoints. The fleet also needs a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract).
+Run the commands on this page from a management host that has `curl`, Python 3, and access to the router's private control endpoints. The exception is [Activate replacement profiles](#activate-replacement-profiles), which runs on the router host. The fleet also needs a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract).
 
-The examples use `http://router:8000` for the router and `e0` for the engine, so substitute your own values. Work in a single shell and save results to a new private run directory:
+The examples use `http://router:8000` for the router and `e0` for the engine. Substitute your own values. Work in a single shell and save results to a new private run directory:
 
 ```bash
 ROUTER_URL='http://router:8000'
@@ -11,17 +11,28 @@ umask 077
 mkdir -p "$RUN_DIR"
 ```
 
-Narwhal tells you when a process is safe to stop, but it never stops or starts one itself. That's your process manager's job, so before you drain anything, write down how it's set up: the engine and sidecar stop and start commands, the process or container identities, the immutable build, the restart policy, resource limits, and where the logs go.
+Narwhal never stops or starts processes. Your process manager does. Before draining, record:
 
-Keep external admission closed until replacement and profile activation are finished. Readmission refuses an engine whose profiles are missing or were bound to an earlier engine generation. Two checks are involved, and their names are easy to mix up. The `profile generation` check compares every loaded profile variant with the verified live generation. The `generation` check is something else entirely: it sends a completion request straight to the engine.
+- the stop and start commands for the engine and its attestation sidecar
+- the process or container identities
+- the immutable build
+- the restart policy and resource limits
+- the log locations
 
-The router keeps using the profiles it loaded at startup until you restart it with an updated store. So after you replace an engine, [activate fresh profiles while preserving its hold](#activate-replacement-profiles) before you ask for readmission.
+Keep external admission closed until replacement and profile activation are finished. The router keeps using the profiles it loaded at startup until you restart it with an updated store, so after replacing an engine, [activate replacement profiles](#activate-replacement-profiles) before requesting readmission. Readmission refuses an engine whose profiles are missing or bound to an earlier engine generation.
+
+Two readmission checks have similar names:
+
+- `profile generation` compares every loaded profile variant with the verified live generation.
+- `generation` sends a completion request directly to the engine.
+
+In this page, "fabric" means the KV transfer path between engines.
 
 ## 7. Restart one engine
 
-This procedure is for fleets where `recovery.engine_restart_policy` is `individual`.
+Use this procedure when `recovery.engine_restart_policy` is `individual`.
 
-Drain the engine before its supervisor replaces the process. Draining takes the engine out of new placement but lets the requests already on it finish.
+Drain the engine before the process manager replaces its process. Draining removes the engine from new placement and lets requests already on it finish.
 
 ### 7.1 Drain the engine
 
@@ -32,7 +43,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
   > "$RUN_DIR/individual-drain-response.json"
 ```
 
-Keep running the check below until it prints `e0 ready to stop`. It confirms the three things that need to be true before you stop the engine: no resident prefill or decode work, no new placement, and a recorded process identity.
+Repeat the check below until it prints `e0 ready to stop`. It asserts that the engine is marked ready to stop, does not accept new placement, has no resident prefill or decode work, and has a recorded process identity.
 
 ```bash
 curl -fsS "$ROUTER_URL/narwhal/lifecycle" \
@@ -50,13 +61,17 @@ print("e0 ready to stop")
 PY
 ```
 
-If the drain deadline runs out first, Narwhal keeps the engine excluded and lets its resident work carry on.
+If the drain deadline expires first, the engine stays excluded and its resident work is not cancelled.
 
 ### 7.2 Replace the process
 
-Restart the engine and its attestation sidecar through the process manager. Then check that the engine's `/health` endpoint returns HTTP 200, that `/version`, `/metrics`, and `/v1/models` describe the new process and the configured model, and that the restarted sidecar is serving attestation bound to that process. Go by the status code on `/health`, because a successful response can have an empty body.
+Restart the engine and its attestation sidecar through the process manager. Then check:
 
-Keep the process manager's stop and start output, along with the new engine and sidecar identities. While the engine is still excluded, [activate replacement profiles](#activate-replacement-profiles), then move on to readmission.
+- `/health` on the engine returns HTTP 200. Check the status code, because a successful response can have an empty body.
+- `/version`, `/metrics`, and `/v1/models` match the new process and the configured model.
+- The restarted sidecar serves attestation bound to the new process.
+
+Keep the process manager's stop and start output and the new engine and sidecar identities. While the engine is still excluded, [activate replacement profiles](#activate-replacement-profiles), then request readmission.
 
 ### 7.3 Request readmission
 
@@ -67,14 +82,14 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   > "$RUN_DIR/individual-readmitted.json"
 ```
 
-Before Narwhal puts the engine back into placement, it validates the replacement and every peer its roles let it work with. It goes through these stages in order:
+Readmission validates the replacement and every peer its roles allow it to work with, in this order:
 
-1. For the engine and each required peer, it checks health, process identity, attestation, profiles, and the configured model. Every loaded profile variant has to match the verified generation, and each peer must still have its accepted process identity.
-2. For the replacement alone, it requires a process start newer than the identity recorded at drain time, and it runs the direct generation check.
-3. If everything so far has passed, it exercises the role-permitted KV transfers. Participant identities, attestation, and profile bindings are rechecked before each transfer and again after its prefill leg.
-4. Finally, it checks the replacement's health once more and rechecks every participant's identity, attestation, and profile bindings.
+1. For the engine and each required peer, check health, process identity, attestation, profiles, and the configured model. Every loaded profile variant must match the verified generation, and each peer must still have its accepted process identity. These checks run for all participants, so one response can report several failures.
+2. For the replacement only, require a process start later than the identity recorded at drain time, and run the direct `generation` check.
+3. When all earlier checks pass, run the role-permitted KV transfers. Participant identities, attestation, and profile bindings are rechecked before each transfer and again after its prefill leg.
+4. Check the replacement's health again, and recheck every participant's identity, attestation, and profile bindings.
 
-A successful readmission shows `state = active` and `accepts_new = true` in the result. A failed one returns HTTP 409 and leaves the engine blocked. Since `curl -f` throws away the body of a failed response, you'll need to query `GET /narwhal/lifecycle` and read `engines.<id>.error` and `checks` to find out what went wrong. The first-stage participant checks run across the whole cohort instead of stopping at the first problem, so one response can report several failures. Fabric validation doesn't start until every participant check has passed.
+A successful readmission shows `state = active` and `accepts_new = true`. A failed readmission returns HTTP 409 and the engine stays blocked. `curl -f` discards the body of a failed response, so read `engines.<id>.error` and `checks` from `GET /narwhal/lifecycle`.
 
 Verify the successful response and keep its checks:
 
@@ -92,39 +107,41 @@ print("e0 readmitted:", engine["checks"])
 PY
 ```
 
-The `fabric produce to ...` and `fabric consume from ...` checks in the output should cover the roles the engine's pins allow. An unpinned engine has to pass both directions against eligible peers. Finish by sending a routed request and confirming its engine placement and terminal outcome in the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
+The `fabric produce to ...` and `fabric consume from ...` checks must cover the directions the role pins allow. Two unpinned engines need a transfer in each direction. A fleet pinned to one prefill engine and one decode engine needs prefill-to-decode.
+
+Finish by sending a routed request and confirming its engine placement and terminal outcome in the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
 
 ### 7.4 Recover an unplanned ejection
 
-When the breaker ejects an engine unexpectedly, Narwhal runs the same validation sequence against whatever process is running now.
+When the circuit breaker ejects an engine unexpectedly, Narwhal runs the same validation sequence against the process that is running now.
 
-If the engine passes and its profiles still match the running process, it comes back on its own. If the process has changed, wait for the lifecycle state to reach `blocked`, then [measure and activate replacement profiles](#activate-replacement-profiles) and request readmission. Any other failed check also leaves the engine blocked until you fix it and request readmission yourself.
+If the engine passes and its profiles still match the running process, it is readmitted automatically. If the process has changed, wait for the lifecycle state to reach `blocked`, then [activate replacement profiles](#activate-replacement-profiles) and request readmission. Any other failed check also leaves the engine blocked until you fix the cause and request readmission.
 
 ### 7.5 Recover loss of every placement peer
 
-If a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) loses every placement peer, Narwhal waits until all configured engines pass their health probes and then validates them as a group. A single failing member keeps the whole fleet held.
+If a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) loses every placement peer, Narwhal waits until all configured engines pass their health probes, then validates them as a group. One failing engine keeps the whole fleet held.
 
-Fix whichever check failed, then request whole-fleet readmission:
+Fix the failed check, then request whole-fleet readmission:
 
 ```text
 POST /narwhal/lifecycle/readmit
 {"wave":true}
 ```
 
-An individual lifecycle hold can also take out the last available peer. When that happens, promote the hold to a wave:
+An individual hold on the last available peer has the same effect. Promote the hold to a wave:
 
 ```text
 POST /narwhal/lifecycle/drain
 {"wave":true}
 ```
 
-and carry on with [Restart an engine wave](#8-restart-an-engine-wave).
+Then follow [Restart an engine wave](#8-restart-an-engine-wave).
 
 ## 8. Restart an engine wave
 
-Wave operations are for fleets where `recovery.engine_restart_policy` is `whole_wave`. That's the policy for engine builds that share peer state across the fleet, and because the state is shared, drain and readmission always act on the complete wave.
+Use wave operations when `recovery.engine_restart_policy` is `whole_wave`. This policy requires an `engine_contract` and `recovery.liveness_every` greater than 0. Drain and readmission act on the complete wave.
 
-A confirmed ejection, a changed process identity, or a failed identity check puts the whole fleet on hold. The router stays non-ready until the wave has been readmitted.
+A confirmed ejection, a changed process identity, or a failed identity check puts the whole fleet on hold. The router is not ready (HTTP 503 on `/ready`) until the wave is readmitted.
 
 ### 8.1 Drain the wave
 
@@ -135,7 +152,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
   > "$RUN_DIR/wave-drain-response.json"
 ```
 
-Keep running the check below until it prints `wave ready to stop`, and save the result before you issue the first supervisor stop command:
+Repeat the check below until it prints `wave ready to stop`. Save the result before issuing the first process manager stop command.
 
 ```bash
 curl -fsS "$ROUTER_URL/narwhal/lifecycle" > "$RUN_DIR/wave-drained.json"
@@ -159,9 +176,9 @@ PY
 
 ### 8.2 Restart the fleet
 
-Using the process manager commands you recorded, restart every engine and attestation sidecar from one immutable build. Keep the old and new identities, and repeat the endpoint checks from [Replace the process](#72-replace-the-process) on every member.
+Using the process manager commands you recorded, restart every engine and attestation sidecar from one immutable build. Keep the old and new identities, and repeat the endpoint checks from [Replace the process](#72-replace-the-process) on every engine.
 
-Once every sidecar is serving valid attestation, [activate replacement profiles](#activate-replacement-profiles) for the whole wave. Confirm the resumed router still has the hold and the original drain identities, then request wave readmission:
+Once every sidecar serves valid attestation, [activate replacement profiles](#activate-replacement-profiles) for the whole wave and verify the hold survived the router restart. Then request wave readmission:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
@@ -169,7 +186,13 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   -d '{"wave":true}' > "$RUN_DIR/wave-readmitted.json"
 ```
 
-Narwhal returns the whole fleet to placement in one state transition. It only does so once every replacement process has a start time newer than its recorded drain identity, every validation gate has passed, and every transfer in the role-permitted KV ring has completed. If even one member fails, the complete wave stays excluded.
+Narwhal returns the fleet to placement only when all of these hold:
+
+- Every replacement process has a start time later than its recorded drain identity.
+- Every validation gate has passed.
+- Every transfer in the role-permitted KV ring has completed.
+
+If any engine fails, the whole wave stays excluded.
 
 Verify the completed wave:
 
@@ -190,15 +213,15 @@ PY
 curl -fsS -o /dev/null "$ROUTER_URL/ready"
 ```
 
-Then compare the recorded fabric directions with the configured role pins. Two unpinned engines need a transfer in each direction. A fleet pinned to one prefill engine and one decode engine only needs prefill-to-decode.
+Compare the recorded `fabric` checks with the role pins, as described in [Request readmission](#73-request-readmission).
 
-As with individual readmission, a failed wave readmission loses its response body to `curl -f`, so query `GET /narwhal/lifecycle` for each member's `error` and `checks`. Fixing the fault doesn't release the wave on its own; you have to request wave readmission again. The [whole-wave release drill](04-Upgrade-and-Validate.md#whole-wave-drill) exercises exactly this failure path.
+A failed wave readmission also loses its response body to `curl -f`. Read each engine's `error` and `checks` from `GET /narwhal/lifecycle`. Fixing the fault does not release the wave. Request wave readmission again. The [whole-wave release drill](04-Upgrade-and-Validate.md#whole-wave-drill) covers this failure path.
 
 ### 8.3 Recover an unplanned whole-wave hold
 
-After an unplanned whole-wave hold, don't restart anything until you've requested an explicit drain. Narwhal has to record each process's current identity first, since readmission later checks that every replacement is newer than it.
+After an unplanned whole-wave hold, do not restart anything until a drain has recorded each process's current identity. Readmission requires each replacement's start time to be later than that record.
 
-Start by recording the hold as it stands:
+Record the hold as it stands:
 
 ```bash
 curl -fsS "$ROUTER_URL/narwhal/lifecycle" > "$RUN_DIR/unplanned-hold.json"
@@ -214,7 +237,7 @@ for iid, engine in state["engines"].items():
 PY
 ```
 
-Then request the drain, and save the response even if identity collection fails:
+Request the drain and save the response even if identity collection fails:
 
 ```bash
 curl -sS -o "$RUN_DIR/unplanned-drain.json" -w '%{http_code}\n' \
@@ -233,24 +256,28 @@ for iid, engine in state["engines"].items():
 PY
 ```
 
-If Narwhal can't read an engine's identity, the drain returns HTTP 503 and that member's `old_process_start` stays unset. The whole fleet remains excluded. One way to end up here is an engine that was already stopped when identity collection ran. In that case:
+If Narwhal cannot read an engine's identity, the drain returns HTTP 503, that engine's `old_process_start` stays unset, and the whole fleet remains excluded. This happens, for example, when an engine was already stopped during identity collection. To recover:
 
-1. Start that engine through its process manager while the fleet hold is still active, and wait for its process identity endpoints to answer.
+1. Start that engine through its process manager while the fleet hold is active, and wait for its process identity endpoints to answer.
 2. Retry [Drain the wave](#81-drain-the-wave). Narwhal keeps the identities it already captured and collects the missing ones.
-3. Run the drain observation and wait for `wave.ready_to_stop = true` before stopping any process.
-4. [Restart the fleet](#82-restart-the-fleet), including any process you started just for identity collection, and request whole-wave readmission.
+3. Run the [8.1 readiness check](#81-drain-the-wave) until `wave.ready_to_stop` is true. Do not stop any process before then.
+4. [Restart the fleet](#82-restart-the-fleet), including any process you started only for identity collection, and request wave readmission.
 
-If every identity was readable on the first drain, check `wave.ready_to_stop` and go straight to the fleet restart. Each replacement's process start must be newer than the drain's `old_process_start`. The `process_starts` values hold the identities that were accepted previously.
+If every identity was readable on the first drain, check `wave.ready_to_stop` and go straight to the fleet restart. Each replacement's process start must be later than the drain's `old_process_start`. The `process_starts` values hold the previously accepted identities.
 
 ## Activate replacement profiles
 
-Use this procedure once the replacement processes and their attestation sidecars are healthy and their lifecycle holds are still in place. Keep external admission closed, and let every routed request finish before you start profiling, preflight, or router replacement.
+Prerequisites:
 
-If you run a warm standby, stop it through its process manager before replacing the active router. Bring it back with the same final profile store after readmission.
+- The replacement processes and their attestation sidecars are healthy.
+- The lifecycle holds are still in place.
+- Every routed request has finished. Do not start profiling, preflight, or router replacement before then.
 
-Run the commands below on the router host, in its deployment environment, from the same working directory and with the same endpoint variables as its existing launch. Copy the run directory across if it isn't there already, then set `RUN_DIR` to its path and `ROUTER_URL` to an address the router host can reach.
+If you run a warm standby, stop it through its process manager before replacing the active router, and bring it back with the same final profile store after readmission. A router started with `--standby-of` does not apply `--resume`, so omit that option when restarting the active router.
 
-Set `FLEET` to the current fleet document and `FRESH_PROFILES` to the complete profile store for the current processes. The two paths below are only examples, so replace them before you run anything:
+Run the commands in this section on the router host, in its deployment environment, from the same working directory and with the same endpoint variables as its existing launch. Copy the run directory there, then set `RUN_DIR` to its path and `ROUTER_URL` to an address the router host can reach.
+
+Set `FLEET` to the current fleet document and `FRESH_PROFILES` to the complete profile store for the current processes. The paths below are examples. Replace them.
 
 ```bash
 FLEET='config/fleet.production.json'
@@ -258,13 +285,13 @@ FRESH_PROFILES='runs/replacement/profiles.json'
 ACTIVATION_FLEET="$RUN_DIR/fleet-activation.json"
 ```
 
-The store has to cover exactly the original fleet, including every shared-GPU role variant it needs. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) with the recorded measurement recipe, and hang on to the profiles and sample evidence for generations that didn't change, because you'll need them to assemble the full store.
+The store must cover exactly the original fleet, including every shared-GPU role variant. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) with the recorded measurement recipe, and reuse the retained profiles and sample evidence for engines whose generation did not change.
 
-`narwhal-profile --only` writes profiles for just the engines you select. On a larger fleet, that means merging its output with the retained profiles for everything else. The [profile command](../cli/Profile.md#options) reference explains how to merge measured stores and keep their source sidecars.
+`narwhal-profile --only` writes profiles for the selected engines. Whenever you replace a subset of the fleet, merge its output with the retained profiles for the other engines. The [profile command](../cli/Profile.md#options) reference explains how to merge measured stores and keep their source sidecars.
 
 ### Prepare the activation configuration
 
-Make a copy of the current fleet document that points its profile path at the complete store and its handoff path at a new file in this run directory:
+Copy the current fleet document, pointing its profile path at the complete store and its handoff path at a new file in this run directory:
 
 ```bash
 python3 - "$FLEET" "$FRESH_PROFILES" "$RUN_DIR" <<'PY'
@@ -283,21 +310,21 @@ with (run / "fleet-activation.json").open("x") as output:
 PY
 ```
 
-Leave the engine IDs, model, endpoints, contract, role pins, and restart policy alone. Resuming needs a compatible handoff schema, the same engine IDs, and the same restart policy. The script changes only `profiles.path` and `recovery.state_path`. A new `profiles.path` is safe because the replacement router loads the new store before it restores the holds from the handoff.
+Do not change the engine IDs, model, endpoints, contract, role pins, or restart policy. Resume requires the same engine IDs, the same restart policy, and a compatible handoff schema. The script edits only `profiles.path` and `recovery.state_path`. The replacement router loads the new profile store before restoring the holds from the handoff.
 
 ### Run full preflight
 
-With the fleet idle, run every preflight gate, including all the role-permitted directed KV paths:
+With the fleet idle, run every preflight gate, including all role-permitted directed KV paths:
 
 ```bash
 narwhal-check --fleet "$ACTIVATION_FLEET" > "$RUN_DIR/activation-preflight.log" 2>&1
 ```
 
-Only continue if the command exits successfully with every gate passing. Keep the log, the profiles, and the sample files.
+Continue only if the command exits successfully with every gate passing. Keep the log, the profiles, and the sample files.
 
 ### Capture the held state
 
-Wait for all routed requests to finish, then capture the handoff. The lifecycle hold has to stay in place through capture and loading, so don't request readmission until you've confirmed the hold survived the resume.
+Wait for all routed requests to finish, then capture the handoff. The lifecycle hold must stay in place through capture and loading, so do not request readmission until you have confirmed the hold survived the resume:
 
 ```bash
 curl -fsS "$ROUTER_URL/narwhal/state" > "$RUN_DIR/activation-idle.json"
@@ -335,20 +362,20 @@ print("saved holds:", [row["iid"] for row in held])
 PY
 ```
 
-`activation-handoff.json` is your record of the state before the restart, so keep it. The replacement router reads and updates the separate `resume-state.json`.
+`activation-handoff.json` records the state before the restart. Keep it. The replacement router reads and updates the separate `resume-state.json`.
 
 ### Restart the router with resume enabled
 
 Before you touch the router, make sure the saved handoff exists and contains the holds you expect to restore.
 
-Stop the old router through its process manager and wait for the process to exit. Start the replacement with `--fleet "$ACTIVATION_FLEET" --resume`, keeping its bind address, port, lease settings, and other serving options as they were. If the old router was started with `--standby-of`, leave that option out: a router started as a standby doesn't apply `--resume`. For a standalone router on the default loopback bind and port, the command looks like this:
+Stop the old router through its process manager and wait for the process to exit. Start the replacement with `--fleet "$ACTIVATION_FLEET" --resume`, keeping its bind address, port, lease settings, and other serving options. Omit `--standby-of` if the old router used it. For a standalone router on the default loopback bind and port, the start command is:
 
 ```bash
 narwhal-serve --fleet "$ACTIVATION_FLEET" --resume \
   --host 127.0.0.1 --port 8000 --journal "$RUN_DIR/router-activation.jsonl"
 ```
 
-Run it through the deployment's process manager. On startup, the router checks every loaded profile against its live generation first, and only then applies the saved handoff.
+Run this command through the deployment's process manager. On startup, the router checks every loaded profile against its live generation, then applies the saved handoff.
 
 ### Verify the hold before readmission
 
@@ -377,16 +404,16 @@ print("lifecycle holds and drain identities preserved")
 PY
 ```
 
-Once that passes, request [individual readmission](#73-request-readmission) or [whole-wave readmission](#82-restart-the-fleet). Check the results and send a routed request before you reopen external admission.
+`/ready` returns HTTP 200 while other engines are eligible, so it does not show whether an individual hold is in effect. Check the held engine's `accepts_new` value.
 
-Don't use `/ready` to tell whether an individual hold is still in effect. It can return HTTP 200 while other engines are still eligible, so check the held engine's `accepts_new` value instead.
+When the check passes, request [individual readmission](#73-request-readmission) or [wave readmission](#82-restart-the-fleet). Verify the result as described there, and send a routed request before reopening external admission.
 
 ## 9. Detect process replacement
 
-Each successful liveness sample doubles as an identity check. Narwhal reads the engine's `/version` and `process_start_time_seconds`, verifies the process-bound attestation and loaded profile bindings, and compares the process start with the identity it accepted earlier. A changed start time or a failed verification excludes the engine and kicks off recovery.
+Each successful liveness sample also checks process identity. Narwhal reads the engine's `/version` and `process_start_time_seconds`, verifies the process-bound attestation and loaded profile bindings, and compares the process start with the identity it accepted earlier. A changed start time or a failed verification excludes the engine and starts recovery.
 
-The handoff stores the accepted process start values and the restart policy. Both resume and standby takeover rely on it to validate the running engines before admitting traffic. During resume, startup verifies the loaded profiles and live attestation before applying the handoff. Any failure, such as a version mismatch reported by the attestation check or a profile bound to a different generation, stops startup. Automatic takeover only works with handoff schema version 1.
+The handoff stores the accepted process start values and the restart policy. Resume and standby takeover use it to validate the running engines before admitting traffic. During resume, startup verifies the loaded profiles and live attestation before applying the handoff. Any failure, such as a version mismatch reported by the attestation check or a profile bound to a different generation, stops startup. Automatic takeover works only with handoff schema version 1.
 
-A changed process start is picked up on the next successful liveness sample. That normally arrives after `recovery.liveness_every * controller.monitor_interval_s`, plus whatever time probing and monitoring take.
+A changed process start is detected on the next successful liveness sample. Detection latency is `recovery.liveness_every` x `controller.monitor_interval_s` seconds, plus probe time.
 
-The whole-wave policy depends on these sweeps to notice that a process has been replaced. For planned process changes, use the drain workflow instead, and make sure the process-start metrics and attestation describe the processes that are actually running.
+The `whole_wave` policy relies on these liveness sweeps to detect process replacement. Route planned process changes through the drain workflow, and make sure the process-start metrics and attestation describe the processes that are running.

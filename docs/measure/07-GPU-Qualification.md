@@ -1,10 +1,10 @@
 # Kimi-K3 GPU benchmark qualification
 
-This is the record of the September 2026 qualification run for Kimi-K3 on AMD MI355X hardware. Both offered rates passed, with all 200 requests at each rate inside the latency limits.
+September 2026 qualification run of Kimi-K3 on AMD MI355X. Both offered rates passed: all 200 requests at each rate met the latency limits.
 
-The latency targets here, 10 s TTFT and 0.3 s TPOT, are far looser than the load trial defaults. That's expected: on this engine shape, decode alone takes about 0.24 s per token.
+The limits are 10 s TTFT and 0.3 s TPOT. Decode takes about 0.24 s per token on this engine shape (measured TPOT about 0.26 s), so this run replaces the `load_trial.py` defaults.
 
-The private bundle under `runs/issue44-mi355x-20260923/` has everything else: host allocation, endpoint addresses, the full deployment package, launch checks, engine attestations, profile samples, preflight output, and raw benchmark evidence.
+Host allocation, endpoint addresses, the deployment package, and raw evidence are in the private bundle under `runs/issue44-mi355x-20260923/`. See the last section for its contents.
 
 ## Pinned inputs
 
@@ -24,21 +24,22 @@ The private bundle under `runs/issue44-mi355x-20260923/` has everything else: ho
 | Benchmark plan SHA-256  | `43a8755d37383687f5ef639c5c16a095f5cc0feaf02b3d0821b1297f319f79b3`                                                                        |
 | Workload SHA-256        | `55885dd1d9b42a4debf7b01230bbb5c917334689e867d5ca08a66edfb73b80e3`                                                                        |
 
-The earlier full checkpoint manifests all agreed on every weight shard hash. At launch, the live check confirmed each shard's recorded size and the model config hash on every selected host. The per-host manifests and current process records are in the private bundle.
+The earlier full checkpoint manifests from every host matched on all shard hashes. At launch, each selected host was checked for shard sizes and the model config hash. The per-host manifests and current process records are in the private bundle.
 
-The workload's token pool comes from the prompt token IDs returned by `prepare`. The seed completion returned the same output token every time, so a pool built from the output would have turned every prompt into one token repeated 8,192 times.
+The workload's token pool is built from the prompt token IDs returned by `prepare`; the seed completion returned the same output token every time, so a pool built from the output would have turned every prompt into one token repeated 8,192 times.
 
 ## Why the first-token deadline changed
 
-Profiling measured 8,192-token prefill medians of about 0.92 s and decode intercepts between 0.2416 and 0.2426 s/token. The packaged first-token deadline of 2.5 s was too short: it rejected KV handoffs between engines that were in fact working. Probes with a wider window completed on every permitted path, with first-token latency between 0.348 and 5.274 s.
+Profiling measured 8,192-token prefill medians of about 0.92 s and decode intercepts between 0.2416 and 0.2426 s/token. The packaged first-token deadline of 2.5 s rejected working KV handoffs. Probes with a wider window completed on every permitted path, with first-token latency between 0.348 and 5.274 s.
 
-The qualified fleet is a copy of the packaged one with one change, `engine.first_token_timeout_s` raised to 8.5 s. That's above the slowest handoff we saw. If a request does use the whole deadline, about 0.6 s of the 10 s TTFT budget remains after the measured prefill. The full preflight then passed its health, contract, generation, model, pace, tokenization, KV transfer, and SLO gates against the same running engine containers and profile generations.
+The qualified fleet is the packaged fleet with `engine.first_token_timeout_s` raised from 2.5 s to 8.5 s, above the slowest observed handoff (5.274 s). If a handoff uses the whole deadline, about 0.6 s of TTFT budget remains (10 s - 8.5 s - 0.92 s prefill). Full preflight passed all gates (health, contract, generation, model, pace, tokenization, KV transfer, SLO) on the same engine containers and profile generations.
 
 ## Procedure
 
-Load the private deployment environment, then prepare and install the pinned source package with `tools/deployment/deploy_hosts.py`. Start each engine from its checked launch plan, capture its live cache and NIXL contract, and start its attestation sidecar.
-
-On the router host, finalize the fleet contract and profile the current engine generations. The final `narwhal-check` runs against the qualified fleet copy described above.
+1. Load the private deployment environment.
+2. Prepare and install the pinned source package with `tools/deployment/deploy_hosts.py`.
+3. On each engine host, start the engine from its checked launch plan, capture its live cache and NIXL contract, and start its attestation sidecar. See [Deploy](../Deploy.md) for launch plan and attestation details.
+4. On the router host, finalize the fleet contract, profile the current engine generations, and run `narwhal-check` against the qualified fleet.
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet \
@@ -54,7 +55,7 @@ On the router host, finalize the fleet contract and profile the current engine g
 .venv/bin/narwhal-check --fleet runs/issue44-mi355x-20260923/fleet-qualified.json
 ```
 
-Start the router with an explicit private journal. While it's running, update the router host's checkout of the benchmark helper to the pinned client revision, then generate the workload that both points share:
+Start the router with an explicit private journal and leave it running. In another shell, check out the pinned client revision of the benchmark helper on the router host (not shown), then generate the workload shared by both points:
 
 ```bash
 .venv/bin/narwhal-serve --fleet runs/issue44-mi355x-20260923/fleet-qualified.json \
@@ -66,7 +67,7 @@ Start the router with an explicit private journal. While it's running, update th
   --out runs/issue44-mi355x-20260923/workload
 ```
 
-The private plan, `benchmark-plan-qualified.json`, defines two points in order: 0.5 and 1 request/s, with 200 requests each. It references the qualified fleet and records the pinned client revision. Both points run `load_trial.py run` with `--ttft 10 --tpot 0.3 --attainment 0.95 --timeout 180`, and the runner fills in the router URL, model, and output directory. Run the plan from the router host:
+The private plan, `benchmark-plan-qualified.json`, defines two points in order: 0.5 and 1 request/s, with 200 requests each. It references the qualified fleet and records the pinned client revision. Both points run `load_trial.py run` with `--ttft 10 --tpot 0.3 --attainment 0.95 --timeout 180`, and the runner fills in the router URL, model, and output directory. The plan file is not published. Run it from the router host:
 
 ```bash
 .venv/bin/python tools/measurement/benchmark_runner.py \
@@ -78,19 +79,19 @@ The private plan, `benchmark-plan-qualified.json`, defines two points in order: 
 
 ## Results
 
-Both points started with a ready, idle router and drained cleanly afterward. The table leaves out each point's warmup request. Counting the warmup, the client and the router journal each recorded 201 terminal requests per point.
+The router was ready and idle before each point and drained after it. The table excludes each point's warmup request; with it, the client and the router journal each recorded 201 terminal requests per point.
 
 | Offered rate  | Completed rate (incl. drain) | Output throughput (incl. drain) | TTFT p50 / p95 / p99    | TPOT p50 / p95 / p99     | Result                |
 | ------------- | ---------------------------- | ------------------------------- | ----------------------- | ------------------------ | --------------------- |
 | 0.5 request/s | 0.460 request/s              | 58.9 tokens/s                   | 5.258 / 7.298 / 7.407 s | 257.5 / 258.4 / 259.3 ms | 200/200 within limits |
 | 1 request/s   | 0.840 request/s              | 107.5 tokens/s                  | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
-The completed rate is lower than the offered rate because the elapsed time includes draining the last requests after the final offer.
+Completed rate and throughput divide by elapsed time including the final drain, so they fall below the offered rate.
 
-During the 0.5 request/s point, the router shifted capacity toward decode, and it kept that allocation for the whole 1 request/s point. The private evidence has the role history, engine identities, and exact allocation.
+During the 0.5 request/s point, the router shifted capacity toward decode and kept that allocation for the whole 1 request/s point. Role history and allocation are in the private bundle.
 
-Both points had complete scrape coverage, matching client and journal outcome counts, and a state timeline showing every role change. The 1 request/s point passed every collector check. The 0.5 request/s point has one `counter_missing` diagnostic, because the `narwhal_flips_total` series didn't exist until the first role change, partway through that point. Grafana's dashboards also only start partway through the lower-rate point; the collector's own samples cover all of it.
+Both points had complete scrape coverage, matching client and journal outcome counts, and a state timeline showing every role change. The 1 request/s point passed every collector check. The 0.5 request/s point has one `counter_missing` diagnostic: `narwhal_flips_total` did not exist until the first role change, partway through that point. Grafana panels for that point also start partway through; the collector's own samples cover all of it.
 
-After the second drain, a post-load [KV ring check](../cli/Check.md) of the role-permitted transfers between engines passed.
+After the second drain, the post-load [KV ring check](../cli/Check.md) passed for all role-permitted engine-to-engine transfers.
 
 The complete private bundle is `runs/issue44-mi355x-20260923/qualification-artifacts.tgz` (SHA-256 `5a3dbb86d0a361637b55014bbf5b03a25ffb72eaffd93716107753978ffb489c`). It has the client records, router journal, per-point evidence, metric samples, profile store and samples, preflight reports, post-load check, workload, and qualified inputs. The deployment and monitoring services were left running for inspection.
