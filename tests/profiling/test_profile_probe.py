@@ -498,6 +498,62 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     client, "http://e", "stub", concurrency=(1,), input_lens=(10,), tokens=2
                 )
 
+    def test_overlapping_tokens_cover_the_admission_lag(self):
+        """A cohort that never overlapped retries with the lag tokens plus the configured count."""
+        lagged = {"cohort": 4, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
+        self.assertEqual(probe._overlapping_tokens(lagged, 64, None), 64 + 128)
+        self.assertIsNone(probe._overlapping_tokens(lagged, 64, 150))
+        overlapped = {"cohort": 4, "first_at": 0.0, "last_join_at": 2.0, "left_at": 5.0}
+        self.assertIsNone(probe._overlapping_tokens(overlapped, 64, None))
+        self.assertIsNone(probe._overlapping_tokens({"cohort": 4}, 64, None))
+
+    async def test_decode_sweep_retries_a_lagged_cohort_with_overlapping_tokens(self):
+        """Early members that finish before the last one joins get one sized retry."""
+        calls: list[int] = []
+
+        async def lagged(client, url, model, prompt, input_len, state, observed, tokens, dialect):
+            calls.append(tokens)
+            state.setdefault("first_at", 0.0)
+            if tokens < 128:
+                state["last_join_at"] = 10.0
+                state.setdefault("left_at", 5.0)
+                return
+            observed.extend((4.0, float(input_len), 0.01) for _ in range(2))
+
+        evidence: list[dict[str, object]] = []
+        with (
+            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(probe, "_one_decode_stream", side_effect=lagged),
+        ):
+            await probe.probe_decode(
+                None,
+                "http://e",
+                "stub",
+                concurrency=(4,),
+                input_lens=(100,),
+                tokens=64,
+                evidence=evidence,
+                max_model_len=4096,
+            )
+        self.assertEqual(calls, [64] * 4 + [192] * 4)
+        self.assertEqual(evidence[0]["tokens"], 192)
+        calls.clear()
+        with (
+            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(probe, "_one_decode_stream", side_effect=lagged),
+            self.assertRaisesRegex(RuntimeError, "insufficient complete-cohort.*tokens=64"),
+        ):
+            await probe.probe_decode(
+                None,
+                "http://e",
+                "stub",
+                concurrency=(4,),
+                input_lens=(100,),
+                tokens=64,
+                max_model_len=250,
+            )
+        self.assertEqual(calls, [64] * 4)
+
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
         """Catch-up tokens cannot make an interrupted decoder appear faster."""
 

@@ -316,7 +316,7 @@ async def _one_decode_stream(
     model: str,
     prompt: str,
     input_len: int,
-    state: dict[str, int],
+    state: dict[str, float],
     samples: list[tuple[float, float, float]],
     tokens: int = DECODE_TOKENS,
     dialect: EngineDialect | None = None,
@@ -342,7 +342,7 @@ async def _one_decode_stream(
     }
     mine = 0
     last: float | None = None
-    last_epoch = -1
+    last_epoch = -1.0
     done = False
     finished = False
     try:
@@ -389,6 +389,10 @@ async def _one_decode_stream(
                     state["resident"] += input_len
                     state["requests"] += 1
                     state["epoch"] += 1
+                    state["joined"] = state.get("joined", 0) + 1
+                    state.setdefault("first_at", now)
+                    if state["joined"] == state["cohort"]:
+                        state["last_join_at"] = now
                 mine += len(ids)
                 state["resident"] += len(ids)
                 if (
@@ -409,9 +413,56 @@ async def _one_decode_stream(
             )
     finally:
         if mine:
+            state.setdefault("left_at", time.monotonic())
             state["resident"] -= input_len + mine
             state["requests"] -= 1
             state["epoch"] += 1
+
+
+async def _decode_cohort(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    prompt: str,
+    input_len: int,
+    cohort: int,
+    tokens: int,
+    dialect: EngineDialect,
+) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
+    """Run one decode cohort and return its complete-cohort intervals and timing state."""
+    state: dict[str, float] = {"resident": 0, "requests": 0, "epoch": 0, "cohort": cohort}
+    observed: list[tuple[float, float, float]] = []
+    tasks = [
+        asyncio.create_task(
+            _one_decode_stream(
+                client, url, model, prompt, input_len, state, observed, tokens, dialect
+            )
+        )
+        for _ in range(cohort)
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return observed, state
+
+
+def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
+    """Size a retry so the first member still decodes when the last member joins.
+
+    A member that emitted `tokens` between the first arrival and the first
+    departure keeps `tokens` of full-cohort decode after the admission lag.
+    Returns None when the cohort already overlapped or the size exceeds `limit`.
+    """
+    first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
+    if first is None or joined is None or left is None or joined < left or left <= first:
+        return None
+    sized = tokens + math.ceil(tokens * (joined - first) / (left - first))
+    if limit is not None and sized > limit:
+        return None
+    return sized
 
 
 async def probe_decode(
@@ -450,26 +501,23 @@ async def probe_decode(
         for c in concurrency:
             replicates: list[tuple[float, float, float]] = []
             for repeat in range(repeats):
-                state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": c}
-                observed: list[tuple[float, float, float]] = []
-                tasks = [
-                    asyncio.create_task(
-                        _one_decode_stream(
-                            client, url, model, prompt, input_len, state, observed, tokens, dialect
+                used = tokens
+                observed, state = await _decode_cohort(
+                    client, url, model, prompt, input_len, c, used, dialect
+                )
+                if len(observed) < 2 * c:
+                    limit = max_model_len - input_len if max_model_len is not None else None
+                    retry = _overlapping_tokens(state, tokens, limit)
+                    if retry is not None:
+                        used = retry
+                        observed, state = await _decode_cohort(
+                            client, url, model, prompt, input_len, c, used, dialect
                         )
-                    )
-                    for _ in range(c)
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
                 if len(observed) < 2 * c:
                     raise RuntimeError(
                         f"decode probe has insufficient complete-cohort intervals: "
-                        f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}"
+                        f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}, "
+                        f"tokens={used}"
                     )
                 if evidence is not None:
                     evidence.append(
@@ -477,6 +525,7 @@ async def probe_decode(
                             "input_tokens": input_len,
                             "concurrency": c,
                             "repeat": repeat,
+                            "tokens": used,
                             "intervals": observed,
                         }
                     )
@@ -813,6 +862,9 @@ async def profile_instance(
         repeats=s.decode_repeats,
         observation_timeout_s=observation_timeout_s,
     )
+    decode_tokens_used = [
+        used for row in decode_intervals if isinstance(used := row.get("tokens"), int)
+    ]
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
@@ -860,7 +912,7 @@ async def profile_instance(
         prefill_min_tokens=math.floor(min(row[0] for row in prefill)),
         prefill_max_tokens=math.ceil(max(row[0] for row in prefill)),
         decode_min_output_tokens=1,
-        decode_max_output_tokens=s.decode_tokens,
+        decode_max_output_tokens=max(decode_tokens_used, default=s.decode_tokens),
     )
     try:
         if reason is not None:
