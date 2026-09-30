@@ -1,70 +1,57 @@
+---
+description: Fail over to the standby Narwhal router and roll back a router release.
+---
+
 # Router failover and rollback
 
 ## Router failover
 
 ### Primary router failed
 
-Query `/ready` and `/narwhal/lifecycle` on both routers, then direct load-balancer traffic to the single lease holder reporting `router.controls_fleet: true` when its `/ready` returns HTTP 200.
+1. Query `/ready` and `/narwhal/lifecycle` on both routers.
+2. Identify the lease holder: its `/narwhal/lifecycle` reports `router.controls_fleet: true`.
+3. Wait for the lease holder's `/ready` to return HTTP 200.
+4. Send load-balancer traffic to that router.
+5. Check the active router against the last persisted state handoff:
+    - Its lease epoch is higher than the failed primary's last epoch.
+    - Its roles match the handoff.
+    - Its cumulative counters match the handoff.
+6. Add `--standby-of <active-router>` (the active router's URL) to the old primary's launch command.
+7. Restart the old primary.
 
-Check the active router against the last persisted handoff:
+The recovered standby:
 
-- its lease epoch exceeds the failed primary's last epoch;
-- its roles match the last handoff;
-- its cumulative counters match the last handoff.
+- returns HTTP 503 from `/ready`
+- rejects direct completion requests with HTTP 503
 
-Restart the old primary as a standby:
+When both routers return HTTP 503 from `/ready`, read the refusal reasons:
 
-```text
---standby-of <active-router>
-```
+| Refusal reason | Action |
+| --- | --- |
+| Lease storage or clock bound | Repair the storage or clock with the lease holder and fencing left in place. |
+| Any other reason | Fix what the reason names. |
 
-The recovered process should return HTTP 503 from `/ready` and reject a direct completion request.
+### State handoff is stale or incompatible
 
-If both routers return HTTP 503, use their refusal reasons to determine the next repair. Lease-storage and clock-bound failures must be repaired while preserving lease ownership and fencing so recovery converges on one active primary.
+| Cause | Standby `/ready` |
+| --- | --- |
+| The previous lease epoch's state handoff expired, or the previous router exited before persisting one | HTTP 503, reason `no fresh handoff` |
+| Contract version mismatch or wrong epoch in the state handoff | HTTP 503 |
 
-### Handoff is stale or incompatible
+1. Keep client traffic stopped.
+2. Restore a compatible router release.
+3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set).
 
-A standby reports `no fresh handoff` when the previous lease epoch's handoff has expired or the previous router exited before persisting one.
+If handoff restoration fails:
 
-The router also keeps `/ready` at HTTP 503 when the handoff has an incompatible contract version or incorrect epoch.
-
-Keep client traffic stopped while restoring a compatible router release and state set.
-
-When handoff recovery fails, start one router from its configured opening roles during a maintenance window.
-
-Before admitting traffic, verify that the previous router process is stopped or fenced.
+1. Open a maintenance window.
+2. Set `recovery.resume: false` in the fleet configuration.
+3. Drop `--resume` and `--standby-of` from one router's launch command.
+4. Wait until the old router has stopped or fenced itself and its lease has expired.
+5. Start that router from its opening roles.
+6. Admit traffic.
 
 ## Router rollback
 
-Remove the target router from the load balancer.
-
-Stop it cleanly where possible so it persists a complete handoff.
-
-Inspect the rollback build's contract support:
-
-```bash
-narwhal-check --print-contract-versions
-```
-
-Restore configuration, profiles, and a handoff version that the rollback build can read.
-
-For a rollback that starts from configured opening roles and resets cumulative counters, configure:
-
-```yaml
-recovery:
-  resume: false
-```
-
-Before serving traffic, verify that fleet control belongs either to the rollback router or to its fenced HA peer.
-
-Start the rollback build and check:
-
-- health;
-- readiness;
-- roles;
-- cumulative counters;
-- one completion request.
-
-Return it to service after those checks pass. Restore its standby after the active router is stable.
-
-Run the [post-recovery drills](../Troubleshoot.md#after-recovery) after the router returns to service.
+1. Follow [Roll back](../operate/04-Upgrade-and-Validate.md#103-roll-back).
+2. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).

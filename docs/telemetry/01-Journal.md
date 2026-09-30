@@ -1,105 +1,192 @@
+---
+description: Diagnose requests and SLO attainment from the Narwhal JSON Lines request journal.
+---
+
 # Request journal
 
 ## Diagnose a request from the journal
 
-Pass `--journal <path>` to place the JSON Lines journal at a chosen path; its default is `journal.jsonl` beside `profiles.path`. Narwhal appends records under a process-specific `run` identifier, separating restarts and standby takeovers in a shared file.
+`--journal <path>` on `narwhal-serve` sets the JSON Lines journal path, `journal.jsonl` beside `profiles.path` by default.
 
-The first row identifies the journal contract and the build that produced it:
+| Row type | Key field | Written |
+| --- | --- | --- |
+| Build metadata | `meta` | Once per router process, at journal open |
+| Terminal request | `terminal` | Once per original request |
+| Router event | `event` | Once per event |
+
+Terminal and event rows carry these fields:
+
+| Field | Value |
+| --- | --- |
+| `schema` | `narwhal.journal` |
+| `schema_version` | `1` |
+| `run` | Router process identifier, new on each restart or standby takeover |
+
+`/narwhal/state` reports the current process's `run` as `journal_run`.
+
+Build metadata row:
 
 ```json
-{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.1.0","git":"<commit>","source":"sha256:...","token_accounting":"token_ids"}}
+{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.3.1","git":"<commit>","source":"sha256:...","token_accounting":"token_ids"}}
 ```
 
-`source` is the SHA-256 digest of the installed package's Python files. Identical Python source produces the same digest from a checkout, deployment, or wheel.
+| Field | Meaning |
+| --- | --- |
+| `version` | Installed `narwhal-inference` version. |
+| `git` | `git describe` output for a source checkout, null for an installed package. |
+| `source` | SHA-256 digest of the installed package's Python files. |
+| `token_accounting` | Decode-output accounting mode of the fleet's engine dialect. |
 
 ### Terminal request records
 
-Narwhal closes each original completion request with one terminal row, attaching retries and the final invalid, rejected, expired, failed, cancelled, refused, or completed outcome to that request.
+Each original completion request and its retries share one terminal row.
 
-| Field                                        | Meaning                                                                                                                                                               |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`, `rid`, `client_rid`                   | Router process, Narwhal request ID, and optional caller request ID.                                                                                                   |
-| `arrived`                                    | Arrival time on the process monotonic clock. Compare this value only within one `run`.                                                                                |
-| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens. For a cancellation, `output_len` records delivered tokens when they can be measured.                     |
-| `ttft_s`, `tpot_s`, `first_byte_s`           | Router-side prefill, decode, and first-visible-output timing.                                                                                                         |
-| `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
-| `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
-| `cached_tokens`                              | Prompt tokens each engine could serve from its prefix cache, by engine ID, as last rechecked at prefill placement. Lists engines that can reuse at least one leading prompt block before the final prompt token. |
-| `cache_placement`                            | Prefill placement priced with cache evidence: `placed_iid`, `placed_cached_tokens`, `evidence_sequence`, `predicted_prefill_s`, `cold_prefill_s` and `cold_choice_iid`. `evidence_sequence` is the sidecar residency sequence behind the cached count. `cold_choice_iid` is the engine cold pricing would choose among the same placement candidates. `null` for a request with empty `cached_tokens` or a placed engine outside the profile store. |
-| `token_accounting`                           | Decode-output accounting mode. `token_ids` provides exact per-token identity; every other dialect reports `unavailable`.                                              |
-| `refused`, `refused_cause`                   | Predictive refusal flag and cause: `prompt`, `queue`, `aggregate_unpriced` or `decode`. See [admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| `cancelled`, `cancelled_phase`               | Client disconnect and the phase in which it occurred: `admission`, `queue`, `backoff`, `prefill`, or `decode`.                                                        |
-| `terminal`                                   | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.                                                              |
-| `input_sized`                                | Whether local input sizing completed. When false, the body terminated before sizing and `input_len: 0` records that early exit.                                       |
-| `attempts`, `decode_attempts`                | Prefill and decode dispatch counts for the original request.                                                                                                          |
-| `attempt_failures`                           | Bounded records for failed attempts, including failures followed by successful retries.                                                                               |
-| `queue_wait_s`, `duration_s`                 | Total admission and dispatch wait, and complete request lifetime on the router clock.                                                                                 |
-| `decode_tpot_s`                              | Time from first to last observed output token divided by `output_tokens - 1`. Null when fewer than two tokens were observed or exact token accounting is unavailable. |
-| `decode_tokens_observed`, `upstream_seconds` | Tokens observed across every attempt and summed HTTP-leg duration, including failed work, transfer time, and waiting.                                                 |
-| `error`                                      | Failure or refusal detail. Successful and cancelled requests use null.                                                                                                |
+| Field | Meaning |
+| --- | --- |
+| `run`, `rid`, `client_rid` | Router process, Narwhal request ID, and the caller's `X-Request-Id` header. |
+| `arrived` | Arrival time on the monotonic clock of the `run`'s router process. |
+| `input_len` | Prompt tokens. |
+| `input_sized` | Whether local input sizing completed. |
+| `wanted_len` | Requested output tokens. |
+| `output_len` | Output tokens the router measured up to completion or cancellation. |
+| `ttft_s` | Seconds from arrival to prefill completion. |
+| `tpot_s` | Mean seconds per output token after prefill completion. |
+| `first_byte_s` | Seconds from arrival to the first visible output. |
+| `decode_tpot_s` | Time from first to last observed output token divided by `output_len - 1`. |
+| `prefill_iid`, `decode_iid` | Engines of the final attempt's prefill and decode legs. |
+| `crossed` | `true` when `decode_iid` differs from `prefill_iid`. |
+| `cached_tokens` | Prompt tokens each engine can serve from its prefix cache at the last prefill-placement recheck, by engine ID, for engines that reuse at least one leading prompt block before the final prompt token. |
+| `cache_placement` | The prefill placement priced with [cache evidence](#cache-placement). |
+| `token_accounting` | `token_ids` for exact per-token identity, `unavailable` when the engine dialect omits token IDs. |
+| `refused`, `refused_cause` | `true` on a predictive refusal, with its [refusal cause](#refusal-causes). |
+| `rejected` | `true` on a capacity rejection. |
+| `expired` | `true` on an admission or total deadline expiry. |
+| `cancelled`, `cancelled_phase` | `true` on a client disconnect, with its phase: `admission`, `queue`, `backoff`, `prefill`, or `decode`. |
+| `terminal` | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`. |
+| `attempts`, `decode_attempts` | Prefill and decode dispatch counts for the original request. |
+| `attempt_failures` | One [entry](#attempt-failures) per failed attempt, retried or final. |
+| `queue_wait_s` | Total admission and dispatch wait. |
+| `duration_s` | Complete request lifetime on the router clock. |
+| `decode_tokens_observed` | Decode tokens read across every attempt. |
+| `upstream_seconds` | Summed HTTP leg seconds per phase (`prefill`, `decode`) across every attempt, failed or successful. |
+| `error` | Error detail on `failed`, `refused`, `rejected`, `expired`, and `invalid` rows. |
 
-Each `attempt_failures` entry can record:
+| Condition | Field values |
+| --- | --- |
+| `input_sized` is false | `input_len` is `0`. |
+| `token_accounting` is `unavailable` | `output_len`, `tpot_s`, `decode_tpot_s`, and `decode_tokens_observed` are null. |
+| Fewer than two measured output tokens | `tpot_s` and `decode_tpot_s` are null. |
+| Prefill incomplete | `ttft_s` and `tpot_s` are null. |
+| Zero visible output | `first_byte_s` is null. |
+| `terminal` is `completed` or `cancelled` | `error` is null. |
+| `cached_tokens` is empty | `cache_placement` is null. |
+| The placed engine is outside the profile store | `cache_placement` is null. |
 
-- monotonic time;
-- attempt number;
-- request phase;
-- prefill and decode engine IDs;
-- exception type, message, and status;
-- transient classification;
-- visible-output state;
-- retry decision;
-- scheduled backoff.
+#### Cache placement
 
-Narwhal retains at most `serving.max_attempts` failure entries and caps messages at 240 characters. A retry decision records the scheduled action, which a client cancellation can interrupt during backoff before dispatch.
+| Field | Meaning |
+| --- | --- |
+| `placed_iid` | Engine chosen for the prefill leg. |
+| `placed_cached_tokens` | The chosen engine's `cached_tokens` entry. |
+| `evidence_sequence` | Sidecar residency sequence behind the cached count. |
+| `predicted_prefill_s` | Prefill seconds priced on the chosen engine. |
+| `cold_prefill_s` | Cold prefill seconds for the full input on the chosen engine. |
+| `cold_choice_iid` | Engine that cold pricing chooses among the same placement candidates. |
 
-### Attainment accounting
+#### Refusal causes
 
-For deployment acceptance, score the [client's scheduled offers](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) against its TTFT and TPOT limits. Only completed client responses within the applicable limits pass. All other scored offers are misses. Build this population from the client's offer records, including unsent offers and excluding the unscored warmup.
+The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission) sets the time to first token (TTFT) budget.
 
-Join sent, scored offers to terminal journal rows by `client_rid` to diagnose misses. Journal outcomes that represent misses include:
+| `refused_cause` | Condition |
+| --- | --- |
+| `prompt` | The prompt's prefill alone exceeds the TTFT budget. |
+| `queue` | The prompt alone fits the TTFT budget, and the cheapest placement including queueing exceeds it. |
+| `aggregate_unpriced` | Every candidate engine carries decode work. |
+| `decode` | Peak projected decode work over the request's decode window exceeds live decode capacity, or decode load pushes the request past `slo.tpot_s`. |
 
-- invalid requests;
-- capacity rejections;
-- predictive refusals;
-- expiries;
-- engine failures;
-- cancellations, including those with partial output and measured timing;
-- terminal requests whose `output_len` is null;
-- terminal requests whose `ttft_s` is null.
+#### Attempt failures
 
-Completed responses above an applicable client latency limit also miss. Narwhal writes timing measured before a client disconnect to the `cancelled` terminal row and increments the cancellation counter for that original request. Cancelled requests count as misses even when `output_len` or `ttft_s` has a measured value.
+| Field | Meaning |
+| --- | --- |
+| `at` | Monotonic time of the failure. |
+| `attempt` | Attempt number. |
+| `phase` | Request phase. |
+| `prefill_iid`, `decode_iid` | Engines of the failed attempt. |
+| `error_type`, `error_message`, `status` | Exception type, message cut at 240 characters, and status. |
+| `transient` | Transient classification. |
+| `output_started` | Whether client-visible output had started. |
+| `retry_scheduled` | Whether a retry was scheduled. |
+| `retry_reason` | `allowed`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. |
+| `backoff_s` | Scheduled backoff seconds. |
 
-The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) excludes cancelled, rejected, and invalid requests. Use the client's all-offer score for deployment acceptance.
+| Property | Value |
+| --- | --- |
+| Entry limit | At most `serving.max_attempts`. |
+| Cancellation during backoff | The last entry keeps `retry_scheduled: true`. |
+
+Remove engine IDs and engine URLs from failure text before publishing timing journals.
 
 ### Separate transfer and decode queueing
 
-For requests whose first byte follows prefill, `first_byte_s - ttft_s` measures KV transfer plus decode queueing.
+For requests whose first byte follows prefill:
 
-A crossed request normally pays both components. A request decoded on the local engine can still wait in the decode queue.
+| Request | `first_byte_s - ttft_s` contains |
+| --- | --- |
+| Crossed | KV transfer plus decode queueing. |
+| Locally decoded | Decode queueing. |
 
-### Journal events
+## Attainment accounting
 
-Narwhal appends router operation events to the request journal for:
+Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
 
-- role-floor breaches and recoveries;
-- blocked decode-floor changes;
-- engine lifecycle operations;
-- monitoring health.
+An offer passes when the client received a completed response within the applicable limits.
 
-If profile-generation verification fails during a health or inference
-recovery probe, Narwhal excludes the engine from placement and writes an
-`engine_lifecycle` event with `action: profile_recovery_blocked`. The event
-records the engine `iid`, the failed check in `error`, and `at` as Unix
-wall-clock seconds. Inspect the engine's
-[profile generation evidence](02-Profiles.md#validate-the-engine-cost-model)
-before retrying recovery.
+Joined to sent, scored offers by `client_rid`, these terminal journal rows are misses:
 
-Monitoring writes these event types:
+- invalid requests
+- capacity rejections
+- predictive refusals
+- expiries
+- engine failures
+- cancellations
+- a row with a null `output_len` or `ttft_s`
 
-- `monitoring_stage_failure`, including `stage`, `class`, and the stage-local `consecutive` failure count;
-- `monitoring_degraded` when consecutive failures reach `controller.monitor_failure_limit`;
-- `monitoring_recovered` after a fully successful monitoring pass clears degraded state.
+For a cancelled request:
 
-Select terminal request rows and process event rows separately during journal analysis.
+- the terminal row keeps timing measured before the client disconnect
+- the cancellation counter increments for the original request
 
-Failure text can contain engine IDs and engine URLs. Remove those identifiers before publishing timing journals.
+The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) skips cancelled, rejected, and invalid requests.
+
+Accept deployments on the client's all-offer score.
+
+## Journal events
+
+| `event` | Written when | Fields beside `at` |
+| --- | --- | --- |
+| `below_floor` | Live prefill engines fall below `min_prefill`. | `live_prefill`, `min_prefill`, `ejected`, `quarantined` |
+| `below_floor_recovered` | The live prefill pool returns to `min_prefill`. | `duration_s`, `live_prefill`, `min_prefill` |
+| `controller_decision` | The role controller records an `applied`, `blocked`, `held`, or `advisory` decision. | `prefill`, `decode`, `by`, `reason`, `result`, `applied`, decision details |
+| `decode_floor_restored` | A role change restores `min_decode`. | `iid`, `live_decode`, `min_decode` |
+| `engine_lifecycle` | An engine lifecycle operation runs. | `action` and its operation fields |
+| `monitoring_stage_failure` | A monitoring stage fails. | `stage`, `class`, stage-local `consecutive` count |
+| `monitoring_degraded` | Consecutive failed monitoring passes reach `controller.monitor_failure_limit`. | `stage`, `class`, `core_consecutive` |
+| `monitoring_recovered` | A fully successful monitoring pass clears degraded state. | |
+
+| Event | `at` clock |
+| --- | --- |
+| `engine_lifecycle` | Unix wall-clock seconds |
+| Every other event | Router monotonic clock |
+
+A failed profile-generation check during a health or inference recovery probe:
+
+- ejects the engine
+- writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
+
+| Field | Meaning |
+| --- | --- |
+| `iid` | Engine. |
+| `error` | Failed checks. |
+| `at` | Unix wall-clock seconds. |
+
+Inspect the engine's [profile generation evidence](02-Profiles.md#validate-the-engine-cost-model) before retrying recovery.

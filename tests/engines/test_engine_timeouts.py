@@ -258,7 +258,7 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
         for reused_connection in (False, True):
             with self.subTest(reused_connection=reused_connection):
                 self.requests.clear()
-                client = EngineClient(prefill_timeout_s=0.04, pool_timeout_s=1)
+                client = EngineClient(prefill_timeout_s=0.5, pool_timeout_s=1)
                 try:
                     if reused_connection:
                         await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})

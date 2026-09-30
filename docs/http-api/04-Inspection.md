@@ -1,8 +1,12 @@
+---
+description: Inspect a Narwhal router through GET /v1/models, /health, /ready and /metrics.
+---
+
 # Model, health, and metrics inspection
 
 ## `GET /v1/models`
 
-Returns the configured served model in OpenAI list format.
+Returns the configured model in OpenAI list format:
 
 ```json
 {
@@ -19,22 +23,23 @@ Returns the configured served model in OpenAI list format.
 
 ## `GET /health`
 
-Reports router process liveness.
+Returns HTTP `200` in every router state.
 
-Possible `status` values are:
+| Field                 | Meaning                        |
+| --------------------- | ------------------------------ |
+| `status`              | Router state                   |
+| `instances`           | Configured fleet size          |
+| `available_instances` | Engines eligible for placement |
 
-- `ok`
-- `standby`
-- `fenced`
-- `maintenance`
-- `degraded`
+The earliest matching row sets `status`:
 
-The response also reports:
-
-- configured fleet size as `instances`
-- placement-eligible engine count as `available_instances`
-
-Example:
+| `status`      | Meaning                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| `ok`          | Router admits new client requests                                                                      |
+| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, or an invalid active-router lease    |
+| `maintenance` | Whole-wave drain, recovery, or restart hold                                                            |
+| `standby`     | Standby router                                                                                         |
+| `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement |
 
 ```json
 {
@@ -44,44 +49,52 @@ Example:
 }
 ```
 
-All `/health` states return HTTP `200`.
-
-Narwhal counts engines eligible for placement after ejection, drain, and quarantine in `available_instances`.
-
-Use Prometheus scrape targets and breaker state for engine-level liveness.
-
 ## `GET /ready`
 
-Narwhal answers each `/ready` probe with HTTP `200` when this router holds fleet control and admits new work, allowing the load balancer to send it client requests. An HTTP `503` keeps the router out of rotation for one of these conditions:
+Returns HTTP `200` when this router controls the fleet and admits new work.
 
-- standby state
-- fencing
-- lease-storage failure
-- lifecycle hold
-- loss of eligible backends
-- monitoring degradation
+Returns HTTP `503` with `Retry-After: 1` otherwise.
 
-After `controller.monitor_failure_limit` consecutive failed monitoring passes, `/ready` reports:
+| Field           | Meaning                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------- |
+| `status`        | `ready` or `not_ready`                                                                                   |
+| `control_ready` | `true` when this router controls the fleet and `/narwhal/state` reports `monitoring.degraded` as `false` |
+| `epoch`         | Lease epoch                                                                                              |
+| `holder`        | Lease-holder token                                                                                       |
+| `reason`        | Cause of `not_ready`, empty when `status` is `ready`                                                     |
 
-```text
-monitoring degraded: <stage> <class>
-```
+The earliest matching row sets `reason`:
 
-Standbys count the same failures toward takeover.
+| Cause                               | `reason`                                                                                       |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Fencing or lease-storage failure    | Failover block, such as `lease renewal failed`                                                 |
+| Whole-wave hold                     | `whole-wave drain <id>`, `whole-wave recovery <id>`, or `whole-wave restart required: <cause>` |
+| Engine-monitoring degradation       | `monitoring degraded: <stage> <class>`                                                         |
+| Standby state                       | `shadowing`                                                                                    |
+| Expired lease                       | `lease expired`                                                                                |
+| Pending engine identity validation  | `engine identity validation pending`                                                           |
+| Zero engines eligible for placement | `no available engines`                                                                         |
 
-One completely successful monitoring pass clears degraded state.
+`monitoring.degraded` transitions:
 
-When the eligible engine count reaches zero, `/ready` returns HTTP `503` with:
+| Transition | Condition                                                    |
+| ---------- | ------------------------------------------------------------ |
+| To `true`  | `controller.monitor_failure_limit` consecutive failed passes |
+| To `false` | One fully successful pass                                    |
+
+A standby router counts each `control_ready: false` response from the active router's `/ready` as a missed takeover probe.
+
+With zero eligible engines, the response is:
 
 ```json
 {
+  "status": "not_ready",
+  "control_ready": true,
+  "epoch": 0,
+  "holder": "",
   "reason": "no available engines"
 }
 ```
-
-New completion requests receive `backend_unavailable` with `Retry-After: 1`.
-
-Lifecycle and control holds take precedence over backend state.
 
 During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
 
@@ -89,10 +102,6 @@ During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-
 - `/ready` reports the lifecycle reason
 - completion requests return HTTP `503` with error code `standby`
 
-`control_ready` stays true during backend loss or managed maintenance while lease ownership and monitoring remain healthy, allowing standbys to keep handoffs current.
-
 ## `GET /metrics`
 
-Returns Prometheus exposition format `0.0.4`.
-
-See [Metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) for the operational series.
+Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.

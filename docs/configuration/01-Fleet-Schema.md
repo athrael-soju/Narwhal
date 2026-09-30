@@ -1,65 +1,54 @@
+---
+description: Top-level keys, a minimal fleet definition and the engine compatibility contract for Narwhal fleet files.
+---
+
 # Fleet schema and engine contract
 
 ## 1. Configuration model
 
-### 1.1 Accepted top-level objects
+### 1.1 Top-level keys
 
-The native fleet document accepts these top-level keys:
-
-- `schema`
-- `schema_version`
-- `model`
-- `hardware`
-- `engines`
-- `engine_contract`
-- `slo`
-- `controller`
-- `serving`
-- `engine`
-- `recovery`
-- `profiles`
-
-The loader accepts the listed keys and underscore-prefixed annotation fields, and reports cross-field validation failures together.
+| Top-level key                                                                                                                                      | Result   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery`, or `profiles` | Accepted |
+| Annotation key starting with `_`                                                                                                                   | Accepted |
+| Other key                                                                                                                                          | Error    |
 
 Use JSON-native types:
 
-- booleans: `true` or `false`
-- counts: JSON integers
-- durations and ratios: finite JSON numbers
+| Value               | JSON type         |
+| ------------------- | ----------------- |
+| Boolean             | `true` or `false` |
+| Count               | Integer           |
+| Duration or ratio   | Finite number     |
+| Name, path, or mode | String            |
 
-Type failures are reported with public field paths, for example:
+A type mistake produces an error like this:
 
 ```text
-engine.tokenize must be a boolean; serving.max_connections must be an integer; controller.monitor_interval_s must be a number
+fleet.json: controller.monitor_interval_s must be a number; serving.max_connections must be an integer; engine.tokenize must be a boolean
 ```
 
 ### 1.2 Paths
 
-Relative fleet and profile paths resolve from the checkout root when used by the deployment workflow.
-
-`narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` values from its working directory.
-
-The `--journal` flag selects a journal path. By default, `narwhal-serve` writes `journal.jsonl` beside `profiles.path`.
+| Caller              | Relative paths                            | Resolved from                |
+| ------------------- | ----------------------------------------- | ---------------------------- |
+| Deployment workflow | Fleet and profile paths                   | Checkout root                |
+| `narwhal-serve`     | `profiles.path` and `recovery.state_path` | Working directory at startup |
 
 ### 1.3 Environment loading
 
-Narwhal reads variables from the process environment. The [deployment workflow](../deploy/01-Discover.md#load-the-private-environment) loads workstation `.env` and generates role-specific environments for remote commands.
+Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#load-the-private-environment) loads.
 
-Common variables are:
+| Variable                            | Use                                                                                                | Default          |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------- |
+| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"` |                  |
+| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                           |                  |
+| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                  |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`      |
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090` |
 
-| Variable                            | Use                                                                                                                                    |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `NARWHAL_FLEET`                     | Selects the fleet JSON for `make observe` and Python callers of `create_app()`. CLI commands still require `--fleet "$NARWHAL_FLEET"`. |
-| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable for engine authentication. Point `engine.engine_api_key_env` at this name.                          |
-| `NARWHAL_ROUTER_URL`                | Router target scraped by `make observe`.                                                                                               |
-| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener override.                                                                                                             |
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener override.                                                                                                          |
-
-The example observability setup binds Grafana to `127.0.0.1:3000` and Prometheus to `127.0.0.1:9090`.
-
-Fleet JSON owns model names, hardware shape, SLOs, profiles, and engine endpoints. Engine launch credentials belong to the engine launcher. Public client authentication belongs at ingress.
-
-Engine `url` and `attestation_url` values resolve environment references when the entire JSON value contains one reference:
+An engine `url` or `attestation_url` expands from the environment when the entire JSON string is a single `${NAME}` reference:
 
 ```json
 {
@@ -67,38 +56,43 @@ Engine `url` and `attestation_url` values resolve environment references when th
 }
 ```
 
-The loader requires a populated referenced variable and reports the URL field path and variable name when that check fails.
+| Value                                                     | Result                                          |
+| --------------------------------------------------------- | ----------------------------------------------- |
+| `${NAME}` in `url` or `attestation_url`, with `NAME` set  | Value of `NAME`                                 |
+| `${NAME}` with `NAME` unset or blank                      | Error that names the URL field and the variable |
+| Partial reference, or default syntax such as `${NAME:-x}` | Error                                           |
+| Resolved value that contains `${`                         | Error                                           |
+| `$NAME`, or `${...}` in any other field                   | Literal text                                    |
 
-The loader rejects partial and default-syntax `${...}` references and resolved values containing another reference. It leaves shell-style strings such as `$NAME` and non-endpoint JSON fields literal.
-
-`FleetConfig.save()` writes resolved URLs, so save its output to an ignored fleet path.
+Save resolved URLs from `FleetConfig.save()` to a Git-ignored fleet path.
 
 ---
 
 ## 2. Minimal fleet definition
 
-A valid serving fleet needs the following fields.
+A fleet needs six fields:
 
-| Field            | Required value    | Meaning                                                                  |
-| ---------------- | ----------------- | ------------------------------------------------------------------------ |
-| `schema`         | `"narwhal.fleet"` | Fleet interface identity.                                                |
-| `schema_version` | `1`               | Fleet document version.                                                  |
-| `model`          | string            | Model name exposed by the router. Every engine must serve this name.     |
-| `engines`        | nonempty array    | Engine instances. `iid` values must be unique.                           |
-| `slo.ttft_s`     | positive seconds  | TTFT target used for admission, placement, load projection, and control. |
-| `slo.tpot_s`     | positive seconds  | TPOT target used for admission, placement, load projection, and control. |
+| Field            | Value             | Notes                                                                                       |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------- |
+| `schema`         | `"narwhal.fleet"` | Identifies the fleet interface.                                                             |
+| `schema_version` | `1`               | The configuration version.                                                                  |
+| `model`          | string            | The exact model name the router exposes and every engine serves.                            |
+| `engines`        | nonempty array    | The engine instances.                                                                       |
+| `slo.ttft_s`     | positive seconds  | Time-to-first-token (TTFT) target for admission, placement, load projection, and control.   |
+| `slo.tpot_s`     | positive seconds  | Time-per-output-token (TPOT) target for admission, placement, load projection, and control. |
 
-Each engine entry accepts:
+Set both targets from measurements on the deployed engine shape.
 
-| Field             | Default    | Meaning                                                                                         |
-| ----------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `iid`             | required   | Scheduler identity, unique within `engines`.                                                    |
-| `url`             | required   | vLLM HTTP base URL. Trailing `/` characters are removed.                                        |
-| `attestation_url` | `""`       | Full attestation-sidecar URL. Required by `narwhal-check` when `engine_contract` is configured. |
-| `role`            | `"decode"` | Initial role. Accepted values are `"prefill"` and `"decode"`.                                   |
-| `pin`             | `false`    | Prevents the configured role from changing.                                                     |
+Each engine entry takes these fields:
 
-Example:
+| Field             | Default    | Notes                                                                                                                         |
+| ----------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `iid`             | required   | Scheduler identity, unique within `engines`.                                                                                  |
+| `url`             | required   | The vLLM HTTP base URL.                                                                                                       |
+| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`.                            |
+| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                                                 |
+| `pin`             | `false`    | When true, the engine keeps its configured role through role-controller moves and resume, and serves that role's phase alone. |
+| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                                                          |
 
 ```json
 {
@@ -110,64 +104,99 @@ Example:
 }
 ```
 
-An engine defaults to `decode`. A pinned engine retains its configured role through controller movement, placement changes, and resume, and serves its configured phase alone. Pinning can reserve prefill capacity for warm-standby takeover.
+### 2.1 Shared-device allocation
 
-Set TTFT and TPOT targets from measurements taken on the deployed engine shape. Narwhal derives Prometheus histogram buckets from those values.
+A `shared_device` group places two to eight engines on one GPU.
+
+| Field                                  | Requirement                                                                         |
+| -------------------------------------- | ----------------------------------------------------------------------------------- |
+| `shared_device.group`                  | Nonempty group name, identical for every engine on the GPU.                         |
+| `shared_device.gpu_uuid`               | Nonempty GPU UUID, identical across the group.                                      |
+| `shared_device.device_allowance`       | Group fraction of device memory, above 0 and at most 1, identical across the group. |
+| `shared_device.gpu_memory_utilization` | This engine's fraction of device memory, above 0 and at most 1.                     |
+
+The group's `gpu_memory_utilization` values sum to at most its `device_allowance`.
 
 ---
 
 ## 3. Engine shape and compatibility contract
 
-Define a complete `engine_contract` for production traffic. Preflight, lifecycle readmission, restart handling, and live NIXL checks use it to distinguish a restarted process from a different engine build before peer transfer.
+Every production fleet needs a complete `engine_contract`.
 
-Lifecycle drain and readmission require every contract field. If a required contract value is empty, the engine remains held out with `missing-contract`.
+A complete `engine_contract` meets these requirements:
+
+| [Contract field](#32-contract-fields) | Requirement                                   |
+| ------------------------------------- | --------------------------------------------- |
+| `image_digest`                        | Optional                                      |
+| Every other field                     | Nonempty string, positive integer, or boolean |
+
+| Action with an incomplete `engine_contract` | Error                                                 |
+| ------------------------------------------- | ----------------------------------------------------- |
+| Lifecycle drain                             | `lifecycle drain requires a complete engine_contract` |
+| Readmission                                 | `readmission requires a complete engine_contract`     |
 
 ### 3.1 Hardware block
 
-The [engine-host inspection](../deploy/03-Validate-Engines.md#inspect-every-engine-host) identifies the accelerator vendor and product; set `hardware.accelerator` to the observed product name. Set `hardware.accelerators_per_engine` to the replica's allocated accelerator count and `hardware.tensor_parallel` to the external launcher's vLLM TP size. Both counts must be positive, with TP at or below the allocation.
+The optional `hardware` block needs all three fields when present.
 
-Verify the running shape through attestation, profiles, transfer tests, and deployment load.
+| Field                              | Notes                                                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `hardware.accelerator`             | Nonempty accelerator product name from [engine-host inspection](../deploy/03-Validate-Engines.md#inspect-every-engine-host). |
+| `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                           |
+| `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                       |
 
 ### 3.2 Contract fields
 
-| Field                      | Default           | Requirement                                                                                                                                                                                                   |
-| -------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vllm_version`             | required          | Exact value returned by every engine `/version` endpoint.                                                                                                                                                     |
-| `image_digest`             | `""`              | Immutable `sha256:<64 hex>` container digest from engine-side attestation.                                                                                                                                    |
-| `nixl_version`             | `""`              | NIXL package version in the image.                                                                                                                                                                            |
-| `nixl_connector_version`   | `0`               | Positive `NIXL_CONNECTOR_VERSION` from deployed connector metadata. Capture it in [Gate E](../deploy/05-Attest.md#capture-attestation-inputs).                                                     |
-| `model_architecture`       | `""`              | Model implementation name relevant to KV layout.                                                                                                                                                              |
-| `model_dtype`              | `""`              | Model execution dtype.                                                                                                                                                                                        |
-| `kv_heads`                 | `0`               | Positive model-wide `ModelConfig.get_total_num_kv_heads()` result.                                                                                                                                            |
-| `head_size`                | `0`               | Positive `ModelConfig.get_head_size()` used by the NIXL compatibility hash. Capture the resolved dimensions in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs).                    |
-| `hidden_layers`            | `0`               | Positive model-wide `ModelConfig.get_total_num_hidden_layers()` result.                                                                                                                                       |
-| `attention_backend`        | `""`              | Attention backend expected from the recorded launch.                                                                                                                                                          |
-| `kv_cache_dtype`           | `""`              | KV-cache dtype.                                                                                                                                                                                               |
-| `cross_layers_blocks`      | `null`            | Resolved physical cache-block grouping, `KVCacheLayout.is_block_outermost`, from the pinned layout API. Capture it in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs).                                    |
-| `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager participates in layout.                                                                                                                                                |
-| `connector`                | `"NixlConnector"` | Engine-side connector name; requires a nonempty string.                                                                                                                                                      |
-| `kv_role`                  | `""`              | Engine-side KV-role semantics, for example `kv_both`.                                                                                                                                                         |
-| `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`. Retain resolved class and mode in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs).                                                             |
-| `speculative_config`       | `""`              | Stable speculative-decoding configuration name, or `disabled`.                                                                                                                                                |
-| `enforce_handshake_compat` | `true`            | Effective value from the pinned NIXL worker extra-config lookup. Narwhal requires `true`. Capture configured and installed-default values in [Deploy](../deploy/05-Attest.md#capture-attestation-inputs). |
+| Field                      | Default           | Requirement                                                                                    |
+| -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| `vllm_version`             | required          | The exact string each engine returns from `/version`.                                          |
+| `image_digest`             | `""`              | The immutable `sha256:<64 hex>` container digest from engine-side attestation.                 |
+| `nixl_version`             | `""`              | The NIXL package version installed in the image.                                               |
+| `nixl_connector_version`   | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
+| `model_architecture`       | `""`              | The model implementation name.                                                                 |
+| `model_dtype`              | `""`              | The dtype the model runs in.                                                                   |
+| `kv_heads`                 | `0`               | Positive value of `ModelConfig.get_total_num_kv_heads()` for the whole model.                  |
+| `head_size`                | `0`               | Positive value of `ModelConfig.get_head_size()`.                                               |
+| `hidden_layers`            | `0`               | Positive value of `ModelConfig.get_total_num_hidden_layers()` for the whole model.             |
+| `attention_backend`        | `""`              | The expected backend from the recorded launch.                                                 |
+| `kv_cache_dtype`           | `""`              | The KV-cache dtype.                                                                            |
+| `cross_layers_blocks`      | `null`            | Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API. |
+| `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager is part of the layout.                                  |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name.                                                           |
+| `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
+| `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
+| `speculative_config`       | `""`              | A stable name for your speculative-decoding setup, or `disabled`.                              |
+| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
+
+Capture every contract value from the deployed engine in [Gate E: capture attestation inputs](../deploy/05-Attest.md#capture-the-attestation-inputs).
+
+Values to check against the live engine:
+
+- `nixl_connector_version`
+- the resolved `head_size` dimensions
+- `cross_layers_blocks`
+- the resolved `transfer_mode` class and mode
+- `enforce_handshake_compat`, both the configured value and the installed default
 
 ### 3.3 Attestation
 
-The attestation generator described in [Deploy](../deploy/05-Attest.md) writes:
+The generator in [Gate E: attest the live engine processes](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
 
-```text
-runs/engine-launch-*/engine-attestation.json
-```
+Fill in the fleet contract:
 
-It is assembled from the checked serving plan, runtime inspection, live cache capture, and startup log.
+1. Start the sidecars.
+2. Run `finalize-fleet` in the router shell:
 
-Router finalisation reads the live sidecars, requires complete matching contracts, and fills `engine_contract` in:
+    ```bash
+    .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
+    ```
 
-```text
-runs/deployment/fleet.json
-```
+| Sidecar contracts       | `finalize-fleet` result                           |
+| ----------------------- | ------------------------------------------------- |
+| Complete and identical  | `engine_contract` written into the `--fleet` file |
+| Incomplete or different | Exit status 1                                     |
 
-The [attestation example](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares:
+Each [attestation document](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares this identity:
 
 ```json
 {
@@ -176,16 +205,42 @@ The [attestation example](https://github.com/athrael-soju/Narwhal/blob/main/conf
 }
 ```
 
-`narwhal-attest` requires at least one nonempty source entry for each populated contract field before querying the engine.
+`narwhal-attest` needs at least one nonempty source entry for every populated contract field.
 
-Run one sidecar beside every contracted engine and configure the engine's `attestation_url`.
+For each contracted engine:
 
-At startup, `narwhal-attest` reads `/version` and `process_start_time_seconds`, adds both values to `contract` and `sources`, then hashes the complete response into `attestation_digest`.
+1. Run one sidecar beside the engine.
+2. Set the engine's `attestation_url` to the sidecar's address.
 
-A document with launch evidence also returns `launch` and a `launch_digest` over the contract and launch evidence. An engine restarted from an identical launch keeps its `launch_digest`, and saved profiles and first-token calibrations bind to it.
+Sidecar identity values, read at startup:
 
-If either identity value changes later, both sidecar routes return HTTP 503.
+- the engine's `/version`
+- the `process_start_time_seconds` metric from the engine's `/metrics`
 
-After an engine process changes, verify its HTTP endpoints and restart the sidecar through its configured process manager so the new instance binds to the new process identity.
+| Condition                                                                     | Sidecar result               |
+| ----------------------------------------------------------------------------- | ---------------------------- |
+| `/version` at startup differs from `vllm_version` in the attestation document | Exits with an error          |
+| Either identity value is unreadable or differs from its startup value         | Every route returns HTTP 503 |
 
-`narwhal-check` verifies attested fields and process start time before opening the NIXL handshake or running produce/consume probes. A mismatch stops preflight before live KV transfer.
+Each sidecar response carries:
+
+- the contract
+- its sources
+- the two identity values, under `engine`
+- an `attestation_digest` over the rest of the response
+
+A document with launch evidence adds two fields to each response:
+
+- `launch`, the launch evidence
+- `launch_digest`, a digest over the contract and the launch evidence
+
+An engine restarted from an identical launch keeps its `launch_digest`.
+
+Saved profiles and first-token calibrations bind to the engine's `launch_digest`.
+
+Treat an HTTP 503 as a changed engine process:
+
+1. Check the engine's HTTP endpoints.
+2. Restart the sidecar through its process manager.
+
+An attested-field or process-start-time mismatch fails `narwhal-check` and skips its produce and consume KV-transfer probes.

@@ -1,101 +1,98 @@
+---
+description: Interpret Narwhal router health, readiness and placement state during operation.
+---
+
 # Router state and placement monitoring
 
 ## 5. Interpret router state
 
-Use `/health` for process and fleet state. Use `/ready` for traffic eligibility.
-
 ### `/health`
 
-`/health` continues reporting router-process health through backend outages.
+`/health` returns HTTP 200 in every router state with this body:
 
-It returns HTTP 200 with:
-
-- `instances`: configured fleet size;
-- `available_instances`: engines currently eligible for placement after ejection, drain, and quarantine exclusions.
+| Field | Value |
+| --- | --- |
+| `status` | Router state: `ok`, `degraded`, `maintenance`, `standby`, or `fenced` |
+| `instances` | Configured fleet size |
+| `available_instances` | Engines eligible for placement: the configured fleet minus ejected, draining, and quarantined engines |
 
 ### Backend exhaustion
 
-When every engine has been excluded from placement, the active router reports:
+Active router responses when every engine is excluded from placement:
 
-```text
-status: degraded
-```
-
-`/ready` returns HTTP 503 with:
-
-```text
-reason: no available engines
-```
-
-New completion requests receive a retryable error:
-
-```text
-backend_unavailable
-```
+| Request | Response |
+| --- | --- |
+| `/health` | `status: degraded` |
+| `/ready` | HTTP 503 with `reason: no available engines` |
+| New completion requests | HTTP 503, retryable error code `backend_unavailable` |
 
 ### Whole-wave lifecycle hold
 
-A whole-wave lifecycle hold places the router in:
+Active router responses until whole-wave readmission succeeds:
 
-```text
-status: maintenance
-```
-
-The status includes the lifecycle reason. Completion requests receive HTTP 503 with error code:
-
-```text
-standby
-```
-
-A whole-wave hold pauses background monitoring until readmission.
+| Request | Response |
+| --- | --- |
+| `/health` | `status: maintenance` |
+| `/ready` | HTTP 503 with `reason` = lifecycle reason |
+| New completion requests | HTTP 503, error code `standby`, error message = lifecycle reason |
 
 ### Temporary holds
 
-Performance-drift and temporary-quarantine holds retain the last eligible engine in service. Failed health or inference probes may still exclude that engine.
+Hold behavior for the last eligible engine:
+
+| Cause | Result |
+| --- | --- |
+| Performance-drift hold | Remains in placement |
+| Temporary-quarantine hold | Remains in placement |
+| Failed health or inference probe | Removed from placement |
 
 ### Router control and replacement
 
-During backend outages and managed maintenance, the router retains control.
+Signals in `/ready`:
 
-Standby routers use `control_ready` to copy the current handoff state.
+| Signal | Meaning | Use |
+| --- | --- | --- |
+| HTTP status | Traffic eligibility | Load balancers route client traffic |
+| `control_ready: true` | A valid lease and healthy engine monitoring | Standby routers copy the state handoff |
 
-Client load balancers continue routing according to HTTP status.
+A replacement router:
 
-A replacement router must run the same release, apply the same lifecycle rules, and preserve saved ejections until recovery succeeds.
+- runs the same release
+- applies the same lifecycle rules
+- keeps saved ejections until recovery succeeds
 
 ## 6. Monitor placement and control
 
-Follow [Set up observability](../Observability.md) to generate engine scrape targets, start Prometheus and Grafana, verify collection, and open the dashboard through an SSH tunnel.
+Prometheus and Grafana setup: [Set up observability](../Observability.md).
 
-Choose router and engine scopes using the [dashboard reference](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard).
+[Dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) signals:
 
-Read the dashboard by subsystem:
+| Signal | Operational question |
+| --- | --- |
+| Readiness and lease epoch | Which router admits traffic? |
+| Pool size and normalized load | Has either phase reached its measured limit? |
+| Queue depth, pressure, and sheds | Is overload waiting, protected, or refused? |
+| Ejection, probation, and role floors | How much healthy capacity remains? |
+| TTFT, TPOT, queue wait, and seat time | Where is client latency accumulating? |
+| Retries, failures, refusals, and rejections | Which protection path is active? |
+| Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-| Signal                                         | Operational question                                |
-| ---------------------------------------------- | --------------------------------------------------- |
-| Readiness and lease epoch                      | Which router owns admission?                        |
-| Pool size and normalized load                  | Has either phase reached its measured limit?        |
-| Queue depth, pressure, and sheds               | Is overload waiting, protected, or refused?         |
-| Ejection, probation, and role floors           | How much healthy capacity remains?                  |
-| TTFT, TPOT, queue wait, and seat time          | Where is client latency accumulating?               |
-| Retries, failures, refusals, and rejections    | Which protection path is active?                    |
-| Role changes, reversals, and blocked decisions | Is the controller holding a stable role assignment? |
+`tools/observability/prometheus-alerts.yml` defines these alert rules:
 
-Set deployment-specific paging thresholds in:
+| Alert | Condition | Duration | Severity |
+| --- | --- | --- | --- |
+| `NarwhalRouterDown` | Router scrape fails | 2m | `page` |
+| `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
+| `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
+| `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
+| `NarwhalUnservedRising` | Unserved requests above 0.2/s over 10m | 10m | `warn` |
+| `NarwhalPoolStarved` | A pool with zero engines | 2m | `warn` |
+| `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
+| `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
-```text
-tools/observability/prometheus-alerts.yml
-```
+Telemetry sources:
 
-Configure thresholds for:
-
-- router down;
-- engine down;
-- error bursts;
-- unserved requests;
-- ejections;
-- role floors.
-
-Use request journals for per-request placement and timing analysis.
-
-Use metrics for process-level summaries within their counter-reset behaviour and state-retention windows.
+| Source | Scope |
+| --- | --- |
+| Request journals | Per-request placement and timing |
+| Metrics | Process-level summaries since the last counter reset |

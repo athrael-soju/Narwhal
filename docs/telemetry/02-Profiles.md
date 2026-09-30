@@ -1,96 +1,126 @@
+---
+description: Validate the measured per-engine cost model that narwhal-profile writes.
+---
+
 # Engine profiles and capacity
 
 ## Validate the engine cost model
 
 `narwhal-profile` writes one measured cost-model row per engine into `profiles.path`.
 
-The profile file declares:
+Profile store document:
 
 ```json
 {
   "schema": "narwhal.profiles",
   "schema_version": 1,
+  "meta": {"package": "narwhal-inference", "version": "0.3.1", "git": "<commit>", "source": "sha256:..."},
   "profiles": []
 }
 ```
 
-The profiler reads each engine's identity before and after its sweep. With
-`engine_contract`, it verifies attestation and saves the attested launch digest
-with the fit. The launch digest covers the contract fields and the launch
-evidence: engine arguments without addresses and endpoints, image, packages,
-model configuration and revision, and launcher and launch-record hashes. An
-engine restarted from an identical launch keeps its digest. A sidecar without
-launch evidence supplies its attestation digest, which changes with each
-process. The sample sidecar stores the full attestation response. Without
-`engine_contract`, the profiler saves a digest of the process identity from
-`/version` and `/metrics`.
+The profiler fails the run when an engine's generation digest changes between the start and end of its sweep.
 
-Preflight and startup check every configured engine's profile against its
-live generation. Readmission and automatic recovery repeat this check before
-returning an engine to placement. These checks cover every stored variant.
+| Fleet | Saved digest | `.samples.json` sidecar keeps |
+| --- | --- | --- |
+| With `engine_contract` and a launch digest in the attestation | Attested launch digest. | The full attestation response. |
+| With `engine_contract` and an attestation that omits launch evidence | Attestation digest, which changes with each process. | The full attestation response. |
+| Otherwise | Digest of the process identity from `/version` and `/metrics`. | The process identity. |
 
-Missing generation evidence or a digest mismatch requires a fresh profile;
-the error names the engine. Preflight also checks measured decode bounds and
-fit errors before pricing capacity.
+The attested launch digest covers:
 
-Restart the router to load updated profiles. For fleets with `engine_contract`,
-[activate the fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles).
-Resume preserves lifecycle holds and drain identities until readmission.
+- the contract fields
+- engine arguments with addresses and endpoints removed
+- image
+- packages
+- model configuration and revision
+- launcher and launch-record hashes
 
-A malformed profile aborts the operation with the affected file, engine, and field:
+An engine restarted from an identical launch keeps its launch digest.
+
+For a stored profile with missing generation evidence or a digest that differs from the engine's live generation:
+
+- Preflight, router startup, readmission, and automatic recovery require a fresh profile.
+- The error names the engine.
+
+Preflight checks the measured decode bounds and fit errors.
+
+| Fleet | Load updated profiles |
+| --- | --- |
+| With `engine_contract` | [Activate the fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles). |
+| Otherwise | Restart the router. |
+
+A malformed profile aborts the operation and names the affected file, engine, and field:
 
 ```text
-profiles.json: profile n4: tpot_slope must be positive
+profiles.json: profile n4: tpot_slope must be nonnegative
 ```
 
-Build one profile store whose `iid` set matches the configured fleet; validation reports any missing or extra engine IDs.
+Before preflight or router startup:
 
-When profiling engines independently with `narwhal-profile --only`, combine their measured rows into one fleet-wide profile store before preflight or router startup.
+1. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
+2. Confirm that the profile store's `iid` set matches the configured fleet.
 
 ### Profile fields
 
-| Field                                          | JSON type         | Constraint                                                                                                         |
-| ---------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `iid`                                          | string            | Nonempty.                                                                                                          |
-| `generation_digest`                            | string            | Attested launch digest; the attestation digest from a sidecar without launch evidence; or the process identity without a declared contract. |
-| `ttft_a`, `ttft_b`, `ttft_c`                   | number            | Nonnegative prefill quadratic coefficients.                                                                        |
-| `ttft_block_tokens`, `ttft_split` | integer and number, optional | Engine cache block size and the added prefill time for a prompt that ends inside a block past the first. Both are set when the fit measures a split step; otherwise both are `null`. |
-| `tpot_slope`                                   | number            | Strictly positive decode interval per resident KV token. A zero slope would price decode capacity as infinite.     |
-| `tpot_intercept`                               | number            | Nonnegative zero-contention decode interval.                                                                       |
-| `kv_capacity_tokens`                           | integer, optional | Positive when present. When `decode_max_kv_tokens` is also present, physical capacity must be at least that large. |
-| `tpot_request_slope`                           | number            | Nonnegative decode interval per active sequence. Defaults to `0`.                                                  |
-| `decode_min_requests`, `decode_max_requests`   | integer           | Positive measured concurrency range with `min <= max`.                                                             |
-| `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer           | Positive measured resident-KV range with `min <= max`.                                                             |
-| `decode_fit_mape`, `decode_cv_mape`            | number            | Nonnegative fit error and leave-one-out cross-validation error.                                                    |
-| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative warm prefill coefficients: `c + b*S + d*P + a*(2*P*S + S*S)` for `P` cached prefix tokens and `S` uncached suffix tokens, plus `ttft_split` when the suffix ends inside a cache block past its first. |
-| `cached_cv_mape`                               | number, optional  | Nonnegative leave-one-case-out warm prefill error.                                                                 |
-| `cached_min_prefix_tokens`, `cached_max_prefix_tokens`, `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured warm domain with `min <= max`. |
+| Field | JSON type | Constraint |
+| --- | --- | --- |
+| `iid` | string | Nonempty. |
+| `generation_digest` | string | `sha256:` digest of the attested launch, the verified attestation, or the process identity. |
+| `ttft_a`, `ttft_b`, `ttft_c` | number | Nonnegative prefill quadratic coefficients. |
+| `ttft_block_tokens`, `ttft_split` | integer and number, optional | Positive cache block size and nonnegative added prefill time for a prompt that ends inside a block past the first, both set or both `null`. |
+| `tpot_slope` | number | Nonnegative decode interval per resident KV token. |
+| `tpot_intercept` | number | Nonnegative zero-contention decode interval. |
+| `tpot_request_slope` | number, optional | Nonnegative decode interval per active sequence, default `0`. |
+| `kv_capacity_tokens` | integer, optional | Positive, and at least `decode_max_kv_tokens`. |
+| `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. |
+| `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer | Positive measured resident-KV range with `min <= max`. |
+| `decode_fit_mape`, `decode_cv_mape` | number | Nonnegative fit error and leave-one-out cross-validation error. |
+| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) `c + b*S + d*P + a*(2*P*S + S*S) + ttft_split*s` for `P` cached prefix tokens and `S` uncached suffix tokens. |
+| `cached_cv_mape` | number, optional | Nonnegative leave-one-case-out warm prefill error. |
+| `cached_min_prefix_tokens`, `cached_max_prefix_tokens` | integer, optional | Positive measured cached-prefix range with `min <= max`. |
+| `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured uncached-suffix range with `min <= max`. |
+| `prefill_min_tokens`, `prefill_max_tokens` | integer, optional | Positive measured prompt-length range with `min <= max`. |
+| `decode_min_output_tokens`, `decode_max_output_tokens` | integer, optional | Positive measured output-length range with `min <= max`. |
+| `colocated_group` | string, optional | Nonempty shared-device group of a colocated role-mix variant. |
+| `colocated_target_role` | string | `prefill` or `decode`, required with `colocated_group`. |
+| `colocated_prefill_engines`, `colocated_decode_engines` | integer | Positive measured role mix totalling at least two engines, required with `colocated_group`. |
+| `colocated_prefill_rps`, `colocated_decode_rps` | number | Nonnegative neighbour load, required with `colocated_group`. |
 
-The `cached_` fields are all set or all `null`. A request with a cached prefix gets cold pricing for its full input when the `cached_` fields are `null` or the case lies outside their measured domain.
+| Input | Result |
+| --- | --- |
+| `true`, `"96"`, or `1.5` in an integer field | Rejected. |
+| `NaN` or `Infinity` | Profile loading aborts at JSON decoding. |
+| A field outside this table | Profile loading aborts. |
+| A partial set of `cached_` fields | Profile loading aborts. |
 
-Integer fields reject Boolean, string, and fractional JSON values such as:
+| Request with a cached prefix | Prefill price |
+| --- | --- |
+| Profile sets the `cached_` fields and the request lies within their measured domain | Warm prefill fit |
+| Otherwise | Cold prefill curve over the full input |
 
-```json
-true
-"96"
-1.5
-```
+For the `profile has no generation evidence` error from preflight, router startup, or recovery on a row missing `generation_digest`:
 
-`NaN` and `Infinity` abort profile loading during JSON decoding, before the row validator examines engine IDs.
+1. Write a fresh store with `narwhal-profile` against the current engine processes.
+2. Keep the `.samples.json` sidecar.
 
-Preflight, router startup, and recovery reject rows without `generation_digest` with `profile has no generation evidence`, even when the store's schema version is current.
+The [refit procedure](../measure/01-Profile.md#repair-profiles-produced-by-the-earlier-raw-repeat-fitter) requires:
 
-Run `narwhal-profile` against the current engine processes into a fresh store and keep its `.samples.json` sidecar.
+- a `generation_digest` in each saved profile
+- a `generation_evidence` object in its sample row
 
-Refitting requires both `generation_digest` in each saved profile and a `generation_evidence` object in its sample row. Samples missing either require a fresh sweep; see the [refit procedure](../measure/01-Profile.md#repair-profiles-produced-by-the-earlier-raw-repeat-fitter).
+Samples missing either need a fresh sweep.
 
 ### Decode capacity derived from the profile
 
-Narwhal caps decode concurrency for each fitted engine at the smaller of:
+Narwhal caps decode concurrency for each fitted engine at the priced context length:
 
-1. `decode_max_requests`;
-2. the number of requests that fit the KV budget at the priced context length.
+| Condition | Decode request limit |
+| --- | --- |
+| `context_tokens <= 0` or `decode_max_requests` is `null` | Zero. |
+| Otherwise | The smaller of `decode_max_requests` and the KV budget divided by `context_tokens`, at least `1`. |
 
-The KV budget begins at `decode_max_kv_tokens`. When `kv_capacity_tokens` is present, physical capacity can reduce that budget further.
-
-Narwhal prices capacity from the limits above for positive `context_tokens` with a measured `decode_max_requests`. The zero-capacity result covers `context_tokens <= 0` and `decode_max_requests: null`.
+| Profile | KV budget |
+| --- | --- |
+| With `kv_capacity_tokens` | The smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. |
+| Otherwise | `decode_max_kv_tokens`. |

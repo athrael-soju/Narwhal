@@ -7,6 +7,7 @@ strict: true
 
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/narwhal.png
   favicon: assets/narwhal.png
   palette:
@@ -39,9 +40,13 @@ copyright: Copyright &copy; athrael-soju
 plugins:
   - search
 
+hooks:
+  - overrides/hooks/llms_txt.py
+
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
@@ -57,6 +62,7 @@ nav:
       - Overview: Dev-Runtime.md
       - Install the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
+      - Recovery and qualification: dev/Recovery-and-Qualification.md
   - Deploy a fleet:
       - Overview: Deploy.md
       - A. Discover the fleet: deploy/01-Discover.md
@@ -88,7 +94,8 @@ nav:
           - Production boundary and router pair: operate/01-Start-Routers.md
           - Router state and placement monitoring: operate/02-Monitor.md
           - Engine restart and process replacement: operate/03-Restart-Engines.md
-          - Upgrade, rollback, and release drills: operate/04-Upgrade-and-Validate.md
+          - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
+          - Release drills: operate/05-Release-Drills.md
       - Troubleshoot a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md
@@ -126,11 +133,12 @@ nav:
           - Model, health, and metrics: http-api/04-Inspection.md
           - Live router and scheduler state: http-api/05-Live-State.md
           - SLO and demand accounting: http-api/06-SLO-and-Demand.md
-          - HA handoff and lifecycle: http-api/07-Handoff-and-Lifecycle.md
+          - State handoff and lifecycle: http-api/07-Handoff-and-Lifecycle.md
       - Telemetry and artifacts:
           - Overview: Telemetry-and-Artifacts.md
           - Request journal: telemetry/01-Journal.md
           - Engine profiles and capacity: telemetry/02-Profiles.md
-          - Metrics and controller state: telemetry/03-Metrics-and-Control.md
-          - Monitoring and engine failures: telemetry/04-Failures.md
+          - Metrics and role controller state: telemetry/03-Metrics-and-Control.md
+          - Engine monitoring and failures: telemetry/04-Failures.md
           - Interface versions and compatibility: telemetry/05-Compatibility.md
+  - Recognition: Recognition.md
