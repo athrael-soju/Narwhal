@@ -59,6 +59,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         await self.subscriptions.refresh(self.client)
         view = self.subscriptions.view("e1")
         self.assertEqual((view.known, view.sequence, view.resyncs), (True, -1, 1))
+        self.assertEqual(view.reason, "no cache events published")
         # Hybrid layout: the Mamba group names only the block its attention peer named.
         self.index.apply(
             0,
@@ -66,7 +67,9 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.subscriptions.refresh(self.client)
         names = self.names(prompt)
-        self.assertEqual((view.sequence, view.resyncs), (0, 1))
+        self.assertEqual(
+            (view.sequence, view.resyncs, view.reason), (0, 1, "complete event history")
+        )
         self.assertEqual(view.cached_prefix_blocks(names), 3)
         self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
         self.index.apply(1, [CacheCleared()])

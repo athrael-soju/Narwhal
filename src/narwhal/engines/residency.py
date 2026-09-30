@@ -117,6 +117,8 @@ class ResidencyIndex:
             elif self.sequence is None:
                 self.known = True
                 self.reason = "complete event history"
+            elif self.sequence == -1 and self.known:
+                self.reason = "complete event history"
             self.sequence = sequence
             if events is None or any(event is None for event in events):
                 self._lose(f"unreadable cache event in sequence {sequence}")

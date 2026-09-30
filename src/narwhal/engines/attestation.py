@@ -369,6 +369,7 @@ def build_app(
             "epoch": epoch,
             "sequence": sequence,
             "block_size": index.block_size,
+            "reason": index.reason,
             "changes": changes,
         }
 

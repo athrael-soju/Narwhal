@@ -22,7 +22,7 @@ With `--kv-events`, the sidecar subscribes to the engine's cache events. It keep
 | Route | Response |
 | --- | --- |
 | `GET /v1/residency` | Snapshot: `known`, `reason`, `sequence`, `block_size`, `epoch`, `process_start_time_seconds`, and per KV cache group its `group` key, `kind`, `sliding_window`, named block `identities` and count of `unnamed` blocks |
-| `GET /v1/residency/events?after=N` | One change per event batch after sequence `N`, in order, with the sidecar `epoch` and `block_size`. Each change lists per group the identities the batch made resident and those it evicted. HTTP 410 when the caller needs a fresh snapshot |
+| `GET /v1/residency/events?after=N` | One change per event batch after sequence `N`, in order, with the sidecar `epoch`, `block_size` and `reason`. Each change lists per group the identities the batch made resident and those it evicted. HTTP 410 when the caller needs a fresh snapshot |
 
 Both routes answer HTTP 503 after the engine process changes.
 
