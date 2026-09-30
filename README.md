@@ -108,7 +108,9 @@ Resident requests finish on their assigned engines.
   <a href="https://github.com/athrael-soju/Narwhal">Narwhal</a>, <a href="https://github.com/ai-dynamo/dynamo">Dynamo Planner</a>, <a href="https://github.com/ray-project/ray">Ray Serve LLM</a>
 </p>
 
-![Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM.](https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM.">
+</p>
 
 ## Get the commands
 
