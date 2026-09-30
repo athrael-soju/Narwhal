@@ -1,18 +1,22 @@
-# Monitoring and engine failure diagnosis
+---
+description: Metrics for engine monitoring degradation and engine breaker state in a Narwhal fleet.
+---
 
-## Diagnose monitoring degradation
+# Engine monitoring and failure diagnosis
 
-| Metric                                          | Meaning                                                                   | Labels  |
-| ----------------------------------------------- | ------------------------------------------------------------------------- | ------- |
-| `narwhal_monitoring_degraded`                   | `1` while repeated monitoring-pass failures block new admissions.         | none    |
-| `narwhal_monitoring_core_consecutive_failures`  | Consecutive failed monitoring passes.                                     | none    |
-| `narwhal_monitoring_core_failures_total`        | Failed monitoring passes during the current process lifetime.             | none    |
-| `narwhal_monitoring_stage_failures_total`       | Failure count for a monitoring stage.                                     | `stage` |
-| `narwhal_monitoring_stage_consecutive_failures` | Consecutive failures for a monitoring stage.                              | `stage` |
-| `narwhal_event_loop_lag_seconds`                | Delay beyond the latest scheduled monitoring deadline.                    | none    |
-| `narwhal_event_loop_lag_high_water_seconds`     | Largest monitoring-deadline delay observed by the current router process. | none    |
+## Engine monitoring degradation
 
-The stage label uses one of:
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_monitoring_degraded` | gauge | | `1` while the router blocks new admissions after `controller.monitor_failure_limit` consecutive failed passes, otherwise `0`. |
+| `narwhal_monitoring_core_consecutive_failures` | gauge | | Consecutive failed monitoring passes. |
+| `narwhal_monitoring_core_failures_total` | counter | | Failed monitoring passes since process start. |
+| `narwhal_monitoring_stage_failures_total` | counter | `stage` | Failed passes for one monitoring stage. |
+| `narwhal_monitoring_stage_consecutive_failures` | gauge | `stage` | Consecutive failures for a monitoring stage. |
+| `narwhal_event_loop_lag_seconds` | gauge | | Delay beyond the latest scheduled monitoring deadline. |
+| `narwhal_event_loop_lag_high_water_seconds` | gauge | | Largest monitoring-deadline delay since router start. |
+
+`stage` values:
 
 ```text
 controller
@@ -26,18 +30,16 @@ handoff
 telemetry
 ```
 
-The `telemetry` stage performs floor-state refresh and loop logging.
+The `telemetry` stage covers floor-state refresh and loop logs.
 
-## Diagnose engine breaker state
+## Engine breaker state
 
-Narwhal maintains breaker state separately by engine and failure class.
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_engine_breaker_streak` | gauge | `iid`, `class` | Current consecutive-failure streak for every configured engine and failure class. |
+| `narwhal_engine_breaker_verifying` | gauge | `iid`, `kind` | `1` while an engine verification probe is running. |
 
-| Metric                             | Meaning                                                                                    | Labels         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------ | -------------- |
-| `narwhal_engine_breaker_streak`    | Consecutive failures for one engine and failure class. Zero-valued series remain exported. | `iid`, `class` |
-| `narwhal_engine_breaker_verifying` | `1` while an engine verification probe is running.                                         | `iid`, `kind`  |
-
-Breaker failure classes are:
+`class` values:
 
 ```text
 connection
@@ -49,23 +51,11 @@ stream
 liveness
 ```
 
-Verification probes report one of:
+`kind` values: `verify_health` or `verify_inference`.
 
-```text
-verify_health
-verify_inference
-```
-
-A completed probe acts on the engine:
-
-| Probe | Engine | Action |
-| --- | --- | --- |
-| Passes | Any | Clears the relevant failure streaks |
-| Fails | Another live engine serves its role or accepts role changes | Ejects the engine |
-| Fails | Its removal leaves its role unserved | Keeps the engine in placement and lifts its hold |
-
-`narwhal_ejected` exports engine ejection.
-
-`make observe` stages `tools/observability/prometheus-alerts.yml` for Prometheus rule evaluation and `tools/observability/grafana-narwhal.json` for Grafana dashboard provisioning.
-
-[Dashboard definitions](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md) documents the panel scope and metric boundaries.
+| Verification probe result | Effect |
+| --- | --- |
+| Passes with a passing profile generation check | The relevant failure streaks clear. |
+| Fails while another live engine serves its role or accepts role changes | `narwhal_ejected` records the engine as ejected. |
+| Fails when its removal leaves its role unserved | The engine stays in placement with its hold lifted. |
+| Waits out the local control pool | Inconclusive, with streaks unchanged. |

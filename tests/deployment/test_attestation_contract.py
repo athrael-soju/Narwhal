@@ -26,6 +26,7 @@ from tools.deployment.attestation_contract import (
     engine_document,
     finalize_fleet,
     generate,
+    launch_args,
     live_native,
     read_json,
     residency_arguments,
@@ -37,6 +38,37 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def save(path: Path, value: object) -> None:
     path.write_text(json.dumps(value) + "\n")
+
+
+class LaunchArgsTests(unittest.TestCase):
+    def test_launch_args_drop_only_per_launch_values(self):
+        args = [
+            "-m",
+            "vllm.entrypoints.openai.api_server",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8201",
+            "--served-model-name",
+            "model",
+            "--kv-events-config",
+            '{"endpoint": "ipc:///run/one"}',
+            "--max-num-seqs",
+            "64",
+        ]
+        self.assertEqual(
+            launch_args(args),
+            [
+                "-m",
+                "vllm.entrypoints.openai.api_server",
+                "--host",
+                "--port",
+                "--served-model-name",
+                "--kv-events-config",
+                "--max-num-seqs",
+                "64",
+            ],
+        )
 
 
 class AttestationContractTests(unittest.TestCase):

@@ -340,6 +340,10 @@ def build(
             common.extend(["--device", device])
         if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
             common.extend(["--gpus", "all"])
+            # UCX CUDA IPC tells peers apart by PID; colocated engines need distinct host PIDs.
+            visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
+            if len(visible) > len(record["gpu_ids"]):
+                common.extend(["--pid", "host"])
         else:
             common.extend(["--security-opt", "seccomp=unconfined"])
     else:

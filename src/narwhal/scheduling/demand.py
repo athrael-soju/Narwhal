@@ -15,6 +15,7 @@ from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
 OutputEstimates = tuple[dict[tuple[int, int], float], dict[int, float]]
+CAPACITY_STEPS_PER_OCTAVE = 16
 
 
 @dataclass(frozen=True)
@@ -157,7 +158,9 @@ class DemandModel:
                 len(inst.decode),
             )
             if ceiling > 0:
-                resident += inst.decode_tokens() / ceiling
+                share = inst.decode_tokens() / ceiling
+                cap = self.scheduler.decode_concurrency
+                resident += max(share, len(inst.decode) / cap) if cap > 0 else share
         self.residency.add(resident)
 
     def _decode_correction(self) -> float:
@@ -258,15 +261,17 @@ class DemandModel:
             if output_len == 0:
                 demand_complete = False
                 continue
-            key = (input_len, output_len)
+            key = (self._capacity_bucket(input_len), self._capacity_bucket(output_len))
             if key not in capacities:
-                context = input_len + output_len / 2.0
+                bucket_input, bucket_output = key
+                context = bucket_input + bucket_output / 2.0
                 values = [
                     p.decode_rps(
                         self.scheduler.slo.tpot_s,
                         context,
-                        output_len,
+                        bucket_output,
                         correction=correction,
+                        request_cap=self.scheduler.decode_concurrency,
                     )
                     for p in profiles
                 ]
@@ -288,6 +293,14 @@ class DemandModel:
     def _shape_bucket(tokens: int) -> int:
         """Place a token length in a power-of-two bucket."""
         return 1 if tokens <= 1 else 1 << (tokens - 1).bit_length()
+
+    @staticmethod
+    def _capacity_bucket(tokens: int) -> int:
+        """Round a token length up onto a sixteenth-octave grid."""
+        if tokens <= 1:
+            return 1
+        step = math.ceil(math.log2(tokens) * CAPACITY_STEPS_PER_OCTAVE)
+        return max(tokens, math.ceil(2 ** (step / CAPACITY_STEPS_PER_OCTAVE)))
 
     def _output_estimates(
         self,
@@ -349,11 +362,18 @@ class DemandModel:
         controller pass refreshes the snapshot; a snapshot older than the demand window
         rebuilds here.
         """
+        _, estimates, fleet = self._current_snapshot()
+        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
+
+    def current_estimates(self) -> OutputEstimates:
+        """Return the controller's output estimates, rebuilt when older than the demand window."""
+        return self._current_snapshot()[1]
+
+    def _current_snapshot(self) -> tuple[float, OutputEstimates, int]:
         snapshot = self._estimates
         if snapshot is None or self._clock() - snapshot[0] >= self.window_s:
             snapshot = self._estimate_snapshot()
-        _, estimates, fleet = snapshot
-        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
+        return snapshot
 
     def _expected_output(
         self,

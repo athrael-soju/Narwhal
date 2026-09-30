@@ -1,74 +1,92 @@
+---
+description: Narwhal dev runs several vLLM engines with prefill and decode role swaps on one NVIDIA CUDA GPU under Ubuntu or WSL2.
+---
+
 # Narwhal dev
 
-Narwhal dev starts, profiles, verifies and stops independent engines sharing
-one GPU. The current native backend uses NVIDIA CUDA on Ubuntu or Ubuntu under
-WSL2. Each instance keeps its model, runtime, GPU allocation, ports, profiles
-and process identities under `runs/dev` by default.
+Narwhal dev runs several independent inference engines on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2.
 
-The installed template starts two engines, one prefill and one decode, with
-Qwen3.5-0.8B GGUF. It selects a CUDA GPU by UUID and checks available VRAM
-against its allocation and 512 MiB reserve. The target is an NVIDIA GPU with
-**8 GB of VRAM or less**; a successful `up` and `verify` establishes fit and
-directed KV transfer on the selected card. The separate
-[RTX 5090 reference](dev/RTX-5090-Reference.md) records the measured
-four-engine configuration.
+An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities.
+
+Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+
+For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefill and one decode engine running the Qwen3.5-0.8B GGUF model.
+
+The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on and pinned to the RTX 5090.
 
 ## Prepare Ubuntu or WSL2
 
-On native Ubuntu, use an NVIDIA driver compatible with the selected CUDA
-runtime. On WSL2, install the NVIDIA driver on Windows and run Ubuntu inside
-WSL2. [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/)
-describes the Windows driver setup. Keep the checkout, model, virtual
-environment and instance directory on the Linux filesystem in either case.
+1. Install the NVIDIA driver for your host:
 
-In the Ubuntu shell, inspect the available GPU and IPv4 interfaces:
+    | Host | Driver |
+    | --- | --- |
+    | Native Ubuntu | A driver compatible with the CUDA runtime you plan to use |
+    | WSL2 | The Windows driver from [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) |
 
-```bash
-nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
-"$nvidia_smi" --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
-ip -brief -4 address
-```
+2. Keep the checkout, the model, the virtual environment, and the instance directory on the Linux filesystem.
+3. Run every command from an Ubuntu shell, inside WSL2 on a Windows host.
+4. Show the GPU and the IPv4 interfaces:
 
-WSL2 exposes `nvidia-smi` at `/usr/lib/wsl/lib/nvidia-smi` when that path is
-outside the shell's `PATH`. Choose an interface with one IPv4 address for
-NIXL/UCX; its name may differ from the default `eth0`. The commands below
-run in the Ubuntu shell on both hosts.
+    ```bash
+    nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
+    "$nvidia_smi" --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
+    ip -brief -4 address
+    ```
+
+5. Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
 
 ## Install the runtime and model
 
-Follow the [CUDA runtime and model steps](dev/CUDA-Runtime.md) in the Ubuntu
-shell. The installed template pins vLLM, Torch, NIXL, Transformers, the GGUF
-loader, model and tokenizer. CUDA support currently covers NVIDIA GPUs;
-contributions can add discovery, launch and transfer support for other
-vendors.
+Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md).
 
-The default two-engine allocation assigns each vLLM process 0.35 of total
-VRAM, caps whole-device startup growth at 0.8 and reserves 512 MiB of free
-memory at initialization. Model weights, runtime overhead and KV cache
-consume that budget. Tune `--gpu-memory-utilization` and `--device-allowance`
-for a fresh instance after checking the card's available memory. Its initial
-development budgets are 5 seconds TTFT and 500 ms TPOT; set targets from
-measurements on the selected card. A custom
-`--template` can change the model, runtime, context length, profiling sweep
-and reserve. A recipe can set `gpu.product` to pin a card and
-`gpu.minimum_total_mib` to require a measured capacity.
+## Template and GPU allocation
 
-Export the installed template when preparing a new recipe:
+Two `init` flags set the GPU memory allocation:
 
-```bash
-mkdir -p runs
-python - <<'PYTHON' > runs/small-cuda-template.json
-from importlib.resources import files
-print(files('narwhal.dev').joinpath('small-cuda-v1.json').read_text())
-PYTHON
-```
+| Flag | Template field | Default | Meaning |
+| --- | --- | --- | --- |
+| `--gpu-memory-utilization` | `allocation.gpu_memory_utilization` | Template value, `0.35` installed | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
+| `--device-allowance` | `allocation.device_allowance` | Template value, `0.8` installed | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
 
-Edit the file, then initialize a fresh instance with
-`narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
+`init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB installed).
+
+The shipped template sets development SLO targets:
+
+| Target | Template field | Value |
+| --- | --- | --- |
+| Time to first token (TTFT) | `slo.ttft_s` | 5 seconds |
+| Time per output token (TPOT) | `slo.tpot_s` | 500 ms |
+
+Replace these placeholder targets with values measured on your card.
+
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve.
+
+Template fields that pin the hardware:
+
+| Field | Effect |
+| --- | --- |
+| `gpu.product` | GPU product name |
+| `gpu.minimum_total_mib` | Minimum total VRAM |
+
+Create a custom template:
+
+1. Export the installed template:
+
+    ```bash
+    mkdir -p runs
+    python - <<'PYTHON' > runs/small-cuda-template.json
+    from importlib.resources import files
+    print(files('narwhal.dev').joinpath('small-cuda-v1.json').read_text())
+    PYTHON
+    ```
+
+2. Edit the exported file.
+3. Initialize a fresh instance with
+   `narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
 
 ## Initialize and verify an instance
 
-Select the IPv4 interface found above:
+Run the lifecycle commands with the interface name from `ip`:
 
 ```bash
 interface=eth0  # replace with the interface reported by ip
@@ -78,215 +96,178 @@ narwhal dev verify
 narwhal dev status
 ```
 
-`init` writes the private instance after checking the model, runtime and GPU
-allocation. `up` checks ports, starts and profiles the engines, captures
-attestations and starts the router. `verify` runs preflight across the
-eligible directed KV paths, sends a routed arithmetic request and retains
-the response and metrics before reporting `ready`. Keep the same Python
-environment active for subsequent lifecycle commands; the instance records
-its interpreter.
+`init` runs these steps:
 
-Lifecycle results are one JSON document on stdout. Preparation, profiling
-and error diagnostics go to stderr. `status` reports `degraded` with the
-retained reason when verification fails; a successful `verify` restores
-`ready` after the failing input is repaired. Select `--format json` for
-[versioned command results and automation exit codes](Command-Results.md).
+1. Checks the model and tokenizer checksums.
+2. Selects a CUDA GPU by UUID and checks its free VRAM.
+3. Checks the runtime package versions and GGUF plugin hashes.
+4. Checks the network interface and ports.
+5. Writes the private instance.
 
-The default router listens at `http://127.0.0.1:18000`. Inspect its state
-and metrics after verification:
+`up` runs these steps:
+
+1. Checks the model, tokenizer, and GGUF plugin hashes.
+2. Checks that the ports are free.
+3. Starts the engines.
+4. Captures attestations and starts the attestation sidecars.
+5. Profiles every role split.
+6. Starts the router.
+
+`verify` runs these steps:
+
+1. Runs preflight over every eligible directed KV path.
+2. Sends a routed arithmetic request.
+3. Saves the router and engine metrics.
+4. Reports `ready` when every check passes.
+
+Run every later lifecycle command in the Python environment that ran `init`.
+
+Each command writes to two streams:
+
+| Stream | Content |
+| --- | --- |
+| stdout | The [lifecycle result](cli/Dev.md) as one JSON document |
+| stderr | Preparation, profiling, and error diagnostics |
+
+For scripts, `--format json` returns [versioned command results and automation exit codes](Command-Results.md).
+
+Read the router's state and metrics at its default address:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-Select another port layout with `narwhal dev init --port-base`, or another
-instance with `--instance` on each command. The [CLI reference](cli/Dev.md)
-lists the flags, lifecycle results and exit codes. The optional
-[four-engine role cycle](dev/RTX-5090-Reference.md#replay-all-three-role-splits)
-uses the RTX 5090 reference's workload and split targets.
+Optional: [forward these metrics to a Prometheus and Grafana host](observability/04-WSL2.md).
+
+Two `narwhal dev` options change the layout and target:
+
+| Option | Effect |
+| --- | --- |
+| `--port-base` on `narwhal dev init` | Selects a different port layout |
+| `--instance` on any command | Targets another instance |
 
 ## Inspect and stop the instance
 
-`status` prints the current run directory. Its `engine-*/startup.log` files
-record model loading and engine requests, `profile-*.log` files record probe
-and fit outcomes, and `verify-*/preflight.log` records the runtime, profile
-and transfer checks. The run also retains the routed response, memory
-samples, request journal and `teardown.json`.
+The run directory that `status` prints holds:
+
+| Content | Path |
+| --- | --- |
+| Routed response | `verify-*/completion.json` |
+| Whole-device memory samples | `up-memory.jsonl`, `verify-memory.jsonl` |
+| Request journal | `journal.jsonl` |
+| Teardown record | `teardown.json` |
+| Model loading and engine requests | `engine-*/startup.log` |
+| Probe and fit outcomes | `profile-*.log` |
+| Runtime, profile, and transfer checks | `verify-*/preflight.log` |
+
+Stop the instance:
 
 ```bash
 narwhal dev down
 narwhal dev status
 ```
 
-`down` stops process groups bound to the recorded boot ID and start ticks,
-then reports `stopped`. A later `up` creates a fresh run directory and
-profiles the new engine processes. On WSL2, the optional
-[monitoring example](observability/04-WSL2.md) forwards the local metrics to
-a separate Prometheus and Grafana host.
+`down` reports `stopped` for the recorded process groups.
 
-After a runtime change or engine restart, stop the generation and repeat
-`up` and `verify` so profiles and transfer checks bind to the new processes.
+Each `up` writes a new run directory.
+
+For a runtime change or engine restart:
+
+1. Run `down`.
+2. Run `up`.
+3. Run `verify`.
 
 ## Stage deadlines and recovery
 
-`dev up` and `dev verify` run runtime checks, native shared startup, attestation,
-profiling and preflight as separate subprocess stages. Each stage gets 300 seconds
-of execution by default. `NARWHAL_STAGE_TIMEOUT_SECONDS` overrides that default;
-`NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` overrides one stage, with its name converted
-to uppercase and punctuation replaced by underscores. For example:
+`dev up` and `dev verify` run subprocess stages with time budgets.
+
+| Variable | Default | Scope |
+| --- | --- | --- |
+| `NARWHAL_STAGE_TIMEOUT_SECONDS` | 300 seconds | Every stage |
+| `NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` | | One stage, with `<NAME>` as the stage name in uppercase and hyphens replaced by underscores |
+
+Stage names:
+
+| Stage | Work |
+| --- | --- |
+| `engine-<n>` | Runtime check for engine `n` |
+| `native-start-shared` | Native shared startup |
+| `attest-<n>` | Attestation capture for engine `n` |
+| `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines |
+| `profile-merge` | Merging the role-split profiles, with three or more engines |
+| `preflight` | Directed KV preflight during `verify` |
+
+Override the startup and preflight budgets:
 
 ```bash
 NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=720 narwhal dev up
 NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 ```
 
-`*.command.json` identifies each dev stage. The command writes partial output to
-private `*.stdout` and `*.stderr` artifacts and records its budget, wall-clock
-start, elapsed time, exit status and process identities in `*.stage.json`.
-The enclosing budget includes helper imports, subprocess startup and execution;
-each engine health check retains its own 180-second limit inside native shared
-startup. Profile splits each receive a fresh stage budget. HTTP health requests
-and the routed verification request retain their existing request deadlines.
+Budgets and fixed limits:
 
-On expiry, SIGINT or SIGTERM during a helper stage, the controller signals owned
-processes with SIGTERM, waits up to `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` (10 seconds),
-then uses SIGKILL and waits up to `NARWHAL_STAGE_KILL_GRACE_SECONDS` (5 seconds).
-These periods follow the execution budget; stage evidence records escalation
-and any surviving owned PIDs.
+| Limit | Value |
+| --- | --- |
+| Stage budget | Covers the stage's work, helper imports, and subprocess startup |
+| Profiled role split | A fresh stage budget for each split |
+| Engine health check in native shared startup | 180 seconds per engine |
+| HTTP health request | 2-second timeout per request |
+| Routed verification request | 30-second timeout |
+| Cleanup grace periods | Added to the execution budget |
 
-Startup rollback records the initiating failure alongside teardown errors in
-`lifecycle.json`. Verification failures retain the attempt directory and keep
-status degraded until a successful verification. Inspect the failed stage's
-output, run `narwhal dev status --instance PATH`, then use `narwhal dev down
---instance PATH` to stop the generation before retrying startup. A surviving
-process with expired ownership requires operator inspection of its recorded
-boot ID, start tick and process group. All evidence stays under the instance.
+`narwhal dev` stops the stage's supervised processes when:
 
-The engine deployment wrapper uses these budgets for Docker clients and native
-runtime checks. Each Docker create/run carries the launch token from
-`docker-owner.json` in `io.narwhal.launch` and a unique operation token in
-`io.narwhal.operation`. A timed out or cancelled client triggers daemon inspection
-with a separate `NARWHAL_DOCKER_RECONCILE_SECONDS` budget (30 seconds).
-Reconciliation removes containers created by the interrupted operation, or the
-explicit target of an interrupted start, then queries daemon state again. It
-retains the launch directory's other containers and records their IDs as
-preserved resources. Each reconciliation client shares the remaining
-reconciliation budget and receives the same termination grace periods, so final
-client cleanup can extend reconciliation by 15 seconds with defaults.
+- a stage budget expires
+- `narwhal dev` receives SIGINT (Ctrl-C) during a stage
+- `narwhal dev` receives SIGTERM during a stage
 
-`docker-reconcile-*.json` records the operation token, targeted, removed, preserved
-and surviving IDs, refusal decisions,
-inspection errors and observation time. A stalled daemon leaves the result at
-`inspection_required`; inspect the persisted ownership label and recorded IDs
-before retrying. The report describes the daemon at observation time: repeat
-inspection after daemon recovery to catch a create operation that completed after
-client cancellation. Keep the original launch directory through that inspection.
+Cleanup steps:
 
-### Reference GPU timeout check
+| Step | Signal | Wait | Variable |
+| :---: | --- | --- | --- |
+| 1 | SIGTERM | Up to 10 seconds | `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` |
+| 2 | SIGKILL to surviving processes | Up to 5 seconds | `NARWHAL_STAGE_KILL_GRACE_SECONDS` |
 
-Run this qualification on the reference GPU with the pinned template and an
-operator-selected instance. Retain a successful generation's startup logs and
-`native-start-shared.log.*.stage.json`, then run `dev down` and record idle device
-memory, process IDs and the configured engine, attestation and NIXL ports.
-Use those timestamps to select a native-start budget after the first engine's
-CUDA allocation and before the complete shared startup finishes:
+Files next to each stage log:
 
-```bash
-NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS="$STARTUP_BUDGET_SECONDS" \
-  narwhal dev up --instance runs/dev-timeout
-narwhal dev status --instance runs/dev-timeout
-narwhal dev down --instance runs/dev-timeout
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv
-```
+| File | Content |
+| --- | --- |
+| `*.command.json` | The stage's command line |
+| `*.stdout`, `*.stderr` | The stage's private output |
+| `*.stage.json` | The budget, wall-clock start, elapsed time, exit status, process identities, cleanup escalation, and surviving PIDs |
 
-Record the observed allocation before expiry, command duration, worker exit,
-post-cleanup device memory and port release. Compare duration against the stage
-budget plus termination grace and rollback time, and compare memory against the
-idle baseline. Retain `lifecycle.json`, teardown, startup, memory and stage
-artifacts. Confirm an unrelated process survives, then start and verify a fresh
-generation with the normal budget. This opt-in qualification exercises vLLM
-workers and CUDA cleanup; the automated deadline suite uses CPU helpers and a
-fake Docker daemon executable.
+Failed command outcomes:
 
-## Controller interruption
-
-The Linux recovery suite starts synthetic services and subprocess helpers,
-interrupts the controller at synchronised barriers, then executes `status` and
-`down` in fresh processes. Services create workers that delay termination;
-helpers create workers in separate sessions. The suite checks complete committed
-JSON documents, lock release, retained output, idempotent teardown and the
-survival of an unrelated process across these twelve cases:
-
-| Interruption barrier | Signals exercised | Controller cleanup and fresh `down` |
+| Failed command | Result | Report |
 | --- | --- | --- |
-| Child created, before identity capture | SIGINT | Startup stops the child tree and retains spawn cleanup evidence; `down` reports stopped. |
-| Child created, before identity capture | SIGKILL | Recovery uses the last committed ownership set; the operator identifies the newly created service from its command and log. |
-| Ownership document awaiting atomic replacement | SIGKILL | Readers see the previous complete document; operator inspection covers the service described by the pending write. |
-| Ownership committed | SIGINT, SIGTERM | SIGINT rolls startup back; SIGTERM ends the controller and fresh `down` terminates the recorded group. |
-| Service readiness wait | SIGKILL | Fresh `status` reports degraded and `down` terminates the recorded group. |
-| Profiling helper active | SIGINT, SIGTERM, SIGKILL | SIGINT/SIGTERM stop the helper and roll startup back; after SIGKILL, fresh `down` recovers the helper and service records. |
-| Verification helper active | SIGTERM, SIGKILL | SIGTERM records degraded verification and retains services; SIGKILL leaves interrupted helper evidence. Fresh `down` terminates the helpers and services. |
-| Recorded service leader exited, delayed worker surviving | SIGKILL | Status lists the surviving group; teardown requests operator inspection of the worker's identity. |
+| `up` | Startup rolls back. | `lifecycle.json` records the original failure and teardown errors. |
+| `verify` | The attempt directory stays. | `status` reports `degraded` with the reason until a later `verify` succeeds or `down` completes. |
 
-Each helper runs beneath a dedicated Linux subreaper that holds its process
-identity until cleanup finishes. A helper that forks, starts another session
-and exits immediately leaves its worker attached to that supervisor. The
-controller signals workers before removing the supervisor, then reaps its
-adopted children. Successful native shared startup releases the supervisor
-explicitly so the launched engines continue into attestation and profiling.
-Release failures take the bounded cleanup path and retain their initiating error.
+Recover from a failed stage, with `PATH` as the instance directory:
 
-Stage documents retain the boot ID and process start ticks, updating atomically
-when the controller observes another descendant. After abrupt controller death,
-`status` lists matching interrupted helpers in `stage_processes`; `down` uses
-those records and the still-live supervisor to discover and terminate its tree.
-A mismatched boot or start tick protects a replacement process from signalling.
-Recovery updates the stage record to `recovered`, or `recovery_required` with the
-surviving PIDs, and preserves stdout, stderr and command evidence.
+1. Read the failed stage's output.
+2. Run `narwhal dev status --instance PATH`.
+3. Stop the process generation with `narwhal dev down --instance PATH`.
+4. Run `narwhal dev up --instance PATH`.
 
-Ownership begins with a committed process or stage record. A SIGKILL before that
-commit can leave a service whose command log predates its ownership entry.
-Inspect the log, kernel start ticks and listening ports, stop the confirmed
-process tree, then repeat `down`. Its stopped status covers the persisted
-ownership set. A service leader that exits before teardown establishes worker
-ownership also requires operator inspection; the status and teardown documents
-identify the surviving group. The dedicated helper supervisor covers helper
-leader exit while that supervisor remains alive.
-
-### Reference GPU interruption check
-
-Use an operator-selected instance with the pinned runtime and a completed normal
-`up`/`verify` cycle. Retain its generation, device-memory baseline, process tree
-and engine, attestation and NIXL port assignments. Qualify these two interruption
-points on that host:
-
-1. Start a fresh generation, wait for a committed engine identity and an observed
-   CUDA allocation, then send SIGINT to the `narwhal dev up` controller PID.
-   Record the controller's exit, retained startup failure, worker exits, device
-   memory and port state; run `status` and `down` from a fresh shell.
-2. Start and verify a fresh generation, launch another `dev verify`, wait for its
-   preflight stage ownership record, then send SIGKILL to that controller PID.
-   Record `status`, run `down` twice, and compare surviving process identities,
-   device memory and bound ports against the baseline.
-
-Keep a separately identified process alive during both checks and confirm its
-identity after teardown. Retain controller output, `lifecycle.json`, stage and
-teardown documents, vLLM logs, GPU process listings and timestamped memory/port
-observations. A surviving CUDA allocation or occupied engine port identifies the
-PID to investigate before another generation starts. Record the vLLM, driver,
-CUDA and GPU versions alongside the exercised signal and barrier. The automated
-suite qualifies Linux ownership using CPU processes and substituted HTTP health
-responses; this opt-in procedure adds actual vLLM, CUDA and port-release evidence.
+If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 
 ## Contribute another GPU recipe
 
-For another small CUDA GPU, record the GPU, driver, model and runtime
-versions, free-memory reserve, peak startup memory, both directed KV
-transfers and routed completion. Share its working template and qualification
-evidence so the allocation can be reproduced.
+Contribute a template for a new small CUDA GPU:
 
-Contributions for other GPU vendors can add discovery, memory accounting,
-engine launch and a compatible transfer runtime alongside a measured
-template. [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md)
-describes the checks and pull request workflow.
+1. Follow the [checks and pull request workflow](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md).
+2. Submit the working template with qualification evidence.
+
+The qualification evidence records:
+
+- the GPU, driver, model, and runtime versions
+- the free-memory reserve and peak startup memory
+- both directed KV transfers
+- the routed completion
+
+A contribution for a GPU from another vendor includes:
+
+- a measured template
+- optionally, discovery, memory accounting, engine launch, and a compatible transfer runtime

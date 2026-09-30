@@ -118,6 +118,7 @@ class ResidencySubscriptions:
         if body["epoch"] != view.epoch:
             return False
         view.block_size = body["block_size"]
+        view.reason = body.get("reason", view.reason)
         for change in body["changes"]:
             if view.sequence is None or change["sequence"] != view.sequence + 1:
                 return False

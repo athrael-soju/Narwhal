@@ -259,10 +259,14 @@ class Profile:
         _check({f.name: getattr(self, f.name) for f in fields(self)}, label)
 
     def prefill_time(self, input_len: int) -> float:
-        """Predict prefill time for an input length, adding `ttft_split` when it splits."""
-        x = float(input_len)
+        """Predict prefill time for an input length, adding `ttft_split` when it splits.
+
+        A prompt below the measured sweep is priced at the sweep's shortest length.
+        """
+        tokens = max(input_len, self.prefill_min_tokens or 0)
+        x = float(tokens)
         return max(
-            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(input_len)
+            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(tokens)
         )
 
     def _split_step(self, tokens: int) -> float:
@@ -303,16 +307,15 @@ class Profile:
         )
 
     def covers_prefill(self, input_len: int) -> bool:
-        """Return whether a prompt length was in the measured prefill sweep."""
-        return (self.prefill_min_tokens is None or input_len >= self.prefill_min_tokens) and (
-            self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
-        )
+        """Return whether a prompt length is at most the measured prefill sweep's longest."""
+        return self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
 
     def covers_output(self, output_len: float) -> bool:
-        """Return whether an output length was in the measured decode sweep."""
-        return (
-            self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
-        ) and (self.decode_max_output_tokens is None or output_len <= self.decode_max_output_tokens)
+        """Return whether an output length reaches the measured decode sweep's minimum.
+
+        The decode fit prices one step from batch requests and KV tokens.
+        """
+        return self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
         """Predict one decode iteration from active requests and their KV tokens."""
@@ -343,16 +346,10 @@ class Profile:
         return capacity
 
     def covers_decode(self, batch_requests: float, batch_tokens: float) -> bool:
-        """Return whether a decode point is inside the measured profile domain."""
-        if batch_requests <= 0 or batch_tokens <= 0:
-            return True
-        bounds = (
-            (self.decode_min_requests, self.decode_max_requests, batch_requests),
-            (self.decode_min_kv_tokens, self.decode_max_kv_tokens, batch_tokens),
-        )
-        return all(lo is None or lo <= value for lo, _, value in bounds) and all(
-            hi is None or value <= hi for _, hi, value in bounds
-        )
+        """Return whether a decode point is at most the measured profile domain's largest."""
+        requests = self.decode_max_requests is None or batch_requests <= self.decode_max_requests
+        tokens = self.decode_max_kv_tokens is None or batch_tokens <= self.decode_max_kv_tokens
+        return requests and tokens
 
     @property
     def decode_token_limit(self) -> int | None:
@@ -360,15 +357,18 @@ class Profile:
         bounds = [b for b in (self.kv_capacity_tokens, self.decode_max_kv_tokens) if b is not None]
         return min(bounds) if bounds else None
 
-    def decode_request_limit(self, context_tokens: float) -> int:
+    def decode_request_limit(self, context_tokens: float, request_cap: int = 0) -> int:
         """Return the concurrent decode-request limit for the context length.
 
-        Return 0 for an invalid context or missing measured request bound.
+        A positive `request_cap` bounds the limit. Return 0 for an invalid
+        context or missing measured request bound.
         """
         measured = self.decode_max_requests
         if context_tokens <= 0 or measured is None or measured <= 0:
             return 0
         limits = [measured]
+        if request_cap > 0:
+            limits.append(request_cap)
         token_limit = self.decode_token_limit
         if token_limit is not None:
             limits.append(max(1, int(token_limit / context_tokens)))
@@ -381,6 +381,7 @@ class Profile:
         output_tokens: float,
         *,
         correction: float = 1.0,
+        request_cap: int = 0,
     ) -> float:
         """Return measured-domain request capacity for one decode engine."""
         if (
@@ -390,7 +391,7 @@ class Profile:
             or not self.covers_output(output_tokens)
         ):
             return 0.0
-        hi = self.decode_request_limit(context_tokens)
+        hi = self.decode_request_limit(context_tokens, request_cap)
         if hi <= 0:
             return 0.0
         lo = 1

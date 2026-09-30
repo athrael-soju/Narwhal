@@ -222,7 +222,9 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                     transport=transport,
                 )
                 try:
-                    async with client._data.stream("POST", self.url + "/occupied", json={}) as held:
+                    async with client._data(self.url).stream(
+                        "POST", self.url + "/occupied", json={}
+                    ) as held:
                         with self.assertRaises(httpx.PoolTimeout) as caught:
                             await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
                         self.assertIsNone(leg_failure_class(caught.exception))
@@ -234,11 +236,29 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     await client.aclose()
 
+    async def test_a_held_connection_to_one_engine_leaves_other_engines_free(self):
+        self.release.clear()
+        self.requests.clear()
+        client = EngineClient(max_connections=1, prefill_timeout_s=0.5, pool_timeout_s=0.2)
+        other = self.url.replace("127.0.0.1", "localhost")
+        try:
+            async with client._data(self.url).stream(
+                "POST", self.url + "/occupied", json={}
+            ) as held:
+                result = await client.prefill(other, "/v1/completions", {"prompt": "x"}, {})
+                self.assertEqual(result.parameters()["remote_engine_id"], "e0")
+                self.release.set()
+                await held.aread()
+            self.assertIsNot(client._data(self.url), client._data(other))
+            self.assertIs(client._data(other), client._data(other))
+        finally:
+            await client.aclose()
+
     async def test_elapsed_deadline_after_dispatch_remains_engine_timeout(self):
         for reused_connection in (False, True):
             with self.subTest(reused_connection=reused_connection):
                 self.requests.clear()
-                client = EngineClient(prefill_timeout_s=0.04, pool_timeout_s=1)
+                client = EngineClient(prefill_timeout_s=0.5, pool_timeout_s=1)
                 try:
                     if reused_connection:
                         await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})

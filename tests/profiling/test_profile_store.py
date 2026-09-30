@@ -105,9 +105,14 @@ class ProfileStoreTests(unittest.TestCase):
         restored = ProfileStore(self.path)
         restored.bind_role_mix({row.iid: "gpu-0"}, lambda group: (2, 1), lambda iid: Role.PREFILL)
         self.assertEqual(restored.get(row.iid), row)
-        self.assertIsNone(restored.mean_prefill_time(64))
-        self.assertIsNotNone(restored.mean_prefill_time(256))
-        self.assertEqual(row.decode_rps(1, 256, 32), 0)
+        self.assertEqual(restored.mean_prefill_time(64), restored.mean_prefill_time(128))
+        self.assertLess(restored.mean_prefill_time(128), restored.mean_prefill_time(256))
+        self.assertIsNone(restored.mean_prefill_time(2048))
+        self.assertGreater(row.decode_rps(1, 256, 32), 0)
+        self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
+        self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)
+        self.assertEqual(row.decode_request_limit(256, request_cap=1), 1)
+        self.assertLess(row.decode_rps(1, 256, 32, request_cap=1), row.decode_rps(1, 256, 32))
         with self.assertRaisesRegex(ValueError, "colocated role mix"):
             replace(row, colocated_decode_rps=None)
 

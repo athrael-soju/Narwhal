@@ -1,32 +1,73 @@
+---
+description: Run the narwhal-check preflight gates against profiled, idle Narwhal engines.
+---
+
 # Gate F: Profile once and run the live KV contract
 
 ## Profile idle engines
 
-Reserve the real engines and keep them otherwise idle. From the router:
+Run these steps from the router shell.
 
-```bash
-.venv/bin/narwhal-profile \
-  --fleet runs/deployment/fleet.json \
-  --limits runs/deployment/profiling-limits.json \
-  --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
-  --decode-input-lens 512,4096,8192
-```
+1. Reserve the real engines.
+2. Keep the engines otherwise idle.
+3. Load the private engine URLs and credentials from the router environment.
+4. Warm the model.
+5. Pick input lengths and concurrency points that match production traffic.
+6. Place two prefill lengths on cache block boundaries and the rest between boundaries.
+7. Run the profiler:
 
-Preparation derives `profiling-limits.json` from each engine's `--max-num-seqs`. The profiler bounds decode concurrency to that limit and adds it as a sweep point when needed. It reads `max_model_len` from each live `/tokenize` response, chooses lengths that leave one prefill output token or 64 decode output tokens, and checks actual tokenised length before each completion.
+    ```bash
+    .venv/bin/narwhal-profile \
+      --fleet runs/deployment/fleet.json \
+      --limits runs/deployment/profiling-limits.json \
+      --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
+      --decode-input-lens 512,4096,8192
+    ```
 
-Compare the effective sweep with every checked serving plan. A shorter context or one-sequence limit requires changing launch policy or sweep before profiling. Use private engine URLs and credentials from the router environment. Warm the model. Engines keep prefix caching on during profiling; each cold probe request carries a fresh cache salt.
+8. Compare each printed effective sweep with every checked serving plan.
 
-Prefill profiling measures one-token latency against input length. Decode profiling holds each cohort in decode across prompt lengths and concurrency levels. It fits the cohort's token intervals against active-request count and estimated resident KV. Choose lengths and concurrency points that cover expected production traffic. Include two prefill lengths on cache block boundaries and place the rest between boundaries. Keep the `.samples.json` sidecar written alongside the profile store configured by `profiles.path`.
+Gate B's `deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's `--max-num-seqs`.
 
-The controller holds a role change if its projected decode point falls outside measured profile range. Profile engine IDs must exactly match the configured fleet; mismatch stops startup.
+The effective sweep has these bounds:
 
-At preflight and router startup, Narwhal matches each saved profile to the live engine's attested process identity and requires a new profile when that identity changes.
+| Sweep input          | Bound                                                      |
+| -------------------- | ---------------------------------------------------------- |
+| Decode concurrency   | At most `--max-num-seqs`.                                  |
+| Prefill lengths      | Input plus one output token fits the live `max_model_len`. |
+| Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`. |
 
-Set `slo.ttft_s` and `slo.tpot_s` from the service requirement and measured engine curves before preflight, keeping TPOT above the measured per-token floor. A target edit changes the preflight budget while the curves continue to describe the same engines.
+Engines keep prefix caching on during profiling.
+
+| Profiler error                                                                       | Fix                                                      |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| The live context leaves fewer than three prefill lengths or two decode input lengths | Pass shorter `--prefill-lens` and `--decode-input-lens`. |
+| `--max-num-seqs` allows fewer than two decode concurrency points                     | Change the engine launch policy.                         |
+
+Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
+
+| Condition                                                                       | Result                                              |
+| ------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Profile engine IDs differ from the configured fleet                             | Preflight fails and router startup stops.           |
+| The live engine's attested process identity differs from its saved profile      | Preflight and router startup require a new profile. |
+| A role change's projected decode point falls outside the measured profile range | The role controller holds the change.               |
+
+Set the service-level objective (SLO) targets before preflight:
+
+1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#5-set-production-slos) from the service requirement and the measured engine curves.
+2. Keep the time per output token (TPOT) target above the measured per-token floor.
 
 ## Calibrate the first-token deadline
 
-From the router host, keep the engines idle. With the example engine launch limit of 16,384 total tokens, inputs can use at most 16,383 tokens while leaving room for one output token. For a service admitting that input range, run:
+Calibration inputs, with the engines idle:
+
+| Flag                      | Value                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--input-tokens`          | Lengths spanning the served range, including the longest admitted input, with room for one output token on both engines |
+| `--observation-timeout-s` | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`                                            |
+| `--calibration-out`       | A fresh artifact path under the ignored `runs/` tree                                                                    |
+| `--samples`               | 100, the default and the minimum for qualifying evidence                                                                |
+
+For an engine launch limit of 16,384 total tokens, run the calibration from the router shell:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
@@ -35,50 +76,109 @@ From the router host, keep the engines idle. With the example engine launch limi
   --calibration-out runs/deployment/first-token-calibration.json
 ```
 
-Choose input lengths that span the served range and include its longest admitted input. Every target must leave at least one output token within both engines' live context limits. Calibration requests up to four output tokens, reducing that count to fit the smaller producer/consumer context limit. Set the observation bound above the current `engine.first_token_timeout_s` and within `serving.request_timeout_s`.
+The artifact records input tokens, prefill time, decode-to-first-token time, and failed or expired attempts.
 
-Each sample uses a unique prompt prefix and a fresh handoff on a role-permitted directed pair. The live tokenizer sizes the prompt to at most the requested token count. The command probes every permitted pair and records actual input tokens, prefill time, time from starting decode to the first generated token, and failed or expired attempts. Write the artifact to a fresh path under the ignored `runs/` tree.
+| Exit code | Artifact status                                                                                                                               |
+| :-------: | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0         | `complete`: at least 100 samples per role-permitted directed pair and input length, every attempt completed, and matching process generations |
+| 1         | `incomplete`                                                                                                                                  |
 
-A complete artifact has at least 100 successful samples per pair and input length, with every attempt successful and engine generations unchanged. For each group, the command computes `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds`; its printed candidate is the largest group result. Diagnose failed transfers and observation expiries before using the candidate. A larger observation bound changes only the diagnostic run.
+`serving.request_timeout_s` bounds each attempt's prompt sizing, prefill, and decode completion.
 
-Each attempt, including prompt sizing, prefill, and decode completion, remains bounded by `serving.request_timeout_s`. An attempt that expires after producing its first token is retained as `request_expired` and excluded from the candidate calculation.
+| Attempt status                                       | Meaning                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------- |
+| `completed`                                          | Decode produced its first token within `--observation-timeout-s`. |
+| `request_expired`                                    | `serving.request_timeout_s` expired.                              |
+| `observation_expired`                                | The first token missed `--observation-timeout-s`.                 |
+| `failed_sizing`, `failed_prefill`, `failed_transfer` | The named phase failed.                                           |
 
-Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path. Check that the selected deadline, measured prefill, and router overhead fit the service's client TTFT requirement.
+Only `completed` timings enter the candidate calculation.
 
-Repeat calibration after a model, engine generation, transport or served-context change. Write the replacement artifact to a fresh path, update the fleet configuration, and distribute both files to every router host before preflight and startup.
+The command prints the candidate deadline, the largest `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` across pairs and input lengths.
 
-Retain the fleet document, raw artifact, command, and process identities together. See the [GPU qualification report](../measure/07-GPU-Qualification.md) for measured results.
+Diagnose the failed transfers and observation expiries before using the candidate.
+
+| Field                                 | Value                         |
+| ------------------------------------- | ----------------------------- |
+| `engine.first_token_timeout_s`        | Strictly above the candidate. |
+| `engine.first_token_calibration_path` | The artifact path.            |
+
+The deadline, the measured prefill, and the router overhead must fit the client time to first token (TTFT) requirement.
+
+Repeat the calibration when the model, process generation, transport, or served context changes:
+
+1. Use a fresh artifact path.
+2. Update the fleet config.
+3. Copy the artifact and the fleet config to every router host before preflight.
+
+Retain the fleet file, the raw artifact, the command, and the process identities together.
 
 ## Run preflight
 
-From the router, keep the engines otherwise idle and run:
+With the engines otherwise idle, run the preflight from the router shell:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json
 ```
 
-The `consume` gate uses a fixed prompt, a fresh cache salt and a fresh handoff for each role-permitted engine pair. The default mesh covers every eligible ordered pair; `--ring` selects pairs that cover each eligible producer and consumer. See the [CLI reference](../cli/Check.md) for supported options.
-
-Decode must produce its first generated token within `engine.first_token_timeout_s` and finish a valid stream with output. Each consume attempt's prefill and decode must complete within `serving.request_timeout_s`. The consume gate reports first-token time for a passing transfer. A deadline expiry means that the transfer remains unconfirmed; check the calibration artifact and configured deadline. Retain the failing pair, error, and engine logs for other transfer failures.
-
-An empty calibration path produces a warning in preflight and at router startup. When a path is configured, both require complete evidence matching the running engines and a deadline strictly above its candidate. Preflight fails and router startup stops on invalid evidence or an insufficient deadline.
-
-`--repeats N` runs fixed transfer probes for each pair and reports their verdicts. Retain the command, fleet document, preflight output, process identities, and profile store together.
-
 The full preflight runs these gates:
 
-| Gate       | What must pass                                                                                                                                                                                              |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reach`    | Every engine returns HTTP 200 with the configured health HTTP I/O timeout.                                                                                                                                   |
-| `contract` | Attestation matches current process and declared runtime.                                                                                                                                                   |
-| `profile`  | Each saved generation digest matches its live engine; profile IDs match the fleet and measured decode errors stay within policy.                                                                            |
-| `model`    | Every engine serves the configured model.                                                                                                                                                                   |
-| `pace`     | Prefill latency remains within permitted slowdown. With at least three successful probes, comparison uses fleet median. Saved per-engine profiles are used when available; smaller fleets require profiles. |
-| `tokenize` | Exact input sizing succeeds when enabled.                                                                                                                                                                   |
-| `produce`  | Every tested producer can export a KV handoff.                                                                                                                                                              |
-| `consume`  | Every tested peer can consume that handoff.                                                                                                                                                                 |
-| `slo`      | Configured TTFT/TPOT targets are feasible against measured profiles.                                                                                                                                        |
+| Gate       | What must pass                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reach`    | Every engine returns HTTP 200 within the configured health HTTP I/O timeout.                                                                      |
+| `contract` | Attestation matches the current process and declared runtime.                                                                                     |
+| `profile`  | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy. |
+| `model`    | Every engine serves the configured model.                                                                                                         |
+| `pace`     | Prefill latency stays within the [permitted slowdown](#pace-gate).                                                                                |
+| `tokenize` | Exact input sizing succeeds when `engine.tokenize` is on.                                                                                         |
+| `produce`  | Every tested producer can export a KV handoff.                                                                                                    |
+| `consume`  | Every tested peer can consume that KV handoff.                                                                                                    |
+| `slo`      | The configured TTFT and TPOT targets are feasible against the measured profiles.                                                                  |
 
-Start the router after every required gate passes.
+The calibration path sets the first-token evidence check:
+
+| `engine.first_token_calibration_path` | Preflight and router startup                                                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Empty                                 | Warning.                                                                                                                                   |
+| Set                                   | Preflight fails and router startup stops when evidence for the running engines is incomplete or the deadline is at or below the candidate. |
+
+### Pace gate
+
+| Pace gate property | Value                          |
+| ------------------ | ------------------------------ |
+| Probes per engine  | Two cold one-token completions |
+| Score              | The faster probe time          |
+| Slowdown limit     | 1.5x                           |
+| Failed probe       | Fails the gate                 |
+
+| Successful probes | Each engine is compared against                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Three or more     | The fleet median, and for every profiled engine, that profile's prefill prediction at the exact `usage.prompt_tokens`. |
+| Fewer than three  | For every profiled engine, that profile's prefill prediction at the exact `usage.prompt_tokens`.                       |
+
+### KV transfer gates
+
+[`narwhal-check`](../cli/Check.md) selects transfer pairs with these options:
+
+| Option        | Pairs and probes                                          |
+| ------------- | --------------------------------------------------------- |
+| Default mesh  | Every eligible ordered pair.                              |
+| `--ring`      | The pairs covering each eligible producer and consumer.   |
+| `--repeats N` | `N` transfer probes per pair, with one verdict per probe. |
+
+In the consume gate, a transfer across a role-permitted engine pair passes when:
+
+- Decode produces its first generated token within `engine.first_token_timeout_s`.
+- Decode finishes a valid stream with output.
+- Prefill and decode complete within `serving.request_timeout_s`.
+
+The gate reports the first-token time for each passing transfer.
+
+| Failure                          | Action                                           |
+| -------------------------------- | ------------------------------------------------ |
+| The first-token deadline expires | Check the calibration artifact and the deadline. |
+| Any other failure                | Keep the pair, the error, and the engine logs.   |
+
+Keep the command, fleet file, preflight output, process identities, and profile store together.
 
 Continue with [Gate G: Start the service and validate capacity through the private path](07-Serve-and-Measure.md).

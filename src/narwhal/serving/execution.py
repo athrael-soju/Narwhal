@@ -252,6 +252,24 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     )
 
 
+def _failure_response(state: RequestLifecycle) -> JSONResponse:
+    return JSONResponse(
+        status_code=state.outcome["status"],
+        content={"error": {"message": state.outcome["public_error"], "type": state.phase}},
+    )
+
+
+async def _resume(first: str | None, rest: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    """Yield the frame that committed the response, then the rest of the stream."""
+    try:
+        if first is not None:
+            yield first
+        async for frame in rest:
+            yield frame
+    finally:
+        await rest.aclose()
+
+
 async def serve_request(
     router: NarwhalRouter,
     rid: str,
@@ -280,12 +298,16 @@ async def serve_request(
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
-        (
-            req.input_len,
-            req.cached_tokens,
-            req.cache_sequences,
-            req.cache_identities,
-        ) = await state.wait(lambda: router.size(body))
+        sizing = router._clock()
+        try:
+            (
+                req.input_len,
+                req.cached_tokens,
+                req.cache_sequences,
+                req.cache_identities,
+            ) = await state.wait(lambda: router.size(body))
+        finally:
+            router.sizing_delays.add(router._clock() - sizing)
         if state.demand_observation is not None:
             router.controller.demand.resize_arrival(
                 state.demand_observation,
@@ -306,18 +328,18 @@ async def serve_request(
     streaming = bool(body.get("stream"))
     stream = run_decode(state, prepared, endpoint, body, engine_headers, streaming=streaming)
     if streaming:
-        return RequestStreamResponse(stream, state)
+        try:
+            first = await anext(stream, None)
+        except BaseException:
+            await stream.aclose()
+            raise
+        if not state.output_started and state.outcome["error"] is not None:
+            await stream.aclose()
+            return _failure_response(state)
+        return RequestStreamResponse(_resume(first, stream), state)
     chunks = [line async for line in stream]
     if state.outcome["error"] is not None:
-        return JSONResponse(
-            status_code=state.outcome["status"],
-            content={
-                "error": {
-                    "message": state.outcome["public_error"],
-                    "type": state.phase,
-                }
-            },
-        )
+        return _failure_response(state)
     try:
         out = reassemble(chunks, endpoint=endpoint)
     except ValueError as exc:

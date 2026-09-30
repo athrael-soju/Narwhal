@@ -76,8 +76,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 await self.router.input_length(body)
             self.assertTrue(count.await_args.kwargs["strict"])
 
-    async def test_input_length_rotates_after_failure_and_reuses_a_successful_tokenizer(self):
-        """Failed exact counting fails this request and rotates the preferred engine."""
+    async def test_input_length_skips_a_failed_tokenizer_until_a_count_succeeds(self):
+        """Failed exact counting fails this request; the next counts avoid that engine."""
         self.cfg.tokenize = True
         with patch.object(
             self.router.engines,
@@ -94,8 +94,9 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 await self.router.input_length({"prompt": "hello"})
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 9)
             self.assertEqual(await self.router.input_length({"prompt": "hello"}), 10)
-        self.assertNotEqual(count.call_args_list[0].args[0], count.call_args_list[1].args[0])
-        self.assertEqual(count.call_args_list[1].args[0], count.call_args_list[2].args[0])
+        urls = [call.args[0] for call in count.call_args_list]
+        self.assertNotEqual(urls[0], urls[1])
+        self.assertIsNone(self.router._tokenize_failed)
         self.assertEqual(self.router.estimate_length({"prompt": [1, 2, 3]}), 3)
         self.assertGreaterEqual(
             self.router.estimate_length({"messages": [{"content": "hello"}]}), 1
@@ -105,6 +106,22 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
             self.assertEqual(await self.router.input_length({"prompt": ""}), 1)
             count.assert_not_awaited()
+
+    async def test_exact_counts_spread_across_the_least_occupied_engines(self):
+        """Idle engines share the counts in turn; an occupied engine is left out."""
+        self.cfg.tokenize = True
+        live = self.router.scheduler.live_instances()
+        busy = live[0]
+        busy.decode["resident"] = Request("resident", 100, wanted_len=10)
+        with patch.object(
+            self.router.engines, "tokenize", new=AsyncMock(return_value=Tokenization(5, None))
+        ) as count:
+            for _ in range(2 * (len(live) - 1)):
+                await self.router.input_length({"prompt": "hello"})
+        urls = [call.args[0] for call in count.call_args_list]
+        self.assertNotIn(busy.url, urls)
+        self.assertEqual(set(urls), {i.url for i in live[1:]})
+        self.assertEqual(max(urls.count(u) for u in set(urls)), 2)
 
     async def test_health_verification_keeps_inconclusive_holds_and_resolves_health_evidence(self):
         """Ejecting a suspect engine requires a failed health probe."""

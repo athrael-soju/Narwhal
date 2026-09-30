@@ -14,8 +14,10 @@ from narwhal.contracts import ATTESTATION, versioned
 from narwhal.engines.attestation import (
     AttestationDocument,
     EngineIdentity,
+    _payload_digest,
     build_app,
     fetch_engine_identity,
+    launch_digest,
     make_attestation,
     parse_process_start,
     verify_attestation,
@@ -49,6 +51,36 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 for p in verify_attestation(payload, changed, self.identity)
             )
         )
+
+    def test_launch_evidence_is_signed_and_verified(self):
+        """A launch digest covers the contract and launch; tampering fails verification."""
+        launched = replace(self.document, launch={"args": ["--max-num-seqs", "64"]})
+        payload = make_attestation(launched, self.identity)
+        self.assertEqual(
+            payload["launch_digest"], launch_digest(self.contract.fields(), launched.launch)
+        )
+        self.assertEqual(verify_attestation(payload, self.contract, self.identity), [])
+        restarted = make_attestation(
+            launched, replace(self.identity, process_start_time_seconds=101)
+        )
+        self.assertEqual(restarted["launch_digest"], payload["launch_digest"])
+        self.assertNotEqual(restarted["attestation_digest"], payload["attestation_digest"])
+        tampered = copy.deepcopy(payload)
+        tampered["launch"]["args"] = ["--max-num-seqs", "32"]
+        tampered["attestation_digest"] = _payload_digest(tampered)
+        self.assertIn(
+            "launch_digest does not match the launch evidence",
+            verify_attestation(tampered, self.contract, self.identity),
+        )
+        unpaired = {k: v for k, v in payload.items() if k != "launch_digest"}
+        unpaired["attestation_digest"] = _payload_digest(unpaired)
+        self.assertIn(
+            "launch and launch_digest must appear together",
+            verify_attestation(unpaired, self.contract, self.identity),
+        )
+        legacy = make_attestation(self.document, self.identity)
+        self.assertNotIn("launch_digest", legacy)
+        self.assertEqual(verify_attestation(legacy, self.contract, self.identity), [])
 
     def test_tampering_and_response_shapes_report_failures(self):
         """Checksum and structural errors remain visible to preflight."""

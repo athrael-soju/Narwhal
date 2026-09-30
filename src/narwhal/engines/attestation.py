@@ -47,6 +47,7 @@ class AttestationDocument:
 
     contract: EngineContract
     sources: dict[str, str]
+    launch: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> AttestationDocument:
@@ -58,7 +59,7 @@ class AttestationDocument:
             validate_document(raw, ATTESTATION)
         except ContractVersionError as exc:
             raise ValueError(str(exc)) from exc
-        unknown = sorted(set(raw) - {"schema", "schema_version", "contract", "sources"})
+        unknown = sorted(set(raw) - {"schema", "schema_version", "contract", "sources", "launch"})
         if unknown:
             raise ValueError(f"unknown attestation field(s): {', '.join(unknown)}")
         contract = _read_contract(raw.get("contract"))
@@ -77,7 +78,10 @@ class AttestationDocument:
         missing_sources = sorted(_populated_fields(contract) - set(sources))
         if missing_sources:
             raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
-        return cls(contract=contract, sources=dict(sources))
+        launch = raw.get("launch")
+        if launch is not None and not isinstance(launch, dict):
+            raise ValueError("attestation launch must be an object")
+        return cls(contract=contract, sources=dict(sources), launch=launch)
 
 
 def _read_contract(raw: Any) -> EngineContract:
@@ -199,8 +203,19 @@ def make_attestation(
             },
         },
     )
+    if document.launch is not None:
+        payload["launch"] = document.launch
+        payload["launch_digest"] = launch_digest(document.contract.fields(), document.launch)
     payload["attestation_digest"] = _payload_digest(payload)
     return payload
+
+
+def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
+    """Digest the contract and launch evidence that fix an engine's timing."""
+    raw = json.dumps(
+        {"contract": contract, "launch": launch}, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return "sha256:" + sha256(raw).hexdigest()
 
 
 def verify_attestation(
@@ -220,14 +235,22 @@ def verify_attestation(
         "engine",
         "attestation_digest",
     }
-    unknown = sorted(set(payload) - expected_keys)
+    unknown = sorted(set(payload) - expected_keys - {"launch", "launch_digest"})
     missing = sorted(expected_keys - set(payload))
     if unknown:
         failures.append(f"unknown response field(s): {', '.join(unknown)}")
     if missing:
         failures.append(f"missing response field(s): {', '.join(missing)}")
+    if ("launch" in payload) != ("launch_digest" in payload):
+        failures.append("launch and launch_digest must appear together")
     if failures:
         return failures
+    if "launch" in payload and (
+        not isinstance(payload["launch"], dict)
+        or not isinstance(payload["contract"], dict)
+        or payload["launch_digest"] != launch_digest(payload["contract"], payload["launch"])
+    ):
+        failures.append("launch_digest does not match the launch evidence")
     try:
         validate_document(payload, ATTESTATION)
     except ContractVersionError as exc:
@@ -286,7 +309,10 @@ def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
     missing_sources = sorted(_populated_fields(contract) - set(sources))
     if missing_sources:
         raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
-    return AttestationDocument(contract, dict(sources))
+    launch = payload.get("launch")
+    return AttestationDocument(
+        contract, dict(sources), launch=launch if isinstance(launch, dict) else None
+    )
 
 
 def _payload_digest(payload: dict[str, Any]) -> str:
@@ -369,6 +395,7 @@ def build_app(
             "epoch": epoch,
             "sequence": sequence,
             "block_size": index.block_size,
+            "reason": index.reason,
             "changes": changes,
         }
 

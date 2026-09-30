@@ -1,18 +1,27 @@
+---
+description: Launch and verify four Qwen3.5-0.8B engines on one RTX 5090 with Narwhal dev.
+---
+
 # RTX 5090 reference for Narwhal dev
 
-This measured recipe pins an RTX 5090, Qwen3.5-0.8B GGUF and four engines.
-Follow the host setup in [Narwhal dev](../Dev-Runtime.md) and the shared
-[CUDA runtime and model installation](CUDA-Runtime.md) on Ubuntu or Ubuntu
-under WSL2.
+Four Qwen3.5-0.8B GGUF engines run on one RTX 5090, on Ubuntu or Ubuntu under WSL2.
 
-The reference allocates four engines with a 4,096-token context limit, four
-active sequences per engine and a 0.1 vLLM memory fraction each. Launch
-checks reserve 2,048 MiB of free VRAM beyond the 0.5 whole-device allowance.
+Prerequisites:
+
+1. Complete the host setup in [Narwhal dev](../Dev-Runtime.md).
+2. Complete the shared [CUDA runtime and model installation](CUDA-Runtime.md).
+
+| Setting | Value |
+| --- | --- |
+| Context limit per engine | 4,096 tokens, input plus output |
+| Active sequences per engine | 4 |
+| vLLM memory fraction per engine | 0.1 |
+| Device share for all four engines | Up to 0.5 |
+| Free VRAM required by `narwhal dev init` | Half the total VRAM plus 2,048 MiB |
 
 ## Select the RTX 5090 template
 
-Export the packaged reference into the Linux checkout before initializing an
-instance:
+Export the packaged reference template:
 
 ```bash
 mkdir -p runs
@@ -22,30 +31,49 @@ print(files('narwhal.dev').joinpath('reference-v1.json').read_text())
 PYTHON
 ```
 
-The template pins the GPU product, a 30,000 MiB minimum and the same runtime
-and model hashes as the installed small-GPU template.
+The template pins:
+
+- the GPU product, NVIDIA GeForce RTX 5090
+- a minimum of 30,000 MiB total VRAM
+- the same runtime and model hashes as the installed small-GPU template
 
 ## Launch and verify the reference
 
-Select the Linux network interface that has one IPv4 address with
-`ip -brief -4 address`, then use its name in place of `eth0` if needed:
+1. Run `ip -brief -4 address`.
+2. Find the Linux network interface that carries a single IPv4 address.
+3. Replace `eth0` with that interface name in these commands:
 
-```bash
-narwhal dev init --interface eth0 --template runs/rtx5090-template.json
-narwhal dev up
-narwhal dev verify
-narwhal dev status
-```
+    ```bash
+    narwhal dev init --interface eth0 --template runs/rtx5090-template.json
+    narwhal dev up
+    narwhal dev verify
+    narwhal dev status
+    ```
 
-`up` profiles the engines and starts the router. For this four-engine
-reference, `verify` checks all 12 eligible directed KV transfers and a
-routed arithmetic request. Use the same virtual environment for subsequent
-lifecycle commands; the instance records its interpreter.
+| Command | Result |
+| --- | --- |
+| `up` | Profiles the engines and starts the router |
+| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, and reports `ready` |
 
-The router listens on `127.0.0.1:18000`. Engine HTTP ports start at 18101,
-attestation ports at 18201 and NIXL side-channel ports at 5701. Select
-another port layout with `narwhal dev init --port-base`, or another instance
-with `--instance` on each command.
+Run later lifecycle commands in the virtual environment that ran `init`.
+
+Default ports:
+
+| Service | Port |
+| --- | --- |
+| Router | `127.0.0.1:18000` |
+| Engine HTTP | 18101 and up |
+| Attestation | 18201 and up |
+| NIXL side channel | 5701 and up |
+
+Options for another layout or instance:
+
+| Option | Effect |
+| --- | --- |
+| `narwhal dev init --port-base` | Selects a different port layout |
+| `--instance` on each command | Addresses another instance |
+
+Send a routed chat completion:
 
 ```bash
 curl http://127.0.0.1:18000/v1/chat/completions \
@@ -53,15 +81,22 @@ curl http://127.0.0.1:18000/v1/chat/completions \
   -d '{"model":"Qwen3.5-0.8B-GGUF-Q4_K_M","messages":[{"role":"user","content":"Reply with only the number: 2 + 3 = ?"}],"temperature":0,"max_tokens":32}'
 ```
 
-Expect the response content `5`. The local metrics endpoints work on Ubuntu
-and WSL2; [the WSL2 monitoring example](../observability/04-WSL2.md)
-forwards them to a separate Prometheus and Grafana host.
+The expected response content is `5`.
+
+Forward metrics to Prometheus and Grafana with the [WSL2 monitoring example](../observability/04-WSL2.md).
 
 ## Replay all three role splits
 
-The reference template's `role_cycle` fixes the token pool, random seeds and
-workload order. From the matching Narwhal checkout, with the instance's
-virtual environment active:
+The `role_cycle` in the reference template fixes the token pool, random seeds, and workload order.
+
+Replay prerequisites:
+
+- a verified instance that starts with two prefill and two decode engines (2P:2D)
+- an active role controller
+- the matching Narwhal checkout as the working directory
+- the instance's virtual environment as the active environment
+
+Run the replay and stop the instance:
 
 ```bash
 python -m tools.measurement.dev_cycle --instance runs/dev --dry-run
@@ -69,53 +104,76 @@ python -m tools.measurement.dev_cycle --instance runs/dev
 narwhal dev down --instance runs/dev
 ```
 
-Start from a verified 2P:2D fleet. The runner lets the 30-second demand
-window expire, then sends one warmup request before each phase:
+Replay phases:
 
 | Phase | Input / output tokens | Requests | Requests/s | Maximum in flight |
-| --- | --- | --- | --- | --- |
+| --- | --- | :---: | :---: | :---: |
 | Decode | 256 / 128 | 24 | 0.5 | 8 |
 | Prefill steady | 3,840 / 1 | 35 | 1 | 8 |
 | Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
 
-Narwhal chooses roles from the current profiles and resident work throughout
-the sequence. The runner checks controller-selected
-**2P:2D → 1P:3D → 2P:2D → 3P:1D → 2P:2D** transitions and requires every
-steady-phase request to meet the template's TTFT and TPOT budgets. The burst
-accepts completed requests and TTFT-budget HTTP 429 responses, and records
-its latency attainment separately. Engine profiles and concurrent GPU work
-can change the resulting transitions and latency.
+| Item | Value |
+| --- | --- |
+| Split sequence | 2P:2D, 1P:3D, 2P:2D, 3P:1D, 2P:2D |
+| Duration | About two minutes |
 
-Allow about two minutes for the workload sequence after `up` and `verify`.
-Each replay creates `cycle-*` beneath the instance, or a fresh directory
-selected with `--out`. Its `summary.json` contains the observed splits,
-per-phase latency, acceptance result and `grafana_range` timestamps for the
-dashboard's `from` and `to` URL parameters. The directory also preserves
-the template, effective fleet, source hashes, request rows and router state.
-Exit code 0 means the cycle and steady-phase budgets passed; 2 means a
-completed replay failed those checks; 1 means setup or execution failed.
+Acceptance criteria:
 
-## Inspect the reference's operating limits
+| Scope | Accepted outcome |
+| --- | --- |
+| Role cycle | The observed splits match the split sequence, with every move made by the role controller on the same engine processes. |
+| Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
+| Prefill burst | Every request completes or returns an HTTP 429 response that cites the TTFT budget. |
+
+Replay records directory:
+
+| Option | Directory |
+| --- | --- |
+| Default | A `cycle-*` directory beneath the instance |
+| `--out DIR` | `DIR`, a fresh directory |
+
+| Content | Holds |
+| --- | --- |
+| `summary.json` | Observed splits, per-phase latency, and the acceptance result |
+| `grafana_range` in `summary.json` | Timestamps for the dashboard's `from` and `to` URL parameters |
+| Other files | The template, effective fleet, source hashes, request rows, and router state |
+
+Exit codes:
+
+| Code | Meaning |
+| :--: | --- |
+| `0` | The role cycle and every phase passed. |
+| `1` | Setup or execution failed. |
+| `2` | A completed replay failed the role cycle or a phase. |
+
+## Reference operating limits
+
+State and metrics endpoints:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-The four engines open with two prefill and two decode roles. Startup
-profiles 1P:3D, 2P:2D and 3P:1D so the controller can price changes in both
-directions from the current processes. Prefill and decode sweeps cover
-128 to 3,840 input tokens, with decode concurrency one and two and up to
-128 output tokens. The 4,096-token engine context limit bounds input plus
-output.
+| Setting | Value |
+| --- | --- |
+| Initial split | 2P:2D |
+| Profiled splits at startup | 1P:3D, 2P:2D, and 3P:1D |
+| Prefill and decode sweep input | 128 to 3,840 tokens |
+| Decode sweep concurrency | 1 and 2 |
+| Decode sweep output | Up to 128 tokens |
+| Sweep bound | The 4,096-token engine context limit |
+| TTFT budget | 1 second |
+| TPOT budget | 125 ms |
+| Engine sampling interval | 100 ms |
+| Role-change evaluation interval | 250 ms |
+| Demand window for ordinary moves | 30 seconds |
+| Confirmations for ordinary moves | 3 |
 
-The reference uses a 1-second TTFT budget and a 125-ms TPOT budget. Narwhal
-samples engines every 100 ms and evaluates role changes every 250 ms, using
-a 30-second demand window and three confirmations for ordinary moves. After
-`verify`, fill one demand window with representative traffic before
-assessing role changes.
+Fill one 30-second demand window with representative traffic between `verify` and any assessment of role changes.
 
-To change engine count, model, context length or memory fractions, edit the
-exported `runs/rtx5090-template.json` and initialize a fresh instance with
-that file. Run `up` and `verify` to measure startup memory, directed KV paths
-and routed completion on the target GPU.
+To change the engine count, model, context length, or memory fractions:
+
+1. Edit the exported `runs/rtx5090-template.json`.
+2. Initialize a fresh instance from that file.
+3. Run `up` and `verify` on the target GPU.

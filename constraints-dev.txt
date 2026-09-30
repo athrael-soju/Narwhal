@@ -19,6 +19,7 @@ fastapi==0.141.1
 filelock==3.32.6
 h11==0.16.0
 httpcore==1.0.9
+httptools==0.8.0
 httpx==0.28.1
 id==1.6.1
 identify==2.6.19
@@ -63,5 +64,6 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.7.0
 uvicorn==0.52.4
+uvloop==0.22.1
 virtualenv==21.7.9
 zipp==4.1.0

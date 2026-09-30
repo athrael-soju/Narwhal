@@ -22,7 +22,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from ..config import FleetConfig
+from ..config import EngineSpec, FleetConfig
 from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
 from ..engines.dialect import lookup as lookup_dialect
@@ -316,7 +316,7 @@ async def _one_decode_stream(
     model: str,
     prompt: str,
     input_len: int,
-    state: dict[str, int],
+    state: dict[str, float],
     samples: list[tuple[float, float, float]],
     tokens: int = DECODE_TOKENS,
     dialect: EngineDialect | None = None,
@@ -342,7 +342,7 @@ async def _one_decode_stream(
     }
     mine = 0
     last: float | None = None
-    last_epoch = -1
+    last_epoch = -1.0
     done = False
     finished = False
     try:
@@ -389,6 +389,10 @@ async def _one_decode_stream(
                     state["resident"] += input_len
                     state["requests"] += 1
                     state["epoch"] += 1
+                    state["joined"] = state.get("joined", 0) + 1
+                    state.setdefault("first_at", now)
+                    if state["joined"] == state["cohort"]:
+                        state["last_join_at"] = now
                 mine += len(ids)
                 state["resident"] += len(ids)
                 if (
@@ -409,9 +413,56 @@ async def _one_decode_stream(
             )
     finally:
         if mine:
+            state.setdefault("left_at", time.monotonic())
             state["resident"] -= input_len + mine
             state["requests"] -= 1
             state["epoch"] += 1
+
+
+async def _decode_cohort(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    prompt: str,
+    input_len: int,
+    cohort: int,
+    tokens: int,
+    dialect: EngineDialect,
+) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
+    """Run one decode cohort and return its complete-cohort intervals and timing state."""
+    state: dict[str, float] = {"resident": 0, "requests": 0, "epoch": 0, "cohort": cohort}
+    observed: list[tuple[float, float, float]] = []
+    tasks = [
+        asyncio.create_task(
+            _one_decode_stream(
+                client, url, model, prompt, input_len, state, observed, tokens, dialect
+            )
+        )
+        for _ in range(cohort)
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return observed, state
+
+
+def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
+    """Size a retry so the first member still decodes when the last member joins.
+
+    A member that emitted `tokens` between the first arrival and the first
+    departure keeps `tokens` of full-cohort decode after the admission lag.
+    Returns None when the cohort already overlapped or the size exceeds `limit`.
+    """
+    first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
+    if first is None or joined is None or left is None or joined < left or left <= first:
+        return None
+    sized = tokens + math.ceil(tokens * (joined - first) / (left - first))
+    if limit is not None and sized > limit:
+        return None
+    return sized
 
 
 async def probe_decode(
@@ -450,26 +501,23 @@ async def probe_decode(
         for c in concurrency:
             replicates: list[tuple[float, float, float]] = []
             for repeat in range(repeats):
-                state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": c}
-                observed: list[tuple[float, float, float]] = []
-                tasks = [
-                    asyncio.create_task(
-                        _one_decode_stream(
-                            client, url, model, prompt, input_len, state, observed, tokens, dialect
+                used = tokens
+                observed, state = await _decode_cohort(
+                    client, url, model, prompt, input_len, c, used, dialect
+                )
+                if len(observed) < 2 * c:
+                    limit = max_model_len - input_len if max_model_len is not None else None
+                    retry = _overlapping_tokens(state, tokens, limit)
+                    if retry is not None:
+                        used = retry
+                        observed, state = await _decode_cohort(
+                            client, url, model, prompt, input_len, c, used, dialect
                         )
-                    )
-                    for _ in range(c)
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
                 if len(observed) < 2 * c:
                     raise RuntimeError(
                         f"decode probe has insufficient complete-cohort intervals: "
-                        f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}"
+                        f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}, "
+                        f"tokens={used}"
                     )
                 if evidence is not None:
                     evidence.append(
@@ -477,6 +525,7 @@ async def probe_decode(
                             "input_tokens": input_len,
                             "concurrency": c,
                             "repeat": repeat,
+                            "tokens": used,
                             "intervals": observed,
                         }
                     )
@@ -813,6 +862,9 @@ async def profile_instance(
         repeats=s.decode_repeats,
         observation_timeout_s=observation_timeout_s,
     )
+    decode_tokens_used = [
+        used for row in decode_intervals if isinstance(used := row.get("tokens"), int)
+    ]
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
@@ -860,7 +912,7 @@ async def profile_instance(
         prefill_min_tokens=math.floor(min(row[0] for row in prefill)),
         prefill_max_tokens=math.ceil(max(row[0] for row in prefill)),
         decode_min_output_tokens=1,
-        decode_max_output_tokens=s.decode_tokens,
+        decode_max_output_tokens=max(decode_tokens_used, default=s.decode_tokens),
     )
     try:
         if reason is not None:
@@ -1277,6 +1329,27 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
     return 0
 
 
+class _Unhealthy(Exception):
+    """An engine failed its health gate before profiling."""
+
+
+def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
+    """Group engines that share a device, or all engines under neighbour load, into one lane."""
+    if colocated:
+        return [list(targets)]
+    lanes: dict[str, list[EngineSpec]] = {}
+    for spec in targets:
+        key = spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
+        lanes.setdefault(key, []).append(spec)
+    return list(lanes.values())
+
+
+async def _cancel(tasks: list[asyncio.Task[None]]) -> None:
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -1327,7 +1400,8 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    connections = max((sweep or Sweep()).decode_concurrency) + len(cfg.engines)
+    lanes = _profile_lanes(targets, colocated=colocated_workload is not None)
+    connections = max((sweep or Sweep()).decode_concurrency) * len(lanes) + len(cfg.engines)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(
             observation_timeout_s or 300.0,
@@ -1336,7 +1410,8 @@ async def run(
         limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
         headers=cfg.engine_headers(),
     ) as client:
-        for spec in targets:
+
+        async def profile_engine(spec: EngineSpec) -> None:
             r = await client.get(
                 f"{spec.url}{dialect.health_path}", timeout=observation_timeout_s or 10.0
             )
@@ -1345,7 +1420,7 @@ async def run(
                     "engine_unhealthy", "Health gate failed", stage="health", engine=spec.iid
                 )
                 print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
-                return 1
+                raise _Unhealthy(spec.iid)
             if dialect.tokenize_path is None:
                 raise ValueError(
                     f"{spec.iid}: the {dialect.name} dialect needs a tokenization route "
@@ -1443,7 +1518,7 @@ async def run(
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
                 )
-                if generation.digest != current.digest:
+                if generation.process_digest != current.process_digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")
                 profile = replace(profile, generation_digest=generation.digest)
                 problems = decode_evidence_problems(
@@ -1483,7 +1558,7 @@ async def run(
                 output.write(json.dumps(measurement_record, indent=2) + "\n")
             store.put(profile)
             print(
-                f"    fit: ttft = {profile.ttft_a:.3e}n^2 + {profile.ttft_b:.3e}n "
+                f"  {spec.iid} fit: ttft = {profile.ttft_a:.3e}n^2 + {profile.ttft_b:.3e}n "
                 f"+ {profile.ttft_c:.4f}"
             )
             print(
@@ -1497,6 +1572,20 @@ async def run(
             )
             fit_error = profile.decode_fit_mape if profile.decode_fit_mape is not None else 0.0
             print(f"         decode fit MAPE {fit_error:.1%}; cross-validation {cv}")
+
+        async def profile_lane(lane: list[EngineSpec]) -> None:
+            for spec in lane:
+                await profile_engine(spec)
+
+        tasks = [asyncio.create_task(profile_lane(lane)) for lane in lanes]
+        try:
+            await asyncio.gather(*tasks)
+        except _Unhealthy:
+            await _cancel(tasks)
+            return 1
+        except BaseException:
+            await _cancel(tasks)
+            raise
     print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
     return 0
 

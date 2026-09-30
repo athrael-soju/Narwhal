@@ -333,18 +333,17 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(snapshot.offered_inputs, ())
         self.assertEqual(snapshot.offered_outputs, ())
         candidates = dict(snapshot.profile_options)[2]
-        for bounds in (
-            {"decode_max_kv_tokens": 50},
-            {"decode_min_kv_tokens": 200},
-            {"prefill_max_tokens": 50},
-            {"decode_max_output_tokens": 5},
+        for bounds, covered in (
+            ({"decode_max_kv_tokens": 50}, False),
+            ({"prefill_max_tokens": 50}, False),
+            ({"decode_min_kv_tokens": 200, "prefill_min_tokens": 200}, True),
         ):
             with self.subTest(bounds=bounds):
                 narrowed = replace(
                     snapshot,
                     profile_options=((2, tuple(replace(p, **bounds) for p in candidates)),),
                 )
-                self.assertFalse(narrowed.score(2).decode_profile_covered)
+                self.assertEqual(narrowed.score(2).decode_profile_covered, covered)
         self.assertIsNotNone(fleet.confirm())
 
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
@@ -381,6 +380,108 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(
             fleet.scheduler._last_decision["decision_basis"], "prefill_pressure_recovery"
         )
+
+    def test_demand_prices_outputs_past_the_profiled_decode_length(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(
+            replace(p, decode_max_output_tokens=4) for p in fleet.profiles.all_profiles()
+        )
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+        priced = demand.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+        self.assertTrue(priced.complete)
+        self.assertGreater(priced.decode_engines, 0.0)
+
+    def test_demand_prices_prompts_below_the_profiled_prefill_sweep_at_its_shortest(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(replace(p, prefill_min_tokens=100) for p in fleet.profiles.all_profiles())
+
+        def offered(length: int):
+            model = type(fleet.controller.demand)(
+                fleet.monitor, fleet.scheduler, lambda: fleet.now, window_s=60.0, bucket_s=1.0
+            )
+            model.saw_arrival(length, wanted_len=4, at=fleet.now)
+            return model.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+
+        short, shortest = offered(10), offered(100)
+        self.assertTrue(short.complete)
+        self.assertGreater(short.prefill_engines, 0.0)
+        self.assertAlmostEqual(short.prefill_engines, shortest.prefill_engines)
+
+    def test_decode_capacity_prices_length_buckets_at_or_above_exact_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        shapes = [(400 + i, 200 + (7 * i) % 100) for i in range(200)]
+        for input_len, wanted_len in shapes:
+            demand.saw_arrival(input_len, wanted_len=wanted_len, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        original = Profile.decode_rps
+        with patch.object(Profile, "decode_rps", autospec=True, side_effect=original) as rps:
+            bucketed = price()
+        self.assertLess(rps.call_count, len(shapes) * len(profiles) / 2)
+        with patch.object(type(demand), "_capacity_bucket", staticmethod(lambda tokens: tokens)):
+            exact = price()
+        self.assertGreater(exact, 0.0)
+        self.assertGreaterEqual(bucketed, exact)
+        self.assertLess(bucketed, exact * 1.2)
+
+    def test_state_snapshots_reuse_the_controller_output_estimates(self) -> None:
+        fleet = self.fleet
+        demand = fleet.controller.demand
+        demand.refresh_output_estimates()
+        with patch.object(demand, "_output_estimates", wraps=demand._output_estimates) as rebuild:
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_not_called()
+            fleet.now += demand.window_s
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_called_once()
+
+    def test_a_decode_concurrency_cap_raises_priced_decode_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        uncapped = price()
+        fleet.scheduler.decode_concurrency = 1
+        self.assertGreater(price(), uncapped)
+
+    def test_full_capped_decode_slots_move_an_engine_to_decode(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.scheduler.decode_concurrency = 2
+        fleet.controller.demand.unsized_pending = 1
+        fleet.pressure = {Role.PREFILL: 0.1, Role.DECODE: 0.1}
+        for iid in ("e3", "e4", "e5"):
+            for index in range(2):
+                request = Request(f"{iid}-{index}", 100, wanted_len=10)
+                request.phase = Phase.DECODE
+                fleet.monitor.dispatched(iid, request)
+        for index in range(4):
+            waiting = Request(f"waiting{index}", 100, wanted_len=10)
+            waiting.phase = Phase.DECODE
+            fleet.monitor.waiting[waiting.rid] = waiting
+        fleet.controller.demand.sample()
+        self.assertGreaterEqual(fleet.controller.demand.resident_demand(fleet.now, 60.0), 3.0)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.1, 0.1)
+        )
+        self.assertAlmostEqual(snapshot.decode_recovery_ratio, (6 + 4) / (3 * 2))
+        self.assertIsNotNone(fleet.confirm())
+        self.assertEqual(sum(i.role is Role.PREFILL for i in fleet.monitor.instances.values()), 2)
 
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet

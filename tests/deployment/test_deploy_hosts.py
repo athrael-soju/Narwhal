@@ -120,6 +120,54 @@ class HostDeploymentTests(unittest.TestCase):
         prepare(self.hosts, self.env, run, ROOT)
         return run, load_run(run, self.hosts, self.env)
 
+    def test_colocated_cuda_engines_see_peer_gpus_after_their_own(self):
+        self.hosts = [
+            Host("node-1", "NODE_1_SSH", "NODE_1_PASSWORD", ("router", "engine-1", "engine-2"))
+        ]
+        engine = launch_document()["engines"]["engine-1"]
+        engine.update(
+            gpu_ids=["0"],
+            tensor_parallel_size=1,
+            gpu_visibility_env="CUDA_VISIBLE_DEVICES",
+            accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
+            runtime=runtime(),
+        )
+        engine["runtime"]["extra_args"].extend(("--max-num-seqs", "8"))
+        second = json.loads(json.dumps(engine))
+        second.update(gpu_ids=["1"], accelerator_devices=["/dev/nvidiactl", "/dev/nvidia1"])
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fleet = root / "fleet.json"
+            fleet.write_text(
+                json.dumps(
+                    {
+                        "engines": [
+                            {"iid": "n1", "url": "http://one.invalid"},
+                            {"iid": "n2", "url": "http://one.invalid"},
+                        ]
+                    }
+                )
+            )
+            launch = root / "launch.json"
+            launch.write_text(
+                json.dumps(
+                    {
+                        "schema": "narwhal.engine-launch",
+                        "schema_version": 1,
+                        "engines": {"engine-1": engine, "engine-2": second},
+                    }
+                )
+            )
+            self.env.update(NARWHAL_FLEET=str(fleet), NARWHAL_LAUNCH_CONFIG=str(launch))
+            prepare(self.hosts, self.env, root / "prepared", ROOT)
+            visible = {
+                role: json.loads(
+                    (root / "prepared/node-1" / f"engine-launch.{role}.json").read_text()
+                )["environment"]["CUDA_VISIBLE_DEVICES"]
+                for role in ("engine-1", "engine-2")
+            }
+        self.assertEqual(visible, {"engine-1": "0,1", "engine-2": "1,0"})
+
     def test_roles_resolve_to_one_authentication_entry(self):
         with tempfile.TemporaryDirectory() as folder:
             inventory = self.inventory(Path(folder) / "hosts.json")
@@ -154,9 +202,14 @@ class HostDeploymentTests(unittest.TestCase):
             run, manifest = self.prepare_run(root)
             transport = LocalSSH(root)
             install(self.hosts, manifest, run, transport)
+            first = len(transport.calls)
             install(self.hosts, manifest, run, transport)
             for host in self.hosts:
                 self.assertEqual(transport.uploads.count((host.id, "source.bundle")), 1)
+                self.assertEqual(
+                    [gate for owner, gate in transport.calls[first:] if owner == host.id],
+                    ["verify files", "revision and installation"],
+                )
                 self.assertEqual(
                     (root / host.id / "installs").read_text().splitlines(), ["install"]
                 )

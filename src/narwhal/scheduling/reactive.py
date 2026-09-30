@@ -105,7 +105,7 @@ class ReactivePolicy:
         # prefill backlog still exceeds the current pool's latency budget.
         recovery_prefill = snapshot.prefill_recovery_ratio
         recovery_ready = (
-            max(recovery_prefill, observed_decode) >= controller.scheduler.th.expand
+            max(recovery_prefill, snapshot.decode_recovery_ratio) >= controller.scheduler.th.expand
             and snapshot.profiles_complete
         )
         recovery_projection = prefill_recovery.projection if prefill_recovery is not None else None
@@ -129,6 +129,7 @@ class ReactivePolicy:
                 "recovery_prefill_ratio": rounded(recovery_prefill),
                 "queued_prefill_s": rounded(snapshot.queued_prefill_s),
                 "observed_decode_ratio": rounded(observed_decode),
+                "recovery_decode_ratio": rounded(snapshot.decode_recovery_ratio),
             }
             if prefill_recovery is not None:
                 details.update(prefill_recovery.details(now))
@@ -178,7 +179,7 @@ class ReactivePolicy:
             and (
                 urgent_ready
                 or not recovery
-                or (recovery_prefill if candidate_p > current_p else observed_decode)
+                or (recovery_prefill if candidate_p > current_p else snapshot.decode_recovery_ratio)
                 >= controller.scheduler.th.expand
             )
         ]

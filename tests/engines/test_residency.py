@@ -327,8 +327,16 @@ class ResidencyIndexTests(unittest.TestCase):
         index = ResidencyIndex(MODEL, TOKENIZER)
         index.mark_empty()
         self.assertTrue(index.known)
+        self.assertEqual(index.reason, "no cache events published")
         self.apply(index, 0, stored([1], range(4)))
         self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(4)))), 1)
+        self.assertEqual(index.snapshot()["reason"], "complete event history")
+        lost = ResidencyIndex(MODEL, TOKENIZER)
+        lost.mark_empty()
+        lost.lose("feed stopped")
+        self.apply(lost, 0, stored([1], range(4)))
+        self.assertFalse(lost.known)
+        self.assertIn("feed stopped", lost.reason)
 
 
 class ResidencyFeedTests(unittest.TestCase):

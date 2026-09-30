@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% macro page_title() -%}
+  {%- if page.is_homepage -%}
+    {{ config.site_name }} - {{ config.site_description }}
+  {%- elif page.meta and page.meta.title -%}
+    {{ page.meta.title }} - {{ config.site_name }}
+  {%- elif page.toc and page.toc.items and page.toc.items[0].level == 1 -%}
+    {{ page.toc.items[0].title | striptags }} - {{ config.site_name }}
+  {%- elif page.title -%}
+    {{ page.title | striptags }} - {{ config.site_name }}
+  {%- else -%}
+    {{ config.site_name }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% block htmltitle %}
+  <title>{{ page_title() | striptags | e }}</title>
+{% endblock %}
+
+{% block extrahead %}
+  {% set description = page.meta.description if page.meta and page.meta.description else config.site_description %}
+  {% set image = config.site_url ~ "assets/social-preview.png" %}
+  {% set image_alt = "The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark" %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ page_title() | striptags | e }}">
+  <meta property="og:description" content="{{ description | e }}">
+  {% if page.canonical_url %}
+    <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta property="og:image" content="{{ image }}">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="{{ image_alt }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title() | striptags | e }}">
+  <meta name="twitter:description" content="{{ description | e }}">
+  <meta name="twitter:image" content="{{ image }}">
+  <meta name="twitter:image:alt" content="{{ image_alt }}">
+{% endblock %}

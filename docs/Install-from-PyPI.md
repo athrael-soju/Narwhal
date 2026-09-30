@@ -1,6 +1,17 @@
+---
+description: Install the narwhal-inference package from PyPI on Linux with Python 3.11 or newer.
+---
+
 # Install Narwhal from PyPI
 
-`narwhal-inference` installs the `narwhal` Python package and six commands for local development, engine launch, attestation, profiling, preflight and routing. Use Python 3.11 or newer on Linux.
+`narwhal-inference` installs the `narwhal` Python package and six commands for local development, engine launch, attestation, profiling, preflight and routing.
+
+| Requirement | Value |
+| --- | --- |
+| Operating system | Linux |
+| Python | 3.11 or newer |
+
+Install the package in a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -10,10 +21,34 @@ narwhal-serve --version
 narwhal --help
 ```
 
-`narwhal-serve --version` prints `narwhal-inference` and the distribution version from the Python environment behind the executable selected by the shell. Record that version with the fleet configuration, engine image, and profiles used for a deployment. Pin the approved version when installing on another router host.
+## Verify the installation
 
-`narwhal --help` lists the six installed commands and their purposes. Each command accepts `--version` before its operational arguments and exits with status 0. Source checkouts whose environment lacks distribution metadata print `narwhal-inference unknown (distribution metadata unavailable)`; install the checkout with `python -m pip install -e .` to register its version.
+Expected `narwhal-serve --version` output:
 
-Narwhal's wheel supplies the router commands. A production fleet also needs separately provisioned vLLM engines with compatible KV transfer, engine attestation, a fleet configuration, and measured profiles. Follow [Deploy a fleet](Deploy.md) to qualify those inputs before serving requests.
+```text
+narwhal-inference <version>
+```
 
-The repository checkout carries deployment helpers and development checks. Run `make setup` in that checkout to install Narwhal and its development dependencies into `.venv`.
+- `narwhal --help` lists the six installed commands.
+- Each command accepts `--version` before its operational arguments.
+- Each `--version` invocation exits with status 0.
+
+For each deployment:
+
+1. Record the version with the fleet configuration, engine image, and profiles.
+2. Pin the approved version on every router host.
+
+## Before serving requests
+
+[Deploy a fleet](Deploy.md) qualifies these production inputs:
+
+- separately provisioned vLLM engines with compatible KV transfer
+- engine attestation
+- a fleet configuration
+- measured profiles
+
+## Install from a source checkout
+
+In a repository checkout, `make setup` installs Narwhal and its development dependencies into `.venv`.
+
+If `--version` prints `narwhal-inference unknown (distribution metadata unavailable)`, run `python -m pip install -e .`.

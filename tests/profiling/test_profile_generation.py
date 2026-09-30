@@ -81,6 +81,27 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(report.failed, [])
 
+    async def test_an_identical_relaunch_keeps_its_profile_and_a_changed_launch_does_not(self):
+        self.document = replace(self.document, launch={"args": ["--max-num-seqs", "64"]})
+        spec = self.cfg.engines[1]
+        contract = self.cfg.engine_contract
+        before = await read_generation(spec, contract, timeout_s=1, transport=self.transport)
+        store = ProfileStore(self.cfg.profiles_path)
+        store.put(replace(profile("e3"), generation_digest=before.digest))
+        self.starts["e3"] = 101.0
+        after = await read_generation(spec, contract, timeout_s=1, transport=self.transport)
+        self.assertEqual(after.digest, before.digest)
+        self.assertNotEqual(after.process_digest, before.process_digest)
+        report = Report()
+        self.assertEqual(
+            await gate_profile_generation(self.cfg, store, {"e3"}, report, self.transport), set()
+        )
+        self.document = replace(self.document, launch={"args": ["--max-num-seqs", "32"]})
+        report = Report()
+        self.assertEqual(
+            await gate_profile_generation(self.cfg, store, {"e3"}, report, self.transport), {"e3"}
+        )
+
     async def test_router_startup_rejects_changed_and_legacy_generations(self):
         self.starts["e3"] = 101.0
         app = create_app(self.cfg, lifecycle_transport=self.transport)

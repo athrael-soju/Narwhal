@@ -161,6 +161,30 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertNotIn("management-only-secret", json.dumps([plan, values]))
             self.assertNotIn("engine-only-secret", json.dumps(plan))
 
+    def test_colocated_cuda_engines_share_the_host_pid_namespace(self):
+        for visible, shared in (("0,1,2", True), ("0", False)):
+            with self.subTest(visible=visible), tempfile.TemporaryDirectory() as folder:
+                record, env = launcher_inputs(Path(folder))
+                record.update(
+                    gpu_ids=["0"],
+                    tensor_parallel_size=1,
+                    gpu_visibility_env="CUDA_VISIBLE_DEVICES",
+                    accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
+                    vllm_args=["--tensor-parallel-size", "1"],
+                )
+                record["transfer"]["gpu_tls"] = "cuda"
+                record["environment"] = {
+                    "CUDA_VISIBLE_DEVICES": visible,
+                    "UCX_NET_DEVICES": "fabric0",
+                }
+                plan, _ = build(record, env, Path(folder) / "launch")
+                pid = (
+                    plan["common"][plan["common"].index("--pid") + 1]
+                    if "--pid" in plan["common"]
+                    else None
+                )
+                self.assertEqual(pid, "host" if shared else None)
+
     def test_extra_options_cannot_override_ports_credentials_or_connector(self):
         for options in (["--port", "99"], ["--api-key", "secret"], ["--kv-transfer-config", "{}"]):
             spec = runtime()

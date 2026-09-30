@@ -186,7 +186,7 @@ class ConsolidationSafety:
     def consolidation_evidence_snapshot(self) -> dict[str, object]:
         """Consolidation evidence and risk state for `/narwhal/state` and `/metrics`."""
         now = self._clock()
-        evidence = self.capture(now)
+        evidence = self.capture(now, estimates=self.demand.current_estimates())
         out = empty_demand_evidence()
         out.update(evidence.snapshot())
         out["risk_events"] = dict(self._risk_events)

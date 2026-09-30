@@ -18,10 +18,19 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class GenerationEvidence:
-    """Generation digest and the process evidence used to derive it."""
+    """Profile-binding digest, its evidence, and the engine-process digest.
+
+    `digest` is the attested launch digest when the sidecar reports one, so an
+    identical relaunch keeps it; otherwise it equals `process_digest`.
+    """
 
     digest: str
     document: dict[str, Any]
+    process_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.process_digest:
+            object.__setattr__(self, "process_digest", self.digest)
 
 
 def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
@@ -59,7 +68,8 @@ async def read_generation(
     failures = verify_attestation(payload, contract, identity)
     if failures:
         raise ValueError(f"{spec.iid}: attestation: {'; '.join(failures)}")
-    return GenerationEvidence(payload["attestation_digest"], payload)
+    process = payload["attestation_digest"]
+    return GenerationEvidence(payload.get("launch_digest") or process, payload, process)
 
 
 def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
