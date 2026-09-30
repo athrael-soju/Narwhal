@@ -2,33 +2,27 @@
 
 ## Access the dashboard from a workstation
 
-Reach the router-side Grafana and Prometheus listeners through an SSH tunnel to the router host.
-
-Run the tunnel from the management checkout with the workstation `.env` loaded.
-
-Reuse the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) when it already forwards monitoring.
-
-Otherwise, open a tunnel:
+1. Skip the tunnel command when the [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards monitoring.
+2. From the management checkout with the workstation `.env` loaded, open a tunnel:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:9090
 ```
 
-Keep the tunnel's terminal open while you browse.
+3. Keep the tunnel terminal open.
 
 | Interface | URL |
 | --- | --- |
 | Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
 | Prometheus | `http://127.0.0.1:19090` |
 
-Grafana permits anonymous Viewer access through the local tunnel.
-
-The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
+- Grafana permits anonymous Viewer access through the local tunnel.
+- The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
 
 ## Isolate a second monitoring stack
 
-When another monitoring deployment shares the router host, assign distinct loopback listeners:
+When another monitoring deployment shares the router host, run `make observe` with distinct loopback listeners:
 
 ```bash
 NARWHAL_GRAFANA_BIND_ADDRESS=127.0.0.2 \

@@ -14,15 +14,13 @@
 
 ## 2. Keep one deployment set
 
-Install one deployment set on both router hosts, with the same release identifier and these five items:
+Install on both router hosts, with the same release identifier:
 
 - the Narwhal release;
 - the fleet configuration;
 - the profile store;
-- the first-token calibration artifact, when `engine.first_token_calibration_path` is set;
-- the corresponding [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
-
-The configured calibration path must be readable from each router's working directory.
+- the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory;
+- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test).
 
 After an engine replacement, match the calibration artifact to the live engine's process generation:
 
@@ -78,9 +76,9 @@ Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) a
 | --- | --- |
 | Shared lease path | POSIX `flock`, coherent reads, and atomic rename |
 | Host clock offset | Below `--lease-safety-margin` |
-| `--lease-ttl` | `narwhal-serve` requires a value above the sum of `--lease-renew-interval` and `--lease-safety-margin` |
+| `--lease-ttl` | Above the sum of `--lease-renew-interval` and `--lease-safety-margin` |
 
-Start the first router on its host, with its private listen address as `--host`:
+Start the first router, with its private listen address as `--host`:
 
 ```bash
 narwhal-serve \

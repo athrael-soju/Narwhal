@@ -27,7 +27,7 @@ Each original completion request and its retries share one terminal row.
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`, `rid`, `client_rid`                   | Router process, Narwhal request ID, and optional caller request ID.                                                                                                   |
 | `arrived`                                    | Arrival time on the process monotonic clock, comparable within one `run`.                                                                                             |
-| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens, where `output_len` on a cancellation counts the delivered tokens the router measured.                    |
+| `input_len`, `output_len`, `wanted_len`      | Prompt tokens, returned tokens, and requested output tokens, with `output_len` on a cancellation counting the delivered tokens the router measured.                |
 | `ttft_s`, `tpot_s`, `first_byte_s`           | Router-side prefill, decode, and first-visible-output timing.                                                                                                         |
 | `prefill_iid`, `decode_iid`                  | Engines selected for the prefill and decode legs.                                                                                                                     |
 | `crossed`                                    | Whether decode consumed KV produced by the recorded prefill engine.                                                                                                   |
@@ -48,22 +48,22 @@ Each original completion request and its retries share one terminal row.
 The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission) sets the time to first token (TTFT) budgets.
 
 - `prompt`: the prompt alone exceeds the TTFT budget.
-- `queue`: the prompt fits the TTFT budget, and the predicted TTFT including queueing exceeds it.
+- `queue`: the prompt fits the TTFT budget and the predicted TTFT including queueing exceeds it.
 - `aggregate_unpriced`: every candidate engine carries decode work.
 
 #### Attempt failures
 
 Each `attempt_failures` entry records:
 
-- monotonic time;
-- attempt number;
-- request phase;
-- prefill and decode engine IDs;
-- exception type, message, and status;
-- transient classification;
-- visible-output state;
-- retry decision;
-- scheduled backoff.
+- monotonic time
+- attempt number
+- request phase
+- prefill and decode engine IDs
+- exception type, message, and status
+- transient classification
+- visible-output state
+- retry decision
+- scheduled backoff
 
 | Property          | Value                                                                  |
 | ----------------- | ---------------------------------------------------------------------- |
@@ -90,18 +90,18 @@ An offer passes when the client received a completed response within the applica
 
 Joined to sent, scored offers by `client_rid`, these terminal journal rows are misses:
 
-- invalid requests;
-- capacity rejections;
-- predictive refusals;
-- expiries;
-- engine failures;
-- cancellations;
-- a row with a null `output_len` or `ttft_s`.
+- invalid requests
+- capacity rejections
+- predictive refusals
+- expiries
+- engine failures
+- cancellations
+- a row with a null `output_len` or `ttft_s`
 
 For a cancelled request:
 
-- the terminal row keeps timing measured before the client disconnect;
-- the cancellation counter increments for the original request.
+- the terminal row keeps timing measured before the client disconnect
+- the cancellation counter increments for the original request
 
 The router's [rolling `attainment` diagnostic](../http-api/06-SLO-and-Demand.md#slo-attainment) skips cancelled, rejected, and invalid requests.
 
@@ -111,15 +111,15 @@ Accept deployments on the client's all-offer score.
 
 Event rows record:
 
-- role-floor breaches and recoveries;
-- blocked decode-floor changes;
-- engine lifecycle operations;
-- monitoring health.
+- role-floor breaches and recoveries
+- blocked decode-floor changes
+- engine lifecycle operations
+- monitoring health
 
 A failed profile-generation check during a health or inference recovery probe:
 
-- blocks the engine from placement;
-- writes an `engine_lifecycle` event with `action: profile_recovery_blocked`.
+- blocks the engine from placement
+- writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
 
 | Field   | Meaning                  |
 | ------- | ------------------------ |

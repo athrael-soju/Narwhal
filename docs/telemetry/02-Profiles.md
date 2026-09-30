@@ -21,10 +21,10 @@ The profiler fails the run when an engine's generation digest changes between th
 | With `engine_contract` | Digest of the verified attestation.                            | The full attestation response.  |
 | Otherwise              | Digest of the process identity from `/version` and `/metrics`. | The process identity.           |
 
-When a stored profile variant has missing generation evidence or a digest that differs from the engine's live generation:
+A stored profile variant with missing generation evidence or a digest that differs from the engine's live generation:
 
-- preflight, router startup, readmission, and automatic recovery require a fresh profile;
-- the error names the engine.
+- Preflight, router startup, readmission, and automatic recovery require a fresh profile.
+- The error names the engine.
 
 Preflight checks the measured decode bounds and fit errors.
 
@@ -70,21 +70,21 @@ For the `profile has no generation evidence` error from preflight, router startu
 
 The [refit procedure](../measure/01-Profile.md#repair-profiles-produced-by-the-earlier-raw-repeat-fitter) requires:
 
-- a `generation_digest` in each saved profile;
-- a `generation_evidence` object in its sample row.
+- a `generation_digest` in each saved profile
+- a `generation_evidence` object in its sample row
 
-Run a fresh sweep for samples missing either.
+Samples missing either need a fresh sweep.
 
 ### Decode capacity derived from the profile
 
 Narwhal caps decode concurrency for each fitted engine at the smaller of:
 
-1. `decode_max_requests`;
+1. `decode_max_requests`
 2. the number of requests that fit the KV budget at the priced context length.
 
 The KV budget is `decode_max_kv_tokens`, or the smaller of `decode_max_kv_tokens` and `kv_capacity_tokens` when both are present.
 
 | Condition                                                        | Decode capacity                  |
 | ---------------------------------------------------------------- | -------------------------------- |
-| Positive `context_tokens` and a measured `decode_max_requests`   | Priced from the limits above.    |
+| Positive `context_tokens` and a measured `decode_max_requests`   | Priced from the limits above. |
 | `context_tokens <= 0` or `decode_max_requests` is `null`         | Zero.                            |

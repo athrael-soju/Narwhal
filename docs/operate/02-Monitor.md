@@ -6,41 +6,41 @@
 
 `/health` returns HTTP 200 in every router state with this body:
 
-- `status`: the router state, one of `ok`, `degraded`, `maintenance`, `standby`, or `fenced`
+- `status`: router state, one of `ok`, `degraded`, `maintenance`, `standby`, or `fenced`
 - `instances`: the configured fleet size
-- `available_instances`: the number of engines eligible for placement, equal to the configured fleet minus ejected, draining, and quarantined engines
+- `available_instances`: engines eligible for placement, the configured fleet minus ejected, draining, and quarantined engines
 
 ### Backend exhaustion
 
-When every engine has been excluded from placement, the active router reports:
+Active router responses when every engine is excluded from placement:
 
 | Request | Response |
 | --- | --- |
 | `/health` | `status: degraded` |
 | `/ready` | HTTP 503 with `reason: no available engines` |
-| New completion requests | HTTP 503 and the retryable error code `backend_unavailable` |
+| New completion requests | HTTP 503, retryable error code `backend_unavailable` |
 
 ### Whole-wave lifecycle hold
 
-Until whole-wave readmission succeeds, the active router reports:
+Active router responses until whole-wave readmission succeeds:
 
 | Request | Response |
 | --- | --- |
 | `/health` | `status: maintenance` |
-| `/ready` | HTTP 503 with the `reason` set to the lifecycle reason |
-| New completion requests | HTTP 503 and the error code `standby`, with the lifecycle reason as the error message |
+| `/ready` | HTTP 503 with `reason` = lifecycle reason |
+| New completion requests | HTTP 503, error code `standby`, error message = lifecycle reason |
 
 ### Temporary holds
 
 | Cause | Last eligible engine |
 | --- | --- |
-| Performance-drift hold | Stays in placement |
-| Temporary-quarantine hold | Stays in placement |
-| Failed health or inference probe | Leaves placement |
+| Performance-drift hold | Remains in placement |
+| Temporary-quarantine hold | Remains in placement |
+| Failed health or inference probe | Removed from placement |
 
 ### Router control and replacement
 
-`/ready` gives two signals:
+Signals in `/ready`:
 
 | Signal | Meaning | Use |
 | --- | --- | --- |
@@ -49,15 +49,15 @@ Until whole-wave readmission succeeds, the active router reports:
 
 A replacement router:
 
-- runs the same release;
-- applies the same lifecycle rules;
-- keeps saved ejections until recovery succeeds.
+- Runs the same release.
+- Applies the same lifecycle rules.
+- Keeps saved ejections until recovery succeeds.
 
 ## 6. Monitor placement and control
 
-Set up Prometheus and Grafana with [Set up observability](../Observability.md).
+Prometheus and Grafana setup: [Set up observability](../Observability.md).
 
-Each [dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) signal answers one question:
+[Dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) signals:
 
 | Signal                                         | Operational question                                     |
 | ---------------------------------------------- | -------------------------------------------------------- |
@@ -69,14 +69,14 @@ Each [dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observa
 | Retries, failures, refusals, and rejections    | Which protection path is active?                         |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-Set paging thresholds in `tools/observability/prometheus-alerts.yml` for:
+Paging thresholds in `tools/observability/prometheus-alerts.yml` for:
 
-- router down;
-- engine down;
-- error bursts;
-- unserved requests;
-- ejections;
-- role floors.
+- Router down.
+- Engine down.
+- Error bursts.
+- Unserved requests.
+- Ejections.
+- Role floors.
 
 | Source | Scope |
 | --- | --- |

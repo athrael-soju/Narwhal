@@ -2,9 +2,9 @@
 
 Prerequisites:
 
-- a management host with `curl`, Python 3, and access to the router's private control endpoints;
-- a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) in the fleet configuration;
-- one shell for every command on this page.
+- a management host with `curl`, Python 3, and access to the router's private control endpoints
+- a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) in the fleet configuration
+- one shell for every command on this page
 
 Substitute these example values:
 
@@ -24,9 +24,9 @@ mkdir -p "$RUN_DIR"
 
 Before draining, record:
 
-- the stop and start commands for the engine and its attestation sidecar;
-- their process or container identities;
-- the immutable build.
+- the stop and start commands for the engine and its attestation sidecar
+- their process or container identities
+- the immutable build
 
 | Component | Action |
 | --- | --- |
@@ -34,13 +34,6 @@ Before draining, record:
 | Process manager | Stops and starts processes |
 
 Keep external admission closed during replacement and profile activation.
-
-Process generation checks at readmission:
-
-| Check | Process generation test |
-| --- | --- |
-| `profile generation` | A loaded profile for every variant, bound to the verified live process generation. |
-| `generation` | A direct completion probe to the engine. |
 
 ## 7. Restart one engine
 
@@ -75,7 +68,7 @@ print("e0 ready to stop")
 PY
 ```
 
-Stop the engine only after the check passes.
+Stop the engine when the check passes.
 
 ### 7.2 Replace the process
 
@@ -85,8 +78,7 @@ Restart the engine and its attestation sidecar through their configured process 
 2. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
 3. Check that the restarted attestation sidecar serves attestation bound to that process.
 4. Retain process manager output and new engine and sidecar identities.
-
-While the engine stays excluded, [activate replacement profiles](#activate-replacement-profiles).
+5. [Activate replacement profiles](#activate-replacement-profiles) while the engine stays excluded.
 
 ### 7.3 Request readmission
 
@@ -99,7 +91,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   > "$RUN_DIR/individual-readmitted.json"
 ```
 
-Readmission checks run in this order:
+Readmission checks:
 
 | Order | Participants | Checks |
 | --- | --- | --- |
@@ -109,10 +101,15 @@ Readmission checks run in this order:
 | 4 | Replacement engine | Health |
 | 5 | All participants | Identities, attestation, and profile bindings |
 
-| Result | Response |
+| Check | Process generation test |
 | --- | --- |
-| Every check passes | The engine reports `state = active` and `accepts_new = true`. |
-| A check fails | HTTP 409, with the engine in lifecycle state `blocked`. |
+| `profile generation` | A loaded profile for every variant, bound to the verified live process generation |
+| `generation` | A direct completion probe to the engine |
+
+| Result | Response | Engine `state` |
+| --- | --- | --- |
+| Every check passes | `accepts_new = true` | `active` |
+| A check fails | HTTP 409 | `blocked` |
 
 On HTTP 409, read the cause from `engines.<id>.error` and `checks` in `GET /narwhal/lifecycle`.
 
@@ -142,15 +139,22 @@ PY
 
 ### 7.4 Recover an unplanned ejection
 
-| Result | Action |
-| --- | --- |
-| Checks pass and profiles match the running process | Narwhal returns the engine to placement automatically. |
-| Process changed | Wait for lifecycle state `blocked`, [measure and activate replacement profiles](#activate-replacement-profiles), and request readmission. |
-| Any other check fails | Repair the blocked engine and request readmission. |
+When checks pass and profiles match the running process, the engine returns to placement automatically.
+
+When the process changed:
+
+1. Wait for lifecycle state `blocked`.
+2. [Measure and activate replacement profiles](#activate-replacement-profiles).
+3. Request readmission.
+
+When any other check fails:
+
+1. Repair the blocked engine.
+2. Request readmission.
 
 ### 7.5 Recover loss of every placement peer
 
-When a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) loses every placement peer, one failed member holds the whole wave.
+In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract), loss of every placement peer holds the whole wave.
 
 1. Repair the failing check.
 2. Request whole-wave readmission:
@@ -160,23 +164,21 @@ POST /narwhal/lifecycle/readmit
 {"wave":true}
 ```
 
-If an individual hold has already removed the last available peer, promote it to a whole-wave hold:
+If an individual hold has removed the last available peer, promote it to a whole-wave hold for [Restart an engine wave](#8-restart-an-engine-wave):
 
 ```text
 POST /narwhal/lifecycle/drain
 {"wave":true}
 ```
 
-Continue with [Restart an engine wave](#8-restart-an-engine-wave).
-
 ## 8. Restart an engine wave
 
-Set `recovery.engine_restart_policy` to `whole_wave` for engine builds that share peer state across the fleet.
+Set `recovery.engine_restart_policy` to `whole_wave` when engine builds share peer state across the fleet.
 
 Under `whole_wave`:
 
-- a confirmed ejection, process change, or identity failure holds the whole wave;
-- the router's `/ready` returns HTTP 503 until whole-wave readmission completes.
+- a confirmed ejection, process change, or identity failure holds the whole wave
+- the router's `/ready` returns HTTP 503 until whole-wave readmission completes
 
 ### 8.1 Drain the wave
 
@@ -211,7 +213,7 @@ print("wave ready to stop:", state["wave"]["id"])
 PY
 ```
 
-Issue the first supervisor stop command only after the check passes.
+Issue the first supervisor stop command when the check passes.
 
 ### 8.2 Restart the fleet
 
@@ -231,9 +233,9 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
 
 Every wave member returns to placement together when:
 
-- every replacement has a process start newer than its recorded drain identity;
-- every validation check passes;
-- every role-permitted fabric validation transfer completes.
+- every replacement has a process start newer than its recorded drain identity
+- every validation check passes
+- every role-permitted fabric validation transfer completes
 
 Verify the completed wave:
 
@@ -269,7 +271,7 @@ If readmission fails:
 
 ### 8.3 Recover an unplanned whole-wave hold
 
-During an unplanned whole-wave hold, drain the wave explicitly before replacing its processes.
+Before replacing processes during an unplanned whole-wave hold, drain the wave.
 
 Save the initial hold state:
 
@@ -311,18 +313,18 @@ PY
 | `engines.<id>.old_process_start` | Process start recorded by this drain |
 | `process_starts` | Previously accepted identities |
 
-If the drain read every identity:
+When the drain collects every identity:
 
 1. Verify `wave.ready_to_stop`.
 2. Follow [Restart the fleet](#82-restart-the-fleet).
 
 When an identity read fails:
 
-- the drain returns HTTP 503;
-- that member's `old_process_start` stays empty;
-- the wave stays excluded.
+- the drain returns HTTP 503
+- that member's `old_process_start` stays empty
+- the wave stays excluded
 
-If an engine was already stopped during identity collection:
+If an engine stopped during identity collection:
 
 1. Start that engine through its process manager during the whole-wave hold.
 2. Wait for its process identity endpoints to answer.
@@ -335,8 +337,8 @@ If an engine was already stopped during identity collection:
 
 Prerequisites:
 
-- healthy replacement processes and attestation sidecars on hold;
-- routed requests finished before profiling, preflight, or router replacement.
+- healthy replacement processes and attestation sidecars on hold
+- routed requests finished before profiling, preflight, or router replacement
 
 For a warm standby router:
 
@@ -363,9 +365,10 @@ FRESH_PROFILES='runs/replacement/profiles.json'
 ACTIVATION_FLEET="$RUN_DIR/fleet-activation.json"
 ```
 
-[Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) with the recorded measurement recipe.
+Refresh the profiles:
 
-After a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
+1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) with the recorded measurement recipe.
+2. With a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
 
 ### 1. Prepare the activation configuration
 
@@ -392,7 +395,7 @@ PY
 | --- | --- |
 | Engine section of the fleet file | Unchanged |
 | `profiles.path` | May change |
-| State handoff schema | Compatible version |
+| State handoff schema | `schema_version` 1 |
 
 ### 2. Run full preflight
 
@@ -444,12 +447,12 @@ print("saved holds:", [row["iid"] for row in held])
 PY
 ```
 
-Request readmission only after step 5 verifies the resumed hold.
+Request readmission after step 5 verifies the resumed hold.
 
 | File | Role |
 | --- | --- |
 | `activation-handoff.json` | Pre-restart evidence to keep |
-| `resume-state.json` | Separate copy that the replacement router reads and updates |
+| `resume-state.json` | Copy read and updated by the replacement router |
 
 ### 4. Restart the router with resume enabled
 
@@ -464,7 +467,7 @@ narwhal-serve --fleet "$ACTIVATION_FLEET" --resume \
   --host 127.0.0.1 --port 8000 --journal "$RUN_DIR/router-activation.jsonl"
 ```
 
-The router starts only when its profiles and attestation match the live process generation.
+Startup requires profiles and attestation that match the live process generation.
 
 ### 5. Verify the hold before readmission
 
@@ -507,12 +510,12 @@ When `recovery.liveness_every` is above zero, a liveness sweep probes each engin
 
 An engine that answers leaves placement for recovery when one of these checks fails:
 
-- `/version` and `process_start_time_seconds`;
-- the process-bound attestation and loaded profile bindings;
-- the process start against the accepted identity.
+- `/version` and `process_start_time_seconds`
+- the process-bound attestation and loaded profile bindings
+- the process start against the accepted identity
 
 `whole_wave` requires `recovery.liveness_every` above `0`.
 
-Use the drain workflow for planned process changes.
+Planned process changes use the [drain workflow](#7-restart-one-engine).
 
 Automatic takeover requires handoff schema version `1`.

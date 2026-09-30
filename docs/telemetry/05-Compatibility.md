@@ -56,8 +56,8 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-roll-back).
 
-When the `schema` or `write` value changes, documents written by the installed release may fail validation on the candidate.
+A changed `schema` or `write` value can fail validation of installed-release documents on the candidate.
 
 ## Schema version changes
 
-Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or changes type.
+Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped.

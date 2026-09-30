@@ -30,16 +30,22 @@ The `narwhal-check` `slo` gate passes when both targets are feasible against the
 
 1. Assign a deployment identifier before the load test.
 2. Attach the exact artifacts to it:
-    * the Narwhal release, source revision, and distribution digest;
-    * the fleet, router, and engine configuration;
-    * the profile files and sample store;
-    * the engine image digest, engine launcher, and attestation documents;
-    * the preflight output, endpoint captures, deployment-client output, router journal, state snapshots, and metrics.
+
+    | Artifact group | Items |
+    | --- | --- |
+    | Release | Narwhal release, source revision, distribution digest |
+    | Configuration | fleet configuration, router configuration, engine configuration |
+    | Engine inputs | profile files, sample store, engine image digest, engine launcher |
+    | Deployment evidence | attestation documents, preflight output, endpoint captures, deployment-client output |
+    | Run evidence | router journal, state snapshots, metrics |
 3. Record the hosts and SSH tunnel mapping with the identifier.
 
-Keep the source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets fixed across the offered-rate sweep.
+Held fixed across the offered-rate sweep: source revision, model, runtime, profiles, router targets, workload shape, cache policy, and both latency targets.
 
-Between rates, wait for resident work to finish and transfer leases to release.
+Before the next rate, wait for:
+
+* resident work to finish
+* transfer leases to release
 
 Stop the sweep at the first of:
 

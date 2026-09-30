@@ -2,7 +2,7 @@
 
 ## Read live state from Prometheus
 
-Narwhal restores these request-outcome counters on resume and standby takeover:
+Request-outcome counters restored on resume and standby takeover:
 
 ```text
 narwhal_served_total
@@ -13,9 +13,9 @@ narwhal_rejected_total
 narwhal_cancelled_total
 ```
 
-A new router process starts the retry quota, histograms, and every other counter at zero.
+Retry quota, histograms, and every other counter start at zero in a new router process.
 
-Split journal rows by `run` when you compare restored outcome counts with offered counts.
+Split journal rows by `run` when comparing restored outcome counts with offered counts.
 
 ### Metric families
 
@@ -42,40 +42,40 @@ Split journal rows by `run` when you compare restored outcome counts with offere
 
 | Metric                         | Meaning                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `narwhal_flip_reversals_total` | Moves, from an engine's second move on, whose target role differs from the target of that engine's previous recorded move.      |
+| `narwhal_flip_reversals_total` | Moves whose target role differs from the same engine's previous recorded move, counted from that engine's second move. |
 | `narwhal_flips_refused_total`  | Role changes blocked by timing, availability, role pins, role floors, the resident guard, or advisory mode.                     |
-| `narwhal_pool_load`            | Pool load under the phase-specific normalization in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), with `1.0` at the phase target. |
+| `narwhal_pool_load`            | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), with `1.0` at the phase target. |
 
 ## Read latency histograms
 
 `narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
 
-The bucket boundaries for `narwhal_ttft_seconds` and `narwhal_tpot_seconds` are multiples of the corresponding SLO budget:
+Bucket boundaries for `narwhal_ttft_seconds` and `narwhal_tpot_seconds`, as multiples of the corresponding SLO budget:
 
 ```text
 0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0, +Inf
 ```
 
-These histograms use the configured request-lifecycle bounds:
+Histograms with configured request-lifecycle bounds:
 
-- `narwhal_queue_wait_seconds`;
-- `narwhal_seat_seconds`, the time a request holds an admission seat.
+- `narwhal_queue_wait_seconds`
+- `narwhal_seat_seconds` (the time a request holds an admission seat)
 
-When you aggregate histograms:
+Histogram aggregation:
 
-- compute quantiles from bucket rates grouped by `instance` and `le`;
-- sum buckets only across routers with identical bucket edges.
+- Compute quantiles from bucket rates grouped by `instance` and `le`.
+- Sum buckets only across routers with identical bucket edges.
 
 ## Inspect retained attainment evidence
 
-`narwhal_attainment_evidence_pruned_total` appears with a `kind` label of `buckets` or `outcomes` when the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment).
+`narwhal_attainment_evidence_pruned_total` is exported with a `kind` label of `buckets` or `outcomes` once the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment).
 
 ## Inspect demand history and decode floor
 
 Router restart:
 
-- clears the demand histories;
-- resets `narwhal_decode_floor` to `min_decode` from the fleet configuration.
+- Demand histories clear.
+- `narwhal_decode_floor` resets to `min_decode` from the fleet configuration.
 
 | Metric                                         | Type  | Labels                                                                             | Meaning                                                    |
 | ---------------------------------------------- | ----- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -90,7 +90,7 @@ Router restart:
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `narwhal_demand_evidence_span_seconds` | gauge |      | Duration of the retained arrival window in seconds. |
-| `narwhal_demand_evidence_arrivals` | gauge |      | Arrival samples contained in that window. |
+| `narwhal_demand_evidence_arrivals` | gauge |      | Arrival samples in the retained arrival window. |
 | `narwhal_demand_evidence_closed` | gauge |      | `1` after the evidence window closes. |
 | `narwhal_demand_evidence_risk_age_seconds` | gauge |      | Age of the newest risk event in seconds. |
 | `narwhal_demand_evidence_short_decode_engines` | gauge |      | Short-horizon decode demand in engine equivalents. |

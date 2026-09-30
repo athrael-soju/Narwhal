@@ -2,7 +2,7 @@
 
 ## GPU telemetry
 
-Run the deployment's AMD or NVIDIA exporter for GPU sensor metrics on its hardware dashboard.
+Run the deployment's AMD or NVIDIA exporter to feed GPU sensor metrics to the hardware dashboard.
 
 ## Alert evaluation
 
@@ -21,7 +21,7 @@ Alert rules select targets by these labels:
 | Router | `job="narwhal-router"` |
 | Engine | `job="engines"`, `iid=<engine identity>` |
 
-In production, the deployment's alert manager routes the same rules file's `severity="page"` and `severity="warn"` alerts.
+The deployment's alert manager routes `severity="page"` and `severity="warn"` alerts in production.
 
 ## Troubleshooting
 
@@ -30,7 +30,7 @@ In production, the deployment's alert manager routes the same rules file's `seve
 | Browser connection fails | Check the SSH tunnel and the route to the router host. |
 | `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolate-a-second-monitoring-stack) with `NARWHAL_GRAFANA_BIND_ADDRESS` and `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | Startup reports a command deadline | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`. |
-| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana` and confirm the pinned image versions. |
+| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana` for the pinned image versions. |
 | Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets`. |
@@ -53,4 +53,4 @@ Verify each fix with a `make observe` rerun that passes the [readiness contract]
 - Save deployment addresses and captured responses under `runs/`.
 - Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
 
-For fleet-health actions, follow [Monitor placement and control](../operate/02-Monitor.md#6-monitor-placement-and-control).
+Fleet-health actions follow [Monitor placement and control](../operate/02-Monitor.md#6-monitor-placement-and-control).
