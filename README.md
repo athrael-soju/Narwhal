@@ -151,13 +151,17 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 </p>
 
 <p align="center">
-  <a href="https://github.com/athrael-soju/Narwhal"><img src="https://img.shields.io/badge/framework-Narwhal-0f766e" alt="Narwhal"></a>
+  <a href="https://github.com/athrael-soju/Narwhal"><img src="https://img.shields.io/badge/framework-Narwhal%20v0.1.0-0f766e" alt="Narwhal v0.1.0"></a>
   <a href="https://github.com/ai-dynamo/dynamo"><img src="https://img.shields.io/badge/framework-Dynamo%20Planner-0f766e" alt="Dynamo Planner"></a>
   <a href="https://github.com/ray-project/ray"><img src="https://img.shields.io/badge/framework-Ray%20Serve%20LLM-0f766e" alt="Ray Serve LLM"></a>
 </p>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM.">
+</p>
+
+<p align="center">
+  <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://img.shields.io/badge/write--up-Evaluating%20Narwhal-0f766e" alt="Evaluating Narwhal write-up"></a>
 </p>
 
 ## Get the commands

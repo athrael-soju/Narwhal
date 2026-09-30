@@ -8,6 +8,7 @@ Requirements:
 
 - An Ubuntu shell, native or under WSL2
 - Linux x86-64 for the GGUF plugin wheel
+- Python 3.12
 - An NVIDIA GPU and driver that support the CUDA runtime of the pinned packages
 
 Install from a checkout on the Linux filesystem:

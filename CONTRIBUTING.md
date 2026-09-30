@@ -88,6 +88,8 @@ On the GitHub-hosted runners, the suite covers:
 
 The wheel checks exercise console commands, package data, and HTTP routes outside the checkout.
 
+CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes and pull requests to `main` that change files outside `docs/`, Markdown, and `mkdocs.yml`.
+
 ### Coverage and test scope
 
 `make coverage` runs the unit suite with package and tool coverage, writing HTML branch annotations, JSON and XML reports, and the test log to a fresh `runs/coverage/run-*` directory. Set the output path with `COVERAGE_ARGS='--out runs/coverage/review'`.

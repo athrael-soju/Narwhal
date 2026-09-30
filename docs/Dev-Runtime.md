@@ -43,19 +43,19 @@ Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and toke
 
 Two `init` flags set the GPU memory allocation:
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--gpu-memory-utilization` | Template value, `0.35` installed | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
-| `--device-allowance` | Template value, `0.8` installed | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
+| Flag | Template field | Default | Meaning |
+| --- | --- | --- | --- |
+| `--gpu-memory-utilization` | `allocation.gpu_memory_utilization` | Template value, `0.35` installed | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
+| `--device-allowance` | `allocation.device_allowance` | Template value, `0.8` installed | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
 
 `init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB installed).
 
 The shipped template sets development SLO targets:
 
-| Target | Value |
-| --- | --- |
-| Time to first token (TTFT) | 5 seconds |
-| Time per output token (TPOT) | 500 ms |
+| Target | Template field | Value |
+| --- | --- | --- |
+| Time to first token (TTFT) | `slo.ttft_s` | 5 seconds |
+| Time per output token (TPOT) | `slo.tpot_s` | 500 ms |
 
 Replace these placeholder targets with values measured on your card.
 

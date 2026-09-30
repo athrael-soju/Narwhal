@@ -46,7 +46,12 @@ Each reconciliation writes a `docker-reconcile-*.json` report with:
 For an `inspection_required` report result from a stalled daemon:
 
 1. Inspect the persisted launch-token label and the recorded IDs before a retry.
-2. Inspect the recovered daemon for creates completed after cancellation.
+2. On the recovered daemon, list the containers that carry the report's operation token:
+
+    ```bash
+    docker ps -a --filter "label=io.narwhal.operation=OPERATION_TOKEN"
+    ```
+
 3. Keep the original launch directory until step 2 completes.
 
 ## Interrupted `narwhal dev` process
