@@ -60,4 +60,4 @@ Triggers for whole-wave recovery:
 11. Wait for fabric validation to pass.
 12. Confirm `/ready` returns HTTP 200.
 13. Restore ingress.
-14. Run the drills in [Validate every release](../operate/04-Upgrade-and-Validate.md#11-validate-every-release).
+14. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).

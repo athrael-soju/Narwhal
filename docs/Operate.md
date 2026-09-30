@@ -21,7 +21,8 @@ TLS, authentication, WAF, model routing
 - [Production boundary and router pair](operate/01-Start-Routers.md)
 - [Router state and placement monitoring](operate/02-Monitor.md)
 - [Engine restart and process replacement](operate/03-Restart-Engines.md)
-- [Upgrade, rollback, and release drills](operate/04-Upgrade-and-Validate.md)
+- [Upgrade and rollback](operate/04-Upgrade-and-Validate.md)
+- [Release drills](operate/05-Release-Drills.md)
 - [Troubleshoot a fleet](Troubleshoot.md)
 - [Measure a fleet](Measure.md)
 
@@ -42,6 +43,6 @@ For a new or replaced production deployment:
 11. Run the deployment workload through production ingress.
 12. Verify dashboard collection.
 13. Verify paging thresholds.
-14. Run the [engine restart drill](operate/04-Upgrade-and-Validate.md#11-validate-every-release) for the configured restart policy.
+14. Run the [engine restart drill](operate/05-Release-Drills.md#11-validate-every-release) for the configured restart policy.
 15. Run the router failover drill through the production load balancer.
 16. Open client admission.

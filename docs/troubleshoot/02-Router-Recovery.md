@@ -50,4 +50,4 @@ If handoff restoration fails:
 ## Router rollback
 
 1. Follow [Roll back](../operate/04-Upgrade-and-Validate.md#103-roll-back).
-2. Run the drills in [Validate every release](../operate/04-Upgrade-and-Validate.md#11-validate-every-release).
+2. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).

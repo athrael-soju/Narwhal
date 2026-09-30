@@ -130,7 +130,7 @@ MkDocs clears and rebuilds `site/`, and any documentation warning fails the buil
 
 ## Behaviour changes
 
-Add focused tests for serving and recovery changes, and validate process replacement and router failover on a deployed fleet with the [release drills](docs/operate/04-Upgrade-and-Validate.md).
+Add focused tests for serving and recovery changes, and validate process replacement and router failover on a deployed fleet with the [release drills](docs/operate/05-Release-Drills.md).
 
 Put operator settings in `FleetConfig` and document them in `config/fleet.example.json`, keeping secret values in environment variables. `NARWHAL_FLEET` selects the fleet configuration.
 

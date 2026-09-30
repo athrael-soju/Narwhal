@@ -88,7 +88,8 @@ nav:
           - Production boundary and router pair: operate/01-Start-Routers.md
           - Router state and placement monitoring: operate/02-Monitor.md
           - Engine restart and process replacement: operate/03-Restart-Engines.md
-          - Upgrade, rollback, and release drills: operate/04-Upgrade-and-Validate.md
+          - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
+          - Release drills: operate/05-Release-Drills.md
       - Troubleshoot a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md

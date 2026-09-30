@@ -88,4 +88,4 @@ Procedures by path:
 
 ## After recovery
 
-Run the [release validation drills](operate/04-Upgrade-and-Validate.md#11-validate-every-release).
+Run the [release validation drills](operate/05-Release-Drills.md#11-validate-every-release).
