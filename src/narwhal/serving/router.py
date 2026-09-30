@@ -237,8 +237,8 @@ class NarwhalRouter:
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
-        # Prefer the last engine that answered the tokenizer probe.
-        self._tokenizer: str | None = None
+        self._tokenize_turn = 0
+        self._tokenize_failed: str | None = None
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](
@@ -277,9 +277,10 @@ class NarwhalRouter:
         """Return the input token count and the prefix-cache evidence for the prompt.
 
         Already-tokenized prompts supply their exact count locally. Other
-        requests query one engine. A failed exact-count call fails the request
-        and rotates the preferred engine for the next request. Disabled or
-        unavailable token counting uses the local estimate and no cache evidence.
+        requests query the live engine with the fewest resident requests. A
+        failed exact-count call fails the request, and later requests skip that
+        engine until a count succeeds. Disabled or unavailable token counting
+        uses the local estimate and no cache evidence.
         """
         prompt = body.get("prompt")
         if (
@@ -292,22 +293,29 @@ class NarwhalRouter:
         if self.cfg.tokenize:
             live = self.scheduler.live_instances()
             if live:
-                k = next((j for j, i in enumerate(live) if i.iid == self._tokenizer), 0)
+                engine = self._tokenize_engine(live)
                 try:
                     got = await self.engines.tokenize(
-                        live[k].url, body, self.cfg.tokenize_timeout_s, strict=True
+                        engine.url, body, self.cfg.tokenize_timeout_s, strict=True
                     )
                 except EngineError:
-                    self._tokenizer = live[(k + 1) % len(live)].iid
+                    self._tokenize_failed = engine.iid
                     raise
                 if got is not None:
-                    self._tokenizer = live[k].iid
+                    self._tokenize_failed = None
                     ids = got.token_ids
                     if ids is None:
                         return got.count, {}, {}, {}
                     return got.count, *(await self._cache_evidence(body, ids))
-                self._tokenizer = live[(k + 1) % len(live)].iid
         return self.estimate_length(body), {}, {}, {}
+
+    def _tokenize_engine(self, live: list[Instance]) -> Instance:
+        """Pick the least-occupied live engine, rotating among ties."""
+        candidates = [i for i in live if i.iid != self._tokenize_failed] or live
+        self._tokenize_turn += 1
+        start = self._tokenize_turn % len(candidates)
+        ordered = candidates[start:] + candidates[:start]
+        return min(ordered, key=lambda i: len(i.prefill) + len(i.decode))
 
     def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
         """Return the prompt tokens each engine can serve from its prefix cache."""
