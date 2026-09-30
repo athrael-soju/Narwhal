@@ -7,7 +7,7 @@
 | Field                        | Default        | Meaning                                                                | Values                                                            |
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                            |
-| `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget.                           | Nonnegative                                                       |
+| `serving.admission_margin`   | `0.0`          | Fraction added to the TTFT admission budget.                           | Zero or greater                                                       |
 | `serving.max_connections`    | `512`          | Global admitted-request limit and data connection pool size.           | At least 1                                                        |
 | `engine.control_connections` | `0`            | Control connection pool size, reserved for health and recovery probes. | `0` for two per engine with a minimum of four, or a positive size |
 
@@ -47,9 +47,9 @@ Measure sustained healthy inflight load before increasing `serving.max_connectio
 Retained completion requests:
 
 - The admission limit is `--max-concurrent` when set, otherwise `serving.max_connections`.
-- Narwhal retains at most the admission limit plus `serving.queue_capacity` completion requests.
+- The retained-request ceiling is the admission limit plus `serving.queue_capacity` completion requests.
 - A new completion request at that ceiling gets HTTP 429 before body parsing.
-- Narwhal records each of these refusals as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers).
+- Each refusal counts as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers).
 
 | Failure                                                    | Result                                                |
 | ---------------------------------------------------------- | ----------------------------------------------------- |
@@ -89,8 +89,6 @@ Treat an error event, or a stream that ends before the success terminator, as a 
 
 Fit client-side retries inside the caller's remaining deadline.
 
----
-
 ## 5. Placement
 
 | Case                                                                                                | Selected engine                                |
@@ -99,15 +97,11 @@ Fit client-side retries inside the caller's remaining deadline.
 | Equal-cost engines                                                                                  | Lowest instance ID                             |
 | Every candidate violates its projected SLO                                                          | Lowest-cost candidate as an unserved placement |
 
-Engine-side prefix caching runs separately from router placement.
-
 A live role change:
 
 - applies to new placements immediately
 - leaves resident requests on their current engine and reservation until completion or cancellation
 - keeps lifecycle drains, quarantine, ejections, and restart holds in place
-
----
 
 ## 6. Request deadlines and engine HTTP behaviour
 
@@ -119,7 +113,7 @@ A live role change:
 | `recovery.failure_quarantine_s`       | `0.0`                  | Time a failed engine remains excluded from placement.                             | `0` disables quarantine                       |
 | `engine.first_token_timeout_s`        | `2.5`                  | Deadline to the first decode token.                                               | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_calibration_path` | `""`                   | Path to a completed first-token calibration artifact under `runs/`.               |                                               |
-| `engine.decode_read_timeout_s`        | `60.0`                 | Maximum silent interval between decode chunks.                                    | `0` disables the gap limit                    |
+| `engine.decode_read_timeout_s`        | `60.0`                 | Maximum silent interval between decode chunks after the first token.             | `0` disables the gap limit                    |
 | `engine.tokenize`                     | `true`                 | Requests exact text and chat input length from the dialect tokenization endpoint. |                                               |
 | `engine.tokenize_timeout_s`           | `2.0`                  | Elapsed exact-token-count deadline.                                               | Positive                                      |
 | `engine.chars_per_token`              | `3.8`                  | Character-to-token fallback ratio.                                                | Positive                                      |
@@ -139,7 +133,7 @@ Prefill, tokenization, and health calls end when the first of their phase, conne
 
 ### 6.2 First-token deadline and calibration
 
-The `engine.first_token_timeout_s` budget runs from before the decode HTTP stream opens until the first generated token arrives.
+The `engine.first_token_timeout_s` window starts before the decode HTTP stream opens and ends at the first generated token.
 
 The inference probe applies `engine.first_token_timeout_s` independently to each complete leg, prefill and decode.
 
@@ -158,8 +152,6 @@ An engine process restart makes the calibration artifact stale.
 
 ### 6.3 Decode stream gaps
 
-`engine.decode_read_timeout_s` applies after the first token.
-
 Set this limit from measured inter-chunk gaps and the service's failure budget.
 
 Disable the gap limit:
@@ -176,10 +168,10 @@ Disable the gap limit:
 
 | Input                                                                                    | Token count                                     |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Completion prompt that is a nonempty, flat list of nonnegative integer token IDs         | Local array length.                             |
-| Text or chat input, with `engine.tokenize` set to `true` and a dialect exact-count route | That route, within `engine.tokenize_timeout_s`. |
-| Text or chat input whose exact-count call fails                                          | Engine error to the client before placement.    |
-| Other text or chat input                                                                 | Estimate from `engine.chars_per_token`.         |
+| Completion prompt that is a nonempty, flat list of nonnegative integer token IDs         | Local array length                            |
+| Text or chat input, with `engine.tokenize` set to `true` and a dialect exact-count route | That route, within `engine.tokenize_timeout_s` |
+| Text or chat input whose exact-count call fails                                          | Engine error to the client before placement    |
+| Other text or chat input                                                                 | Estimate from `engine.chars_per_token`         |
 
 Measure `engine.chars_per_token` for the served tokenizer and for every dialect that uses this fallback.
 
@@ -198,22 +190,20 @@ Set these timeouts from latency measured under the intended load:
 | Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection | Engine keeps its current health verdict |
 | Health probe exceeds `engine.health_timeout_s`                                               | Failed liveness probe                   |
 
----
-
 ## 7. Role control
 
 | Field                                       | Default | Meaning                                                                                               | Values                           |
 | ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `controller.advisory`                       | `false` | Records proposed role splits and reasons while retaining the current roles.                           |                                  |
+| `controller.advisory`                       | `false` | Holds current roles and records proposed role splits with reasons.                           |                                  |
 | `controller.monitor_interval_s`             | `1.0`   | Delay between engine monitoring passes.                                                               | Positive                         |
 | `controller.monitor_failure_limit`          | `5`     | Consecutive passes with an engine monitoring stage failure before degraded state stops new admission. | At least 1                       |
 | `controller.min_prefill`                    | `1`     | Minimum live prefill engines preserved by role-controller moves.                                      | At least 1                       |
 | `controller.min_decode`                     | `1`     | Minimum live decode engines preserved by role-controller moves.                                       | At least 1                       |
 | `controller.thresholds.expand`              | `1.0`   | SLO-relative pool load that starts reactive expansion.                                                | Positive                         |
-| `controller.thresholds.shrink`              | `0.5`   | Maximum projected source load for ordinary consolidation.                                             | Nonnegative, lower than `expand` |
-| `controller.thresholds.cooldown_s`          | `10.0`  | Minimum time between prefill-to-decode moves.                                                         | Nonnegative                      |
+| `controller.thresholds.shrink`              | `0.5`   | Maximum projected source load for ordinary consolidation.                                             | Zero or greater, lower than `expand` |
+| `controller.thresholds.cooldown_s`          | `10.0`  | Minimum time between prefill-to-decode moves.                                                         | Zero or greater                      |
 | `controller.thresholds.sustained_intervals` | `3`     | Confirmations required for moves that need them.                                                      | At least 1                       |
-| `controller.thresholds.dwell_s`             | `0.0`   | Minimum residence time after an engine changes role.                                                  | Nonnegative                      |
+| `controller.thresholds.dwell_s`             | `0.0`   | Minimum residence time after an engine changes role.                                                  | Zero or greater                      |
 | `controller.thresholds.panic_ratio`         | `0.0`   | Multiple of `expand` for the prefill-to-decode cooldown bypass.                                       | `0` for off, or at least 1       |
 | `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a decode-to-prefill donor.                                 | `0` disables the guard           |
 | `controller.flip_history`                   | `1000`  | Maximum retained role-change records exposed by `/narwhal/state`.                                     | At least 1                       |
@@ -250,7 +240,7 @@ A load of `1.0` means the phase has reached its target.
 | Fleet               | Floor rule                                                                     |
 | ------------------- | ------------------------------------------------------------------------------ |
 | Two or more engines | `controller.min_prefill` plus `controller.min_decode` at most the engine count |
-| One engine          | Both floors at `1`, for aggregate inference                                    |
+| One engine          | Both floors at `1`                                    |
 
 When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
 
@@ -266,7 +256,6 @@ When live decode capacity drops below its floor, engine monitoring restores one 
 Both floor recoveries:
 
 - honor pins, availability, floor limits, and advisory mode
-- record a dwell timestamp for each applied move
 - count each applied move against `controller.flip_history`
 
 ### 7.3 Resident work during role changes
@@ -301,7 +290,7 @@ Ordinary consolidation requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-The `mixed_pressure` rule can move one decode engine to prefill while projected decode load is above `shrink`, when all of these hold:
+The `mixed_pressure` rule moves one decode engine to prefill when projected decode load is above `shrink` and all of these hold:
 
 - measured prefill load reaches `controller.thresholds.expand`
 - every engine has a profile
@@ -341,8 +330,6 @@ The cooldown bypass arms after `controller.thresholds.sustained_intervals` conse
 - decode load at or above `controller.thresholds.panic_ratio` times `controller.thresholds.expand`
 - prefill load at or below `controller.thresholds.shrink`
 
-Persistent overload needs less offered demand or more capacity.
-
 ### 7.6 Evidence gating for decode-to-prefill consolidation
 
 Decode-to-prefill consolidation waits for the arrival-evidence window to close on either condition:
@@ -380,7 +367,7 @@ State and metrics expose:
 | `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for decode-to-prefill consolidation.           | Positive, at most `evidence_max_span_s`                  |
 | `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                     | Positive, at least `evidence_span_s`, at most `window_s` |
 | `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.    | At least 1                                               |
-| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand.                | Finite, nonnegative                                      |
+| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand.                | Finite, zero or greater                                      |
 | `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live-to-profile decode correction.                               | Positive                                                 |
 | `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live-to-profile decode correction.                               | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction.           | `(0, 1]`                                                 |

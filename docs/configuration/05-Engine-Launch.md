@@ -28,10 +28,10 @@ NARWHAL_ATTEST_PORT
 
 Discovery writes these values to `config/deployment.env` for each engine host:
 
-| Variable                                                      | Value                                                 |
-| ------------------------------------------------------------- | ----------------------------------------------------- |
-| `NARWHAL_NODE_<n>_IP`                                         | Unique global address of the chosen interface         |
-| `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` | URLs on that address, with brackets around IPv6 hosts |
+| Variable                                                      | Value                                                     |
+| ------------------------------------------------------------- | --------------------------------------------------------- |
+| `NARWHAL_NODE_<n>_IP`                                         | Unique global address of the chosen interface             |
+| `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` | URLs on that address, with brackets around IPv6 hosts     |
 
 Per-node overrides:
 
@@ -64,7 +64,7 @@ Discovery adds one fleet record per engine:
 
 A single-engine fleet is valid in the fleet schema, with both [role floors](02-Serving-and-Role-Control.md#72-role-floors) at `1`.
 
-Store site-specific fleet files in a [Git-ignored path](06-Fabric-and-Operations.md#20-configuration-provenance-and-publication).
+Store per-site fleet files in a [Git-ignored path](06-Fabric-and-Operations.md#20-configuration-provenance-and-publication).
 
 For the profiling, preflight, and serving commands:
 
@@ -98,12 +98,12 @@ To change GPU allocation or runtime policy:
 | `gpu_ids`              | Selected GPU indices or UUIDs for the replica.                                                                                       |
 | `tensor_parallel_size` | TP size for the replica.                                                                                                             |
 | `gpu_visibility_env`   | GPU visibility variable, `ROCR_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`.                                                           |
-| `accelerator_devices`  | Host device paths mapped into the container, which on ROCm must include `/dev/kfd` and DRI mappings for allocated GPUs.              |
+| `accelerator_devices`  | Host device paths mapped into the container, which on ROCm include `/dev/kfd` and DRI mappings for allocated GPUs.                   |
 | `network_mode`         | Uses `host` for the recorded network and port allocation.                                                                            |
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                             |
 | `transfer.net_devices` | Ethernet interfaces for TCP, such as `${NARWHAL_FABRIC_INTERFACE}` from the selected engine environment, or HCA:port names for RDMA. |
-| `transfer.devices`     | Transport device paths mapped into the container: the RDMA character devices, or an empty list for TCP.                              |
-| `sources`              | Allocation, device, and transfer definitions that produced the record.                                                               |
+| `transfer.devices`     | Transport device paths mapped into the container: the RDMA character devices for RDMA, or an empty list for TCP.                     |
+| `sources`              | Allocation, device, and transfer definitions that produced the record.                                                              |
 
 `prepare` derives these record values:
 
@@ -142,7 +142,7 @@ Discovery fills the `runtime` object from these sources:
 | `kv_cache_dtype`    | `auto` or the requested cache dtype.                                                                                                                                                                                                                                                                   |
 | `block_size`        | Requested runtime block size.                                                                                                                                                                                                                                                                          |
 | `environment`       | Image-local ROCm or CUDA, UCX, NIXL, and library-path settings.                                                                                                                                                                                                                                        |
-| `extra_args`        | Model-specific vLLM arguments, such as context and batching limits, memory utilization, the reasoning parser, the attention backend, remote model code, language-only loading, eager execution, async scheduling, hybrid-cache policy, and the [cache opt-outs](#161-prefix-caching-and-cache-events). |
+| `extra_args`        | vLLM arguments for the model, such as context and batching limits, memory utilization, the reasoning parser, the attention backend, remote model code, language-only loading, eager execution, async scheduling, hybrid-cache policy, and the [cache opt-outs](#161-prefix-caching-and-cache-events). |
 
 The launcher rejects `extra_args` that override these settings:
 
@@ -219,7 +219,7 @@ Socket directories:
 
 The check and engine start fail when either directory belongs to another user or grants group or other access.
 
-To keep prefix caching on and turn event publishing off, add vLLM's own event setting to `extra_args`:
+To keep prefix caching on and turn event publishing off, add vLLM's event setting to `extra_args`:
 
 ```json
 ["--kv-events-config", "{\"enable_kv_cache_events\": false}"]

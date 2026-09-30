@@ -158,7 +158,7 @@ Launch plan properties:
 | Cache events                  | Published by vLLM over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on |
 | Cache event opt-out           | [Prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) |
 
-For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args`, which discovery writes from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirm-the-launch-policy), before you prepare the launch plans.
+For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args`, which discovery writes from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirm-the-launch-policy), before preparing the launch plans.
 
 To add the flag after launch:
 
@@ -167,7 +167,7 @@ To add the flag after launch:
 3. Restart each engine.
 4. Repeat at least the engine-restart work in the [repeat-work table](../Deploy.md#deployment-sequence).
 
-For a separate tokenizer at `PATH`, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before you prepare the launch plan.
+For a separate tokenizer at `PATH`, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before preparing the launch plan.
 
 When a launch input changes, repeat the matching work:
 
@@ -246,7 +246,8 @@ export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
 docker logs --follow "$ENGINE_CONTAINER"
 ```
 
-Watch the logs until the HTTP endpoints come up, then stop the log follower with Ctrl+C.
+3. Watch the log until the HTTP endpoints come up.
+4. Stop the log follower with Ctrl+C.
 
 If startup fails, inspect the container named by `container.id`:
 

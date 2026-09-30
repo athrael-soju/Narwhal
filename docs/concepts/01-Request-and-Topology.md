@@ -4,18 +4,18 @@
 
 Every engine in a fleet meets the same contract:
 
-- It speaks the configured inference-engine dialect.
-- It produces and consumes compatible key-value (KV) cache.
-- It sends KV to every peer eligible to receive it.
-- It has measured prefill and decode performance profiles.
-- It passes preflight validation before it takes traffic.
-- It passes readmission checks again after a hold, drain, failure, or maintenance event.
+- Speaks the configured inference-engine dialect.
+- Produces and consumes compatible key-value (KV) cache.
+- Sends KV to every peer eligible to receive it.
+- Has measured prefill and decode performance profiles.
+- Passes preflight validation before taking traffic.
+- Passes readmission checks after a hold, drain, failure, or maintenance event.
 
 The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) that every engine must match.
 
 ### KV transfer for vLLM engines
 
-Narwhal allows KV transfer across the configured ring or mesh for a vLLM engine with the effective `kv_both` role when these three requirements hold:
+KV transfer across the configured ring or mesh is allowed for a vLLM engine with the effective `kv_both` role when all three requirements hold:
 
 | Requirement                                                          | Provider                                                        |
 | -------------------------------------------------------------------- | --------------------------------------------------------------- |
@@ -27,23 +27,23 @@ Narwhal allows KV transfer across the configured ring or mesh for a vLLM engine 
 
 | Stage | Behavior |
 | --- | --- |
-| Admission | The router gives the request a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| Pricing | Each eligible prefill engine gets a price from the prompt token count, its measured performance curves, and its resident work. |
-| Predictive check | With the default `serving.admission` of `predictive`, a projected time to first token (TTFT) above the TTFT budget on the cheapest available prefill path rejects the request before dispatch. |
-| Prefill | The chosen engine processes the prompt, holds the resulting KV as the producer, and returns a typed KV handoff. |
-| Decode | The same engine, or another eligible engine that consumes the handoff, runs decode. |
-| Streaming | Narwhal streams tokens to the client and tracks token timing and resident work. |
+| Admission | The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
+| Pricing | Each eligible prefill engine is priced from the prompt token count, its measured performance curves, and its resident work. |
+| Predictive check | With the default `serving.admission` of `predictive`, a projected time to first token (TTFT) above the TTFT budget on the cheapest available prefill path rejects the request. |
+| Prefill | The chosen engine holds the prompt KV as the producer and returns a typed KV handoff. |
+| Decode | An eligible engine consumes the handoff and runs decode. |
+| Streaming | Tokens stream to the client. |
 | Journal | The request journal records admission, placement, retries, transfers, timing, and the final outcome. |
 
 When every seat is occupied, `serving.queue_capacity` sets the outcome:
 
 | `serving.queue_capacity` | Outcome |
 | --- | --- |
-| Positive, queue has space | The request waits in a bounded FIFO queue and keeps its original deadline. |
-| Positive, queue full | Narwhal returns a retryable refusal. |
-| `0` (the default) | Narwhal returns a retryable refusal. |
+| Positive, queue has space | The request waits in a bounded FIFO queue under its original deadline. |
+| Positive, queue full | Retryable refusal. |
+| `0` (the default) | Retryable refusal. |
 
-A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode from scratch with a fresh KV handoff.
+A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 
@@ -51,26 +51,22 @@ A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concu
 | --------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Aggregated serving    | Every engine does both prefill and decode, with local KV      | Long prefills share a scheduler with decode batches                  |
 | Static disaggregation | Fixed prefill pool and fixed decode pool                      | An operator changes pool membership by hand                          |
-| Adaptive cold-swap    | Engines change pools by draining and relaunching              | New capacity arrives after restart, weight load, and validation      |
-| Adaptive hot-swap     | Dual-capability engines form logical prefill and decode pools | The role label changes and the weights stay loaded                   |
+| Adaptive cold-swap    | Engines change pools by draining and relaunching              | Capacity arrives after restart, weight load, and validation          |
+| Adaptive hot-swap     | Dual-capability engines form logical prefill and decode pools | Weights stay loaded                                                  |
 
 ### Aggregated serving
 
 ![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
 
-Aggregated serving is the baseline topology.
-
 ### Static disaggregation
 
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
-
-The pool ratio is set when the fleet is sized for the expected workload.
 
 ### Adaptive cold-swap
 
 ![One engine draining and restarting in the decode pool.](../assets/architectures/coldswap.svg)
 
-A cold-swap move completes these steps before the engine adds capacity in its new pool:
+A cold-swap move runs these steps:
 
 1. Drain the engine.
 2. Relaunch it in the new role.
@@ -78,13 +74,13 @@ A cold-swap move completes these steps before the engine adds capacity in its ne
 4. Register its transfer peers.
 5. Pass health validation.
 
-Cold-swap suits traffic shifts that last longer than this sequence.
+Use cold-swap for traffic shifts longer than this sequence.
 
 ### Adaptive hot-swap
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
 
-Hot-swap changes the scheduler role of an eligible dual-capability engine in place, with its KV connections to eligible peers intact.
+Hot-swap changes the scheduler role of an eligible dual-capability engine in place.
 
 [Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 
@@ -93,4 +89,5 @@ Hot-swap changes the scheduler role of an eligible dual-capability engine in pla
 - confirmation rules;
 - minimum role floors;
 - a check on resident work;
-- exclusion of unhealthy engines and engines in a lifecycle event.
+- exclusion of unhealthy engines;
+- exclusion of engines in a lifecycle event.

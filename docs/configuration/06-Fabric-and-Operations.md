@@ -2,10 +2,12 @@
 
 ## 17. Fabric workload qualification
 
-| Command                   | Fabric helper result                                                                                                                |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy_hosts.py prepare` | Snapshot of `tools/deployment/fabric_budget.py` for every engine host, with its SHA-256 in the manifest and engine role environment |
-| `install`                 | Verified snapshot in `runs/deployment-tools/`                                                                                       |
+| Command                                       | Fabric helper result                                                    |
+| --------------------------------------------- | ----------------------------------------------------------------------- |
+| `deploy_hosts.py prepare`                     | Snapshot of `tools/deployment/fabric_budget.py` for every engine host   |
+| `deploy_hosts.py prepare` (manifest)          | SHA-256 of the snapshot recorded in the manifest                        |
+| `deploy_hosts.py prepare` (role environment)  | SHA-256 of the snapshot recorded in the engine role environment         |
+| `install`                                     | Verified snapshot in `runs/deployment-tools/`                           |
 
 If the helper changes, start a new preparation directory.
 
@@ -19,7 +21,7 @@ If the helper changes, start a new preparation directory.
 - tensor parallel (TP) shape
 - runtime inputs
 
-Engines in a group whose captured cache layouts match share one source budget from a representative engine's capture.
+Engines with matching captured cache layouts share one budget from a representative engine.
 
 To compute the budget:
 
@@ -50,7 +52,7 @@ Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--
 
 ### 17.2 Retained budget evidence
 
-`calculate` writes the budget file `runs/fabric-*/budget.json` at mode 0600 on the representative engine host.
+Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engine host.
 
 The budget file holds:
 
@@ -60,9 +62,9 @@ The budget file holds:
 - the sizing assumptions
 - the required decimal Gbit/s
 
-A budget is the total rate over all TP ranks that one directed host edge must carry at the recorded workload.
+The budget is the total rate over all TP ranks that one directed host edge must carry at the recorded workload.
 
-Each matching source role's private comparison file records the budget rate and hash.
+Each matching source role's private comparison file holds the budget rate and hash.
 
 The captured layout holds:
 
@@ -94,7 +96,7 @@ Offline estimates use these options:
 | TCP       | Aggregate received bitrate that the iperf3 receiver reports |
 | RDMA      | Average Gbit/s from the retained perftest report            |
 
-`fabric_budget.py link` prints a SHA-256 fingerprint of these fields for each directed pair:
+Link fingerprint (SHA-256, per directed pair) fields, printed by `fabric_budget.py link`:
 
 - roles
 - addresses
@@ -107,7 +109,7 @@ Offline estimates use these options:
 | Command       | Result                                                                                                             |
 | ------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                  |
-| `reuse-edge`  | Writes a new private comparison of the retained sample against a corrected budget for a matching link fingerprint. |
+| `reuse-edge`  | New private comparison of the retained sample against a corrected budget, for a matching link fingerprint.        |
 
 ---
 
@@ -131,7 +133,7 @@ To turn resume off, set `recovery.resume` to `false`.
 
 ## 19. Request journal
 
-Narwhal writes [request timing records](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) to `journal.jsonl` beside [`profiles.path`](01-Fleet-Schema.md#12-paths).
+Request timing records: [`journal.jsonl`](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) beside [`profiles.path`](01-Fleet-Schema.md#12-paths).
 
 `narwhal-serve --journal PATH` selects another location.
 
@@ -157,19 +159,20 @@ For a new or changed deployment:
 2. Load the private workstation `.env`.
 3. Run deployment discovery.
 4. Prepare a new deployment output directory from the exact management revision.
-5. Install the source bundle and role configuration on each physical host.
-6. Inspect every engine host against its generated launch record.
-7. Verify image, package, and connector identity.
-8. Start every engine.
-9. Capture each engine's live cache layout.
-10. Qualify the directed transfer fabric against the cache-layout budgets.
-11. Start one attestation sidecar per engine.
-12. Finalize the fleet contract from the live processes.
-13. Profile the deployed engine shape with generated `profiling-limits.json`.
-14. Run `narwhal-check` against the exact fleet and engine build.
-15. Start the router and monitoring stack with the qualified fleet.
-16. Measure capacity with final authentication, queueing, retry, byte-limit, and timeout settings.
-17. Run advisory mode on representative traffic before production role movement.
-18. Archive the fleet, private inputs, and launch evidence.
+5. Install the source bundle on each physical host.
+6. Install the role configuration on each physical host.
+7. Inspect every engine host against its generated launch record.
+8. Verify image, package, and connector identity.
+9. Start every engine.
+10. Capture each engine's live cache layout.
+11. Qualify the directed transfer fabric against the cache-layout budgets.
+12. Start one attestation sidecar per engine.
+13. Finalize the fleet contract from the live processes.
+14. Profile the deployed engine shape with generated `profiling-limits.json`.
+15. Run `narwhal-check` against the exact fleet and engine build.
+16. Start the router and monitoring stack with the qualified fleet.
+17. Measure capacity with final authentication, queueing, retry, byte-limit, and timeout settings.
+18. Run advisory mode on representative traffic before production role movement.
+19. Archive the fleet, private inputs, and launch evidence.
 
 Remeasure capacity after changing the engine build or a serving setting: queueing, concurrency, retry, KV handoff timeout, or byte limits.

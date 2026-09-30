@@ -2,7 +2,7 @@
 
 ## Monitoring and readiness
 
-A monitor pass runs these stages independently:
+Monitor pass stages:
 
 | Stage | Work |
 | --- | --- |
@@ -56,8 +56,6 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 | HTTP 408 or 429                                                         | `overload`         | Run a health probe                             |
 | Other HTTP 5xx response                                                 | `inference_status` | Pause new requests and run an inference probe  |
 | Unreadable KV handoff from prefill                                      | `kv_handoff`       | Pause new requests and run an inference probe  |
-
-A paused engine is under an inference-verification hold.
 
 The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
@@ -118,7 +116,7 @@ Readmission checks, in order:
 6. A role-permitted KV transfer.
 7. A final health check.
 
-After a planned restart, the engine's process start must be newer than the one in its drain record.
+A planned restart requires the engine's process start to be newer than the one in its drain record.
 
 Profile checks cover every loaded variant:
 
@@ -144,23 +142,27 @@ An operator drain survives healthy responses, resume, and takeover until readmis
 
 ## Durable control-plane state
 
-On every monitor pass, the active router writes a versioned state handoff that records:
+The state handoff records:
 
-- engine roles;
-- ejections;
-- lifecycle holds;
-- inference-verification holds;
-- consolidation risk;
-- counters;
-- the lease holder.
+- engine roles
+- ejections
+- lifecycle holds
+- inference-verification holds
+- consolidation risk
+- counters
+- the lease holder
 
 ### Resume validation
 
-`narwhal-serve --resume` applies a saved state handoff when its schema, engine set, and engine restart policy match the configured fleet.
+`narwhal-serve --resume` applies a saved state handoff when these match the configured fleet:
+
+- schema
+- engine set
+- engine restart policy
 
 With `engine_contract` configured, resume requires an accepted process identity for each engine the saved state handoff counts as available.
 
-To load fresh measurements and keep lifecycle holds and drain identities, follow [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles).
+[Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
 
 ### Atomic state handoff writes
 
@@ -171,6 +173,6 @@ To load fresh measurements and keep lifecycle holds and drain identities, follow
 
 ### Warm standby and the lease
 
-A warm standby router serves traffic after it acquires the shared lease.
+A warm standby router serves traffic when it holds the shared lease.
 
 Load balancers find the serving router through `/ready`.

@@ -65,7 +65,7 @@ The fleet-wide surge veto withholds an engine's drift verdict when all of these 
 
 - The engine's window score crosses its drift band.
 - At least three engines have scored windows.
-- At least half of the engine's scored peers exceed their own bands.
+- At least half of the engine's scored peers exceed the peers' bands.
 - The engine's score stays within `recovery.health.relative_band` times the median peer score.
 
 A window that closes with at least one observation and fewer than `recovery.health.min_samples` is `undersampled`.
@@ -114,8 +114,8 @@ Contracted resume and automatic takeover require:
 
 | Saved state handoff                                          | Startup result                                                   |
 | ------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Unknown schema or version                                    | Startup aborts.                                                  |
-| Schema-valid, and fails the contracted fleet's resume checks | Whole-wave hold that requires a managed restart of every engine. |
+| Unknown schema or version                                    | Startup aborts                                                   |
+| Schema-valid and failing the contracted fleet's resume checks | Whole-wave hold requiring a managed restart of every engine     |
 
 | State                                                            | On successful resume                                  |
 | ---------------------------------------------------------------- | ----------------------------------------------------- |
@@ -148,12 +148,14 @@ Set the credential variable under `engine`:
 
 | Field                       | Default | Meaning                                                           |
 | --------------------------- | ------- | ----------------------------------------------------------------- |
-| `engine.engine_api_key_env` | `""`    | Environment variable that must hold the engine Bearer credential. |
+| `engine.engine_api_key_env` | `""`    | Environment variable that must hold the engine Bearer credential |
 
-| Requests                                              | Target                                                 | Engine credential |
-| ----------------------------------------------------- | ------------------------------------------------------ | ----------------- |
-| Serving, profiling, preflight, cache-reset, lifecycle | Engine URL                                             | Bearer header     |
-| Attestation                                           | Attestation sidecar URL on the trusted control network |                   |
+Serving, profiling, preflight, cache-reset, and lifecycle requests:
+
+- Target the engine URL.
+- Carry the engine credential in a Bearer header.
+
+Attestation requests target the attestation sidecar URL on the trusted control network.
 
 When `engine.engine_api_key_env` names a variable at deployment export, the credential reaches the engine as:
 
@@ -182,11 +184,22 @@ Protocol fields:
 
 ## 11. Profile validation
 
-| Field                          | Default                | Meaning                                                                   | Valid values                                                        |
-| ------------------------------ | ---------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `profiles.path`                | `"runs/profiles.json"` | Profile store read by the router and written by `narwhal-profile`         |                                                                     |
-| `profiles.max_decode_fit_mape` | `0.05`                 | Maximum in-sample decode-fit error that `narwhal-check` accepts           | Positive, finite, and at most `controller.reactive.movement_margin` |
-| `profiles.max_decode_cv_mape`  | `0.13`                 | Maximum leave-one-out cross-validation error that `narwhal-check` accepts | Positive and finite                                                 |
+`profiles.path`:
+
+- Defaults to `"runs/profiles.json"`.
+- Names the profile store read by the router and written by `narwhal-profile`.
+
+`profiles.max_decode_fit_mape`:
+
+- Defaults to `0.05`.
+- Sets the maximum in-sample decode-fit error that `narwhal-check` accepts.
+- Accepts positive, finite values at most `controller.reactive.movement_margin`.
+
+`profiles.max_decode_cv_mape`:
+
+- Defaults to `0.13`.
+- Sets the maximum leave-one-out cross-validation error that `narwhal-check` accepts.
+- Accepts positive, finite values.
 
 Profiles must cover the context and concurrency range used by the deployment.
 

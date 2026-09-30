@@ -11,8 +11,7 @@ The initial trial uses these parameters:
 - A burst size of one.
 - A one-second transfer budget.
 - 25% bandwidth headroom.
-
-Each representative's budget applies the full handoff rate to every outgoing directed edge from the roles in its cache group.
+- Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
 1. In the representative's engine-role shell, calculate the budget:
 
@@ -45,7 +44,15 @@ Each representative's budget applies the full handoff rate to every outgoing dir
     sha256sum "$FABRIC_RUN/budget.json"
     ```
 
-3. For each representative, retain `FABRIC_RUN`, `ENGINE_RUN`, the budget digest, `required_gbps`, the resolved layout, and the cache-group signature.
+3. For each representative, retain:
+
+    - `FABRIC_RUN`
+    - `ENGINE_RUN`
+    - The budget digest
+    - `required_gbps`
+    - The resolved layout
+    - The cache-group signature
+
 4. For each role that uses another host's representative budget, create a local comparison budget from the representative's `required_gbps` and budget digest:
 
     ```bash
@@ -97,7 +104,7 @@ headroom / 1e9
 
 The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
-1. In both engine-role shells, set the edge variables and check `TEST_PORT`:
+1. In both engine-role shells, run the edge variable setup and `TEST_PORT` listener check:
 
     ```bash
     export SOURCE_NODE=1 DEST_NODE=2 TEST_PORT=5201
@@ -151,7 +158,7 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
       --json > "$EDGE_SAMPLE")
     ```
 
-5. On the source, record the link fingerprint and check the sample against the source budget:
+5. On the source, run the link fingerprint and budget check:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -182,8 +189,6 @@ The route checks accept `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 ## Measure `ucx_rdma`
 
-This test measures one-way RDMA writes between host-memory buffers.
-
 | Fabric                                    | GID selection                                               |
 | ----------------------------------------- | ----------------------------------------------------------- |
 | RDMA over Converged Ethernet (RoCE)       | A global identifier (GID) index, selected in steps 4 to 7   |
@@ -196,7 +201,7 @@ This test measures one-way RDMA writes between host-memory buffers.
     ```
 
 2. Record `ib_write_bw --version`.
-3. On each host, set `HCA` and `HCA_PORT` to the host channel adapter and port named in `transfer.net_devices`, for example `HCA=mlx5_0` and `HCA_PORT=1` for `mlx5_0:1`.
+3. On each host, set `HCA` and `HCA_PORT` from `transfer.net_devices`, where `mlx5_0:1` gives `HCA=mlx5_0` and `HCA_PORT=1`.
 4. For RoCE, inspect:
 
     ```text
@@ -236,7 +241,7 @@ This test measures one-way RDMA writes between host-memory buffers.
     ```
 
 11. Set `MEASURED_GBPS` to the report's `BW average[Gb/sec]` value.
-12. Record the link fingerprint and check the sample against the source budget:
+12. Run the link fingerprint and budget check:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
@@ -257,7 +262,6 @@ This test measures one-way RDMA writes between host-memory buffers.
 
 13. Measure the reverse edge against the new source's budget.
 14. For multi-rail deployments, test every selected HCA port.
-15. Retain every report.
 
 ## Complete the matrix and match retained evidence
 
@@ -280,7 +284,14 @@ For every edge, retain:
 
 Recalculate the budget from the new `cache-layout.json` when the runtime layout changes.
 
-The link inputs are the host assignment, both routes, the interfaces, the transport, the utility version, and the measurement parameters.
+Link inputs:
+
+- The host assignment
+- Both routes
+- The interfaces
+- The transport
+- The utility version
+- The measurement parameters
 
 | Link inputs    | Action                             |
 | -------------- | ---------------------------------- |
@@ -303,7 +314,7 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
   --out "$CURRENT_EDGE_PREFIX.comparison.json"
 ```
 
-`--sample` takes the retained sample for the transport:
+`--sample` value by transport:
 
 | Transport  | `--sample` value              |
 | ---------- | ----------------------------- |
@@ -321,7 +332,6 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
 When `record-edge` or `reuse-edge` exits 1:
 
 1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
-2. Fix the cause.
-3. Resample the directed edge until `record-edge` exits 0.
+2. Resample the directed edge until `record-edge` exits 0.
 
 Next: [Gate E: Attest the live engine processes](05-Attest.md).

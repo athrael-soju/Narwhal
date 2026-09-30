@@ -3,7 +3,7 @@
 | Command   | Action                                                        |
 | --------- | ------------------------------------------------------------- |
 | `prepare` | Bundles the approved commit, role files, and helper snapshots. |
-| `install` | Checks the commit on each host and installs Narwhal.          |
+| `install` | Installs the approved commit on each host.                    |
 
 ## Build an immutable deployment package
 
@@ -11,7 +11,8 @@ In the management checkout:
 
 1. Load `.env` and `config/deployment.env` from Gate A.
 2. Set `NARWHAL_DEPLOYMENT_REVISION` to the full approved commit.
-3. Prepare the package into a new `--out` directory:
+3. Set management credentials in the workstation environment.
+4. Prepare the package into a new `--out` directory:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
@@ -42,9 +43,7 @@ The manifest records:
 - a unique install path under `~/Narwhal-deploy/`
 - SHA-256 hashes for the source bundle, helper snapshots, and role files
 
-Management credentials come from the workstation environment.
-
-Helper snapshots that `install` places under `runs/deployment-tools/` on the engine hosts, with their role environment variables:
+Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 
 | Helper snapshot                          | Path variable                | SHA-256 variable                    |
 | ---------------------------------------- | ---------------------------- | ----------------------------------- |
@@ -54,7 +53,7 @@ Helper snapshots that `install` places under `runs/deployment-tools/` on the eng
 
 ## Install one host, then fan out
 
-Install the engine 1 host:
+1. Install the engine 1 host:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py install \
@@ -63,24 +62,25 @@ python3 tools/deployment/deploy_hosts.py install \
 
 On success the installer prints `<host-id>: installation ready`.
 
-A host with router and engine roles receives both role environments in one install.
+A host with router and engine roles gets both role environments from one install.
 
-When engine 1 is ready, install the remaining hosts:
+2. Install the remaining hosts after engine 1 is ready:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
 ```
 
-`install` behaviour across hosts:
+`install` across hosts:
 
 - Reuses finished installations and matching transferred files.
-- Stops at the first host where the source checkout changed or a file differs.
+- Stops at the first host where the source checkout changed.
+- Stops at the first host where a file differs.
 
 ## Recover a failed installation
 
 | Failure                                   | Recovery                                                                                     |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Transfer validation fails                 | Compare the prepared hashes with the existing remote artifact before you modify it.          |
+| Transfer validation fails                 | Compare the prepared hashes with the existing remote artifact before modifying it.           |
 | Revision validation fails                 | Check that the bundle and role files came from the same prepared run.                        |
 | A dependency installation stops early     | Rerun the same `install --run` until the installed `narwhal-check --help` responds.          |
 | A `.install-lock` remains                 | Remove it after the installer that created it has exited.                                    |
@@ -101,6 +101,10 @@ python3 tools/deployment/deploy_hosts.py shell \
   --run runs/deployment-env/first-deploy --role engine-1
 ```
 
-Each shell starts in the prepared remote checkout with the role environment loaded and `.venv` active.
+Each shell opens with:
 
-Continue with [Gate C: Validate and start every engine](03-Validate-Engines.md).
+- the prepared remote checkout as working directory
+- the role environment loaded
+- `.venv` active
+
+Next: [Gate C: Validate and start every engine](03-Validate-Engines.md).

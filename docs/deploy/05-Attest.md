@@ -1,20 +1,18 @@
 # Gate E: Attest the live engines
 
-Each running engine needs an attestation document and a sidecar that serves it.
-
 ## Check the router inventory
 
 On the router, confirm that `runs/deployment/fleet.json` lists:
 
-- each running engine with URL and attestation URL references that resolve in `.env.router`;
-- the model;
-- the initial roles;
-- the SLO values;
-- the profile path.
+- Each running engine with URL and attestation URL references that resolve in `.env.router`.
+- The model.
+- The initial roles.
+- The SLO values.
+- The profile path.
 
-The capture steps take these inputs:
+Capture inputs:
 
-- the container ID and logs in each engine's Gate C `ENGINE_RUN` directory;
+- The container ID and logs in each engine's Gate C `ENGINE_RUN` directory.
 - `cache-layout.json`.
 
 ## Capture the attestation inputs
@@ -35,8 +33,6 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 .venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-The capture records the image ID and container ID of the deployed build.
-
 | Version                           | Source                                         | Peer compatibility hash |
 | --------------------------------- | ---------------------------------------------- | ----------------------- |
 | `contract.nixl_connector_version` | Installed connector's `NIXL_CONNECTOR_VERSION` | Included                |
@@ -50,7 +46,7 @@ umask 077
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-The command requires the live container's plan and launcher hashes to match `launch.json`.
+The live container's plan and launcher hashes match `launch.json`.
 
 | Dimension            | Source                                                                                                                         |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -59,11 +55,9 @@ The command requires the live container's plan and launcher hashes to match `lau
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                                |
 | `model_architecture` | Resolved architecture                                                                                                          |
 
-The record holds `use_mla` and the identifying hashes.
-
 ### 4. Capture the cache grouping
 
-`cache-registration` writes one final capture per `ENGINE_RUN` from one of these sources:
+Sources for `cache-registration`, one final capture per `ENGINE_RUN`:
 
 | Source                          | Requirement                                                                   |
 | ------------------------------- | ----------------------------------------------------------------------------- |
@@ -90,8 +84,6 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
 | `BLHNC`, `BLNHC`, and `BHLNC`   | `is_block_outermost=true`         |
 | `LBHNC`, `LBNHC`, and `LHBNC`   | `is_block_outermost` is `false`   |
 
-The record stores the layout name, `cross_layers_blocks`, and the plan and image hashes.
-
 ### 5. Compare the layout with the representative's
 
 ```bash
@@ -113,7 +105,7 @@ PY_CACHE_MATCH
 | Comparison with the representative                           | Fabric budget                                                                                                   |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | Group signature, resolved layout, and page geometry all match | The engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). |
-| Layout or page geometry differs                              | The engine needs its own serving capture, budget, and edge comparisons.                                        |
+| Layout or page geometry differs                              | The engine needs a separate serving capture, budget, and edge comparisons.                                        |
 
 ### 6. Capture the transfer direction
 
@@ -185,8 +177,8 @@ cat "$ENGINE_RUN/handshake-policy.json"
 
 The effective `enforce_handshake_compat` value is:
 
-- the plan's transfer config setting, when set;
-- otherwise the pinned NIXL worker default of `True`.
+- The plan's transfer config setting, when set.
+- The pinned NIXL worker default of `True`, otherwise.
 
 The capture passes when the effective value is Boolean `true`.
 
@@ -280,7 +272,7 @@ Run the capture, generate, and serve steps for each engine.
 
 ### 7. Finalize the fleet contract
 
-When every sidecar has passed, run this once from the router shell:
+Run once from the router shell after every sidecar passes:
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
@@ -288,20 +280,20 @@ When every sidecar has passed, run this once from the router shell:
 
 `finalize-fleet` requires:
 
-- each sidecar's attestation to match its engine's live identity;
-- every engine to carry the same complete contract.
+- Each sidecar's attestation matches its engine's live identity.
+- Every engine carries the same complete contract.
 
 `finalize-fleet` writes:
 
-- `engine_contract` into `runs/deployment/fleet.json`;
-- a copy of the previous fleet file under `runs/`.
+- `engine_contract` in `runs/deployment/fleet.json`.
+- A copy of the previous fleet file under `runs/`.
 
 | Failure               | Diagnosis                                                               |
 | --------------------- | ----------------------------------------------------------------------- |
-| A sidecar fails       | The error names the engine and the failed checks.                       |
-| Two engines disagree  | The differing field points to the engine with the bad input.            |
+| A sidecar fails       | Error output lists the engine and the failed checks.                       |
+| Two engines disagree  | The differing field identifies the engine with the bad input.            |
 
-To recover:
+Recovery:
 
 1. Fix the failing engine.
 2. Restart its sidecar against the checked process.

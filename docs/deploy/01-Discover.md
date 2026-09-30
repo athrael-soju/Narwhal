@@ -18,9 +18,9 @@ Set the SSH destinations:
 | Variable               | Destination                                                        |
 | ---------------------- | ------------------------------------------------------------------ |
 | `NARWHAL_NODE_<n>_SSH` | Engine `<n>`, required for every engine                            |
-| `NARWHAL_ROUTER_SSH`   | Router, optional, with the lowest-numbered engine host as default |
+| `NARWHAL_ROUTER_SSH`   | Router, optional, defaulting to the lowest-numbered engine host    |
 
-A destination is a plain `user@host` or an OpenSSH alias, which can carry the username, port, identity, and jump host.
+A destination is `user@host` or an OpenSSH alias carrying the username, port, identity, and jump host.
 
 Roles that share a destination share one host entry and credential.
 
@@ -68,7 +68,14 @@ Discovery stops when the model directories differ across replicas:
 
 ## Run discovery and access checks
 
-Each engine host needs Python 3, Docker, `ip`, `rocminfo` or `nvidia-smi`, the pinned engine image, and the checkpoint at the configured path.
+Each engine host needs:
+
+- Python 3
+- Docker
+- `ip`
+- `rocminfo` or `nvidia-smi`
+- the pinned engine image
+- the checkpoint at the configured path
 
 From the management checkout:
 
@@ -79,14 +86,14 @@ python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
 
-`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store, `config/ssh.known_hosts` by default or an existing verified file.
+`NARWHAL_SSH_KNOWN_HOSTS` names the host-key store, defaulting to `config/ssh.known_hosts` and accepting an existing verified file.
 
 When a deployment command rejects a changed host key:
 
 1. Confirm the new key in the provider console.
 2. Replace the local entry.
 
-For each engine, discovery records:
+Per-engine discovery output:
 
 - the GPU product and mappings
 - the checkpoint configuration and hash
@@ -96,23 +103,23 @@ For each engine, discovery records:
 - the immutable image identity
 - the image package metadata, model dtype, and image runtime environment
 
-Discovery derives these launch settings from the checkpoint:
+Launch settings derived from the checkpoint:
 
 | Checkpoint condition                                                                                        | Setting                            |
 | ----------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | Metadata contains `auto_map`                                                                                | `--trust-remote-code`              |
 | Convolutional SSM transfer state, detected from `text_config.linear_attn_config.kda_layers` and `short_conv_kernel_size` | `VLLM_SSM_CONV_STATE_LAYOUT=DS` |
 
-Discovery writes mode-0600 configuration:
+Generated configuration, mode 0600:
 
 | File                                | Purpose                                                                                                                         |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `config/hosts.local.json`           | Maps management destinations to router and engine roles.                                                                        |
-| `config/ssh.known_hosts`            | Stores server public keys observed through authenticated management access.                                                     |
-| `config/engine-launch.local.json`   | GPU allocation, image and model metadata, transfer devices, launch policy.                                                      |
-| `config/engine-launch.sources.json` | Identifies the inspection and policy records used for each role.                                                                |
-| `config/fleet.json`                 | Defines the model, measured hardware and TP shape, engine URL references, initial roles, initial latency targets, and profile path. |
-| `config/deployment.env`             | Selects the generated paths, fabric addresses, engine/attestation URLs, and per-engine image/hash values used later.            |
+| `config/hosts.local.json`           | Management destinations mapped to router and engine roles                                                                      |
+| `config/ssh.known_hosts`            | Server public keys from authenticated management access                                                   |
+| `config/engine-launch.local.json`   | GPU allocation, image and model metadata, transfer devices, launch policy                                                    |
+| `config/engine-launch.sources.json` | Inspection and policy records for each role                                                              |
+| `config/fleet.json`                 | Model, measured hardware and TP shape, engine URL references, initial roles, initial latency targets, profile path |
+| `config/deployment.env`             | Generated paths, fabric addresses, engine and attestation URLs, per-engine image and hash values            |
 
 The discovery output directory holds:
 
@@ -131,7 +138,16 @@ Reuse an inspected fleet:
 2. Verify access.
 3. Prepare a new deployment run.
 
-Run a fresh discovery into a new output directory after a change to the hardware, model, image, checkpoint, launch policy, route, transport, or other discovery input.
+Run a fresh discovery into a new output directory after a change to:
+
+- the hardware
+- the model
+- the image
+- the checkpoint
+- the launch policy
+- the route
+- the transport
+- another discovery input
 
 ## Confirm the launch policy
 
@@ -166,9 +182,9 @@ Override the policy in `.env` before discovery:
 | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | GPU indices or NVIDIA UUIDs and the replica TP size.                        |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype and requested cache block size.                                 |
-| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array replacing the default vLLM arguments, with `--trust-remote-code` appended when the checkpoint requires it. |
-| `NARWHAL_ENGINE_ENV`                                                                     | JSON object overriding the launcher-supported image runtime environment fields, with `VLLM_SSM_CONV_STATE_LAYOUT` held at `DS` when the checkpoint requires it. |
-| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Select `ucx_rdma`, the HCA:port entries, and the RDMA device paths.         |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array replacing the default vLLM arguments, plus `--trust-remote-code` for checkpoints that require it. |
+| `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported image runtime environment fields, with `VLLM_SSM_CONV_STATE_LAYOUT` held at `DS` for checkpoints that require it. |
+| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_rdma`), HCA:port entries, RDMA device paths.         |
 | `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds.                                   |
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`.
@@ -193,7 +209,7 @@ When `check-access` fails:
 | Symptom                               | Fix                                                                                   |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | Missing access variable               | Check the named `.env` field.                                                         |
-| New or changed host key               | Replace the entry after you verify the destination and fingerprint independently.     |
+| New or changed host key               | Replace the entry after you verify the destination and fingerprint independently. |
 | Authentication or connection problem  | Check the username, credential, route, SSH port, and firewall.                        |
 
 Note which host and gate failed first.
