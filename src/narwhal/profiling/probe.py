@@ -22,7 +22,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from ..config import FleetConfig
+from ..config import EngineSpec, FleetConfig
 from ..contracts import PROFILES, versioned
 from ..engines.dialect import EngineDialect, VllmDialect
 from ..engines.dialect import lookup as lookup_dialect
@@ -1329,6 +1329,27 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
     return 0
 
 
+class _Unhealthy(Exception):
+    """An engine failed its health gate before profiling."""
+
+
+def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
+    """Group engines that share a device, or all engines under neighbour load, into one lane."""
+    if colocated:
+        return [list(targets)]
+    lanes: dict[str, list[EngineSpec]] = {}
+    for spec in targets:
+        key = spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
+        lanes.setdefault(key, []).append(spec)
+    return list(lanes.values())
+
+
+async def _cancel(tasks: list[asyncio.Task[None]]) -> None:
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -1379,7 +1400,8 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    connections = max((sweep or Sweep()).decode_concurrency) + len(cfg.engines)
+    lanes = _profile_lanes(targets, colocated=colocated_workload is not None)
+    connections = max((sweep or Sweep()).decode_concurrency) * len(lanes) + len(cfg.engines)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(
             observation_timeout_s or 300.0,
@@ -1388,7 +1410,8 @@ async def run(
         limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
         headers=cfg.engine_headers(),
     ) as client:
-        for spec in targets:
+
+        async def profile_engine(spec: EngineSpec) -> None:
             r = await client.get(
                 f"{spec.url}{dialect.health_path}", timeout=observation_timeout_s or 10.0
             )
@@ -1397,7 +1420,7 @@ async def run(
                     "engine_unhealthy", "Health gate failed", stage="health", engine=spec.iid
                 )
                 print(f"  {spec.iid}: not healthy, aborting", file=sys.stderr)
-                return 1
+                raise _Unhealthy(spec.iid)
             if dialect.tokenize_path is None:
                 raise ValueError(
                     f"{spec.iid}: the {dialect.name} dialect needs a tokenization route "
@@ -1535,7 +1558,7 @@ async def run(
                 output.write(json.dumps(measurement_record, indent=2) + "\n")
             store.put(profile)
             print(
-                f"    fit: ttft = {profile.ttft_a:.3e}n^2 + {profile.ttft_b:.3e}n "
+                f"  {spec.iid} fit: ttft = {profile.ttft_a:.3e}n^2 + {profile.ttft_b:.3e}n "
                 f"+ {profile.ttft_c:.4f}"
             )
             print(
@@ -1549,6 +1572,20 @@ async def run(
             )
             fit_error = profile.decode_fit_mape if profile.decode_fit_mape is not None else 0.0
             print(f"         decode fit MAPE {fit_error:.1%}; cross-validation {cv}")
+
+        async def profile_lane(lane: list[EngineSpec]) -> None:
+            for spec in lane:
+                await profile_engine(spec)
+
+        tasks = [asyncio.create_task(profile_lane(lane)) for lane in lanes]
+        try:
+            await asyncio.gather(*tasks)
+        except _Unhealthy:
+            await _cancel(tasks)
+            return 1
+        except BaseException:
+            await _cancel(tasks)
+            raise
     print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
     return 0
 

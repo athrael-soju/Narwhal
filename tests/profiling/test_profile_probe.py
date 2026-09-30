@@ -777,6 +777,56 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("profile rejected", saved["engines"]["e0"]["error"])
 
+    def test_profile_lanes_serialize_shared_devices_and_neighbour_load(self):
+        """Engines on their own devices get one lane each; shared devices share a lane."""
+        with tempfile.TemporaryDirectory() as folder:
+            engines = fleet(Path(folder)).engines
+        shared = SharedDeviceAllocation("gpu-0", "uuid", 0.5, 0.1)
+        engines[:2] = [replace(spec, shared_device=shared) for spec in engines[:2]]
+        lanes = [
+            [spec.iid for spec in lane] for lane in probe._profile_lanes(engines, colocated=False)
+        ]
+        self.assertEqual(lanes[0], [engines[0].iid, engines[1].iid])
+        self.assertEqual([len(lane) for lane in lanes[1:]], [1] * (len(engines) - 2))
+        colocated = probe._profile_lanes(engines, colocated=True)
+        self.assertEqual(
+            [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
+        )
+
+    async def test_run_profiles_engines_on_separate_devices_concurrently(self):
+        """Every lane measures at once; the store receives each engine's profile."""
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "parallel.json"
+            client = httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            )
+            active = {"now": 0, "peak": 0}
+
+            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+                active["now"] += 1
+                active["peak"] = max(active["peak"], active["now"])
+                await probe.asyncio.sleep(0.02)
+                active["now"] -= 1
+                return profile(iid)
+
+            with (
+                patch.object(probe.httpx, "AsyncClient", return_value=client),
+                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                    ),
+                ),
+                patch.object(probe, "profile_instance", side_effect=measured),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(await probe.run(cfg, None), 0)
+            self.assertEqual(active["peak"], len(cfg.engines))
+            self.assertEqual(len(ProfileStore(cfg.profiles_path)), len(cfg.engines))
+
     async def test_run_retains_per_peer_evidence_when_a_neighbour_stalls(self):
         """Rejected role-mix measurements retain each neighbour's traffic and error."""
         with tempfile.TemporaryDirectory() as folder:

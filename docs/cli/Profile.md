@@ -4,6 +4,8 @@
 
 Live sweeps bind each fit to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when `engine_contract` is configured, or to the live process identity otherwise, and retain that evidence with the raw observations in the `.samples.json` sidecar.
 
+Live sweeps measure engines on separate devices at the same time. Engines that share a `shared_device.group` measure one after another, as do all engines under `--colocated`.
+
 Live sweeps replace existing outputs when `--overwrite` is supplied. Refits and merges require fresh output paths, and every mode rejects symlink destinations.
 
 ## Selection, refitting, and output
