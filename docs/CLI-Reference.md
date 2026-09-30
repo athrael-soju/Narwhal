@@ -21,22 +21,23 @@
 
 `narwhal config`, `narwhal dev`, `narwhal-engine`, `narwhal-attest`, `narwhal-serve`, `narwhal-profile`, and `narwhal-check` use these codes in text mode:
 
-| Exit code | Outcome                                                                                                               |
-| --------: | --------------------------------------------------------------------------------------------------------------------- |
-|       `0` | Success.                                                                                                              |
-|       `1` | Operation failure: engine HTTP request, runtime inspection, listener bind, verification, or teardown.                 |
-|       `2` | Invalid arguments or configuration inputs.                                                                            |
+| Exit code | Outcome                                                                                               |
+| :-------: | ----------------------------------------------------------------------------------------------------- |
+|       `0` | Success.                                                                                              |
+|       `1` | Operation failure: engine HTTP request, runtime inspection, listener bind, verification, or teardown. |
+|       `2` | Invalid arguments or configuration inputs.                                                            |
 
-Exit codes by command ([`narwhal dev` output and exit codes](cli/Dev.md#output-and-exit-codes), [`narwhal diagnostics` exit statuses](Diagnostic-Bundles.md#manifest-and-exit-status)):
+Command-specific exit codes:
 
-| Command                       | Exit code | Case                               |
-| ----------------------------- | --------: | ---------------------------------- |
-| `narwhal dev`                 |       `1` | The instance reports `degraded`.   |
-| `narwhal dev init`            |       `2` | An initialization check fails.     |
-| `narwhal-engine prepare`      |       `2` | Preparation fails.                 |
-| `narwhal-engine prepare`      |       `1` | An output artifact already exists. |
-| `narwhal diagnostics collect` |       `3` | Partial bundle.                    |
-| `narwhal diagnostics collect` |       `4` | I/O failure.                       |
+| Command | Exit code | Case |
+| --- | :--: | --- |
+| [`narwhal dev`](cli/Dev.md#output-and-exit-codes) | `1` | The instance reports `degraded`. |
+| [`narwhal dev init`](cli/Dev.md#output-and-exit-codes) | `2` | An initialization check fails. |
+| [`narwhal-engine prepare`](cli/Engine.md#actions) | `2` | Preparation fails. |
+| [`narwhal-engine`](cli/Engine.md#actions) | `1` | An output artifact already exists. |
+| [`narwhal-check`](cli/Check.md#exit-codes) | `1` | A gate is skipped with `--evidence-out`. |
+| [`narwhal diagnostics collect`](Diagnostic-Bundles.md#manifest-and-exit-status) | `3` | Partial bundle. |
+| [`narwhal diagnostics collect`](Diagnostic-Bundles.md#manifest-and-exit-status) | `4` | I/O failure. |
 
 ## Failure diagnostics
 
@@ -46,7 +47,9 @@ Exit codes by command ([`narwhal dev` output and exit codes](cli/Dev.md#output-a
 
 ## JSON command results
 
-- Commands: `narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check`.
-- Flag: `--format json`.
-- Output: a [versioned command result](Command-Results.md).
-- Exit code: derived from the result `status`.
+| Property  | Value                                                                                                    |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| Commands  | `narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, `narwhal-check` |
+| Flag      | `--format json`                                                                                          |
+| Output    | A [versioned command result](Command-Results.md)                                                          |
+| Exit code | Derived from the result `status`                                                                         |

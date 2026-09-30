@@ -10,16 +10,13 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 
 | Capability | Behavior | Guide |
 | --- | --- | --- |
-| Role hot-swap | Reassigns prefill and decode roles across a fixed GPU fleet. | [Core concepts](Core-Concepts.md) |
-| Split routing | Routes prefill and decode separately with NIXL key-value (KV) transfer. | [Core concepts](Core-Concepts.md) |
-| Latency-aware admission | Admits and places requests from measured per-engine profiles. | [Measure a fleet](Measure.md) |
-| Completion APIs | Serves streaming and buffered completion and chat requests. | [HTTP API reference](HTTP-API.md) |
-| Router failover | Promotes a warm-standby router. | [Operate Narwhal](Operate.md) |
-| Observability | Exports Prometheus metrics and request journals to a Grafana dashboard. | [Set up observability](Observability.md) |
-| Generation-bound readmission | Readmits an engine only against its live process generation. | [Restart engines](operate/03-Restart-Engines.md) |
-| Offline validation | Validates fleet files and collects diagnostic bundles. | [`narwhal config`](Config-Inspection.md), [`narwhal diagnostics`](Diagnostic-Bundles.md) |
-| Benchmark runs | Runs ordered benchmark points with retained evidence. | [Ordered benchmark points](measure/05-Benchmark-Runner.md) |
-| Development mode | Runs four engines on one NVIDIA CUDA GPU under Ubuntu or WSL2. | [Narwhal dev](Dev-Runtime.md) |
+| Role hot-swap | Reassigns prefill and decode roles across a fixed GPU fleet, with NIXL key-value (KV) transfer between them. | [![Core concepts documentation](https://img.shields.io/badge/docs-Core%20concepts-0f766e)](Core-Concepts.md) |
+| Serving | Serves streaming and buffered completion and chat requests with latency-aware admission. | [![HTTP API reference documentation](https://img.shields.io/badge/docs-HTTP%20API%20reference-0f766e)](HTTP-API.md) |
+| Fault tolerance | Fails over to a warm-standby router and readmits engines against their live process generation. | [![Operate Narwhal documentation](https://img.shields.io/badge/docs-Operate%20Narwhal-0f766e)](Operate.md) |
+| Measurement | Profiles engines and runs ordered benchmark points with retained evidence. | [![Measure a fleet documentation](https://img.shields.io/badge/docs-Measure%20a%20fleet-0f766e)](Measure.md) |
+| Observability | Exports router and engine metrics to Prometheus and a provisioned Grafana dashboard. | [![Set up observability documentation](https://img.shields.io/badge/docs-Set%20up%20observability-0f766e)](Observability.md) |
+| Operator tooling | Validates fleet files offline and collects private diagnostic bundles. | [![CLI reference documentation](https://img.shields.io/badge/docs-CLI%20reference-0f766e)](CLI-Reference.md) |
+| Development mode | Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2. | [![Narwhal dev documentation](https://img.shields.io/badge/docs-Narwhal%20dev-0f766e)](Dev-Runtime.md) |
 
 ## Get started
 
@@ -76,7 +73,7 @@ narwhal --help
 
     ---
 
-    Diagnose overload, engine failures, or router failures starting from the first visible symptom.
+    Diagnose overload, engine failures, and router failures.
 
 </div>
 

@@ -2,7 +2,10 @@
 
 `narwhal-inference` installs the `narwhal` Python package and six commands for local development, engine launch, attestation, profiling, preflight and routing.
 
-Requirements are Linux and Python 3.11 or newer.
+| Requirement | Value |
+| --- | --- |
+| Operating system | Linux |
+| Python | 3.11 or newer |
 
 Install the package in a virtual environment:
 
@@ -33,7 +36,7 @@ For each deployment:
 
 ## Before serving requests
 
-A production fleet needs these inputs, qualified in [Deploy a fleet](Deploy.md):
+[Deploy a fleet](Deploy.md) qualifies these production inputs:
 
 - separately provisioned vLLM engines with compatible KV transfer
 - engine attestation
@@ -44,4 +47,4 @@ A production fleet needs these inputs, qualified in [Deploy a fleet](Deploy.md):
 
 In a repository checkout, `make setup` installs Narwhal and its development dependencies into `.venv`.
 
-If the `--version` flags print `narwhal-inference unknown (distribution metadata unavailable)`, run `python -m pip install -e .`.
+If `--version` prints `narwhal-inference unknown (distribution metadata unavailable)`, run `python -m pip install -e .`.

@@ -27,7 +27,7 @@
 
     ---
 
-    Feed GPU telemetry, evaluate alerts, and retain monitoring captures.
+    Feed GPU telemetry, inspect alerts, troubleshoot monitoring, and retain captures.
 
 -   [Monitor a WSL2 development fleet](observability/04-WSL2.md)
 

@@ -2,8 +2,7 @@
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.
 
-- A template selects the model, runtime, and memory budget.
-- A template's `gpu.product` pins a GPU product.
+A template selects the model, runtime, and memory budget.
 
 | Template | Configuration |
 | --- | --- |
@@ -27,20 +26,22 @@ narwhal dev down
 | `init` | Writes a private instance with model and runtime pins, memory budget, unique ports, engine launch records, and fleet configuration. |
 | `up` | Launches the fleet and reports `launched`. |
 | `verify` | Verifies the fleet and reports `ready`. |
-| `status` | Reports `launched`, `ready`, or `degraded`. |
+| `status` | Reports `starting`, `launched`, `ready`, `degraded`, or `stopped`. |
 | `down` | Stops the recorded process groups with SIGKILL for survivors and reports `stopped`. |
 
 | `status` report | Condition |
 | --- | --- |
+| `starting` | `up` is in progress |
 | `launched` | Supervised processes pass HTTP health checks |
 | `ready` | Verification succeeded with current transfer evidence |
-| `degraded` | A failed `verify` remains on record until a successful verification or a completed `down` |
+| `degraded` | `problems` lists a process, health, readiness, evidence, or verification failure |
+| `stopped` | The recorded processes have stopped |
 
 Running `init` again on an existing instance keeps existing files, operator edits, and saved values of omitted settings.
 
-| Explicitly supplied settings  | Result                                  |
-| ----------------------------- | --------------------------------------- |
-| Match the saved instance      | `status: reused`                        |
+| Explicitly supplied settings | Result |
+| --- | --- |
+| Match the saved instance | `status: reused` |
 | Conflict with a saved setting | Exit `2` listing the differing settings |
 
 To change initialization settings, run `narwhal dev init --instance runs/new-instance` with the desired template and flags.
@@ -52,16 +53,17 @@ For engine authentication:
 
 A failed `verify`:
 
-- saves its reason, evidence directory, and failure time in `lifecycle.json` and the attempt's `failure.json`.
-- appears in later `status` output as `verification_failure`, with its reason in `problems`.
+- saves its reason, evidence directory, and failure time in `lifecycle.json` and the attempt's `failure.json`
+- appears in later `status` output as `verification_failure`, with its reason in `problems`
+- remains on record until a successful `verify` or a completed `down`
 
 ## Output and exit codes
 
 Text mode output:
 
-| Stream | Content                                                         |
-| ------ | --------------------------------------------------------------- |
-| stdout | The returned state, as one JSON document                        |
+| Stream | Content |
+| --- | --- |
+| stdout | The returned state, as one JSON document |
 | stderr | Preparation progress, profiling progress, and error diagnostics |
 
 Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
@@ -69,24 +71,24 @@ Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
 `narwhal dev` uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-codes), with these lifecycle cases:
 
 | Case | Exit code |
-| --- | ---: |
+| --- | :--: |
 | `initialized`, `reused`, `starting`, `launched`, `ready`, or `stopped` | `0` |
 | `degraded`, a failed `verify`, or a later `status` while the instance retains that failure | `1` |
 | An instance configuration error, a runtime package error, or a failed `init` check | `2` |
 
 With `--format json` the state is the versioned [command result](../Command-Results.md) with these added exit codes:
 
-| Case              | Exit code |
-| ----------------- | --------: |
-| `degraded`        |       `3` |
-| Operational error |       `4` |
+| Case | Exit code |
+| --- | :--: |
+| `degraded` | `3` |
+| Operational error | `4` |
 
 ## Options
 
-| Scope            | Options                    |
-| ---------------- | -------------------------- |
+| Scope | Options |
+| --- | --- |
 | Every subcommand | `--instance` and `--format` |
-| `init`           | Every other option below   |
+| `init` | Every other option below |
 
 Print the installed distribution version with `narwhal --version`.
 
@@ -115,11 +117,14 @@ Print the installed distribution version with `narwhal --version`.
 
 Selected ports must be distinct and fit 1..65535.
 
-Memory rules:
+`init` GPU checks:
 
-- The decimal sum of per-engine fractions must be at most the device allowance.
-- Three engines at `0.1` fit an allowance of `0.3`.
-- The free-memory check reserves the allowance times total device memory plus the template's `gpu.reserve_mib` (512 MiB in the installed template).
+| Check | Requirement |
+| --- | --- |
+| Engine fractions | The decimal product of `--engine-count` and `--gpu-memory-utilization` is at most `--device-allowance`. |
+| Free memory | Free VRAM covers `--device-allowance` times total device memory plus the template's `gpu.reserve_mib` (512 MiB in the installed template). |
+| GPU product | The GPU name matches the template's `gpu.product` when the template sets it. |
+| Total memory | Total VRAM is at least the template's `gpu.minimum_total_mib` when the template sets it. |
 
 Change the model or runtime:
 
@@ -130,11 +135,15 @@ Change the model or runtime:
 
 The RTX 5090 reference's `role_cycle` holds deterministic workloads for three role splits:
 
-- 1P:3D, one prefill and three decode engines.
-- 2P:2D, two prefill and two decode engines.
-- 3P:1D, three prefill and one decode engine.
+- 1P:3D, one prefill and three decode engines
+- 2P:2D, two prefill and two decode engines
+- 3P:1D, three prefill and one decode engine
 
-From a checkout, `python -m tools.measurement.dev_cycle --instance runs/dev` replays these workloads through a verified fleet ([workload order, output files, exit codes](../dev/RTX-5090-Reference.md#replay-all-three-role-splits)).
+[Replay the workloads](../dev/RTX-5090-Reference.md#replay-all-three-role-splits) through a verified fleet from a checkout:
+
+```bash
+python -m tools.measurement.dev_cycle --instance runs/dev
+```
 
 The replay saves transition and latency checks.
 

@@ -12,40 +12,39 @@ The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on a
 
 ## Prepare Ubuntu or WSL2
 
-Install the NVIDIA driver for your host:
+1. Install the NVIDIA driver for your host:
 
-| Host | Driver |
-| --- | --- |
-| Native Ubuntu | A driver compatible with the CUDA runtime you plan to use |
-| WSL2 | The Windows driver from [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) |
+    | Host | Driver |
+    | --- | --- |
+    | Native Ubuntu | A driver compatible with the CUDA runtime you plan to use |
+    | WSL2 | The Windows driver from [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) |
 
-On both hosts:
+2. Keep the checkout, the model, the virtual environment, and the instance directory on the Linux filesystem.
+3. Run every command from an Ubuntu shell, inside WSL2 on a Windows host.
+4. Show the GPU and the IPv4 interfaces:
 
-- Keep the checkout, the model, the virtual environment, and the instance directory on the Linux filesystem.
-- Run every command from an Ubuntu shell, inside WSL2 on a Windows host.
+    ```bash
+    nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
+    "$nvidia_smi" --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
+    ip -brief -4 address
+    ```
 
-Show the GPU and the IPv4 interfaces:
-
-```bash
-nvidia_smi=$(command -v nvidia-smi || printf '%s' /usr/lib/wsl/lib/nvidia-smi)
-"$nvidia_smi" --query-gpu=name,uuid,memory.total,memory.used,driver_version --format=csv
-ip -brief -4 address
-```
-
-Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
+5. Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
 
 ## Install the runtime and model
 
 Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md).
 
+## Template and GPU allocation
+
 Two `init` flags set the GPU memory allocation:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--gpu-memory-utilization` | 0.35 | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
-| `--device-allowance` | 0.8 | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
+| `--gpu-memory-utilization` | Template value, `0.35` installed | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
+| `--device-allowance` | Template value, `0.8` installed | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
 
-`init` requires free VRAM to cover the device allowance plus the template's 512 MiB reserve.
+`init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB installed).
 
 The shipped template sets development SLO targets:
 
@@ -65,18 +64,20 @@ Template fields that pin the hardware:
 | `gpu.product` | GPU product name |
 | `gpu.minimum_total_mib` | Minimum total VRAM |
 
-Export the installed template:
+Create a custom template:
 
-```bash
-mkdir -p runs
-python - <<'PYTHON' > runs/small-cuda-template.json
-from importlib.resources import files
-print(files('narwhal.dev').joinpath('small-cuda-v1.json').read_text())
-PYTHON
-```
+1. Export the installed template:
 
-1. Edit the exported file.
-2. Initialize a fresh instance with
+    ```bash
+    mkdir -p runs
+    python - <<'PYTHON' > runs/small-cuda-template.json
+    from importlib.resources import files
+    print(files('narwhal.dev').joinpath('small-cuda-v1.json').read_text())
+    PYTHON
+    ```
+
+2. Edit the exported file.
+3. Initialize a fresh instance with
    `narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
 
 ## Initialize and verify an instance
@@ -93,23 +94,27 @@ narwhal dev status
 
 `init` runs these steps:
 
-1. Selects a CUDA GPU by UUID.
-2. Checks the model, runtime, and GPU allocation.
-3. Writes the private instance.
+1. Checks the model and tokenizer checksums.
+2. Selects a CUDA GPU by UUID and checks its free VRAM.
+3. Checks the runtime package versions and GGUF plugin hashes.
+4. Checks the network interface and ports.
+5. Writes the private instance.
 
 `up` runs these steps:
 
-1. Checks that the ports are free.
-2. Starts the engines.
-3. Profiles the engines.
-4. Captures attestations.
-5. Starts the router.
+1. Checks the model, tokenizer, and GGUF plugin hashes.
+2. Checks that the ports are free.
+3. Starts the engines.
+4. Captures attestations and starts the attestation sidecars.
+5. Profiles every role split.
+6. Starts the router.
 
 `verify` runs these steps:
 
 1. Runs preflight over every eligible directed KV path.
 2. Sends a routed arithmetic request.
-3. Reports `ready` when every check passes.
+3. Saves the router and engine metrics.
+4. Reports `ready` when every check passes.
 
 Run every later lifecycle command in the Python environment that ran `init`.
 
@@ -142,17 +147,15 @@ Two `narwhal dev` options change the layout and target:
 
 The run directory that `status` prints holds:
 
-- the routed response
-- memory samples
-- the request journal
-- `teardown.json`
-- the logs below
-
-| Log | Content |
+| Content | Path |
 | --- | --- |
-| `engine-*/startup.log` | Model loading and engine requests |
-| `profile-*.log` | Probe and fit outcomes |
-| `verify-*/preflight.log` | Runtime, profile, and transfer checks |
+| Routed response | `verify-*/completion.json` |
+| Whole-device memory samples | `up-memory.jsonl`, `verify-memory.jsonl` |
+| Request journal | `journal.jsonl` |
+| Teardown record | `teardown.json` |
+| Model loading and engine requests | `engine-*/startup.log` |
+| Probe and fit outcomes | `profile-*.log` |
+| Runtime, profile, and transfer checks | `verify-*/preflight.log` |
 
 Stop the instance:
 
@@ -188,8 +191,8 @@ Stage names:
 | `native-start-shared` | Native shared startup |
 | `attest-<n>` | Attestation capture for engine `n` |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines |
-| `profile-merge` | Runs with three or more engines |
-| `preflight` | Runs during `verify` |
+| `profile-merge` | Merging the role-split profiles, with three or more engines |
+| `preflight` | Directed KV preflight during `verify` |
 
 Override the startup and preflight budgets:
 
@@ -211,14 +214,14 @@ Budgets and fixed limits:
 
 `narwhal dev` stops the stage's supervised processes when:
 
-- a budget expires
-- a helper stage receives SIGINT from Ctrl-C
-- a helper stage receives SIGTERM
+- a stage budget expires
+- `narwhal dev` receives SIGINT (Ctrl-C) during a stage
+- `narwhal dev` receives SIGTERM during a stage
 
 Cleanup steps:
 
 | Step | Signal | Wait | Variable |
-| --- | --- | --- | --- |
+| :---: | --- | --- | --- |
 | 1 | SIGTERM | Up to 10 seconds | `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` |
 | 2 | SIGKILL to surviving processes | Up to 5 seconds | `NARWHAL_STAGE_KILL_GRACE_SECONDS` |
 
@@ -227,7 +230,7 @@ Files next to each stage log:
 | File | Content |
 | --- | --- |
 | `*.command.json` | The stage's command line |
-| `*.stdout`, `*.stderr` | The private partial output |
+| `*.stdout`, `*.stderr` | The stage's private output |
 | `*.stage.json` | The budget, wall-clock start, elapsed time, exit status, process identities, cleanup escalation, and surviving PIDs |
 
 Failed command outcomes:
@@ -235,14 +238,14 @@ Failed command outcomes:
 | Failed command | Result | Report |
 | --- | --- | --- |
 | `up` | Startup rolls back. | `lifecycle.json` records the original failure and teardown errors. |
-| `verify` | The attempt directory stays. | `status` reports `degraded` with the reason until a later `verify` succeeds. |
+| `verify` | The attempt directory stays. | `status` reports `degraded` with the reason until a later `verify` succeeds or `down` completes. |
 
 Recover from a failed stage, with `PATH` as the instance directory:
 
 1. Read the failed stage's output.
 2. Run `narwhal dev status --instance PATH`.
 3. Stop the process generation with `narwhal dev down --instance PATH`.
-4. Retry startup.
+4. Run `narwhal dev up --instance PATH`.
 
 If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 

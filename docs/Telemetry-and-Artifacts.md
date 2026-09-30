@@ -1,5 +1,15 @@
 # Narwhal telemetry and artifacts
 
+| Artifact | Source | Schema |
+| --- | --- | --- |
+| Request journal | `narwhal-serve --journal`, `journal.jsonl` beside `profiles.path` by default | `narwhal.journal` |
+| Engine profile store | `profiles.path` | `narwhal.profiles` |
+| Prometheus metrics | Router `/metrics` | `narwhal.metrics` |
+| Live state | Router `/narwhal/state` | `narwhal.state` |
+| Contract manifest | `narwhal-check --print-contract-versions` | `narwhal.contract-manifest` |
+
+## Telemetry references
+
 <div class="grid cards" markdown>
 
 -   [Request journal](telemetry/01-Journal.md)

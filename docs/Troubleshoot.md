@@ -26,7 +26,7 @@ On exit status `3`, inspect the source rows in the partial bundle's [manifest](D
 | `--artifact PATH` | Ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run |
 | `--include-request-content` | Journal and completion content |
 
-Manual capture for releases that predate `narwhal diagnostics collect`:
+Manual capture for releases before 0.3.0:
 
 ```bash
 umask 077
@@ -99,11 +99,13 @@ Procedures by path:
 4. Compare completed throughput and the share of requests meeting the service-level objective.
 5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
 
+Ratio definitions:
+
 | Ratio | Numerator | Denominator |
 | --- | --- | --- |
 | Load-test router outcome | Router completions | Admitted requests |
 | [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) | Client completions that meet the service-level objective | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
 
-## After recovery
+## Validate recovery
 
 Run the [release validation drills](operate/05-Release-Drills.md#11-validate-every-release).

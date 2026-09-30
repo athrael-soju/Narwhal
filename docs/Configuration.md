@@ -1,9 +1,9 @@
 # Narwhal fleet configuration and deployment reference
 
-| Models  | Deployment                                                             |
-| ------- | ---------------------------------------------------------------------- |
-| One     | One router process and one engine fleet                                |
-| Several | One router and one fleet per model, with the model selected at ingress |
+| Models  | Deployment                              | Model selection |
+| ------- | --------------------------------------- | --------------- |
+| One     | One router process and one engine fleet |                 |
+| Several | One router and one fleet per model      | Ingress         |
 
 Annotated example fleet file:
 
@@ -29,11 +29,13 @@ Fleet file header:
 
 The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment).
 
-Fleet schema version 1:
+Responsibilities under fleet schema version 1:
 
-- Ingress: client identity and content capture
-- Admission: one global budget
-- Request measurement: token counts and durations
+| Component       | Handles                                        |
+| --------------- | ---------------------------------------------- |
+| Ingress         | Client identity and content capture            |
+| Narwhal router  | One global admission budget                    |
+| Request records | Timings, identifiers, placements, and outcomes |
 
 ## Fleet and deployment contracts
 
@@ -43,7 +45,7 @@ Fleet schema version 1:
 
     ---
 
-    Top-level keys, JSON types, paths, environment variables, minimal fleet definition, hardware block, `engine_contract` fields, and attestation.
+    Top-level keys, JSON types, paths, environment variables, minimal fleet definition, shared-device allocation, hardware block, `engine_contract` fields, and attestation.
 
 -   [Serving and role control](configuration/02-Serving-and-Role-Control.md)
 
