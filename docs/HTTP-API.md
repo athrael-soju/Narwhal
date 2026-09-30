@@ -23,13 +23,51 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 
 ## HTTP contracts
 
-- [Completion requests](http-api/01-Requests.md): request fields, validation, model selection, output restrictions, and request IDs.
-- [Admission and responses](http-api/02-Admission-and-Responses.md): refusal conditions and status codes, admission counters, response assembly, and token-ID accounting.
-- [Backend execution and failures](http-api/03-Backend-and-Failures.md): prefill and decode legs, input sizing, engine-error mapping, timeouts, breaker readmission, and retries.
-- [Model, health, and metrics inspection](http-api/04-Inspection.md): `/v1/models`, `/health`, `/ready`, and `/metrics`.
-- [Live router and scheduler state](http-api/05-Live-State.md): the fields of `/narwhal/state`.
-- [SLO attainment and demand accounting](http-api/06-SLO-and-Demand.md): service-level objective (SLO) outcome buckets, demand history, and consolidation evidence in `/narwhal/state`.
-- [State handoff and engine lifecycle](http-api/07-Handoff-and-Lifecycle.md): the `/narwhal/handoff` document and the routes that drain and readmit engines.
+<div class="grid cards" markdown>
+
+-   [Completion requests](http-api/01-Requests.md)
+
+    ---
+
+    Request fields, validation, model selection, output restrictions, and request IDs.
+
+-   [Admission and responses](http-api/02-Admission-and-Responses.md)
+
+    ---
+
+    Refusal conditions and status codes, admission counters, response assembly, and token-ID accounting.
+
+-   [Backend execution and failures](http-api/03-Backend-and-Failures.md)
+
+    ---
+
+    Prefill and decode legs, input sizing, engine-error mapping, timeouts, breaker readmission, and retries.
+
+-   [Model, health, and metrics inspection](http-api/04-Inspection.md)
+
+    ---
+
+    `/v1/models`, `/health`, `/ready`, and `/metrics`.
+
+-   [Live router and scheduler state](http-api/05-Live-State.md)
+
+    ---
+
+    The fields of `/narwhal/state`.
+
+-   [SLO attainment and demand accounting](http-api/06-SLO-and-Demand.md)
+
+    ---
+
+    Service-level objective (SLO) outcome buckets, demand history, and consolidation evidence in `/narwhal/state`.
+
+-   [State handoff and engine lifecycle](http-api/07-Handoff-and-Lifecycle.md)
+
+    ---
+
+    The `/narwhal/handoff` document and the routes that drain and readmit engines.
+
+</div>
 
 ## Which endpoint do I need?
 

@@ -11,9 +11,30 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
 
 ## Automate benchmark points
 
-- [Ordered benchmark points](measure/05-Benchmark-Runner.md): a plan's trial points with readiness and drain checks per point.
-- [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md): journal rows, metrics samples, file digests, and a shareable summary per point.
+<div class="grid cards" markdown>
+
+-   [Ordered benchmark points](measure/05-Benchmark-Runner.md)
+
+    ---
+
+    A plan's trial points with readiness and drain checks per point.
+
+-   [Benchmark evidence bundle](measure/06-Benchmark-Evidence.md)
+
+    ---
+
+    Journal rows, metrics samples, file digests, and a shareable summary per point.
+
+</div>
 
 ## Qualification results
 
-- [GPU benchmark qualification](measure/07-GPU-Qualification.md): pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on AMD Instinct MI355X engines.
+<div class="grid cards" markdown>
+
+-   [GPU benchmark qualification](measure/07-GPU-Qualification.md)
+
+    ---
+
+    Pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on AMD Instinct MI355X engines.
+
+</div>

@@ -237,3 +237,20 @@
 .md-footer-meta {
   background: var(--narwhal-ink);
 }
+
+/* Whole-card links for grid cards */
+.md-typeset .grid.cards > ul > li {
+  position: relative;
+}
+
+.md-typeset .grid.cards > ul > li > p:first-child > a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.md-typeset .grid.cards > ul > li:focus-within {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}

@@ -100,10 +100,33 @@ Work to repeat by change:
 
 ## Runtime and tooling references
 
-- [Configuration](Configuration.md): fleet fields and defaults.
-- [Measure](Measure.md): profiling and service-level objective (SLO) calibration.
-- [Observability](Observability.md): Prometheus and Grafana setup.
-- [Troubleshoot](Troubleshoot.md): symptom-based diagnosis.
+<div class="grid cards" markdown>
+
+-   [Configuration](Configuration.md)
+
+    ---
+
+    Fleet fields and defaults.
+
+-   [Measure](Measure.md)
+
+    ---
+
+    Profiling and service-level objective (SLO) calibration.
+
+-   [Observability](Observability.md)
+
+    ---
+
+    Prometheus and Grafana setup.
+
+-   [Troubleshoot](Troubleshoot.md)
+
+    ---
+
+    Symptom-based diagnosis.
+
+</div>
 
 External sources:
 

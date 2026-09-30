@@ -65,9 +65,27 @@ Before stopping an engine, capture evidence per the [planned restart or unplanne
 
 Procedures by path:
 
-- [Fleet overload with healthy engines](#fleet-overload-with-healthy-engines): HTTP 429 or 504 increases.
-- [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md): an engine failed unexpectedly, or the fleet needs a whole-wave restart.
-- [Router failover and rollback](troubleshoot/02-Router-Recovery.md): the primary router failed, or a standby reports a stale or incompatible state handoff.
+<div class="grid cards" markdown>
+
+-   [Fleet overload with healthy engines](#fleet-overload-with-healthy-engines)
+
+    ---
+
+    HTTP 429 or 504 increases.
+
+-   [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md)
+
+    ---
+
+    An engine failed unexpectedly, or the fleet needs a whole-wave restart.
+
+-   [Router failover and rollback](troubleshoot/02-Router-Recovery.md)
+
+    ---
+
+    The primary router failed, or a standby reports a stale or incompatible state handoff.
+
+</div>
 
 ## Fleet overload with healthy engines
 

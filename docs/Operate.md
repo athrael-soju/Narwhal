@@ -18,13 +18,51 @@ TLS, authentication, WAF, model routing
 
 ## Operator tasks
 
-- [Production boundary and router pair](operate/01-Start-Routers.md)
-- [Router state and placement monitoring](operate/02-Monitor.md)
-- [Engine restart and process replacement](operate/03-Restart-Engines.md)
-- [Upgrade and rollback](operate/04-Upgrade-and-Validate.md)
-- [Release drills](operate/05-Release-Drills.md)
-- [Troubleshoot a fleet](Troubleshoot.md)
-- [Measure a fleet](Measure.md)
+<div class="grid cards" markdown>
+
+-   [Production boundary and router pair](operate/01-Start-Routers.md)
+
+    ---
+
+    Set the production boundary, keep one deployment set, configure the client path, and start a router pair.
+
+-   [Router state and placement monitoring](operate/02-Monitor.md)
+
+    ---
+
+    Interpret router state and monitor placement and control.
+
+-   [Engine restart and process replacement](operate/03-Restart-Engines.md)
+
+    ---
+
+    Restart one engine or an engine wave, activate replacement profiles, and detect process replacement.
+
+-   [Upgrade and rollback](operate/04-Upgrade-and-Validate.md)
+
+    ---
+
+    Upgrade routers across compatible or changed handoff versions and roll back.
+
+-   [Release drills](operate/05-Release-Drills.md)
+
+    ---
+
+    Validate every release with restart, whole-wave, and failover drills.
+
+-   [Troubleshoot a fleet](Troubleshoot.md)
+
+    ---
+
+    Diagnose overload, engine failures, or router failures from the first visible symptom.
+
+-   [Measure a fleet](Measure.md)
+
+    ---
+
+    Profile the fleet, calibrate SLOs, and measure a target workload.
+
+</div>
 
 ## Production startup checklist
 

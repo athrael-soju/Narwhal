@@ -34,24 +34,96 @@ narwhal --help
 
 ## Tasks
 
-| Goal                                                                                           | Guide                                     |
-| ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Install the Narwhal commands from PyPI and check their version                                 | [Install from PyPI](Install-from-PyPI.md) |
-| Run a local NVIDIA GPU fleet on Ubuntu or WSL2                                                 | [Narwhal dev](Dev-Runtime.md)             |
-| Bring up a new fleet and verify request routing                                                | [Deploy a fleet](Deploy.md)               |
-| Profile the fleet, select measurement ranges, calibrate SLOs, and measure a target workload    | [Measure a fleet](Measure.md)             |
-| Export metrics to Prometheus and inspect the fleet in Grafana                                  | [Set up observability](Observability.md)  |
-| Manage ingress, routers, engines, and software upgrades                                        | [Operate Narwhal](Operate.md)             |
-| Diagnose overload, engine failures, or router failures starting from the first visible symptom | [Troubleshoot a fleet](Troubleshoot.md)   |
+<div class="grid cards" markdown>
+
+-   [Install from PyPI](Install-from-PyPI.md)
+
+    ---
+
+    Install the Narwhal commands from PyPI and check their version.
+
+-   [Narwhal dev](Dev-Runtime.md)
+
+    ---
+
+    Run a local NVIDIA GPU fleet on Ubuntu or WSL2.
+
+-   [Deploy a fleet](Deploy.md)
+
+    ---
+
+    Bring up a new fleet and verify request routing.
+
+-   [Measure a fleet](Measure.md)
+
+    ---
+
+    Profile the fleet, select measurement ranges, calibrate SLOs, and measure a target workload.
+
+-   [Set up observability](Observability.md)
+
+    ---
+
+    Export metrics to Prometheus and inspect the fleet in Grafana.
+
+-   [Operate Narwhal](Operate.md)
+
+    ---
+
+    Manage ingress, routers, engines, and software upgrades.
+
+-   [Troubleshoot a fleet](Troubleshoot.md)
+
+    ---
+
+    Diagnose overload, engine failures, or router failures starting from the first visible symptom.
+
+</div>
 
 ## Concepts and reference
 
-- [Core concepts](Core-Concepts.md): engine, request placement, role control, and fleet state contracts.
-- [Configuration](Configuration.md): fleet configuration fields, environment inputs, and their defaults.
-- [CLI reference](CLI-Reference.md): commands, options, and exit codes.
-- [HTTP API reference](HTTP-API.md): completion, inspection, and lifecycle endpoints.
-- [Telemetry and artifact reference](Telemetry-and-Artifacts.md): journals, profiles, metrics, and persisted contract versions.
+<div class="grid cards" markdown>
+
+-   [Core concepts](Core-Concepts.md)
+
+    ---
+
+    Engine, request placement, role control, and fleet state contracts.
+
+-   [Configuration](Configuration.md)
+
+    ---
+
+    Fleet configuration fields, environment inputs, and their defaults.
+
+-   [CLI reference](CLI-Reference.md)
+
+    ---
+
+    Commands, options, and exit codes.
+
+-   [HTTP API reference](HTTP-API.md)
+
+    ---
+
+    Completion, inspection, and lifecycle endpoints.
+
+-   [Telemetry and artifact reference](Telemetry-and-Artifacts.md)
+
+    ---
+
+    Journals, profiles, metrics, and persisted contract versions.
+
+</div>
 
 ## Development
 
-- [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md): development environment setup, the local test workflow, and the pull request process.
+<div class="grid cards" markdown>
+
+-   [Contributing](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md)
+
+    ---
+
+    Development environment setup, the local test workflow, and the pull request process.
+
+</div>

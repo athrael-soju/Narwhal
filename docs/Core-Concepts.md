@@ -9,9 +9,27 @@ A role move:
 
 ## Concept pages
 
-- [Request flow and fleet topology](concepts/01-Request-and-Topology.md).
-- [Role control and capacity floors](concepts/02-Role-Control.md).
-- [Failure, readmission, and state](concepts/03-Failure-and-State.md).
+<div class="grid cards" markdown>
+
+-   [Request flow and fleet topology](concepts/01-Request-and-Topology.md)
+
+    ---
+
+    Engine contract, request execution, and fleet topology.
+
+-   [Role control and capacity floors](concepts/02-Role-Control.md)
+
+    ---
+
+    Role-controller evaluation, role floors, fallback, and degraded capacity.
+
+-   [Failure, readmission, and state](concepts/03-Failure-and-State.md)
+
+    ---
+
+    Monitoring and readiness, engine failure handling, readmission and drains, serving saturation and retries, and durable control-plane state.
+
+</div>
 
 ## Terms
 
