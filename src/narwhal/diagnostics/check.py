@@ -435,6 +435,7 @@ async def _pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         "vllm_version": identity.vllm_version,
         "process_start_time_seconds": identity.process_start_time_seconds,
         "attestation_digest": payload["attestation_digest"],
+        **({"launch_digest": payload["launch_digest"]} if "launch_digest" in payload else {}),
         "contract_fingerprint": cfg.engine_contract.fingerprint(),
         "cache_layout_sources": {
             name: sources[name] for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
@@ -953,7 +954,9 @@ async def run(
                         generation_failures.add(f"{iid} process changed after directed KV probes")
                     for profile in store.profiles_for_engine(iid):
                         problem = generation_problem(
-                            iid, profile.generation_digest, str(current["attestation_digest"])
+                            iid,
+                            profile.generation_digest,
+                            str(current.get("launch_digest") or current["attestation_digest"]),
                         )
                         if problem:
                             generation_failures.add(problem)

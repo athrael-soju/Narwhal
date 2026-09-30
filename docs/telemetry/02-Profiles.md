@@ -15,10 +15,15 @@ The profile file declares:
 ```
 
 The profiler reads each engine's identity before and after its sweep. With
-`engine_contract`, it verifies attestation and saves the digest with the fit.
-The sample sidecar stores the full attestation response, including the process
-start, contract fields, and evidence sources. Without `engine_contract`, it
-saves a digest of the process identity from `/version` and `/metrics`.
+`engine_contract`, it verifies attestation and saves the attested launch digest
+with the fit. The launch digest covers the contract fields and the launch
+evidence: engine arguments without addresses and endpoints, image, packages,
+model configuration and revision, and launcher and launch-record hashes. An
+engine restarted from an identical launch keeps its digest. A sidecar without
+launch evidence supplies its attestation digest, which changes with each
+process. The sample sidecar stores the full attestation response. Without
+`engine_contract`, the profiler saves a digest of the process identity from
+`/version` and `/metrics`.
 
 Preflight and startup check every configured engine's profile against its
 live generation. Readmission and automatic recovery repeat this check before
@@ -47,7 +52,7 @@ When profiling engines independently with `narwhal-profile --only`, combine thei
 | Field                                          | JSON type         | Constraint                                                                                                         |
 | ---------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `iid`                                          | string            | Nonempty.                                                                                                          |
-| `generation_digest`                            | string            | SHA-256 digest of the verified attestation, or the process identity when the fleet has no declared contract.      |
+| `generation_digest`                            | string            | Attested launch digest; the attestation digest from a sidecar without launch evidence; or the process identity without a declared contract. |
 | `ttft_a`, `ttft_b`, `ttft_c`                   | number            | Nonnegative prefill quadratic coefficients.                                                                        |
 | `ttft_block_tokens`, `ttft_split` | integer and number, optional | Engine cache block size and the added prefill time for a prompt that ends inside a block past the first. Both are set when the fit measures a split step; otherwise both are `null`. |
 | `tpot_slope`                                   | number            | Strictly positive decode interval per resident KV token. A zero slope would price decode capacity as infinite.     |

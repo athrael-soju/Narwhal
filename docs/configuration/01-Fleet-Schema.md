@@ -182,6 +182,8 @@ Run one sidecar beside every contracted engine and configure the engine's `attes
 
 At startup, `narwhal-attest` reads `/version` and `process_start_time_seconds`, adds both values to `contract` and `sources`, then hashes the complete response into `attestation_digest`.
 
+A document with launch evidence also returns `launch` and a `launch_digest` over the contract and launch evidence. An engine restarted from an identical launch keeps its `launch_digest`, and saved profiles and first-token calibrations bind to it.
+
 If either identity value changes later, both sidecar routes return HTTP 503.
 
 After an engine process changes, verify its HTTP endpoints and restart the sidecar through its configured process manager so the new instance binds to the new process identity.

@@ -1518,7 +1518,7 @@ async def run(
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
                 )
-                if generation.digest != current.digest:
+                if generation.process_digest != current.process_digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")
                 profile = replace(profile, generation_digest=generation.digest)
                 problems = decode_evidence_problems(

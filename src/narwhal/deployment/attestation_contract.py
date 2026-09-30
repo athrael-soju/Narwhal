@@ -575,12 +575,40 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     if native:
         evidence.pop("image_digest")
     sources = {field: f"{path.resolve()} sha256:{digest(path)}" for field, path in evidence.items()}
+    launch = {
+        "args": launch_args(plan["args"]),
+        "image_id": "" if native else checked["image_id"],
+        "expected_packages": plan["expected_packages"],
+        "model_config_sha256": plan["model_config_sha256"],
+        "model_revision": plan.get("model_revision", ""),
+        "launch_sha256": plan.get("launch_sha256", ""),
+        "launcher_sha256": plan.get("launcher_sha256", ""),
+        "cache_capture_sha256": plan.get("cache_capture_sha256", ""),
+    }
     return {
         "schema": "narwhal.attestation",
         "schema_version": 1,
         "contract": contract,
         "sources": sources,
+        "launch": launch,
     }
+
+
+# Per-launch addresses and endpoints; the flags stay, their values do not.
+_PER_LAUNCH_VALUES = frozenset(("--host", "--port", "--served-model-name", "--kv-events-config"))
+
+
+def launch_args(args: list[str]) -> list[str]:
+    """Return engine arguments without per-launch addresses and endpoints."""
+    kept: list[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        kept.append(arg)
+        skip = arg in _PER_LAUNCH_VALUES
+    return kept
 
 
 def generate(run: Path, startup_log: Path) -> Path:

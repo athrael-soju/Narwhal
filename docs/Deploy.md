@@ -61,7 +61,7 @@ Repeat work when its measured input changes:
 | Offered rate or request count within the profiled workload range | Run the next trial point after router drain. Keep the engine profiles, fabric samples, and full preflight. |
 | SLO or first-token deadline | `narwhal-check` tests the revised limits against saved profiles and live handoffs before the router loads the edited fleet. |
 | Router restart with the same fleet document | Narwhal checks saved profiles and configured first-token calibration against the live engine generations before the restarted router accepts traffic. |
-| Engine restart with the same launch plan | Capture its live cache and attestation, profile the new generation, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), and run full preflight. Recalculate its fabric budget when the captured geometry changes. |
+| Engine restart with the same launch plan | Capture its live cache and attestation, then run full preflight. Saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) remain valid while the attested launch digest is unchanged. Recalculate its fabric budget when the captured geometry changes. |
 | Fabric route, host assignment, or transport | Measure the affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline), then exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index

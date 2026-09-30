@@ -2,7 +2,7 @@
 
 `narwhal-profile --fleet PATH` measures live engines into the fleet's `profiles.path`, refits TTFT from retained samples, or merges separately measured role mixes. Every mode writes a profile store and a sidecar at the same path with its suffix replaced by `.samples.json`.
 
-Live sweeps bind each fit to the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when `engine_contract` is configured, or to the live process identity otherwise, and retain that evidence with the raw observations in the `.samples.json` sidecar.
+Live sweeps bind each fit to the attested launch from the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when `engine_contract` is configured, or to the live process identity otherwise, and retain that evidence with the raw observations in the `.samples.json` sidecar.
 
 Live sweeps measure engines on separate devices at the same time. Engines that share a `shared_device.group` measure one after another, as do all engines under `--colocated`.
 

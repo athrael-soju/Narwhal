@@ -21,9 +21,10 @@ resource limits, and log locations. Narwhal reports when a process can be
 stopped; the deployment's process manager stops and starts it.
 
 Keep external admission closed during replacement and profile activation.
-Readmission rejects missing profiles and profiles bound to a previous engine
-generation. The `profile generation` check compares every loaded profile
-variant with the verified live generation. The separate `generation` check
+Readmission rejects missing profiles and profiles bound to a different
+engine launch. The `profile generation` check compares every loaded profile
+variant with the verified live generation; an engine restarted from an
+identical attested launch keeps its profiles. The separate `generation` check
 sends a completion request directly to the engine.
 
 After replacing an engine, [activate fresh profiles while preserving its
