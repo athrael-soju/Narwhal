@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/athrael-soju/Narwhal/compare/v0.3.2...v0.4.0) (2026-10-01)
+
+
+### Features
+
+* cache-aware placement ([#227](https://github.com/athrael-soju/Narwhal/issues/227)) ([d256647](https://github.com/athrael-soju/Narwhal/commit/d256647a116ade0a1a26f3e0980df184a42a4313))
+
 ## [0.3.2](https://github.com/athrael-soju/Narwhal/compare/v0.3.1...v0.3.2) (2026-09-30)
 
 
