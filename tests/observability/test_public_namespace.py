@@ -87,6 +87,17 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(names)
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
 
+    async def test_flip_counters_start_at_zero_for_every_caller(self):
+        """Role-change counters exist before the first flip, so increase() counts it."""
+        response = await self.client.get("/metrics")
+        for by, to in (
+            ("reactive", "prefill"),
+            ("reactive", "decode"),
+            ("decode_floor", "decode"),
+            ("floor_recovery", "prefill"),
+        ):
+            self.assertIn(f'narwhal_flips_total{{to="{to}",by="{by}"}} 0', response.text)
+
     async def test_lifecycle_state_metric_reports_each_engine(self):
         """Each engine exports its current lifecycle state, including a blocked recovery."""
         self.router.lifecycle.records["p"] = DrainRecord(
@@ -242,6 +253,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
         elements = dashboard["spec"]["elements"]
         table = elements["panel-7"]["spec"]
+        for query in table["data"]["spec"]["queries"]:
+            self.assertEqual(query["spec"]["query"]["spec"].get("format"), "table")
         state = next(
             query["spec"]["query"]["spec"]["expr"]
             for query in table["data"]["spec"]["queries"]
@@ -259,6 +272,14 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             'narwhal_resident_requests{job="narwhal-router",instance=~"$router",iid=~"$iid",phase="prefill"}',
         ):
             self.assertIn(source, state)
+        # An aggregated engine holds both roles and serves both phases.
+        self.assertIn("unless on(iid) (count by(iid) (count by(iid, role) (", state)
+        overrides = {
+            override["matcher"]["options"]: override["properties"]
+            for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+        }
+        for column in ("Resident", "vLLM running"):
+            self.assertIn({"id": "fieldMinMax", "value": True}, overrides[column])
         mappings = next(
             override["properties"][0]["value"][0]["options"]
             for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
@@ -302,7 +323,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(roles[str(code)]["color"], table_colors[name])
 
     def test_headline_row_reports_goodput_and_latency_against_the_slo(self):
-        """The first row divides SLO-met completions by offers and latency p95 by its SLO."""
+        """The first row reports goodput over ended requests and p95 latency against the SLO."""
         dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
         elements = dashboard["spec"]["elements"]
         row = sorted(
@@ -323,14 +344,68 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             return {spec["legendFormat"]: spec["expr"] for spec in specs}
 
         goodput = expressions(row[0][1])["Within SLO"]
-        self.assertIn("narwhal_slo_met_total", goodput.split(" / ")[0])
-        self.assertIn("narwhal_offered_total", goodput.split(" / ")[1])
+        met, ended = goodput.split(" / ", 1)
+        self.assertIn("narwhal_slo_met_total", met)
+        for outcome in ("served", "failed", "refused", "rejected", "expired", "cancelled"):
+            self.assertIn(f"narwhal_{outcome}_total", ended)
+        self.assertNotIn("narwhal_offered_total", ended)
         for _, name in row:
             self.assertEqual(len(expressions(name)), 2)
+        # Ratios and percentiles summarise the displayed interval.
+        for _, name in row[:4]:
+            for expr in expressions(name).values():
+                self.assertIn("[$__range]", expr)
+                self.assertNotIn("$__rate_interval", expr)
         for (_, name), metric in zip(row[2:4], ("ttft", "tpot"), strict=True):
             share = expressions(name)["Of SLO"]
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
+        self.assertTrue(expressions(row[4][1])["Flips"].startswith("round(sum(increase("))
+
+    def test_prompt_token_rates_exclude_kv_transfer(self):
+        """Prompt token rates count tokens each engine prefilled itself."""
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        elements = dashboard["spec"]["elements"]
+        throughput = next(
+            query["spec"]["query"]["spec"]["expr"]
+            for query in elements["panel-49"]["spec"]["data"]["spec"]["queries"]
+            if query["spec"]["query"]["spec"]["legendFormat"] == "Prefill/s"
+        )
+        tokens = next(
+            query["spec"]["query"]["spec"]["expr"]
+            for query in elements["panel-7"]["spec"]["data"]["spec"]["queries"]
+            if query["spec"]["refId"] == "T"
+        )
+        for expr in (throughput, tokens):
+            local, _ = expr.split(" or sum by(iid) (rate(vllm:prompt_tokens_total{", 1)
+            self.assertIn('source=~"local_compute|local_cache_hit"', local)
+            self.assertNotIn("external_kv_transfer", expr)
+        decode, prefill = tokens.split(" or ((", 1)
+        self.assertIn("vllm:generation_tokens_total", decode)
+        self.assertIn('role="decode"', decode)
+        self.assertIn('role="prefill"', prefill)
+
+    def test_alert_history_timeline_and_outcome_markers(self):
+        """Fleet events keeps firing history, and Request outcomes marks alert periods."""
+        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        events = dashboard["spec"]["elements"]["panel-37"]["spec"]
+        self.assertEqual(events["vizConfig"]["kind"], "state-timeline")
+        query = events["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]
+        self.assertTrue(query["range"])
+        self.assertIn('severity="page"', query["expr"])
+        self.assertIn('severity="warn"', query["expr"])
+        outcomes = dashboard["spec"]["elements"]["panel-11"]["spec"]["id"]
+        markers = {
+            annotation["spec"]["name"]: annotation["spec"]
+            for annotation in dashboard["spec"]["annotations"]
+            if annotation["spec"]["name"].startswith("Narwhal")
+        }
+        self.assertEqual(set(markers), {"Narwhal warnings", "Narwhal pages"})
+        for name, severity in (("Narwhal warnings", "warn"), ("Narwhal pages", "page")):
+            expr = markers[name]["query"]["spec"]["expr"]
+            self.assertEqual(markers[name]["filter"], {"exclude": False, "ids": [outcomes]})
+            self.assertIn(f'severity="{severity}"', expr)
+            self.assertIn("unless", expr)
 
     def test_request_outcomes_plot_every_terminal_counter_from_zero(self):
         """Each terminal counter has its own unstacked series beside offered."""
@@ -414,7 +489,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
         response = await self.client.get("/metrics")
         self.assertIn("narwhal_flip_reversals_total 0\n", response.text)
-        self.assertNotIn("narwhal_flips_total{to=", response.text)
+        self.assertNotIn('by="test:controller"', response.text)
+        self.assertIn('narwhal_flips_total{to="decode",by="reactive"} 0\n', response.text)
         self.assertIn('narwhal_flip_inflight_total{phase="decode"} 0\n', response.text)
 
     async def test_flip_refusals_outlive_the_twenty_record_state_window(self):

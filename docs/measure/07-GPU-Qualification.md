@@ -134,7 +134,7 @@ The private `benchmark-plan-qualified.json` sets:
 | Collector scrape coverage | Whole run | Whole run |
 | Collector client and journal counts | Matched | Matched |
 | Collector role timeline | Every role change | Every role change |
-| Collector diagnostics | One `counter_missing` for `narwhal_flips_total`, a series first exported at the first role change | Zero |
+| Collector diagnostics | One `counter_missing` for `narwhal_flips_total`, a series the router then exported only after the first role change | Zero |
 
 Grafana dashboard coverage begins partway through the 0.5 request/s point.
 

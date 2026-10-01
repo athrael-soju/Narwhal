@@ -57,4 +57,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-[![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)
+[![Next: Read the dashboard](https://img.shields.io/badge/next-Read%20the%20dashboard-0f766e)](05-Dashboard.md)

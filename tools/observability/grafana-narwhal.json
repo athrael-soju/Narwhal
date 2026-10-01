@@ -27,6 +27,78 @@
                         "type": "dashboard"
                     }
                 }
+            },
+            {
+                "kind": "AnnotationQuery",
+                "spec": {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "query": {
+                        "kind": "prometheus",
+                        "spec": {
+                            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+                            "step": "15s",
+                            "titleFormat": "{{alertname}}",
+                            "textFormat": "{{severity}} {{iid}}",
+                            "useValueForTime": false
+                        }
+                    },
+                    "enable": true,
+                    "hide": false,
+                    "iconColor": "#C8963E",
+                    "name": "Narwhal warnings",
+                    "filter": {
+                        "exclude": false,
+                        "ids": [
+                            11
+                        ]
+                    },
+                    "legacyOptions": {
+                        "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+                        "step": "15s",
+                        "titleFormat": "{{alertname}}",
+                        "textFormat": "{{severity}} {{iid}}",
+                        "useValueForTime": false
+                    }
+                }
+            },
+            {
+                "kind": "AnnotationQuery",
+                "spec": {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "query": {
+                        "kind": "prometheus",
+                        "spec": {
+                            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+                            "step": "15s",
+                            "titleFormat": "{{alertname}}",
+                            "textFormat": "{{severity}} {{iid}}",
+                            "useValueForTime": false
+                        }
+                    },
+                    "enable": true,
+                    "hide": false,
+                    "iconColor": "#D44A3A",
+                    "name": "Narwhal pages",
+                    "filter": {
+                        "exclude": false,
+                        "ids": [
+                            11
+                        ]
+                    },
+                    "legacyOptions": {
+                        "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+                        "step": "15s",
+                        "titleFormat": "{{alertname}}",
+                        "textFormat": "{{severity}} {{iid}}",
+                        "useValueForTime": false
+                    }
+                }
             }
         ],
         "cursorSync": "Crosshair",
@@ -250,7 +322,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "count((max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * ((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))) >= 5) or vector(0)",
+                                                "expr": "count((max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))) >= 5) or vector(0)",
                                                 "instant": true,
                                                 "legendFormat": "Out of service",
                                                 "range": false
@@ -271,7 +343,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(increase(narwhal_flips_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))",
+                                                "expr": "round(sum(increase(narwhal_flips_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))",
                                                 "instant": true,
                                                 "legendFormat": "Flips",
                                                 "range": false
@@ -399,7 +471,7 @@
                 "spec": {
                     "id": 5,
                     "title": "Goodput",
-                    "description": "Share of offered requests completed within both the TTFT and TPOT SLOs, and those requests per second.",
+                    "description": "Share of requests that ended in the displayed interval within both the TTFT and TPOT SLOs, and the number of those requests. Refused, rejected, failed, expired and cancelled requests count as misses.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -412,10 +484,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
+                                                "expr": "sum(increase(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) / (sum(increase(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))",
+                                                "instant": true,
                                                 "legendFormat": "Within SLO",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -433,10 +505,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
-                                                "legendFormat": "Rate",
-                                                "range": true
+                                                "expr": "round(sum(increase(narwhal_slo_met_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))",
+                                                "instant": true,
+                                                "legendFormat": "Requests",
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -542,16 +614,12 @@
                                     {
                                         "matcher": {
                                             "id": "byName",
-                                            "options": "Rate"
+                                            "options": "Requests"
                                         },
                                         "properties": [
                                             {
                                                 "id": "unit",
-                                                "value": "reqps"
-                                            },
-                                            {
-                                                "id": "decimals",
-                                                "value": 1
+                                                "value": "short"
                                             },
                                             {
                                                 "id": "color",
@@ -586,7 +654,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(vllm:prompt_tokens_total{job=\"engines\"}[$__rate_interval]))",
+                                                "expr": "sum(sum by(iid) (rate(vllm:prompt_tokens_by_source_total{job=\"engines\",source=~\"local_compute|local_cache_hit\"}[$__rate_interval])) or sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\"}[$__rate_interval])))",
                                                 "instant": false,
                                                 "legendFormat": "Prefill/s",
                                                 "range": true
@@ -703,7 +771,7 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * ((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
+                                                "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
                                                 "format": "table",
                                                 "instant": true,
                                                 "legendFormat": "",
@@ -794,7 +862,8 @@
                                                 "expr": "sum by(iid) (rate(vllm:prefix_cache_hits_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) / sum by(iid) (rate(vllm:prefix_cache_queries_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))",
                                                 "instant": true,
                                                 "legendFormat": "",
-                                                "range": false
+                                                "range": false,
+                                                "format": "table"
                                             }
                                         },
                                         "datasource": {
@@ -812,10 +881,11 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "(sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (sum by(iid) (rate(vllm:generation_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
+                                                "expr": "(sum by(iid) (rate(vllm:generation_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or ((sum by(iid) (rate(vllm:prompt_tokens_by_source_total{job=\"engines\",iid=~\"$iid\",source=~\"local_compute|local_cache_hit\"}[$__rate_interval])) or sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
                                                 "instant": true,
                                                 "legendFormat": "",
-                                                "range": false
+                                                "range": false,
+                                                "format": "table"
                                             }
                                         },
                                         "datasource": {
@@ -1103,6 +1173,10 @@
                                             {
                                                 "id": "min",
                                                 "value": 0
+                                            },
+                                            {
+                                                "id": "fieldMinMax",
+                                                "value": true
                                             }
                                         ]
                                     },
@@ -1130,6 +1204,10 @@
                                             {
                                                 "id": "min",
                                                 "value": 0
+                                            },
+                                            {
+                                                "id": "fieldMinMax",
+                                                "value": true
                                             }
                                         ]
                                     },
@@ -2318,7 +2396,7 @@
                 "spec": {
                     "id": 37,
                     "title": "Fleet events",
-                    "description": "Firing Narwhal alerts at page and warning severity, with the affected engine when the alert carries an iid label.",
+                    "description": "Narwhal alerts that fired in the displayed interval, one row per alert and engine: red while a page alert fires, amber while a warning fires. The Router block in the headline row counts the alerts firing now.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -2331,11 +2409,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity!=\"info\"}",
-                                                "format": "table",
-                                                "instant": true,
-                                                "legendFormat": "",
-                                                "range": false
+                                                "expr": "max by (alertname, iid) ((2 * ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"}) or ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"})",
+                                                "instant": false,
+                                                "legendFormat": "{{alertname}} {{iid}}",
+                                                "range": true
                                             }
                                         },
                                         "datasource": {
@@ -2347,87 +2424,59 @@
                                     }
                                 }
                             ],
-                            "transformations": [
-                                {
-                                    "kind": "organize",
-                                    "spec": {
-                                        "id": "organize",
-                                        "options": {
-                                            "includeByName": {
-                                                "alertname": true,
-                                                "iid": true,
-                                                "severity": true
-                                            },
-                                            "indexByName": {
-                                                "alertname": 0,
-                                                "iid": 2,
-                                                "severity": 1
-                                            },
-                                            "renameByName": {
-                                                "alertname": "Alert",
-                                                "iid": "Engine",
-                                                "severity": "Severity"
-                                            }
-                                        }
-                                    }
-                                }
-                            ],
+                            "transformations": [],
                             "queryOptions": {}
                         }
                     },
                     "vizConfig": {
-                        "kind": "table",
+                        "kind": "state-timeline",
                         "spec": {
                             "pluginVersion": "",
                             "options": {
-                                "cellHeight": "sm",
-                                "footer": {
-                                    "show": false
+                                "alignValue": "center",
+                                "legend": {
+                                    "displayMode": "list",
+                                    "placement": "bottom",
+                                    "showLegend": false
                                 },
-                                "showHeader": true
+                                "mergeValues": true,
+                                "rowHeight": 0.8,
+                                "showValue": "never",
+                                "tooltip": {
+                                    "mode": "single"
+                                }
                             },
                             "fieldConfig": {
                                 "defaults": {
-                                    "noValue": "No data",
-                                    "custom": {
-                                        "cellOptions": {
-                                            "type": "auto"
-                                        },
-                                        "minWidth": 70
-                                    }
-                                },
-                                "overrides": [
-                                    {
-                                        "matcher": {
-                                            "id": "byName",
-                                            "options": "Severity"
-                                        },
-                                        "properties": [
-                                            {
-                                                "id": "mappings",
-                                                "value": [
-                                                    {
-                                                        "options": {
-                                                            "page": {
-                                                                "color": "#EF8585",
-                                                                "text": "Page"
-                                                            },
-                                                            "warn": {
-                                                                "color": "#E9B96E",
-                                                                "text": "Warning"
-                                                            }
-                                                        },
-                                                        "type": "value"
-                                                    }
-                                                ]
-                                            },
-                                            {
-                                                "id": "custom.width",
-                                                "value": 90
+                                    "unit": "short",
+                                    "min": 0,
+                                    "mappings": [
+                                        {
+                                            "type": "value",
+                                            "options": {
+                                                "1": {
+                                                    "text": "Warning",
+                                                    "color": "#C8963E"
+                                                },
+                                                "2": {
+                                                    "text": "Page",
+                                                    "color": "#D44A3A"
+                                                }
                                             }
-                                        ]
-                                    }
-                                ]
+                                        }
+                                    ],
+                                    "color": {
+                                        "mode": "palette-classic"
+                                    },
+                                    "custom": {
+                                        "fillOpacity": 75,
+                                        "lineWidth": 0,
+                                        "showPoints": "never",
+                                        "spanNulls": false
+                                    },
+                                    "noValue": "No alerts in this window"
+                                },
+                                "overrides": []
                             }
                         }
                     }
@@ -2502,7 +2551,7 @@
                                     ],
                                     "displayMode": "table",
                                     "placement": "bottom",
-                                    "showLegend": true
+                                    "showLegend": false
                                 },
                                 "tooltip": {
                                     "mode": "multi",
@@ -2582,7 +2631,7 @@
                 "spec": {
                     "id": 60,
                     "title": "Load",
-                    "description": "Share of offered requests refused at admission or ended by failure or deadline expiry, and the arrival rate. Request outcomes below splits them by outcome.",
+                    "description": "Share of requests that ended in the displayed interval refused or rejected at admission or by failure or deadline expiry, and the number of requests offered. Request outcomes below plots each outcome over time.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -2595,10 +2644,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "(sum(rate(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])) + sum(rate(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))) / sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
+                                                "expr": "(sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / (sum(increase(narwhal_served_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])) + sum(increase(narwhal_cancelled_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))",
+                                                "instant": true,
                                                 "legendFormat": "Unserved",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -2616,10 +2665,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "sum(rate(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
-                                                "instant": false,
+                                                "expr": "round(sum(increase(narwhal_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))",
+                                                "instant": true,
                                                 "legendFormat": "Offered",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -2730,11 +2779,7 @@
                                         "properties": [
                                             {
                                                 "id": "unit",
-                                                "value": "reqps"
-                                            },
-                                            {
-                                                "id": "decimals",
-                                                "value": 1
+                                                "value": "short"
                                             },
                                             {
                                                 "id": "color",
@@ -2756,7 +2801,7 @@
                 "spec": {
                     "id": 61,
                     "title": "TTFT p95",
-                    "description": "95th-percentile TTFT on the selected router as a share of its SLO, and its value.",
+                    "description": "95th-percentile TTFT on the selected router over the displayed interval, as a share of its SLO and in seconds.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -2769,10 +2814,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
-                                                "instant": false,
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
+                                                "instant": true,
                                                 "legendFormat": "Of SLO",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -2790,10 +2835,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))))",
-                                                "instant": false,
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
+                                                "instant": true,
                                                 "legendFormat": "p95",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -2930,7 +2975,7 @@
                 "spec": {
                     "id": 62,
                     "title": "TPOT p95",
-                    "description": "95th-percentile TPOT on the selected router as a share of its SLO, and its value.",
+                    "description": "95th-percentile TPOT on the selected router over the displayed interval, as a share of its SLO and in seconds.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",
@@ -2943,10 +2988,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
-                                                "instant": false,
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) / max(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
+                                                "instant": true,
                                                 "legendFormat": "Of SLO",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -2964,10 +3009,10 @@
                                             "kind": "prometheus",
                                             "spec": {
                                                 "editorMode": "code",
-                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))))",
-                                                "instant": false,
+                                                "expr": "max(histogram_quantile(0.95, sum by (instance, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
+                                                "instant": true,
                                                 "legendFormat": "p95",
-                                                "range": true
+                                                "range": false
                                             }
                                         },
                                         "datasource": {
@@ -3200,7 +3245,7 @@
                         "spec": {
                             "x": 0,
                             "y": 8,
-                            "width": 24,
+                            "width": 16,
                             "height": 10,
                             "element": {
                                 "kind": "ElementReference",
@@ -3211,9 +3256,35 @@
                     {
                         "kind": "GridLayoutItem",
                         "spec": {
+                            "x": 16,
+                            "y": 8,
+                            "width": 8,
+                            "height": 10,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-37"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
                             "x": 0,
                             "y": 18,
-                            "width": 24,
+                            "width": 12,
+                            "height": 8,
+                            "element": {
+                                "kind": "ElementReference",
+                                "name": "panel-10"
+                            }
+                        }
+                    },
+                    {
+                        "kind": "GridLayoutItem",
+                        "spec": {
+                            "x": 12,
+                            "y": 18,
+                            "width": 12,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
@@ -3304,37 +3375,11 @@
                         "spec": {
                             "x": 0,
                             "y": 50,
-                            "width": 12,
-                            "height": 8,
-                            "element": {
-                                "kind": "ElementReference",
-                                "name": "panel-10"
-                            }
-                        }
-                    },
-                    {
-                        "kind": "GridLayoutItem",
-                        "spec": {
-                            "x": 12,
-                            "y": 50,
-                            "width": 12,
-                            "height": 8,
-                            "element": {
-                                "kind": "ElementReference",
-                                "name": "panel-49"
-                            }
-                        }
-                    },
-                    {
-                        "kind": "GridLayoutItem",
-                        "spec": {
-                            "x": 0,
-                            "y": 58,
                             "width": 24,
                             "height": 8,
                             "element": {
                                 "kind": "ElementReference",
-                                "name": "panel-37"
+                                "name": "panel-49"
                             }
                         }
                     }

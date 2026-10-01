@@ -516,11 +516,16 @@ def _render_availability(state: dict) -> list[str]:
     return out
 
 
+# Every caller and target pair exists from startup, so the first role change counts in increase().
+FLIP_KEYS = ("decode_floor:decode", "floor_recovery:prefill", "reactive:decode", "reactive:prefill")
+
+
 def _render_controller(state: dict) -> list[str]:
     """Render role changes and controller diagnostics."""
     control = state.get("control") or {}
+    flips = dict.fromkeys(FLIP_KEYS, 0) | (control.get("flips") or {})
     flip_samples: list[tuple[Mapping[str, str], float | int]] = []
-    for key, count in sorted((control.get("flips") or {}).items()):
+    for key, count in sorted(flips.items()):
         by, to = key.rsplit(":", 1)
         flip_samples.append(({"to": to, "by": by}, count))
 

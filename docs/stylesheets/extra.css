@@ -284,3 +284,28 @@
     flex-direction: column;
   }
 }
+
+.md-typeset .narwhal-panel-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1em 0;
+}
+
+.md-typeset .narwhal-panel-row > p {
+  flex: 1 1 0;
+  margin: 0;
+}
+
+.md-typeset .narwhal-panel-row img {
+  width: 100%;
+}
+
+.md-typeset .narwhal-panel-row.wide-first > p:first-child {
+  flex-grow: 2;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .narwhal-panel-row {
+    flex-direction: column;
+  }
+}

@@ -27,6 +27,12 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
     Reach the dashboard from a workstation and isolate a second monitoring stack.
 
+-   [Read the dashboard](observability/05-Dashboard.md)
+
+    ---
+
+    Read the SLO headline, engine states, fleet events, role history, outcomes, latency, and pool panels.
+
 -   [GPU telemetry, alerts, and recovery](observability/03-Telemetry-and-Recovery.md)
 
     ---
