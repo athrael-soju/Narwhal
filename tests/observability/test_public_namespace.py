@@ -361,6 +361,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
         self.assertTrue(expressions(row[4][1])["Flips"].startswith("round(sum(increase("))
+        # Latency values pick their own precision so milliseconds fit beside the share.
+        for _, name in row[2:4]:
+            config = elements[name]["spec"]["vizConfig"]["spec"]["fieldConfig"]
+            self.assertNotIn("decimals", config["defaults"])
+            p95 = next(o for o in config["overrides"] if o["matcher"]["options"] == "p95")
+            self.assertNotIn("decimals", [prop["id"] for prop in p95["properties"]])
 
     def test_prompt_token_rates_exclude_kv_transfer(self):
         """Prompt token rates count tokens each engine prefilled itself."""

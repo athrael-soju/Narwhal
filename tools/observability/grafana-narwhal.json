@@ -2880,7 +2880,6 @@
                             "fieldConfig": {
                                 "defaults": {
                                     "unit": "short",
-                                    "decimals": 2,
                                     "noValue": "No data",
                                     "color": {
                                         "mode": "fixed",
@@ -2950,10 +2949,6 @@
                                             {
                                                 "id": "unit",
                                                 "value": "s"
-                                            },
-                                            {
-                                                "id": "decimals",
-                                                "value": 2
                                             },
                                             {
                                                 "id": "color",
@@ -3054,7 +3049,6 @@
                             "fieldConfig": {
                                 "defaults": {
                                     "unit": "short",
-                                    "decimals": 2,
                                     "noValue": "No data",
                                     "color": {
                                         "mode": "fixed",
@@ -3124,10 +3118,6 @@
                                             {
                                                 "id": "unit",
                                                 "value": "s"
-                                            },
-                                            {
-                                                "id": "decimals",
-                                                "value": 1
                                             },
                                             {
                                                 "id": "color",

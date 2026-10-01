@@ -305,6 +305,16 @@
 }
 
 @media screen and (max-width: 44.9375em) {
+  .md-typeset .narwhal-panel-row.stats {
+    flex-flow: row wrap;
+  }
+
+  .md-typeset .narwhal-panel-row.stats > p {
+    flex: 1 1 40%;
+  }
+}
+
+@media screen and (max-width: 44.9375em) {
   .md-typeset .narwhal-panel-row {
     flex-direction: column;
   }

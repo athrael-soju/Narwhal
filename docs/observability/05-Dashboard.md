@@ -8,6 +8,22 @@ The **Narwhal Orchestrator** dashboard reads from top to bottom: the SLO headlin
 
 ## Headline row
 
+<div class="narwhal-panel-row stats" markdown>
+
+![Goodput block with 100.0% within SLO and 2.94K requests.](../assets/observability/headline-goodput.png)
+
+![Load block with 0.0% unserved and 2.87K offered.](../assets/observability/headline-load.png)
+
+![TTFT p95 block at 15% of the SLO, 306 ms.](../assets/observability/headline-ttft-p95.png)
+
+![TPOT p95 block at 34% of the SLO, 15.4 ms.](../assets/observability/headline-tpot-p95.png)
+
+![Engines block with no engines out of service and 4 flips.](../assets/observability/headline-engines.png)
+
+![Router block with admission Ready and no firing alerts.](../assets/observability/headline-router.png)
+
+</div>
+
 Each block pairs a status value with a context value. The status value turns green, amber or red against its target; the context value stays neutral. Goodput, Load, TTFT p95 and TPOT p95 cover the displayed interval, and the charts below show how each changes within it. Engines and Router show the current state, and **Flips** counts role flips in the displayed interval.
 
 | Block | Status value | Green | Amber | Red | Context value |
