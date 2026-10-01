@@ -91,23 +91,73 @@ The inference probe runs a prefill leg and a decode leg:
 
 ### Peer memory release
 
-Engines that share a host and exchange KV through CUDA IPC map each other's KV memory. A stopped engine's GPU memory stays allocated while any peer holds that mapping, and the engine can restart on its GPU once every peer releases it.
+Engines that share a host and exchange KV through CUDA IPC map each other's KV memory.
 
-Release takes three parts:
+A stopped engine's GPU memory stays allocated while a host peer holds that mapping.
 
 | Part | Behavior |
 | --- | --- |
-| vLLM NIXL connector | A consume request evicts each producer that has been idle for longer than `engine_ttl` and removes its NIXL agent. |
-| Engine launcher | For engines with CUDA IPC peers, sets `engine_ttl` to 60 seconds and `UCX_CUDA_IPC_CACHE` to `n`. A `UCX_CUDA_IPC_CACHE` value in `runtime.environment` takes precedence. |
-| UCX 1.22 or later in the engine image | With `UCX_CUDA_IPC_CACHE=n`, unmaps the producer's memory when NIXL removes its agent. |
+| vLLM NIXL connector | A consume request evicts each producer idle for longer than `engine_ttl` and removes its NIXL agent. |
+| Engine launcher | Sets `engine_ttl` to 60 seconds for engines with CUDA IPC peers. |
+| Engine launcher | Sets `UCX_CUDA_IPC_CACHE` to `n` for engines with CUDA IPC peers, unless `runtime.environment` sets it. |
+| UCX 1.22 or later in the engine image | Unmaps the producer's memory when NIXL removes its agent, with the CUDA IPC cache off. |
+| Router peer release rounds | Send each live KV consumer a transfer probe from another live producer. |
+| Engine startup | Waits up to 180 seconds for its GPU memory before vLLM measures it. |
 
-The image check records the UCX version bundled with the image's NIXL build in `checked.json` as `ucx_version`, and records `peer_release: true` when the engine has no CUDA IPC peers or meets both UCX conditions. The attestation reports both values under `launch`.
+`launch.peer_release` in an engine's attestation reports whether that engine releases a stopped peer's memory:
 
-Under `recovery.engine_restart_policy` `individual`, the router sends peer release rounds for each ejected engine and for each engine whose lifecycle drain has completed. A round sends one transfer probe through every live engine that can consume KV, from another live producer. Rounds run 65, 125, 245, 485, 965, 1925 and 3845 seconds after the ejection or drain while the engine stays out of placement, so later rounds also cover longer backend `engine_ttl` values. Consumers that a round misses receive another probe 5 seconds later. `/narwhal/state` reports each engine's rounds in [`peer_release`](../http-api/05-Live-State.md#peer_release).
+| Engine | `peer_release` |
+| --- | --- |
+| Engine without CUDA IPC peers | `true` |
+| UCX 1.22 or later with the CUDA IPC cache off | `true` |
+| Any other CUDA IPC engine | `false` |
 
-A restarted serving engine waits before vLLM measures free GPU memory. Every 5 seconds for up to 180 seconds, it compares free memory with the share that `--gpu-memory-utilization` requests, and logs `waiting for KV peers to release it` while memory is short. A restart issued right after a crash therefore starts once the first release round frees the memory.
+The image check records the same value in `checked.json`, with the bundled UCX version in `ucx_version`.
 
-With `peer_release: false`, peers keep the stopped engine's memory mapped until they restart. `narwhal-check` warns about host-sharing engines whose attestation lacks `launch.peer_release: true`, and a [wave restart](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) recovers the crashed engine.
+#### Release rounds
+
+Under `recovery.engine_restart_policy` `individual`, the router schedules release rounds for each engine out of placement:
+
+| Engine state | Rounds start |
+| --- | --- |
+| Ejected | At ejection |
+| Lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked` | At each change of state |
+
+| Round | Seconds after the start |
+| :---: | :---: |
+| 1 | 65 |
+| 2 | 125 |
+| 3 | 245 |
+| 4 | 485 |
+| 5 | 965 |
+| 6 | 1925 |
+| 7 | 3845 |
+
+| Probe outcome | Next attempt |
+| --- | --- |
+| Producer or consumer leg failed | One retry 5 seconds later, through the next producer |
+| Zero other live producers for the consumer | Next round, with a warning in the router log |
+
+`/narwhal/state` reports each engine's rounds in [`peer_release`](../http-api/05-Live-State.md#peer_release).
+
+#### Startup wait
+
+A restarted serving engine polls free GPU memory every 5 seconds.
+
+It starts vLLM once free memory reaches the share that `--gpu-memory-utilization` requests, or after 180 seconds.
+
+While memory is short, the engine logs `waiting for KV peers to release it`.
+
+#### Whole-wave fallback
+
+`narwhal-check` warns about each host-sharing producer with a host peer in either case:
+
+| Host peer | Effect |
+| --- | --- |
+| Lacks `launch.peer_release: true` | Keeps the stopped producer's memory mapped |
+| Has zero other producers for its release probe | Receives zero release probes |
+
+A [wave restart](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) recovers a crashed engine in both cases.
 
 ### Last-engine protection
 

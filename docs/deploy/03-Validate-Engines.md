@@ -242,7 +242,7 @@ The check writes `checked.json`:
 | `prefix_caching`   | The resolved prefix-caching setting           |
 | `kv_events`        | The resolved cache-event endpoints, or `null` |
 | `ucx_version`      | UCX bundled with the image's NIXL, or `null`  |
-| `peer_release`     | `true` when peers release KV memory on stop   |
+| `peer_release`     | `true` when the engine releases a stopped peer's KV memory |
 | `image_id`         | The local image ID                            |
 
 A failed check names the failing package, tokenizer, or identity check.

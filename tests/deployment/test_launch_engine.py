@@ -418,6 +418,8 @@ class EngineLauncherTests(unittest.TestCase):
         self.assertTrue(releases_peers("2.0", "n"))
         self.assertFalse(releases_peers("1.22.0", None))
         self.assertFalse(releases_peers("unknown", "n"))
+        for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
+            self.assertIs(releases_peers("1.22.0", value), disabled)
 
     def test_launch_ports_and_shared_budget_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -128,7 +128,9 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
         version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
     except ValueError:
         return False
-    return version >= UCX_PEER_RELEASE and ipc_cache == "n"
+    # UCX reads "n", "no" (any case) and "0" as false.
+    disabled = ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
+    return version >= UCX_PEER_RELEASE and disabled
 
 
 def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:

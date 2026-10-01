@@ -73,7 +73,11 @@ class Report:
 async def colocated_restart_risk(
     cfg: FleetConfig, transport: httpx.AsyncBaseTransport | None = None
 ) -> str:
-    """Name host-sharing KV engines whose attestation reports no peer memory release."""
+    """Name host-sharing KV producers whose host peers cannot release their GPU memory.
+
+    A stopped producer's memory frees once every host peer that consumes KV attests peer
+    release and has another producer for its release probe.
+    """
     contract = cfg.engine_contract
     if cfg.engine_restart_policy != "individual" or contract is None or not contract.connector:
         return ""
@@ -81,7 +85,7 @@ async def colocated_restart_risk(
     for spec in cfg.engines:
         hosts.setdefault(urlsplit(spec.url).hostname or "", []).append(spec)
     shared = [spec for specs in hosts.values() if len(specs) > 1 for spec in specs]
-    held: list[str] = []
+    released: dict[str, bool] = {}
     async with httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport) as client:
         for spec in shared:
             release = None
@@ -90,13 +94,35 @@ async def colocated_restart_risk(
                     response = await client.get(spec.attestation_url)
                     response.raise_for_status()
                     release = response.json().get("launch", {}).get("peer_release")
-            if release is not True:
-                held.append(spec.iid)
-    if not held:
+            released[spec.iid] = release is True
+    unreleased: set[str] = set()
+    unprobed: set[str] = set()
+    for specs in hosts.values():
+        for stopped in specs:
+            if len(specs) < 2 or not can_produce(stopped):
+                continue
+            for peer in specs:
+                if peer is stopped or not can_consume(peer):
+                    continue
+                if not released[peer.iid]:
+                    unreleased.add(stopped.iid)
+                if not any(
+                    can_produce(other) and other.iid not in (stopped.iid, peer.iid)
+                    for other in cfg.engines
+                ):
+                    unprobed.add(stopped.iid)
+    causes = [
+        f"{', '.join(sorted(iids))} {cause}"
+        for iids, cause in (
+            (unreleased, "share a host with a KV consumer without attested peer release"),
+            (unprobed, "share a host with a KV consumer that has no other producer to probe"),
+        )
+        if iids
+    ]
+    if not causes:
         return ""
     return (
-        f"engines {', '.join(sorted(held))} share a host and exchange KV through device IPC "
-        "without attested peer release; peers keep a stopped engine's GPU memory mapped, "
+        f"engines {'; '.join(causes)}; that peer keeps a stopped engine's GPU memory mapped, "
         "so recover a crashed engine with a whole-wave restart"
     )
 

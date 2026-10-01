@@ -2,14 +2,15 @@
 
 A vLLM NIXL consumer keeps a producer's KV memory mapped until a consume request
 finds that producer idle for longer than the connector's `engine_ttl`. Each round
-sends one transfer probe through every live consumer.
+sends one transfer probe through every live consumer, from another live producer.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from ..engines.validation import can_consume, can_produce
@@ -20,48 +21,63 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("narwhal.peer_release")
 
-# Seconds after ejection or drain. The first round follows the launcher's 60 s engine_ttl;
-# the last follows vLLM's 3600 s default.
+# Seconds after the engine leaves placement. The first round follows the launcher's 60 s
+# engine_ttl; the last follows vLLM's 3600 s default.
 RELEASE_AFTER_S = (65.0, 125.0, 245.0, 485.0, 965.0, 1925.0, 3845.0)
-# Seconds between attempts for consumers a round missed; vLLM sends lease heartbeats at most
-# every 5 s.
+# Seconds before the one retry of a round's missed consumers; vLLM sends lease heartbeats at
+# most every 5 s.
 RETRY_AFTER_S = 5.0
+# Outcomes a retry within the round leaves unchanged.
+SETTLED = ("sent", "no producer", "no model")
+# Lifecycle states that hold an engine out of placement after its drain.
+RELEASED_STATES = ("drained", "deadline_exceeded", "validating", "blocked")
 
 
 class PeerRelease:
-    """Release-round schedule for each ejected or drained engine."""
+    """Release-round schedule for each engine out of placement."""
 
     def __init__(self, clock: Callable[[], float]) -> None:
         self._clock = clock
-        self._rounds: dict[str, tuple[float, int]] = {}
+        self._rounds: dict[str, tuple[str, float, int]] = {}
         self.tasks: set[asyncio.Task[dict[str, str]]] = set()
         self.missed: set[str] = set()
         self.retry_at = 0.0
 
-    def finish(self, task: asyncio.Task[dict[str, str]]) -> None:
-        """Keep consumers without a delivered probe for the next attempt."""
+    def track(self, released: Mapping[str, str]) -> None:
+        """Start an engine's schedule when it leaves placement or changes state."""
+        now = self._clock()
+        for iid in set(self._rounds) - set(released):
+            del self._rounds[iid]
+        for iid, reason in released.items():
+            current = self._rounds.get(iid)
+            if current is None or current[0] != reason:
+                self._rounds[iid] = (reason, now, 0)
+        if not released:
+            self.missed.clear()
+
+    def due(self) -> list[str]:
+        """Return engines with a due round and advance their schedules."""
+        now = self._clock()
+        due = []
+        for iid, (reason, since, done) in sorted(self._rounds.items()):
+            if done < len(RELEASE_AFTER_S) and now - since >= RELEASE_AFTER_S[done]:
+                self._rounds[iid] = (reason, since, done + 1)
+                due.append(iid)
+        return due
+
+    def finish(self, task: asyncio.Task[dict[str, str]], *, retry: bool) -> None:
+        """Keep a round's missed consumers for one retry."""
         if task.cancelled() or task.exception() is not None:
             return
-        self.missed = {iid for iid, outcome in task.result().items() if outcome != "sent"}
+        if retry:
+            self.missed = set()
+            return
+        self.missed = {iid for iid, outcome in task.result().items() if outcome not in SETTLED}
         self.retry_at = self._clock() + RETRY_AFTER_S
 
     def retry_due(self) -> bool:
-        """Return whether missed consumers are due another attempt."""
+        """Return whether missed consumers are due their retry."""
         return bool(self.missed) and self._clock() >= self.retry_at
-
-    def due(self, engines: Iterable[str]) -> list[str]:
-        """Return engines with a due round and advance their schedules."""
-        now = self._clock()
-        current = set(engines)
-        for iid in set(self._rounds) - current:
-            del self._rounds[iid]
-        due = []
-        for iid in sorted(current):
-            since, done = self._rounds.setdefault(iid, (now, 0))
-            if done < len(RELEASE_AFTER_S) and now - since >= RELEASE_AFTER_S[done]:
-                self._rounds[iid] = (since, done + 1)
-                due.append(iid)
-        return due
 
     def snapshot(self) -> dict[str, dict[str, float | int | None]]:
         """Completed rounds and seconds until the next round per engine."""
@@ -75,36 +91,40 @@ class PeerRelease:
                     else None
                 ),
             }
-            for iid, (since, done) in sorted(self._rounds.items())
+            for iid, (_, since, done) in sorted(self._rounds.items())
         }
 
 
-def released_engines(router: NarwhalRouter) -> set[str]:
-    """Return ejected engines and engines that a lifecycle drain released."""
-    held = {
-        iid
-        for iid, record in router.lifecycle.records.items()
-        if record.state not in ("active", "draining")
-    }
-    return set(router.scheduler.ejected) | held
+def released_engines(router: NarwhalRouter) -> dict[str, str]:
+    """Map each engine out of placement to its lifecycle state, or `ejected`."""
+    released = dict.fromkeys(router.scheduler.ejected, "ejected")
+    for iid, record in router.lifecycle.records.items():
+        if record.state in RELEASED_STATES:
+            released[iid] = record.state
+    return released
 
 
 def release_peers(router: NarwhalRouter) -> None:
-    """Start a due release round, or retry the consumers the last round missed."""
+    """Start a due release round, or the retry for the consumers a round missed."""
     release = router.peer_release
-    if router.cfg.engine_restart_policy != "individual" or release.tasks:
+    if router.cfg.engine_restart_policy != "individual":
         return
     released = released_engines(router)
-    gone = release.due(released)
+    release.track(released)
+    if release.tasks:
+        return
+    gone = release.due()
     only: set[str] | None = None
-    if not gone:
-        if not released or not release.retry_due():
-            return
+    if gone:
+        release.missed = set()
+    elif released and release.retry_due():
         gone, only = sorted(released), release.missed
+    else:
+        return
     task = asyncio.create_task(release_round(router, gone, only))
     release.tasks.add(task)
     task.add_done_callback(release.tasks.discard)
-    task.add_done_callback(release.finish)
+    task.add_done_callback(functools.partial(release.finish, retry=only is not None))
 
 
 async def release_round(
@@ -114,16 +134,16 @@ async def release_round(
     specs = {spec.iid: spec for spec in router.cfg.engines}
     live = [inst for inst in router.scheduler.live_instances() if inst.iid in specs]
     producers = [inst for inst in live if can_produce(specs[inst.iid])]
-    consumers = [
-        inst for inst in live if can_consume(specs[inst.iid]) and (only is None or inst.iid in only)
-    ]
+    consumers = [inst for inst in live if can_consume(specs[inst.iid])]
     deadline = max(router.cfg.first_token_timeout_s or 0.0, router.cfg.health_timeout_s)
+    # A retry takes the next producer in each consumer's rotation.
+    shift = 0 if only is None else 1
 
     async def probe(index: int, consumer_iid: str, url: str) -> str:
         others = [inst for inst in producers if inst.iid != consumer_iid]
         if not others:
             return "no producer"
-        producer = others[index % len(others)]
+        producer = others[(index + shift) % len(others)]
         result = await router.engines.probe_inference(
             url, prefill_url=producer.url, deadline_s=deadline
         )
@@ -139,17 +159,24 @@ async def release_round(
                 return f"{name} {leg.failed}"
         return "sent"
 
+    targets = [
+        (index, inst) for index, inst in enumerate(consumers) if only is None or inst.iid in only
+    ]
     answers = await asyncio.gather(
-        *(probe(index, inst.iid, inst.url) for index, inst in enumerate(consumers)),
+        *(probe(index, inst.iid, inst.url) for index, inst in targets),
         return_exceptions=True,
     )
     outcomes = {
         inst.iid: answer if isinstance(answer, str) else f"error {type(answer).__name__}"
-        for inst, answer in zip(consumers, answers, strict=True)
+        for (_, inst), answer in zip(targets, answers, strict=True)
     }
-    log.info(
-        "peer release for %s: %s",
-        ", ".join(gone),
-        ", ".join(f"{iid} {outcome}" for iid, outcome in outcomes.items()) or "no live consumer",
-    )
+    summary = ", ".join(f"{iid} {outcome}" for iid, outcome in outcomes.items())
+    if not outcomes or "no producer" in outcomes.values():
+        log.warning(
+            "peer release for %s: %s; recover with a whole-wave restart",
+            ", ".join(gone),
+            summary or "no live consumer",
+        )
+    else:
+        log.info("peer release for %s: %s", ", ".join(gone), summary)
     return outcomes

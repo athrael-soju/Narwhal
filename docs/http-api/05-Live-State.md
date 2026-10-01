@@ -48,7 +48,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `min_decode`            | Configured minimum live decode count                                                  |
 | `below_floor`           | Current and cumulative prefill-floor breach state                                     |
 | `ejected`               | Engines removed by the breaker                                                        |
-| `peer_release`          | Peer release rounds for each ejected or drained engine                                |
+| `peer_release`          | Peer release rounds for each engine out of placement                                  |
 | `draining`              | Engines excluded by lifecycle action                                                  |
 | `probation`             | Engines carrying a predictive-health placement penalty                                |
 | `health`                | Per-engine drift-window accounting                                                    |
@@ -91,11 +91,11 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 ### `peer_release`
 
-One entry per ejected engine and per engine whose lifecycle drain has completed, under `recovery.engine_restart_policy` `individual`:
+One entry per ejected engine and per engine in lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`, under `recovery.engine_restart_policy` `individual`:
 
 | Field          | Meaning                                                                   |
 | -------------- | ------------------------------------------------------------------------- |
-| `rounds`       | Release rounds sent since the ejection or drain                           |
+| `rounds`       | Release rounds sent since the ejection or the last state change           |
 | `next_round_s` | Seconds until the next round, `null` after the last round                 |
 
 [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) describes the rounds.

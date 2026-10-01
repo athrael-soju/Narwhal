@@ -29,26 +29,40 @@ class PeerReleaseScheduleTests(unittest.TestCase):
     def test_rounds_follow_ejection_until_readmission(self):
         now = [100.0]
         release = PeerRelease(lambda: now[0])
-        self.assertEqual(release.due(["e5"]), [])
+        release.track({"e5": "ejected"})
+        self.assertEqual(release.due(), [])
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
         now[0] += RELEASE_AFTER_S[0] - 0.5
-        self.assertEqual(release.due(["e5"]), [])
+        self.assertEqual(release.due(), [])
         now[0] += 0.5
-        self.assertEqual(release.due(["e5"]), ["e5"])
-        self.assertEqual(release.due(["e5"]), [])
+        self.assertEqual(release.due(), ["e5"])
+        self.assertEqual(release.due(), [])
         self.assertEqual(release.snapshot()["e5"]["rounds"], 1)
         now[0] = 100.0 + RELEASE_AFTER_S[-1]
-        self.assertEqual(release.due(["e5"]), ["e5"])
-        self.assertEqual(release.due(["e5"]), ["e5"])
+        self.assertEqual(release.due(), ["e5"])
+        self.assertEqual(release.due(), ["e5"])
         for _ in RELEASE_AFTER_S:
-            release.due(["e5"])
+            release.due()
         self.assertEqual(
             release.snapshot(), {"e5": {"rounds": len(RELEASE_AFTER_S), "next_round_s": None}}
         )
-        self.assertEqual(release.due([]), [])
+        release.track({})
+        self.assertEqual(release.due(), [])
         self.assertEqual(release.snapshot(), {})
-        self.assertEqual(release.due(["e5"]), [])
+        release.track({"e5": "ejected"})
         self.assertEqual(release.snapshot()["e5"]["rounds"], 0)
+
+    def test_a_state_change_restarts_the_schedule(self):
+        now = [100.0]
+        release = PeerRelease(lambda: now[0])
+        release.track({"e5": "ejected"})
+        now[0] += RELEASE_AFTER_S[0]
+        self.assertEqual(release.due(), ["e5"])
+        now[0] += 30.0
+        release.track({"e5": "ejected"})
+        self.assertEqual(release.snapshot()["e5"]["rounds"], 1)
+        release.track({"e5": "blocked"})
+        self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
 
     def test_first_round_follows_the_launcher_engine_ttl(self):
         from narwhal.deployment.launch_engine import ENGINE_TTL_S
@@ -117,9 +131,10 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         outcomes = await release_round(self.router, ["e5"])
         self.assertEqual(outcomes["e0"], "producer e1 connection")
         self.router.scheduler.eject("e1")
-        with self.assertLogs("narwhal.peer_release", level="INFO") as logs:
+        with self.assertLogs("narwhal.peer_release", level="WARNING") as logs:
             self.assertEqual(await release_round(self.router, ["e5"]), {"e0": "no producer"})
         self.assertIn("peer release for e5: e0 no producer", logs.output[0])
+        self.assertIn("whole-wave restart", logs.output[0])
 
     async def test_release_starts_one_round_when_due_and_skips_whole_wave(self):
         self.router.scheduler.eject("e5")
@@ -175,16 +190,60 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         release_peers(self.router)
         self.assertEqual(self.router.peer_release.tasks, set())
 
+    async def test_a_retry_runs_once_through_the_next_producer(self):
+        async def failing(url, *, prefill_url=None, deadline_s=None):
+            self.calls.append((self.urls[prefill_url], self.urls[url]))
+            return InferenceProbe(prefill=ProbeLeg(failed="connection"), decode=ProbeLeg())
+
+        self.router.engines.probe_inference = AsyncMock(side_effect=failing)
+        self.router.scheduler.eject("e5")
+        release_peers(self.router)
+        self.now[0] += RELEASE_AFTER_S[0]
+        release_peers(self.router)
+        await asyncio.gather(*self.router.peer_release.tasks)
+        first = {consumer: producer for producer, consumer in self.calls}
+        self.calls.clear()
+        self.now[0] += RETRY_AFTER_S
+        release_peers(self.router)
+        await asyncio.gather(*self.router.peer_release.tasks)
+        retried = {consumer: producer for producer, consumer in self.calls}
+        self.assertEqual(set(retried), set(first))
+        self.assertTrue(all(retried[iid] != first[iid] for iid in first))
+        self.calls.clear()
+        for _ in range(3):
+            self.now[0] += RETRY_AFTER_S
+            release_peers(self.router)
+        self.assertEqual(self.router.peer_release.tasks, set())
+        self.assertEqual(self.calls, [])
+
+    async def test_a_consumer_without_another_producer_waits_for_the_next_round(self):
+        for iid in ("e1", "e2", "e3", "e4"):
+            self.router.scheduler.eject(iid)
+        self.router.scheduler.eject("e5")
+        release_peers(self.router)
+        self.now[0] += RELEASE_AFTER_S[0]
+        with self.assertLogs("narwhal.peer_release", level="WARNING"):
+            release_peers(self.router)
+            await asyncio.gather(*self.router.peer_release.tasks)
+        self.assertEqual(self.router.peer_release.missed, set())
+        self.now[0] += RETRY_AFTER_S
+        release_peers(self.router)
+        self.assertEqual(self.router.peer_release.tasks, set())
+        self.assertEqual(self.probe.await_count, 0)
+
     async def test_drained_engines_join_release_rounds(self):
         records = self.router.lifecycle.records
         records["e4"] = DrainRecord("e4", "draining", 0.0, 300.0)
         records["e5"] = DrainRecord("e5", "drained", 0.0, 300.0)
         records["e3"] = DrainRecord("e3", "active", 0.0, 300.0)
-        self.assertEqual(released_engines(self.router), {"e5"})
+        self.assertEqual(released_engines(self.router), {"e5": "drained"})
         self.router.scheduler.eject("e2")
-        self.assertEqual(released_engines(self.router), {"e2", "e5"})
+        self.assertEqual(released_engines(self.router), {"e2": "ejected", "e5": "drained"})
         records["e4"].state = "blocked"
-        self.assertEqual(released_engines(self.router), {"e2", "e4", "e5"})
+        records["e2"] = DrainRecord("e2", "validating", 0.0, 300.0)
+        self.assertEqual(
+            released_engines(self.router), {"e2": "validating", "e4": "blocked", "e5": "drained"}
+        )
 
     async def test_monitor_pass_runs_due_release_rounds(self):
         self.router.scheduler.eject("e5")
