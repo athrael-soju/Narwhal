@@ -46,7 +46,7 @@ Run:
 make observe
 ```
 
-The command starts Prometheus, Grafana and the Grafana Image Renderer, then returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
+The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
 
 ### Readiness contract
 
@@ -104,10 +104,11 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | `runs/observability/mounts/` | `0700` |
 | Mounted subdirectories | `0755` |
 | Mounted files | `0644` |
+| `runs/observability/renderer-token` | `0600` |
 
 Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only.
 
-`make observe` creates `runs/observability/renderer-token` with mode `0600` on first use and passes it to Grafana and the renderer on every run.
+Grafana and the image renderer share the token in `runs/observability/renderer-token`.
 
 Each `make observe` run regenerates the staged files and resets their permissions.
 

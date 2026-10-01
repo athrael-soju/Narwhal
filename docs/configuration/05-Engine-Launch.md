@@ -138,14 +138,12 @@ Colocated CUDA engines with dedicated GPUs:
 | Transfer KV to each other through CUDA IPC          | `transfer.gpu_tls` is `cuda`  |
 | Run in containers that share the host PID namespace | Container backend             |
 
-CUDA IPC engines, colocated with dedicated GPUs or sharing a device, with `transfer.gpu_tls` set to `cuda`:
+[CUDA IPC engines](../concepts/03-Failure-and-State.md#peer-memory-release), colocated with dedicated GPUs or sharing a device, with `transfer.gpu_tls` set to `cuda`:
 
 | Setting | Value |
 | --- | --- |
 | `UCX_CUDA_IPC_CACHE` | The `runtime.environment` value, otherwise the UCX default |
 | vLLM NIXL `engine_ttl` | 60 seconds when `UCX_CUDA_IPC_CACHE` is `n` |
-
-[Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) describes how these settings free a stopped engine's GPU memory.
 
 `install` copies the selected launch record into the engine checkout's `config/` directory.
 

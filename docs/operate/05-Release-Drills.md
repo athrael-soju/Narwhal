@@ -183,10 +183,10 @@ Already-stopped-engine case:
 
 Drain responses for the stopped engine:
 
-| Engine state at the drain request | Drain response |
-| --- | --- |
-| Ejected | Success, with the last process identity the router verified |
-| In placement | Failure naming the missing identity; the retry after ejection succeeds |
+| Engine state at the drain request | Drain response | Next step |
+| --- | --- | --- |
+| Ejected | Success, with the last process identity the router verified | |
+| In placement | Failure naming the missing identity | Retry the drain after the router ejects the engine |
 
 ### Restore service after the drill
 

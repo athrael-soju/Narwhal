@@ -98,9 +98,13 @@ data: {"error": ...}
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
-A failed count puts its engine in a count backoff of 1 second that doubles with each consecutive failure up to 30 seconds.
+Count backoff per engine:
 
-The engine's next successful count resets its backoff.
+| Count result                     | Count backoff             |
+| -------------------------------- | ------------------------- |
+| First failure                    | 1 second                  |
+| Each further consecutive failure | Doubles, up to 30 seconds |
+| Success                          | Reset                     |
 
 Exact-count engine selection:
 
@@ -117,7 +121,7 @@ Tokenization failures return the [engine-fault mapping](#engine-failure-handling
 | ---------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | `recovery.eject_after` consecutive stream failures                                                   | Starts an inference probe                  |
 | Failed inference probe while every role the engine places stays placeable through other live engines | Ejects the engine                          |
-| Other failed inference probe                                                                         | Keeps the engine live with its hold lifted |
+| Other failed inference probe                                                                         | Keeps the engine in placement              |
 | Successful inference probe                                                                           | Readmits the engine                        |
 
 Decode-leg failures by breaker class:
@@ -178,7 +182,7 @@ Each retry receives:
 - fresh backend request IDs
 - a new KV handoff
 
-With `recovery.failure_quarantine_s > 0`, a failed engine's placement depends on its role coverage:
+Failed-engine placement with `recovery.failure_quarantine_s > 0`:
 
 | Condition                                                                                               | Placement after the failure                          |
 | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |

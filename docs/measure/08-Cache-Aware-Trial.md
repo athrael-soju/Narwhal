@@ -35,9 +35,7 @@ Refusals and failures count as misses.
 | `L` | Input tokens of every request in a workload |
 | `B` | Engine cache block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state` |
 
-An engine with boundary-state groups, such as Mamba state, keeps that state at the last full block before the prompt's end.
-
-For a prompt of `L = k*B + s` tokens with `0 < s < B`, the engine keeps that state at `k*B`.
+For a prompt of `L = k*B + s` tokens with `0 < s < B`, an engine with boundary-state groups, such as Mamba state, keeps its boundary state at `k*B`.
 
 For a repeated-prefix workload on such an engine:
 
@@ -80,7 +78,7 @@ For each arm:
 
 Before each cache-aware run, confirm:
 
-- every engine's `residency` record reports `"known": true`
+- every engine's `residency` record reports [`"known": true`](../cli/Attest.md#when-residency-is-known)
 - every profile carries its `cached_` fields
 
 ## Create the workloads
@@ -161,7 +159,7 @@ Point flags:
 | Flag | Value |
 | --- | --- |
 | `--requests` | 60 seconds of offers at the point's rate |
-| `--run-seed` | Distinct for each point, and the same for that point in both arms |
+| `--run-seed` | A distinct seed for each point, shared by both arms |
 
 A run that exits with status `0` or `2` writes `summary.json` with:
 
@@ -186,18 +184,14 @@ Between runs:
 
 Run one separate, unscored cache-aware point after the measured runs.
 
-A reactive prefill-to-decode move requires every [adjacent-split condition](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions):
-
-- projected prefill load at or below `controller.thresholds.shrink`
-- a reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
-- an elapsed `controller.thresholds.cooldown_s`, or an armed cooldown bypass
+A reactive prefill-to-decode move requires every [adjacent-split condition](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions).
 
 Run the role-change point:
 
 1. Prepare a decode-heavy workload with a larger `--output-tokens` and the repeated-prefix workload's `--seed`, `--input-tokens`, `--prefix-tokens`, and `--families`.
 2. Run it at a rate that raises decode load until `flips` in `/narwhal/state` records the move with `"by": "reactive"`.
 3. Confirm that `pools.prefill` lists the remaining prefill engines.
-4. Confirm that new prefill placements go to the remaining prefill engines.
+4. Confirm that prefill placements after the change go to the remaining prefill engines.
 5. Confirm that journal rows placed on the moved engine before the change complete with that engine as `prefill_iid`.
 6. Confirm that the move's `flips` record reports a numeric `drained_s`.
 7. Confirm that the moved engine's `residency` record keeps `"known": true` and the same `epoch` across the change.
@@ -229,10 +223,3 @@ The trial passes when the cache-aware arm meets both thresholds at both rates:
 
 - the benefit threshold on the repeated-prefix workload
 - the regression threshold on the control
-
-## Residency and prefix reuse
-
-| Case | Result |
-| --- | --- |
-| A sidecar starts after vLLM's replay buffer drops the engine's early event batches | [Residency unknown](../cli/Attest.md#residency-limits) until an engine restart or, on vLLM in development mode, a prefix-cache reset |
-| A hybrid attention and Mamba model | The prefill engine that computed a prompt is the one engine that can reuse its prefix |

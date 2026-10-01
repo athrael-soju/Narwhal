@@ -38,7 +38,7 @@ Measure sustained healthy inflight load before increasing `serving.max_connectio
 
 The decode check covers the request's decode window, from its predicted prefill completion to its projected last token.
 
-The decode check admits the request outright in either case:
+The decode check admits the request in either case:
 
 - zero live decode engines
 - a live decode engine whose profile or profiled `decode_max_requests` is unset
@@ -105,10 +105,6 @@ Expected output by request:
 | Capped, with fewer finished requests in its bucket         | Output cap                                                                               |
 | Uncapped                                                   | Median delivered output for its prompt bucket, or the fleet-wide median delivered output |
 
-A shape overflow in the completion history keeps the bucket fractions and prompt-bucket medians last learned before the overflow until the overflow ages out.
-
-The fleet-wide median delivered output is unknown while a shape overflow remains in the completion history.
-
 ### 4.2 Waiting, phase concurrency, and retries
 
 | Field                         | Default    | Meaning                                                                                             | Values                                                                     |
@@ -129,9 +125,7 @@ The fleet-wide median delivered output is unknown while a shape overflow remains
 With a positive `serving.decode_concurrency`, role control:
 
 - prices each engine's decode capacity at that limit
-- prices a limit below the profile's smallest measured batch at that batch's token interval
-- floors decode load at decode residents on decode-role engines plus requests waiting for a decode slot, divided by decode engines times `serving.decode_concurrency`
-- scores a smaller candidate decode pool with each departing engine's residents on that engine
+- floors decode load at decode residents on decode-role engines plus requests waiting for a decode slot, divided by `serving.decode_concurrency` times the larger of the current and candidate decode engine counts
 
 Retained completion requests:
 
@@ -203,13 +197,11 @@ A live role change:
 
 ### 5.1 Prefix-cache pricing
 
-For a request sized with exact token IDs, the router records each engine's cached leading prompt blocks from its [residency view](../http-api/05-Live-State.md#residency), up to the block before the final prompt token.
+For a request sized with exact token IDs, the router records each engine's cached leading prompt blocks from its [residency view](../http-api/05-Live-State.md#residency).
 
 Each prefill placement rechecks those blocks against the engine's current view.
 
-Projected-TTFT evaluations and role-split scoring reuse a waiting request's cache evidence checked within the last 0.25 seconds while every engine behind that evidence keeps a known residency view.
-
-An engine that holds a cached prefix prices the request's prefill with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix).
+The router prices prefill on an engine that holds a cached prefix with that engine's [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix).
 
 Decisions that use the warm price:
 
@@ -219,8 +211,6 @@ Decisions that use the warm price:
 - pool load
 - offered demand
 - role-split scoring
-
-Each recheck that changes a request's cache evidence reprices its arrival in offered demand.
 
 Offered demand takes warm prices from engines that run prefill:
 
@@ -340,11 +330,10 @@ Set these timeouts from latency measured under the intended load:
 
 Probe timeouts:
 
-| Timeout                                                                                                              | Result             |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection                         | Inconclusive probe |
-| Health probe exceeds `engine.health_timeout_s`                                                                       | Failed probe       |
-| Health probe timeout surfaces more than 1.5 times `engine.health_timeout_s` after the probe's first connection event | Inconclusive probe |
+| Timeout                                                                                      | Result             |
+| -------------------------------------------------------------------------------------------- | ------------------ |
+| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection | Inconclusive probe |
+| Health probe exceeds `engine.health_timeout_s`                                               | Failed probe       |
 
 Inconclusive probe result by caller:
 

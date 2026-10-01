@@ -77,7 +77,7 @@ Before preflight or router startup:
 | `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer | Positive measured resident-KV range with `min <= max`. |
 | `decode_fit_mape`, `decode_cv_mape` | number | Nonnegative fit error and leave-one-out cross-validation error. |
-| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) `c + b*S + d*P + a*(2*P*S + S*S) + ttft_split*s` for `P` cached prefix tokens, `S` uncached suffix tokens, and `s` of 1 for a suffix that ends inside a cache block past its first, otherwise 0. |
+| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). |
 | `cached_cv_mape` | number, optional | Nonnegative leave-one-case-out warm prefill error. |
 | `cached_min_prefix_tokens`, `cached_max_prefix_tokens` | integer, optional | Positive measured cached-prefix range with `min <= max`. |
 | `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured uncached-suffix range with `min <= max`. |

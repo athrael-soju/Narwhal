@@ -107,8 +107,6 @@ Readmission checks, in order:
 | 4 | Replacement engine | `/health` returns HTTP 200 | `final health` |
 | 5 | All participants | Identities, attestation, and profile bindings match step 1 | |
 
-An engine restarted from an identical attested launch keeps its profiles and first-token calibration.
-
 Readmission results:
 
 | Result | Response | Engine `state` |
@@ -150,12 +148,7 @@ Verify placement:
 
 ### 7.4 Recover an unplanned ejection
 
-Automatic recovery behavior:
-
-| Condition | Behavior |
-| --- | --- |
-| An ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds | Automatic recovery validates the engine. |
-| An engine fails automatic recovery while another engine stays in placement | Automatic recovery continues for every other ejected engine. |
+When an ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds, automatic recovery validates the engine.
 
 Recovery procedures:
 
@@ -163,7 +156,7 @@ Recovery procedures:
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
 | A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | 1. Wait up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release).<br>2. Read the engine's release rounds in [`peer_release.<id>`](../http-api/05-Live-State.md#peer_release) from `GET /narwhal/state`. |
-| That engine fails at startup with free GPU memory below its budget | A host peer keeps its memory mapped. `narwhal-check` names the cause. [Restart the engine wave](#8-restart-an-engine-wave). |
+| That engine fails at startup with free GPU memory below its budget | [Restart the engine wave](#8-restart-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
 | The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
@@ -191,16 +184,12 @@ POST /narwhal/lifecycle/drain
 
 Set `recovery.engine_restart_policy` to `whole_wave` when engine builds share peer state across the fleet.
 
-Under `individual`, a wave restart also recovers a crashed engine whose host peers keep its GPU memory mapped. [Peer memory release](../concepts/03-Failure-and-State.md#whole-wave-fallback) lists the cases that `narwhal-check` warns about.
-
 Under `whole_wave`:
 
 - a confirmed ejection, process change, or identity failure holds the whole wave
 - the router's `/ready` returns HTTP 503 until whole-wave readmission completes
 
 ### 8.1 Drain the wave
-
-For a wave member that stopped and was ejected before the drain, the drain records the process identity the router last verified.
 
 Drain the wave with a 600-second deadline:
 

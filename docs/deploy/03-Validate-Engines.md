@@ -241,7 +241,7 @@ The check writes `checked.json`:
 | `vllm_api_version` | `vllm.version.__version__` from the image     |
 | `prefix_caching`   | The resolved prefix-caching setting           |
 | `kv_events`        | The resolved cache-event endpoints, or `null` |
-| `ucx_version`      | UCX bundled with the image's NIXL, or `null`  |
+| `ucx_version`      | The UCX version that NIXL loads in the image, or `null` |
 | `peer_release`     | `true` when the engine releases a stopped peer's KV memory |
 | `image_id`         | The local image ID                            |
 

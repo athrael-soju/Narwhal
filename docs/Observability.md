@@ -10,7 +10,7 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 | --- | --- |
 | Prometheus `3.14.0` | Router and engine metrics, alert rules |
 | Grafana `13.2.1` | Provisioned Narwhal Orchestrator dashboard |
-| Grafana Image Renderer `5.12.5` | PNG renders of dashboards and panels for Grafana |
+| Grafana Image Renderer `5.12.5` | PNG renders of dashboards and panels |
 
 ## Monitoring tasks
 
@@ -32,7 +32,7 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
     ---
 
-    Read the headline blocks, engine states, fleet events, role history, outcomes, latency, and pool panels.
+    Read each Narwhal Orchestrator panel and engine state.
 
 -   [GPU telemetry, alerts, and recovery](observability/03-Telemetry-and-Recovery.md)
 

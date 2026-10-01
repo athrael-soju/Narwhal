@@ -38,16 +38,7 @@ Active router responses until whole-wave readmission succeeds:
 
 ### Temporary holds
 
-Hold behavior for an engine that [alone places one of its roles](../concepts/03-Failure-and-State.md#last-engine-protection):
-
-| Cause | Result |
-| --- | --- |
-| Performance-drift hold | Remains in placement |
-| Temporary-quarantine hold | Remains in placement |
-| Inference-probe hold | Remains in placement |
-| Temporary-quarantine or inference-probe hold after another engine's ejection or drain | Returns to placement |
-| Failed health or inference probe | Remains in placement |
-| Connection-error or liveness ejection | Leaves placement |
+Hold behavior for an engine that alone places one of its roles follows [last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection).
 
 ### Router control and replacement
 
@@ -68,7 +59,7 @@ A replacement router:
 
 Prometheus and Grafana setup: [Set up observability](../Observability.md).
 
-[Dashboard](../observability/05-Dashboard.md) signals:
+[Router metric](../telemetry/03-Metrics-and-Control.md#metric-families) signals:
 
 | Signal | Operational question |
 | --- | --- |

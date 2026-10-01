@@ -9,7 +9,7 @@ description: Measure the prefill and decode cost model of each engine with narwh
 | Mode | Operation | Output |
 | --- | --- | --- |
 | Live sweep | Measures live engines. | The fleet's `profiles.path` |
-| Refit | Recomputes cold and warm time to first token (TTFT) fits from retained samples and keeps the decode fits. | `--out` |
+| Refit | Recomputes cold and warm time to first token (TTFT) fits from retained samples, with the decode fits kept. | `--out` |
 | Merge | Combines separately measured role mixes. | `--out` |
 
 Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.

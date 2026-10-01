@@ -85,14 +85,14 @@ Set both targets from measurements on the deployed engine shape.
 
 Each engine entry takes these fields:
 
-| Field             | Default    | Notes                                                                                                                         |
-| ----------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `iid`             | required   | Scheduler identity, unique within `engines`.                                                                                  |
-| `url`             | required   | The vLLM HTTP base URL.                                                                                                       |
-| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`.                            |
-| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                                                 |
-| `pin`             | `false`    | When true, the engine keeps its configured role through role-controller moves and resume, and serves only that role's phase.  |
-| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                                                          |
+| Field             | Default    | Notes                                                                                              |
+| ----------------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `iid`             | required   | Scheduler identity, unique within `engines`.                                                       |
+| `url`             | required   | The vLLM HTTP base URL.                                                                            |
+| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`. |
+| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                      |
+| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume.    |
+| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                               |
 
 ```json
 {

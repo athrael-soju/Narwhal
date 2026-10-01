@@ -16,7 +16,7 @@ Monitoring stages:
 | `rollover` | Interval rollover |
 | `readmission` | Readmission and [peer release](#peer-memory-release) rounds |
 | `liveness` | Liveness probes |
-| `residency` | Prefix residency refresh from attestation sidecars, on its own loop every `controller.monitor_interval_s` |
+| `residency` | Prefix residency refresh from attestation sidecars |
 | `handoff` | State handoff persistence |
 | `telemetry` | Floor-state refresh and loop logging |
 
@@ -57,10 +57,10 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 | Connection error | `connection` | Eject the engine |
 | Transport timeout | `timeout` | Run a health probe |
 | First-token deadline while the engine emits other output | `overload` | Run a health probe |
-| First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Pause new requests on a covered engine and run an inference probe |
+| First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Run an inference probe under a placement hold |
 | HTTP 408 or 429 | `overload` | Run a health probe |
-| Other HTTP 5xx response | `inference_status` | Pause new requests on a covered engine and run an inference probe |
-| Unreadable KV handoff from prefill | `kv_handoff` | Pause new requests on a covered engine and run an inference probe |
+| Other HTTP 5xx response | `inference_status` | Run an inference probe under a placement hold |
+| Unreadable KV handoff from prefill | `kv_handoff` | Run an inference probe under a placement hold |
 
 The role-coverage rule counts an engine as covered when every role it places stays placeable through other live engines:
 
@@ -96,9 +96,9 @@ A stopped engine's GPU memory stays allocated while a host peer holds that mappi
 
 | Part | Behavior |
 | --- | --- |
-| vLLM NIXL connector | A consume request evicts each producer idle for longer than `engine_ttl` and removes its NIXL agent. |
+| vLLM NIXL connector | A consume request removes the NIXL agent of each producer idle for longer than `engine_ttl`. |
 | Engine launcher | Sets `engine_ttl` to 60 seconds for engines with CUDA IPC peers when `runtime.environment` sets `UCX_CUDA_IPC_CACHE` to `n`. |
-| UCX 1.22 or later in the engine image | Unmaps the producer's memory when NIXL removes its agent, with the CUDA IPC cache off. |
+| UCX 1.22 or later in the engine image | With the CUDA IPC cache off, unmaps the producer's memory when NIXL removes its agent. |
 | Router peer release rounds | Send each live KV consumer a transfer probe from another live producer. |
 | Engine startup | Waits up to 180 seconds for its GPU memory before vLLM measures it. |
 
@@ -117,7 +117,7 @@ A stopped engine's GPU memory stays allocated while a host peer holds that mappi
 | UCX 1.22 or later with the CUDA IPC cache off | `true` |
 | Any other CUDA IPC engine | `false` |
 
-The image check records the same value in `checked.json`, with the bundled UCX version in `ucx_version`.
+The image check records the same value in [`checked.json`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification).
 
 #### Release rounds
 
@@ -147,11 +147,13 @@ Under `recovery.engine_restart_policy` `individual`, the router schedules releas
 
 #### Startup wait
 
-A restarted serving engine polls free GPU memory every 5 seconds.
+Restarted serving engine:
 
-It starts vLLM once free memory reaches the share that `--gpu-memory-utilization` requests, or after 180 seconds.
-
-While memory is short, the engine logs `waiting for KV peers to release it`.
+| Property | Value |
+| --- | --- |
+| Free GPU memory poll interval | 5 seconds |
+| vLLM start | Free memory reaches the share that `--gpu-memory-utilization` requests, or 180 seconds pass |
+| Log message while memory is short | `waiting for KV peers to release it` |
 
 #### Whole-wave fallback
 
@@ -159,7 +161,7 @@ While memory is short, the engine logs `waiting for KV peers to release it`.
 
 | Host peer | Effect |
 | --- | --- |
-| Lacks `launch.peer_release: true` | Keeps the stopped producer's memory mapped |
+| Has a `launch.peer_release` attestation that is `false`, missing, or unreadable | Keeps the stopped producer's memory mapped |
 | Has zero other producers for its release probe | Receives zero release probes |
 
 A [wave restart](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) recovers a crashed engine in both cases.
@@ -199,7 +201,7 @@ Quarantine end events:
 | --- | --- |
 | Successful health or inference probe that meets the profile-match rule | Quarantine ends early. |
 | Deadline passes | Candidate selection releases the engine. |
-| Another engine's ejection or drain leaves the engine uncovered | The quarantine or inference-probe hold ends and the engine returns to placement. |
+| Another engine's ejection or drain leaves the engine uncovered | Quarantine ends. |
 
 ## Readmission and drains
 

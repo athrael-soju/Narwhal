@@ -73,10 +73,10 @@ The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fiel
 
 Role control while an engine is ejected, quarantined, draining, or recovering:
 
-| Condition | Behavior |
+| Condition | Role controller |
 | --- | --- |
-| Every role with assigned engines keeps a live engine | The role controller scores splits over the live engines and can move roles. |
-| A role with assigned engines has zero live engines | The role controller skips split scoring and records a held decision. |
+| Every role with assigned engines keeps a live engine | Scores splits over the live engines. |
+| A role with assigned engines has zero live engines | Records a held decision. |
 
 Existing requests finish on their assigned engines after a role change.
 

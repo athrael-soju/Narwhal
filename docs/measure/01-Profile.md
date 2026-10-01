@@ -81,8 +81,6 @@ The profiler sets `ttft_split` when all of these hold:
 
 Otherwise `ttft_split` is `null`.
 
-Of the default `--prefill-lens`, 256, 1024, and 4096 end within the first block or on a block boundary for 16-token and 512-token blocks.
-
 ### Decode sweep
 
 A decode cell is one decode input length and concurrency pair.
@@ -92,7 +90,7 @@ A decode cell is one decode input length and concurrency pair.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live context limit.
 - When fewer than two decode input lengths fit, choose shorter inputs.
-- Reserve the engine and rerun a cold sweep that fails on a rise in `vllm:prefix_cache_hits_total`.
+- When a cold sweep fails on a rise in `vllm:prefix_cache_hits_total`, rerun the sweep with the engine reserved for profiling.
 
 ### Warm prefill with a cached prefix
 
@@ -141,9 +139,9 @@ An engine keeps cold pricing when any of these hold:
 - The measured warm cases cover fewer than two prefix lengths, two suffix lengths, or five cases.
 - The held-out error exceeds 20%.
 
-The profiler prints the reason and records it in `cached_prefill.reason`.
+The profiler records the reason in `cached_prefill.reason`.
 
-When a warm-sweep cold control reuses a cached prefix, the profile fails with `a cold control reused a cached prefix; reserve the engine`:
+If the warm sweep fails with `a cold control reused a cached prefix; reserve the engine`:
 
 1. Reserve the engine.
 2. Rerun the profile.
@@ -151,7 +149,7 @@ When a warm-sweep cold control reuses a cached prefix, the profile fails with `a
 Roll out the warm fit:
 
 1. Record a held-out error threshold in the private execution record.
-2. Set `profiles.path` in a copy of the private fleet file to a new path.
+2. Set `profiles.path` in a copy of the private fleet file to a separate path.
 3. Profile one engine with `--only <iid>` against the fleet copy.
 4. Compare its held-out error with the recorded threshold.
 5. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.

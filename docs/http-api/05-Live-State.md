@@ -126,7 +126,7 @@ Entry fields:
 
 For an engine with `known: false`, the router prices each request's prefill on the cold curve of its full input.
 
-The router refreshes every engine's residency view every `controller.monitor_interval_s` seconds.
+The router refreshes each engine's residency view every `controller.monitor_interval_s` seconds.
 
 The router takes a new snapshot when:
 

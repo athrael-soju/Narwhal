@@ -27,8 +27,6 @@ To open a monitoring tunnel:
 
 Grafana grants anonymous Viewer access through the local tunnel.
 
-The [dashboard selectors](05-Dashboard.md#selectors) switch between router and engine scope.
-
 ## Isolate a second monitoring stack
 
 | Variable | Default |

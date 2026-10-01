@@ -62,9 +62,15 @@ Snapshot fields:
 | Top level | `known`, `reason`, `sequence`, `block_size`, `groups`, `epoch`, `process_start_time_seconds` |
 | Each `groups` entry | `group`, `kind`, `sliding_window`, block `identities`, and the count of `unnamed` blocks |
 
-`changes` holds one entry per event batch, in sequence order.
+`changes` holds one entry per event batch, in sequence order:
 
-Each `changes` entry lists, per group, the `stored` identities its batch made resident and the `removed` identities it evicted.
+| Field | Meaning |
+| --- | --- |
+| `sequence` | The batch's sequence number |
+| `cleared` | `true` when the batch reset the prefix cache |
+| `groups` | The changed cache groups, keyed by group, each with `kind`, `sliding_window`, `stored`, and `removed` |
+| `stored` | Identities the batch made resident in the group |
+| `removed` | Identities the batch evicted from the group |
 
 The events route returns HTTP 410 when any of these holds:
 
@@ -151,8 +157,6 @@ A prefix is reusable when every KV cache group holds the blocks its kind require
 | Other kinds, such as chunked local attention | Zero reusable prefixes |
 
 ### Residency limits
-
-vLLM's replay buffer holds the latest 10,000 event batches.
 
 Limit cases:
 
