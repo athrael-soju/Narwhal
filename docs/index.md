@@ -37,7 +37,7 @@ narwhal --help
 
 <div class="grid cards" markdown>
 
--   [Install from PyPI](Install-from-PyPI.md)
+-   [Installing from PyPI](Install-from-PyPI.md)
 
     ---
 

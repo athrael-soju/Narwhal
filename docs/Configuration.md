@@ -55,7 +55,7 @@ Responsibilities under fleet schema version 1:
 
     ---
 
-    Admission, queueing, retries, placement, deadlines, token counting, and role-controller settings.
+    Admission, decode admission checks, queueing, retries, placement, prefix-cache pricing, deadlines, token counting, and role-controller settings.
 
 -   [Recovery, authentication, and profile validation](configuration/03-Recovery-and-Validation.md)
 

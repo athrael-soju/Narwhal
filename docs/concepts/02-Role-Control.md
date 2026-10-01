@@ -71,12 +71,9 @@ The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fiel
 | `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
 | Lifecycle hold | Takes draining and recovering engines out of placement. |
 
-Role control while an engine is ejected, quarantined, draining, or recovering:
+While an engine is ejected, quarantined, draining, or recovering, the role controller scores splits over the other live engines.
 
-| Condition | Role controller |
-| --- | --- |
-| Every role with assigned engines keeps a live engine | Scores splits over the live engines. |
-| A role with assigned engines has zero live engines | Records a held decision. |
+When that leaves a role with assigned engines at zero live engines, the role controller records a held decision.
 
 Existing requests finish on their assigned engines after a role change.
 

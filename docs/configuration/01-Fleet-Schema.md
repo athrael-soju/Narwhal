@@ -168,7 +168,7 @@ The optional `hardware` block needs all three fields when present.
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
 
-Capture every contract value from the deployed engine in [Gate E: capture attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
+Capture every contract value from the deployed engine in [Gate E: Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Values to check against the live engine:
 
@@ -180,7 +180,7 @@ Values to check against the live engine:
 
 ### 3.3 Attestation
 
-The generator in [Gate E: attest the live engine processes](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
+The generator in [Gate E: Attesting the live engines](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
 
 Fill in the fleet contract:
 

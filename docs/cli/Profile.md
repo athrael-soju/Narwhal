@@ -18,7 +18,7 @@ Fit binding:
 
 | Fleet configuration | A live sweep binds each fit to |
 | --- | --- |
-| Sets `engine_contract` | The attested launch from the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) |
+| Sets `engine_contract` | The `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when the attestation carries launch evidence, otherwise its `attestation_digest` |
 | Omits `engine_contract` | The live process identity |
 
 Live sweep order:
@@ -124,6 +124,8 @@ A profiling run aborts when any of these conditions occurs:
 - the `/tokenize` response fails `max_model_len` validation
 - engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
 - the representative prefill fit exceeds 20% mean error or 50% worst-point error
+- the decode fit error exceeds `profiles.max_decode_fit_mape`, or its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`
+- an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control in the warm prefill sweep
 
 | Mode | Success output |
 | --- | --- |

@@ -19,7 +19,7 @@ Identity checks:
 | Condition | Result |
 | --- | --- |
 | At startup, the engine's vLLM version differs from the attestation document | Exit status 1 |
-| While the sidecar runs, the engine's vLLM version or process start time changes | Every route returns HTTP 503 |
+| While the sidecar runs, the engine's vLLM version or process start time changes or becomes unreadable | Every route returns HTTP 503 |
 
 ## Options
 
@@ -85,7 +85,7 @@ Route status by sidecar state:
 | Sidecar state | Both routes return |
 | --- | :---: |
 | Residency off (`--kv-events` unset) | HTTP 404 |
-| Engine process changed | HTTP 503 |
+| Engine identity changed or unreadable | HTTP 503 |
 
 ### When residency is known
 
@@ -157,8 +157,6 @@ A prefix is reusable when every KV cache group holds the blocks its kind require
 | Other kinds, such as chunked local attention | Zero reusable prefixes |
 
 ### Residency limits
-
-Limit cases:
 
 | Case | Result |
 | --- | --- |

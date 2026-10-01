@@ -119,8 +119,8 @@ Work to repeat by change:
 | Offered rate or request count within the profiled workload range | 1. Drain the router.<br>2. Run the next trial point on the existing engine profiles, fabric samples, and full preflight.                                                                                                                   |
 | SLO or first-token deadline                                      | 1. Run `narwhal-check` with the revised limits against the saved profiles and live handoffs.<br>2. Load the edited fleet in the router.                                                                                                    |
 | Router restart with the same fleet configuration                 | Restart the router.                                                                                                                                                                                                                        |
-| Engine restart whose sidecar attests the `launch_digest` recorded in the saved profiles and calibration | 1. Capture its live cache layout and attestation.<br>2. Run full preflight against the saved profiles and [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
-| Engine restart whose sidecar attests a `launch_digest` different from the saved profiles and calibration, or reports `attestation_digest` as its only digest | 1. Capture its live cache layout and attestation.<br>2. Profile the new process generation.<br>3. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).<br>4. Run full preflight. |
+| Engine restart with an unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#33-attestation) | 1. Capture its live cache layout and attestation.<br>2. Run full preflight against the saved profiles and [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
+| Engine restart with a changed attested `launch_digest`, or a sidecar that reports an attestation digest only | 1. Capture its live cache layout and attestation.<br>2. Profile the new process generation.<br>3. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).<br>4. Run full preflight. |
 | Cache geometry change after an engine restart                    | Recalculate the engine's fabric budget from the new `cache-layout.json`.                                                                                                                                                                   |
 | Fabric route, host assignment, or transport                      | 1. Measure the affected directed links against the source budget.<br>2. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).<br>3. Exercise the live KV paths in preflight.      |
 
@@ -164,19 +164,19 @@ Correction paths by gate:
 
     Fleet fields and defaults.
 
--   [Measure](Measure.md)
+-   [Measuring a fleet](Measure.md)
 
     ---
 
     Profiling and service-level objective (SLO) calibration.
 
--   [Observability](Observability.md)
+-   [Setting up observability](Observability.md)
 
     ---
 
     Prometheus and Grafana setup.
 
--   [Troubleshoot](Troubleshoot.md)
+-   [Troubleshooting a fleet](Troubleshoot.md)
 
     ---
 

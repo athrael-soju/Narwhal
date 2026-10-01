@@ -185,13 +185,8 @@ The wheel installs these commands:
   <a href="https://athrael-soju.github.io/Narwhal/cli/Check/"><img src="https://img.shields.io/badge/cli-narwhal--check-0f766e" alt="narwhal-check"></a>
 </p>
 
-For each deployment:
-
-1. Record the `narwhal-serve --version` output with the fleet configuration, engine image, and profiles.
-2. Pin that version on every router host.
-
 <p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Install-from-PyPI/"><img src="https://img.shields.io/badge/docs-Install%20from%20PyPI-0f766e" alt="Install from PyPI documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Install-from-PyPI/"><img src="https://img.shields.io/badge/docs-Installing%20from%20PyPI-0f766e" alt="Installing from PyPI documentation"></a>
 </p>
 
 ## Trying it on one GPU

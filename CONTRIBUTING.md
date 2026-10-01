@@ -14,25 +14,25 @@ git switch -c describe-your-change upstream/main
 
 Run all `make` commands from the repository root. `make help` lists the contributor commands and their overrides.
 
-First, create the development environment if it does not exist:
+`make setup` creates the development environment when it is missing:
 
 ```bash
 make setup
 ```
 
-Then install the pre-commit hooks:
+Install the pre-commit hooks:
 
 ```bash
 .venv/bin/pre-commit install
 ```
 
-Finally, run the local checks:
+Run the local checks:
 
 ```bash
 make check
 ```
 
-The development toolchain is pinned in `constraints-dev.txt`. If you need to install it manually, run:
+`constraints-dev.txt` pins the development toolchain. Install it by hand with:
 
 ```bash
 python3 -m venv .venv
@@ -118,9 +118,9 @@ Start the local preview:
 make docs-serve
 ```
 
-then open `http://127.0.0.1:8000/Narwhal/`.
+Open `http://127.0.0.1:8000/Narwhal/` in a browser.
 
-MkDocs runs in the foreground and reloads the preview as you edit the documentation. Press Ctrl+C to stop it. If port 8000 is already in use, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/` instead.
+MkDocs runs in the foreground and reloads the preview as you edit the documentation. Press Ctrl+C to stop it. If port 8000 is in use, run `make docs-serve DOCS_PORT=8001` and open `http://127.0.0.1:8001/Narwhal/`.
 
 Run the strict build before submitting documentation changes:
 
@@ -149,7 +149,8 @@ Update the docs whenever a config field, route, journal field, metric, CLI flag,
 | `config/`      | Shipped configuration examples                   |
 | `docs/`        | Repository documentation and GitHub Pages source |
 | `deploy/`      | Optional deployment infrastructure               |
-| `assets/`      | Images used by documentation                     |
+| `tests/`       | Unit tests and shared fixtures                   |
+| `overrides/`   | MkDocs theme template and build hooks            |
 
 ### Source responsibilities
 
@@ -163,6 +164,9 @@ Update the docs whenever a config field, route, journal field, metric, CLI flag,
 | Fleet preflight and KV transfer checks                                              | `diagnostics/`                                        |
 | Prometheus metrics and request journals                                             | `observability/`                                      |
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
+| Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
+| Engine launch plans, runtime checks, stage supervision, and attestation capture     | `deployment/`                                         |
+| Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
 
 Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
@@ -182,7 +186,7 @@ Module responsibilities break down as follows:
 
 Runtime helpers take `NarwhalRouter` explicitly, and injected HTTP transports should be typed as `httpx.AsyncBaseTransport` with their type errors resolved. Lease renewal requires a configured `FileLease`.
 
-Use the installed `narwhal-*` commands in deployment scripts, though `python -m narwhal.cli` also starts the router. Each wire contract carries a document schema identifier, such as `narwhal.state`.
+Use the installed `narwhal-*` commands in deployment scripts. Each wire contract carries a document schema identifier, such as `narwhal.state`.
 
 ### Working files and deployment artifacts
 
@@ -251,7 +255,7 @@ Keep hardware and model identities out of public milestone and issue text, comme
 
 ## Pull requests
 
-Review the diff and commit messages and run the local checks before pushing. Then push your branch to your fork and open a pull request in `athrael-soju/Narwhal`, since maintainers use branches in the same repository.
+Review the diff and commit messages and run the local checks before pushing. Push your branch to your fork, or to `athrael-soju/Narwhal` as a maintainer, and open a pull request in `athrael-soju/Narwhal`.
 
 | PR                | Target branch                                       |
 | ----------------- | --------------------------------------------------- |
@@ -265,7 +269,7 @@ The PR description should cover the problem, the resulting behaviour, and how yo
 
 Keep deployment selections in private execution records, and sanitize logs and configuration before attaching them.
 
-Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`, since the required PR title check validates the prefix before squash merge. The prefix sets the release impact, with `docs:` reserved for documentation changes.
+Use a Conventional Commit prefix in the PR title, such as `fix: preserve queued requests` or `feat: add an engine dialect`. The required PR title check validates the prefix before squash merge. The prefix sets the release impact, with `docs:` reserved for documentation changes.
 
 Release Please includes each `docs:` squash commit in the Documentation changelog section and proposes a patch release when a release contains only documentation changes.
 

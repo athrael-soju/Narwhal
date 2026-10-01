@@ -54,7 +54,7 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 
 | Failure | Class | Action |
 | --- | --- | --- |
-| Connection error | `connection` | Eject the engine |
+| Connection error or connect timeout | `connection` | Eject the engine |
 | Transport timeout | `timeout` | Run a health probe |
 | First-token deadline while the engine emits other output | `overload` | Run a health probe |
 | First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Run an inference probe under a placement hold |
@@ -100,7 +100,6 @@ A stopped engine's GPU memory stays allocated while a host peer holds that mappi
 | Engine launcher | Sets `engine_ttl` to 60 seconds for engines with CUDA IPC peers when `runtime.environment` sets `UCX_CUDA_IPC_CACHE` to `n`. |
 | UCX 1.22 or later in the engine image | With the CUDA IPC cache off, unmaps the producer's memory when NIXL removes its agent. |
 | Router peer release rounds | Send each live KV consumer a transfer probe from another live producer. |
-| Engine startup | Waits up to 180 seconds for its GPU memory before vLLM measures it. |
 
 `UCX_CUDA_IPC_CACHE` in `runtime.environment` selects the trade-off for CUDA IPC engines:
 
@@ -147,13 +146,9 @@ Under `recovery.engine_restart_policy` `individual`, the router schedules releas
 
 #### Startup wait
 
-Restarted serving engine:
+Before vLLM measures GPU memory, a serving engine waits until free memory reaches the share that `--gpu-memory-utilization` requests, for up to 180 seconds.
 
-| Property | Value |
-| --- | --- |
-| Free GPU memory poll interval | 5 seconds |
-| vLLM start | Free memory reaches the share that `--gpu-memory-utilization` requests, or 180 seconds pass |
-| Log message while memory is short | `waiting for KV peers to release it` |
+While memory is short, the engine checks every 5 seconds and logs `waiting for KV peers to release it`.
 
 #### Whole-wave fallback
 
@@ -188,12 +183,7 @@ At zero serving capacity, `/ready` and new completion requests return HTTP 503.
 
 ### Failure quarantine
 
-With `recovery.failure_quarantine_s` above `0`, a failed engine's placement depends on its role coverage:
-
-| Failed engine | Placement |
-| --- | --- |
-| Covered | Quarantined until the deadline |
-| Uncovered | Stays in placement |
+With `recovery.failure_quarantine_s` above `0`, a failed [covered](#failure-evidence) engine enters quarantine until the deadline.
 
 Quarantine end events:
 
@@ -217,16 +207,7 @@ Automatic recovery with `engine_contract` set, under `recovery.engine_restart_po
 | Zero engines remain in placement | Recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recovering-loss-of-every-placement-peer). |
 | A whole-wave member is blocked | The member holds the wave. |
 
-Readmission checks, in order:
-
-1. Health.
-2. Attestation.
-3. Loaded profile generations.
-4. Model identity.
-5. Process identity, with a process start newer than the drain record for a planned restart.
-6. The `generation` check, a direct completion probe.
-7. A role-permitted KV transfer.
-8. A final health check.
+Readmission runs the [lifecycle readmission checks](../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) in order.
 
 Profile checks cover every loaded variant:
 

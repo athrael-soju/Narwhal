@@ -138,7 +138,7 @@ curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-Optional: [forward these metrics to a Prometheus and Grafana host](observability/04-WSL2.md).
+The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to Prometheus and Grafana on a separate host.
 
 Two `narwhal dev` options change the layout and target:
 

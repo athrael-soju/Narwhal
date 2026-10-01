@@ -86,10 +86,7 @@ Generated filenames are a four-digit source index plus a fixed label, such as `0
 | `3` | Inspect individual source outcomes in the partial bundle. |
 | `4` | Inspect the reported I/O failure and the retained output directory. |
 
-JSON command results:
-
-- `data` holds `bundle`, `manifest`, `collection_status`, and the `sources` count.
-- Exit `3` maps to command status `degraded` and error code `collection_partial`.
+The [command result contract](Command-Results.md#result-fields) defines the JSON `data` and the status for each exit code.
 
 ## Content policy
 

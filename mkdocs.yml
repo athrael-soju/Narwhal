@@ -64,21 +64,21 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Install from PyPI: Install-from-PyPI.md
+  - Installing from PyPI: Install-from-PyPI.md
   - Narwhal dev:
       - Overview: Dev-Runtime.md
-      - Install the CUDA runtime: dev/CUDA-Runtime.md
+      - Installing the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
       - Recovery and qualification: dev/Recovery-and-Qualification.md
   - Deploying a fleet:
       - Overview: Deploy.md
-      - A. Discover the fleet: deploy/01-Discover.md
-      - B. Install Narwhal: deploy/02-Install.md
-      - C. Validate and start engines: deploy/03-Validate-Engines.md
-      - D. Qualify fabric: deploy/04-Qualify-Fabric.md
-      - E. Attest live engines: deploy/05-Attest.md
-      - F. Profile once and preflight: deploy/06-Profile-and-Preflight.md
-      - G. Serve and measure: deploy/07-Serve-and-Measure.md
+      - A. Discovering the fleet: deploy/01-Discover.md
+      - B. Installing Narwhal: deploy/02-Install.md
+      - C. Validating and starting engines: deploy/03-Validate-Engines.md
+      - D. Qualifying the fabric: deploy/04-Qualify-Fabric.md
+      - E. Attesting live engines: deploy/05-Attest.md
+      - F. Profiling and running preflight: deploy/06-Profile-and-Preflight.md
+      - G. Serving and measuring: deploy/07-Serve-and-Measure.md
   - Deployment operations:
       - Measuring a fleet:
           - Overview: Measure.md

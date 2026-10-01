@@ -59,7 +59,7 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | --- | --- |
 | `narwhal dev` subcommands | `instance` and the returned lifecycle state |
 | `narwhal config` actions | The `narwhal.effective-config` document |
-| `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and `sources` |
+| `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and the `sources` count |
 | `narwhal-engine` actions | `runs`, the launch directories |
 | `narwhal-profile` | `engines`, the selected engine IDs |
 | `narwhal-check` preflight | `failed`, `skipped`, `warnings`, and `pairs` |
