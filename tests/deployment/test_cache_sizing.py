@@ -357,6 +357,8 @@ class CacheSizingTests(unittest.TestCase):
             plan_path.write_text(json.dumps(plan))
             initialized = Mock(return_value="model-ready")
 
+            layout = {"name": "LBNHC"}
+
             class Core:
                 def __init__(self):
                     self.model_executor = SimpleNamespace(initialize_from_config=initialized)
@@ -364,7 +366,9 @@ class CacheSizingTests(unittest.TestCase):
                 def _initialize_kv_caches(self, config):
                     return self.model_executor.initialize_from_config(
                         [
-                            SimpleNamespace(kv_cache_groups=allocation(), kv_cache_layout="LBNHC")
+                            SimpleNamespace(
+                                kv_cache_groups=allocation(), kv_cache_layout=layout["name"]
+                            )
                             for _ in range(2)
                         ]
                     )
@@ -382,10 +386,16 @@ class CacheSizingTests(unittest.TestCase):
             hook_path = (
                 Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
             )
+            worker_module = ModuleType("vllm.v1.worker.gpu_worker")
+            worker_module.Worker = type("Worker", (), {"init_device": lambda self: None})
             with (
                 patch.dict(
                     sys.modules,
-                    {"vllm.v1.engine.core": core_module, "launch_engine": launcher_module},
+                    {
+                        "vllm.v1.engine.core": core_module,
+                        "vllm.v1.worker.gpu_worker": worker_module,
+                        "launch_engine": launcher_module,
+                    },
                 ),
                 patch.dict(
                     os.environ,
@@ -398,18 +408,82 @@ class CacheSizingTests(unittest.TestCase):
             ):
                 runpy.run_path(str(hook_path))
                 core = Core()
-                self.assertEqual(
-                    core._initialize_kv_caches(
-                        SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
-                    ),
-                    "model-ready",
-                )
-            initialized.assert_called_once()
+                config = SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
+                self.assertEqual(core._initialize_kv_caches(config), "model-ready")
+                captured = output.read_text()
+                # A restart of the same launch keeps the first capture.
+                self.assertEqual(Core()._initialize_kv_caches(config), "model-ready")
+                self.assertEqual(output.read_text(), captured)
+                layout["name"] = "NHD"
+                with self.assertRaisesRegex(ValueError, "differs from this launch's earlier start"):
+                    Core()._initialize_kv_caches(config)
+                self.assertEqual(output.read_text(), captured)
+            self.assertEqual(initialized.call_count, 3)
             self.assertIs(core.model_executor.initialize_from_config, initialized)
             record = json.loads(output.read_text())
             self.assertEqual(runtime_payload(record, 2, 1024), 15360)
             self.assertEqual(record["plan_sha256"], digest(plan_path))
             self.assertIsNot(Core._initialize_kv_caches, original)
+
+    def test_live_hook_waits_for_peer_held_memory_before_device_init(self):
+        hook_path = Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
+        gib = 2**30
+        for readings, polls, ready in (
+            ([(10 * gib, 100 * gib), (95 * gib, 100 * gib)], 1, True),
+            ([(95 * gib, 100 * gib)], 0, True),
+            ([(10 * gib, 100 * gib)] * 50, None, False),
+        ):
+            with self.subTest(polls=polls):
+                calls = []
+
+                class Worker:
+                    local_rank = 0
+                    cache_config = SimpleNamespace(gpu_memory_utilization=0.9)
+
+                    def init_device(self, calls=calls):
+                        calls.append("init")
+
+                worker_module = ModuleType("vllm.v1.worker.gpu_worker")
+                worker_module.Worker = Worker
+                core_module = ModuleType("vllm.v1.engine.core")
+                core_module.EngineCore = type("EngineCore", (), {"_initialize_kv_caches": None})
+                launcher_module = ModuleType("launch_engine")
+                launcher_module.cache_groups = cache_groups
+                launcher_module.digest = digest
+                torch_module = ModuleType("torch")
+                memory = iter(readings)
+                torch_module.cuda = SimpleNamespace(
+                    mem_get_info=lambda index, memory=memory: next(memory)
+                )
+                clock = [0.0]
+
+                def sleep(seconds, clock=clock):
+                    clock[0] += seconds
+
+                with (
+                    patch.dict(
+                        sys.modules,
+                        {
+                            "vllm.v1.engine.core": core_module,
+                            "vllm.v1.worker.gpu_worker": worker_module,
+                            "launch_engine": launcher_module,
+                            "torch": torch_module,
+                        },
+                    ),
+                    patch.dict(os.environ, {"NARWHAL_CAPTURE_CACHE": "1"}),
+                    patch("time.sleep", side_effect=sleep),
+                    patch("time.monotonic", side_effect=lambda clock=clock: clock[0]),
+                    contextlib.redirect_stderr(io.StringIO()) as waited,
+                ):
+                    hook = runpy.run_path(str(hook_path))
+                    Worker().init_device()
+                self.assertEqual(calls, ["init"])
+                if polls is not None:
+                    self.assertEqual(clock[0], polls * hook["PEER_RELEASE_POLL_S"])
+                else:
+                    self.assertGreaterEqual(clock[0], hook["PEER_RELEASE_WAIT_S"])
+                self.assertEqual("waiting for KV peers" in waited.getvalue(), clock[0] > 0)
+                self.assertTrue(ready or clock[0] >= hook["PEER_RELEASE_WAIT_S"])
 
     def test_live_cache_copy_checks_running_process_and_plan_hashes(self):
         from tools.deployment.launch_engine import load, prepare

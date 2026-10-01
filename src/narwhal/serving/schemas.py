@@ -434,6 +434,13 @@ class ResidencyOut(BaseModel):
     resyncs: int = 0
 
 
+class PeerReleaseOut(BaseModel):
+    """Release rounds for one ejected engine."""
+
+    rounds: int
+    next_round_s: float | None
+
+
 class StateOut(BaseModel):
     """Live router and scheduler state."""
 
@@ -477,6 +484,8 @@ class StateOut(BaseModel):
     min_decode: int = 1
     below_floor: BelowFloorOut
     ejected: list[str]
+    # Release rounds sent through live consumers for each ejected engine.
+    peer_release: dict[str, PeerReleaseOut] = Field(default_factory=dict)
     draining: list[str] = []
     # Probation adds the configured penalty to placement cost.
     probation: list[str] = []

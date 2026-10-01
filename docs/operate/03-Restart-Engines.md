@@ -155,7 +155,8 @@ Automatic recovery validates an ejected engine once its `/health` returns HTTP 2
 | Condition | Procedure |
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
-| A crashed engine on a host shared with other KV-transfer engines fails to start because its GPU memory stays allocated | Peers still map the stopped engine's KV memory. [Restart the engine wave](#8-restart-an-engine-wave). |
+| A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | Peers still map the stopped engine's KV memory. The engine waits up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release); `/narwhal/state` reports the release rounds in `peer_release.<id>`. |
+| That engine fails at startup with free GPU memory below its budget | Its attestation lacks `launch.peer_release: true`, or every release round missed a peer. [Restart the engine wave](#8-restart-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
 | The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
@@ -183,7 +184,7 @@ POST /narwhal/lifecycle/drain
 
 Set `recovery.engine_restart_policy` to `whole_wave` when engine builds share peer state across the fleet.
 
-Under `individual`, a wave restart also recovers a crashed engine whose host peers keep its GPU memory mapped. `narwhal-check` warns when engines share a host and exchange KV.
+Under `individual`, a wave restart also recovers a crashed engine whose host peers keep its GPU memory mapped. `narwhal-check` warns about host-sharing engines whose attestation lacks `launch.peer_release: true`.
 
 Under `whole_wave`:
 

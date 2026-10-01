@@ -135,6 +135,8 @@ Colocated CUDA engines with dedicated GPUs:
 | Run on their allocated GPUs                         | Container and native backends |
 | Transfer KV to each other through CUDA IPC          | `transfer.gpu_tls` is `cuda`  |
 | Run in containers that share the host PID namespace | Container backend             |
+| Set vLLM NIXL `engine_ttl` to 60 seconds            | `transfer.gpu_tls` is `cuda`  |
+| Set `UCX_CUDA_IPC_CACHE` to `n`                     | `transfer.gpu_tls` is `cuda`  |
 
 `install` copies the selected launch record into the engine checkout's `config/` directory.
 
@@ -219,8 +221,12 @@ Checks that `narwhal-engine check` runs before model startup:
 | `vllm_api_version` | Value of `vllm.version.__version__`                                                   |
 | `prefix_caching`   | `true` when the resolved engine configuration keeps prefix caching on                 |
 | `kv_events`        | The resolved event and replay endpoints, or `null` when cache-event publishing is off |
+| `ucx_version`      | Version of the UCX library bundled with the image's NIXL build, or `null`             |
+| `peer_release`     | `true` when peers release this engine's KV memory after it stops                      |
 
 The check fails when the resolved endpoints differ from `launch.json`.
+
+With `peer_release: false`, the check prints a warning: peers keep a stopped engine's GPU memory mapped, and a whole-wave restart recovers a crashed engine. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) describes the conditions.
 
 The [live HTTP process check](../deploy/03-Validate-Engines.md#prove-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
 

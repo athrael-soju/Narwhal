@@ -241,6 +241,8 @@ The check writes `checked.json`:
 | `vllm_api_version` | `vllm.version.__version__` from the image     |
 | `prefix_caching`   | The resolved prefix-caching setting           |
 | `kv_events`        | The resolved cache-event endpoints, or `null` |
+| `ucx_version`      | UCX bundled with the image's NIXL, or `null`  |
+| `peer_release`     | `true` when peers release KV memory on stop   |
 | `image_id`         | The local image ID                            |
 
 A failed check names the failing package, tokenizer, or identity check.

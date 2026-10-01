@@ -50,6 +50,10 @@ KV_EVENTS_MOUNT = "/narwhal-kv-events"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
 MAX_SOCKET_PATH_BYTES = 107
+# vLLM's NIXL engine_ttl for CUDA IPC peers; the router's first peer release round follows it.
+ENGINE_TTL_S = 60
+# First UCX release that unmaps CUDA IPC rkeys when NIXL removes a remote agent.
+UCX_PEER_RELEASE = (1, 22)
 MANAGED_ENV = {
     "ROCR_VISIBLE_DEVICES",
     "CUDA_VISIBLE_DEVICES",
@@ -116,6 +120,15 @@ def validate_runtime(runtime: dict) -> None:
             or any(c in value for c in "\r\n\0")
         ):
             raise ValueError(f"unsupported runtime environment field: {name}")
+
+
+def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
+    """Return whether UCX unmaps a removed peer's CUDA IPC memory with this cache setting."""
+    try:
+        version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
+    except ValueError:
+        return False
+    return version >= UCX_PEER_RELEASE and ipc_cache == "n"
 
 
 def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:
@@ -348,12 +361,24 @@ def build(
             common.extend(["--security-opt", "seccomp=unconfined"])
     else:
         common = []
+    # CUDA IPC peers keep this engine's KV memory mapped until vLLM evicts it.
+    ipc_peers = gpu_transport == "cuda" and (
+        record.get("shared_device") is not None
+        or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
+    )
     connector = {
         "kv_connector": "NixlConnector",
         "kv_role": "kv_both",
         "kv_load_failure_policy": "fail",
-        "kv_connector_extra_config": {"backends": ["UCX"], "enforce_handshake_compat": True},
+        "kv_connector_extra_config": {
+            "backends": ["UCX"],
+            "enforce_handshake_compat": True,
+            **({"engine_ttl": ENGINE_TTL_S} if ipc_peers else {}),
+        },
     }
+    if ipc_peers:
+        # UCX's CUDA IPC cache keeps a removed peer's memory mapped.
+        values.setdefault("UCX_CUDA_IPC_CACHE", "n")
     args = [
         "-m",
         "vllm.entrypoints.openai.api_server",
@@ -781,7 +806,28 @@ print('NARWHAL_CACHE_SETTINGS=' + json.dumps({
     'kv_events': {'endpoint': events.endpoint, 'replay_endpoint': events.replay_endpoint}
     if published else None,
 }))
-print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
+def ucx_version():
+    import ctypes, ctypes.util, glob, os
+    try:
+        import nixl._api as api
+    except ImportError:
+        return None
+    package = api.__name__.split('.')[0]
+    root = os.path.dirname(os.path.dirname(api.__file__))
+    paths = sorted(glob.glob(os.path.join(root, package + '.libs', 'libucp*.so*')))
+    paths += [ctypes.util.find_library('ucp') or 'libucp.so.0']
+    for path in paths:
+        try:
+            library = ctypes.CDLL(path)
+        except OSError:
+            continue
+        library.ucp_get_version_string.restype = ctypes.c_char_p
+        return library.ucp_get_version_string().decode()
+    return None
+print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
+    'vllm_api_version': api_version,
+    'ucx_version': ucx_version(),
+}))
 """
     )
     arguments = [
@@ -834,6 +880,9 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
         raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
+    ucx = records[0].get("ucx_version")
+    if ucx is not None and not isinstance(ucx, str):
+        raise ValueError(f"runtime check returned an invalid UCX version; inspect {run / log}")
     prefix = "NARWHAL_CACHE_SETTINGS="
     settings = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -848,12 +897,17 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         raise ValueError(
             f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
         )
+    environment = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
+    ipc_cache = environment.get("UCX_CUDA_IPC_CACHE")
+    ipc_peers = "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
     marker = run / "checked.json"
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
         "vllm_api_version": api_version,
         "prefix_caching": settings[0]["prefix_caching"],
         "kv_events": settings[0]["kv_events"],
+        "ucx_version": ucx,
+        "peer_release": not ipc_peers or releases_peers(ucx, ipc_cache),
     }
     if native:
         evidence.update(
@@ -871,6 +925,12 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     else:
         write_private(marker, value)
     print("Runtime identity, package pins, connector import and tokenizer passed.")
+    if not evidence["peer_release"]:
+        print(
+            f"UCX {ucx or 'version unknown'} with UCX_CUDA_IPC_CACHE={ipc_cache or 'y'} keeps "
+            "a stopped CUDA IPC peer's GPU memory mapped; recover a crashed engine with a "
+            "whole-wave restart."
+        )
     if not evidence["prefix_caching"]:
         print("Prefix caching is off; the engine publishes no cache events.")
     elif planned is None or evidence["kv_events"] is None:

@@ -48,18 +48,38 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         output.__enter__()
         self.addCleanup(output.__exit__, None, None, None)
 
-    def test_colocated_kv_engines_warn_about_individual_restarts(self):
-        """Engines sharing a host under individual restarts name themselves in one warning."""
-        self.assertEqual(check.colocated_restart_risk(self.cfg), "")
+    async def test_colocated_kv_engines_warn_about_individual_restarts(self):
+        """Host-sharing engines without attested peer release share one warning."""
+        self.assertEqual(await check.colocated_restart_risk(self.cfg), "")
         self.cfg.engines = [
-            replace(spec, url=f"http://node-a.invalid:{8200 + index}")
+            replace(
+                spec,
+                url=f"http://node-a.invalid:{8200 + index}",
+                attestation_url=f"http://node-a.invalid:{8300 + index}/v1/attestation",
+            )
             for index, spec in enumerate(self.cfg.engines)
         ]
-        risk = check.colocated_restart_risk(self.cfg)
-        self.assertIn("e0, e3 share a host", risk)
+        released = {8300: False, 8301: True}
+
+        def respond(request):
+            return httpx.Response(
+                200, json={"launch": {"peer_release": released[request.url.port]}}
+            )
+
+        def unreachable(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        attested = httpx.MockTransport(respond)
+        risk = await check.colocated_restart_risk(self.cfg, attested)
+        self.assertIn("engines e0 share a host", risk)
+        self.assertIn("without attested peer release", risk)
         self.assertIn("whole-wave restart", risk)
+        released[8300] = True
+        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
+        risk = await check.colocated_restart_risk(self.cfg, httpx.MockTransport(unreachable))
+        self.assertIn("engines e0, e3 share a host", risk)
         self.cfg.engine_restart_policy = "whole_wave"
-        self.assertEqual(check.colocated_restart_risk(self.cfg), "")
+        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
 
     async def test_reach_and_tokenize_account_for_unreachable_engines(self):
         """Failed health checks remove engines from subsequent exact-count probes."""

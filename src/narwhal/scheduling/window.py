@@ -92,8 +92,10 @@ class DemandWindow(Generic[T]):
         row.last = max(row.last, seen)
         return row
 
-    def replace(self, row: Cohort[T] | None, value: T, *, at: float) -> None:
+    def replace(self, row: Cohort[T] | None, value: T, *, at: float) -> Cohort[T] | None:
         """Reprice one retained observation without adding demand or refreshing age.
+
+        Returns the cohort that now holds the observation.
 
         Only active request owners retain cohort references. A removed boundary
         observation invalidates the cohort's last-timestamp evidence; its old
@@ -103,10 +105,12 @@ class DemandWindow(Generic[T]):
         index = math.floor(at / self.bucket_s)
         bucket = self._buckets.get(index)
         if row is None or bucket is None:
-            return
+            return None
         present = self._overflow.get(index) is row if row.overflow else bucket.get(row.value) is row
-        if not present or (not row.overflow and row.value == value):
-            return
+        if not present:
+            return None
+        if not row.overflow and row.value == value:
+            return row
         row.count -= 1
         if at == row.last:
             row.last_certain = False
@@ -115,7 +119,7 @@ class DemandWindow(Generic[T]):
                 del self._overflow[index]
             else:
                 del bucket[row.value]
-        self.add(value, at=at)
+        return self.add(value, at=at)
 
     def rows(self, since: float | None = None) -> Iterator[Cohort[T]]:
         """Read bounded cohorts, including a whole cohort across a cutoff."""

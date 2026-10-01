@@ -22,7 +22,7 @@ import httpx
 
 from .. import command_results as results
 from ..cli_support import add_version_argument
-from ..config import FleetConfig
+from ..config import EngineSpec, FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
 from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
@@ -70,21 +70,34 @@ class Report:
         self.warnings.append(msg)
 
 
-def colocated_restart_risk(cfg: FleetConfig) -> str:
-    """Name engines that share a host and exchange KV under individual restarts."""
+async def colocated_restart_risk(
+    cfg: FleetConfig, transport: httpx.AsyncBaseTransport | None = None
+) -> str:
+    """Name host-sharing KV engines whose attestation reports no peer memory release."""
     contract = cfg.engine_contract
     if cfg.engine_restart_policy != "individual" or contract is None or not contract.connector:
         return ""
-    hosts: dict[str, list[str]] = {}
+    hosts: dict[str, list[EngineSpec]] = {}
     for spec in cfg.engines:
-        hosts.setdefault(urlsplit(spec.url).hostname or "", []).append(spec.iid)
-    shared = sorted(iid for engines in hosts.values() if len(engines) > 1 for iid in engines)
-    if not shared:
+        hosts.setdefault(urlsplit(spec.url).hostname or "", []).append(spec)
+    shared = [spec for specs in hosts.values() if len(specs) > 1 for spec in specs]
+    held: list[str] = []
+    async with httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport) as client:
+        for spec in shared:
+            release = None
+            if spec.attestation_url:
+                with contextlib.suppress(httpx.HTTPError, ValueError, AttributeError):
+                    response = await client.get(spec.attestation_url)
+                    response.raise_for_status()
+                    release = response.json().get("launch", {}).get("peer_release")
+            if release is not True:
+                held.append(spec.iid)
+    if not held:
         return ""
     return (
-        f"engines {', '.join(shared)} share a host and exchange KV through device IPC; "
-        "peers can keep a stopped engine's GPU memory mapped, so recover a crashed engine "
-        "with a whole-wave restart"
+        f"engines {', '.join(sorted(held))} share a host and exchange KV through device IPC "
+        "without attested peer release; peers keep a stopped engine's GPU memory mapped, "
+        "so recover a crashed engine with a whole-wave restart"
     )
 
 
@@ -918,7 +931,7 @@ async def run(
         else:
             for calibration_problem in await verify_calibration(cfg):
                 rep.fail(calibration_problem)
-        if restart_risk := colocated_restart_risk(cfg):
+        if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
         incompatible = await gate_contract(cfg, live, rep)
         store = gate_profile(cfg, rep)

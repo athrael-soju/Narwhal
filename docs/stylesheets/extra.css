@@ -301,7 +301,7 @@
 }
 
 .md-typeset .narwhal-panel-row.wide-first > p:first-child {
-  flex-grow: 2;
+  flex-grow: 3;
 }
 
 @media screen and (max-width: 44.9375em) {

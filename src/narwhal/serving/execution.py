@@ -328,13 +328,14 @@ async def serve_request(
         finally:
             router.sizing_delays.add(router._clock() - sizing)
         if state.demand_observation is not None:
-            router.controller.demand.resize_arrival(
+            req.demand_arrival = router.controller.demand.resize_arrival(
                 state.demand_observation,
                 req.input_len,
                 req.wanted_len,
                 at=arrived,
                 cached_tokens=req.cached_tokens,
             )
+            req.demand_arrived_at = arrived
             state.demand_observation = None
         if not offered:
             router.controller.saw_arrival(req.input_len, wanted_len=req.wanted_len, at=arrived)

@@ -29,6 +29,7 @@ from ..observability.metrics import Histogram, buckets_for
 from ..profiling.store import ProfileStore
 from ..runtime.lifecycle import LifecycleManager
 from ..runtime.monitoring import MonitoringLedger
+from ..runtime.release import PeerRelease
 from ..runtime.residency import ResidencySubscriptions
 from ..runtime.standby import ready as router_ready
 from ..scheduling.controller import ReactiveController
@@ -204,6 +205,7 @@ class NarwhalRouter:
         self._inference_sources: dict[str, set[str]] = {}
         self._verification_at: dict[str, float] = {}
         self._verification_tasks: set[asyncio.Task[None]] = set()
+        self.peer_release = PeerRelease(self._clock)
         # The fleet's dialect fixes the decode token-accounting mode; stamp it
         # into the journal's run metadata when the journal opens.
         journal.extra = {"token_accounting": self._token_accounting()}
@@ -418,6 +420,7 @@ class NarwhalRouter:
         ):
             return
         request.cache_checked_at = now
+        before = dict(request.cached_tokens)
         for iid in list(request.cached_tokens):
             view = self.residency.views.get(iid)
             if view is not None and view.block_size:
@@ -430,6 +433,8 @@ class NarwhalRouter:
                     continue
             del request.cached_tokens[iid]
             request.cache_sequences.pop(iid, None)
+        if request.cached_tokens != before:
+            self.controller.demand.reprice_arrival(request)
 
     def estimate_length(self, body: dict[str, Any]) -> int:
         """Estimate offered input length locally."""
@@ -790,6 +795,7 @@ class NarwhalRouter:
             "min_decode": self.scheduler.min_decode,
             "below_floor": self.scheduler.floor_snapshot(),
             "ejected": sorted(self.scheduler.ejected),
+            "peer_release": self.peer_release.snapshot(),
             "draining": sorted(self.scheduler.draining),
             "quarantined": self.scheduler.quarantine_list(),
             # Engine failure streaks and active verification probes.

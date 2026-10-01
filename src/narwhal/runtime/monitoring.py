@@ -19,6 +19,7 @@ from .lifecycle import (
     check_process_identities,
     validate_readmission,
 )
+from .release import release_peers
 from .standby import controls_fleet
 
 if TYPE_CHECKING:
@@ -416,6 +417,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             router.monitoring.ok(stage)
     try:
         await readmit(router, interval * router.cfg.readmit_every)
+        release_peers(router)
     except Exception as exc:
         router.monitoring.fail("readmission", exc)
     else:

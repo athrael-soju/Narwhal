@@ -401,6 +401,17 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('severity="page"', query["expr"])
         self.assertIn('severity="warn"', query["expr"])
         outcomes = dashboard["spec"]["elements"]["panel-11"]["spec"]["id"]
+        # Fleet events sits beside the engine table at a quarter of the row.
+        grid = {
+            item["spec"]["element"]["name"]: item["spec"]
+            for item in dashboard["spec"]["layout"]["spec"]["items"]
+        }
+        self.assertEqual(grid["panel-37"]["y"], grid["panel-7"]["y"])
+        self.assertEqual(
+            (grid["panel-7"]["x"], grid["panel-7"]["width"], grid["panel-37"]["x"]), (0, 18, 18)
+        )
+        self.assertEqual(grid["panel-37"]["width"], 6)
+        self.assertEqual(grid["panel-11"]["width"], 24)
         markers = {
             annotation["spec"]["name"]: annotation["spec"]
             for annotation in dashboard["spec"]["annotations"]

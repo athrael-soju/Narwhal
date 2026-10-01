@@ -588,6 +588,8 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "launch_sha256": plan.get("launch_sha256", ""),
         "launcher_sha256": plan.get("launcher_sha256", ""),
         "cache_capture_sha256": plan.get("cache_capture_sha256", ""),
+        "ucx_version": checked.get("ucx_version") or "",
+        "peer_release": checked.get("peer_release") is True,
     }
     return {
         "schema": "narwhal.attestation",

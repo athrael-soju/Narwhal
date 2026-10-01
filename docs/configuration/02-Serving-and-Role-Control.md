@@ -200,6 +200,8 @@ Decisions that use the warm price:
 - offered demand
 - role-split scoring
 
+Each recheck that changes a request's cache evidence reprices its arrival in offered demand.
+
 Offered demand takes warm prices from engines that run prefill:
 
 | Pricing            | Warm-price engines                      |

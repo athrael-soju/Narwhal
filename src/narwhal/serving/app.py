@@ -243,7 +243,7 @@ def create_app(
                 lease_watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await lease_watch
-            probes = list(router._verification_tasks)
+            probes = [*router._verification_tasks, *router.peer_release.tasks]
             for probe in probes:
                 probe.cancel()
             await asyncio.gather(*probes, return_exceptions=True)

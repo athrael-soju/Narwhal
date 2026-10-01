@@ -3235,7 +3235,7 @@
                         "spec": {
                             "x": 0,
                             "y": 8,
-                            "width": 16,
+                            "width": 18,
                             "height": 10,
                             "element": {
                                 "kind": "ElementReference",
@@ -3246,9 +3246,9 @@
                     {
                         "kind": "GridLayoutItem",
                         "spec": {
-                            "x": 16,
+                            "x": 18,
                             "y": 8,
-                            "width": 8,
+                            "width": 6,
                             "height": 10,
                             "element": {
                                 "kind": "ElementReference",

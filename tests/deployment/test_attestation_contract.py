@@ -241,7 +241,13 @@ class AttestationContractTests(unittest.TestCase):
         plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
         save(
             run / "checked.json",
-            {"plan_sha256": plan_hash, "image_id": image, "vllm_api_version": "0.29.0"},
+            {
+                "plan_sha256": plan_hash,
+                "image_id": image,
+                "vllm_api_version": "0.29.0",
+                "ucx_version": "1.22.0",
+                "peer_release": True,
+            },
         )
         (run / "container.id").write_text(cid + "\n")
         save(
@@ -555,6 +561,8 @@ class AttestationContractTests(unittest.TestCase):
                 self.assertEqual(document["contract"]["attention_backend"], "ROCM_AITER_MLA")
                 self.assertIs(document["contract"]["hybrid_kv_cache_manager"], True)
                 self.assertFalse(EngineContract(**document["contract"]).missing())
+                self.assertEqual(document["launch"]["ucx_version"], "1.22.0")
+                self.assertIs(document["launch"]["peer_release"], True)
                 (Path(folder) / "runs").mkdir()
                 previous = Path.cwd()
                 os.chdir(folder)

@@ -123,12 +123,27 @@ class DemandModel:
         *,
         at: float,
         cached_tokens: dict[str, int] | None = None,
-    ) -> None:
-        """Replace one local estimate with the admitted request's count and cache evidence."""
+    ) -> Cohort[Arrival] | None:
+        """Replace one local estimate with the admitted request's count and cache evidence.
+
+        Returns the arrival's cohort for later repricing.
+        """
         arrival, expected = observation
         cached = tuple(sorted((cached_tokens or {}).items()))
-        self.arrivals.replace(arrival, Arrival(input_len, cached), at=at)
+        repriced = self.arrivals.replace(arrival, Arrival(input_len, cached), at=at)
         self.expected_decode.replace(expected, (input_len, max(0, wanted_len)), at=at)
+        return repriced
+
+    def reprice_arrival(self, request: Request) -> None:
+        """Price the request's offered prefill with its rechecked cache evidence."""
+        if request.demand_arrival is None or request.demand_arrived_at is None:
+            return
+        cached = tuple(sorted(request.cached_tokens.items()))
+        request.demand_arrival = self.arrivals.replace(
+            request.demand_arrival,
+            Arrival(request.input_len, cached),
+            at=request.demand_arrived_at,
+        )
 
     def saw_completion(
         self,

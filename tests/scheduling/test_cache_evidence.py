@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.costs import prefill_seconds
+from narwhal.scheduling.demand import Arrival
 from narwhal.scheduling.scoring import CACHE_RECHECK_S
 from narwhal.serving import router as router_module
 from narwhal.serving.app import create_app
@@ -253,6 +254,26 @@ class PlacementRecheckTests(unittest.TestCase):
                 self.assertEqual(request.cache_sequences, {})
                 self.assertIsNone(request.cache_placement)
                 self.assertNotEqual(placed.iid, self.warm_iid)
+
+    def test_offered_demand_follows_evidence_that_eviction_removes(self):
+        """Offered prefill demand prices cold once placement finds the prefix evicted."""
+        demand = self.router.controller.demand
+        now = self.router._clock()
+        request = self.sized()
+        observation = demand.saw_arrival(len(self.prompt), wanted_len=4, at=now)
+        request.demand_arrival = demand.resize_arrival(
+            observation, len(self.prompt), 4, at=now, cached_tokens=request.cached_tokens
+        )
+        request.demand_arrived_at = now
+        warm = demand.estimate(now, window_s=60.0, step_s=1.0)[0]
+        self.view.forget("engine restarted")
+        self.scheduler.schedule(request)
+        cold = demand.estimate(now, window_s=60.0, step_s=1.0)[0]
+        self.assertGreater(cold, warm)
+        self.assertEqual([row.value for row in demand.arrivals.rows()], [Arrival(len(self.prompt))])
+        self.assertEqual(demand.arrival_count(), 1)
+        self.scheduler.schedule(request)
+        self.assertEqual(demand.arrival_count(), 1)
 
     def test_a_retry_placed_cold_clears_the_earlier_placement_record(self):
         request = self.sized()
