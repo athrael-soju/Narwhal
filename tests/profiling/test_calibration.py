@@ -187,7 +187,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertGreater(document["candidate_deadline_s"], 0.5)
-        # Calibration forces its requested output so an immediate end of text cannot fail it.
+        # An immediate end of text cannot fail calibration.
         self.assertTrue(all(body["ignore_eos"] and body["min_tokens"] >= 1 for body in bodies))
 
     async def test_a_relaunch_during_calibration_marks_the_generation_changed(self):

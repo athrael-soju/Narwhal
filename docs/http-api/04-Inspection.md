@@ -75,12 +75,7 @@ The earliest matching row sets `reason`:
 | Pending engine identity validation  | `engine identity validation pending`                                                           |
 | Zero engines eligible for placement | `no available engines`                                                                         |
 
-`monitoring.degraded` transitions:
-
-| Transition | Condition                                                    |
-| ---------- | ------------------------------------------------------------ |
-| To `true`  | `controller.monitor_failure_limit` consecutive failed passes |
-| To `false` | One fully successful pass                                    |
+`monitoring.degraded` turns `true` after `controller.monitor_failure_limit` consecutive failed passes. One fully successful pass sets it back to `false`.
 
 A standby router counts each `control_ready: false` response from the active router's `/ready` as a missed takeover probe.
 

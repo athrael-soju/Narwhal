@@ -599,8 +599,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_pending_output_exceeding_kv_blocks_move(self) -> None:
         fleet = self.fleet
-        # Pending output is priced before decode dispatch, even when all GPUs
-        # would currently appear idle. Physical capacity also bounds the domain.
+        # Pending output is priced before decode dispatch, against physical KV capacity.
         fleet.monitor.waiting["pending"] = Request("pending", 1, wanted_len=1_000_000)
         self.assertIsNone(fleet.confirm())
         decision = fleet.scheduler._last_decision
@@ -674,8 +673,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_rising_decode_demand_blocks_move(self) -> None:
         fleet = self.fleet
-        # Fill the long window before the burst so its denominator differs
-        # from the short horizon by enough to exercise the trend threshold.
+        # The trend gate compares the burst's short-horizon rate with a filled long window.
         fleet.advance(60)
         for index in range(200):
             fleet.controller.saw_arrival(100, wanted_len=100, at=fleet.now - 5 + index / 100)
@@ -983,8 +981,7 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
             streams.append(response)
             return response
 
-        # Placement prefers e1's measured costs. Pins constrain role changes
-        # only, leaving e1 as the occupied source candidate for the policy.
+        # Pins constrain role changes only; e1's cheaper decode makes it the occupied source.
         fleet.scheduler.pinned = frozenset(f"e{i}" for i in range(2, 6))
         fleet.profiles.put(replace(fleet.profiles.get("e1"), tpot_intercept=0.0001))
         for index in range(5):
@@ -1007,7 +1004,7 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(
             fleet.monitor.instances["e1"].decode[first.lifecycle.rid], first.lifecycle.request
         )
-        # Hold e0's prefill slot so a fresh original selects e1 in its new role.
+        # With e0's prefill slot held, a fresh original selects e1 in its new role.
         fleet.monitor.dispatched("e0", Request("busy", 100))
         fresh = await request("fresh")
         self.assertEqual(fresh.lifecycle.prefill_iid, "e1")

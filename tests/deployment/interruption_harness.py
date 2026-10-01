@@ -141,7 +141,7 @@ def controller(root: Path, selected: str) -> None:
 
 def wait_workers(registry: Path, count: int) -> None:
     deadline = time.monotonic() + 4
-    # The controller writes its own identity before creating the synthetic service.
+    # The registry also holds the controller's own identity.
     while len(list(registry.glob("pid-*.json"))) < count + 1:
         if time.monotonic() >= deadline:
             raise TimeoutError("synthetic workers did not register")

@@ -25,10 +25,7 @@ narwhal diagnostics collect \
 
 On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md).
 
-| Option | Adds |
-| --- | --- |
-| `--artifact PATH` | Ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run |
-| `--include-request-content` | Journal and completion content |
+Add `--artifact PATH` to include ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run. Add `--include-request-content` to include journal and completion content.
 
 Manual capture for releases before 0.3.0:
 
@@ -54,18 +51,22 @@ Before stopping an engine, capture evidence per the [planned restart or unplanne
 
 ## Router, admission, and lifecycle signals
 
-| Symptom | Next check or action | Follow-up |
-| --- | --- | --- |
-| Request to `/health` fails | Query peer `/ready` to identify the lease holder. | Inspect the router process, host, and network path. |
-| `/health` reports `standby` | Send traffic and lifecycle actions to the active lease holder. | |
-| `/health` reports `fenced` | Identify the current lease holder. | Remove the fenced router from the load balancer. |
-| `/health` reports `maintenance` | Follow `/narwhal/lifecycle` through the engine wave until readiness returns. | |
-| Both routers return HTTP 503 from `/ready` | Compare refusal reasons. | Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness. |
-| HTTP 429 increases | Separate `rejected`, `refused`, and queue-shed reasons before changing capacity. | |
-| HTTP 502 increases | Inspect engine failures, ejection, quarantine, and in-flight work. | |
-| HTTP 504 increases | Separate queue and request expiry from engine timeouts with the response error and terminal journal row. | |
-| A stream ends with an error frame after the HTTP 200 response starts | Inspect failed attempts, final outcome, and participating engines. | |
-| Lifecycle state is `blocked` | Repair the failed drain identity capture or readmission check. | Retry that operation. |
+Start from the router's health and readiness:
+
+- If a request to `/health` fails, query the peer's `/ready` to identify the lease holder. Inspect the router process, host, and network path.
+- If `/health` reports `standby`, send traffic and lifecycle actions to the active lease holder.
+- If `/health` reports `fenced`, identify the current lease holder and remove the fenced router from the load balancer.
+- If `/health` reports `maintenance`, follow `/narwhal/lifecycle` through the engine wave until readiness returns.
+- If both routers return HTTP 503 from `/ready`, compare their refusal reasons. Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness.
+
+For rising client errors:
+
+- If HTTP 429 responses increase, separate `rejected`, `refused`, and queue-shed reasons before changing capacity.
+- If HTTP 502 responses increase, inspect engine failures, ejection, quarantine, and in-flight work.
+- If HTTP 504 responses increase, separate queue and request expiry from engine timeouts with the response error and terminal journal row.
+- If a stream ends with an error frame after the HTTP 200 response starts, inspect the failed attempts, final outcome, and participating engines.
+
+If the lifecycle state is `blocked`, repair the failed drain identity capture or readmission check, and retry that operation.
 
 Procedures by path:
 
@@ -103,12 +104,7 @@ Procedures by path:
 4. Compare completed throughput and the share of requests meeting the service-level objective.
 5. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
 
-Ratio definitions:
-
-| Ratio | Numerator | Denominator |
-| --- | --- | --- |
-| Load-test router outcome | Router completions | Admitted requests |
-| [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) | Client completions that meet the service-level objective | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
+The load-test router outcome ratio divides router completions by admitted requests. [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) divides the client completions that meet the service-level objective by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
 
 ## Validating recovery
 

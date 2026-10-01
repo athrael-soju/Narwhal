@@ -78,8 +78,7 @@ _DECODE_BOUNDS = (
 def _check(raw: Mapping[str, Any], label: str) -> None:
     """Raise on the first contract violation in one profile row.
 
-    `raw` maps field name to value; absent optional fields take their dataclass
-    defaults. `label` names the engine when `iid` is valid, or the row's position otherwise.
+    Absent optional fields in `raw` take their dataclass defaults.
     """
     where = f"profile {label}"
     iid = raw.get("iid")
@@ -267,10 +266,7 @@ class Profile:
         return self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
 
     def covers_output(self, output_len: float) -> bool:
-        """Return whether an output length reaches the measured decode sweep's minimum.
-
-        The decode fit prices one step from batch requests and KV tokens.
-        """
+        """Return whether an output length reaches the measured decode sweep's minimum."""
         return self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
@@ -283,10 +279,7 @@ class Profile:
         )
 
     def max_tokens(self, tpot_slo_s: float, batch_requests: float = 0.0) -> float:
-        """Return the largest decode batch that meets `tpot_slo_s`.
-
-        Inverts `token_interval` after charging the active-request term.
-        """
+        """Return the largest decode batch, in KV tokens, that meets `tpot_slo_s`."""
         if self.decode_max_requests is not None and batch_requests > self.decode_max_requests:
             return 0.0
         fixed = self.tpot_intercept + self.tpot_request_slope * float(batch_requests)
@@ -314,10 +307,9 @@ class Profile:
         return min(bounds) if bounds else None
 
     def decode_request_limit(self, context_tokens: float, request_cap: int = 0) -> int:
-        """Return the concurrent decode-request limit for the context length.
+        """Return the concurrent decode-request limit for the context length, or 0 when unmeasured.
 
-        A positive `request_cap` bounds the limit. Return 0 for an invalid
-        context or missing measured request bound.
+        A positive `request_cap` bounds the limit.
         """
         measured = self.decode_max_requests
         if context_tokens <= 0 or measured is None or measured <= 0:

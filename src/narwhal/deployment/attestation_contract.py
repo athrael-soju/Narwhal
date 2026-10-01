@@ -368,7 +368,7 @@ def capture_native_http(run: Path) -> None:
 
 
 def capture_native(run: Path) -> Path:
-    """Feed native evidence through Narwhal's existing attestation generator."""
+    """Capture native engine evidence and return the engine attestation path."""
     plan, checked, _ = checked_plan(run)
     if plan.get("backend") != "native":
         raise ValueError("native capture requires a native launch plan")
@@ -592,12 +592,12 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     }
 
 
-# Per-launch addresses and endpoints; the flags stay, their values do not.
+# Flags whose values change per launch.
 _PER_LAUNCH_VALUES = frozenset(("--host", "--port", "--served-model-name", "--kv-events-config"))
 
 
 def launch_args(args: list[str]) -> list[str]:
-    """Return engine arguments without per-launch addresses and endpoints."""
+    """Return engine arguments with the values of per-launch flags removed."""
     kept: list[str] = []
     skip = False
     for arg in args:

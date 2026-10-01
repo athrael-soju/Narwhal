@@ -48,15 +48,9 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` writes `seed-response.json` and `workload.json` under `workload/`:
+`prepare` writes `seed-response.json` and `workload.json` under `workload/`. The workload uses the single served model from the router's `/v1/models`. Its seed request is one unscored 32-token completion from a fixed public seed prompt.
 
-| Item              | Value                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| Model             | The single served model from the router's `/v1/models`                                                          |
-| Seed request      | One unscored 32-token completion from a fixed public seed prompt                                                |
-| Token pool        | The returned prompt token IDs when they contain two or more distinct IDs, otherwise the 32 generated output IDs |
-| Preparation error | Fewer than two distinct IDs in the pool                                                                         |
-| Request `n`       | 8,192 input IDs drawn from the pool with `seed + n`                                                             |
+The token pool holds the seed request's returned prompt token IDs when they contain two or more distinct IDs, otherwise its 32 generated output IDs. Request `n` draws 8,192 input IDs from the pool with `seed + n`. Preparation fails when the pool holds fewer than two distinct IDs.
 
 Request parameters for both rates:
 
@@ -78,16 +72,15 @@ Each run manifest records:
 - httpx version
 - every command-line setting, including the client limits
 
-| Client limit        | Flag             | Default |
-| ------------------- | ---------------- | :-----: |
-| Concurrent requests | `--max-inflight` | 64      |
-| Scheduling lag      | `--max-lag`      | 0.05 s  |
+The client limits concurrent requests with `--max-inflight` (default 64) and scheduling lag with `--max-lag` (default 0.05 s).
 
 An offer over either limit becomes a terminal `client_schedule_miss` record with `client_schedule_valid: false` in the summary.
 
 Check client CPU and scheduling lag before raising either limit.
 
 ## 8. Measuring 0.5 request/s
+
+Run the first rate:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -101,6 +94,8 @@ Check client CPU and scheduling lag before raising either limit.
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
+`load_trial.py run` exits with one of these codes:
+
 | Exit  | Meaning                                                | Required action                                          |
 | :---: | ------------------------------------------------------ | -------------------------------------------------------- |
 | `0`   | Schedule validity and candidate attainment both passed | Drain the router                                         |
@@ -108,12 +103,13 @@ Check client CPU and scheduling lag before raising either limit.
 | `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json`        |
 | `130` | Interrupted run with partial artifacts                 | Keep the partial output and rerun into a new `--out` path |
 
-For exit code `2`:
+After exit code `2`, a `client_schedule_valid` value of `true` means the rate missed the attainment target. Keep the result and stop.
 
-| `client_schedule_valid` | Meaning                               | Required action                                                                   |
-| ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| `true`                  | The rate missed the attainment target | Keep the result and stop                                                          |
-| `false`                 | Client scheduling missed              | 1. Inspect `requests.jsonl`.<br>2. Repair client scheduling.<br>3. Repeat the rate. |
+A `client_schedule_valid` value of `false` means client scheduling missed:
+
+1. Inspect `requests.jsonl`.
+2. Repair client scheduling.
+3. Repeat the rate.
 
 ## 9. Measuring 1 request/s
 

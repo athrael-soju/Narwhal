@@ -71,6 +71,8 @@ Each original completion request and its retries share one terminal row.
 | `upstream_seconds` | Summed HTTP leg seconds per phase (`prefill`, `decode`) across every attempt, failed or successful. |
 | `error` | Error detail on `failed`, `refused`, `rejected`, `expired`, and `invalid` rows. |
 
+These conditions set a field to `0` or null:
+
 | Condition | Field values |
 | --- | --- |
 | `input_sized` is false | `input_len` is `0`. |
@@ -79,17 +81,20 @@ Each original completion request and its retries share one terminal row.
 | Prefill incomplete | `ttft_s` and `tpot_s` are null. |
 | Zero visible output | `first_byte_s` is null. |
 | `terminal` is `completed` or `cancelled` | `error` is null. |
-| Input sizing finds an engine holding at least one leading prompt block before the final prompt token | `cached_tokens` lists that engine. |
-| A prefill-placement recheck finds zero matching blocks on a listed engine | `cached_tokens` drops that engine. |
-| The request sets `truncate_prompt_tokens`, `documents`, or `reasoning_effort` | `cached_tokens` is empty. |
-| A chat message carries a multimodal content part | `cached_tokens` is empty. |
-| `engine_contract.speculative_config` names a speculative-decoding setup | `cached_tokens` is empty. |
-| The fleet leaves `engine_contract` unset | `cached_tokens` is empty. |
-| Input sizing uses the local estimate or a count-only tokenization response | `cached_tokens` is empty. |
-| `cached_tokens` is empty | `cache_placement` is null. |
-| The placed engine is outside the profile store | `cache_placement` is null. |
+
+`cached_tokens` lists each engine that input sizing finds holding at least one leading prompt block before the final prompt token. A prefill-placement recheck drops a listed engine when it finds zero matching blocks on it.
+
+`cached_tokens` is empty when:
+
+- the request sets `truncate_prompt_tokens`, `documents`, or `reasoning_effort`
+- a chat message carries a multimodal content part
+- `engine_contract.speculative_config` names a speculative-decoding setup
+- the fleet leaves `engine_contract` unset
+- input sizing uses the local estimate or a count-only tokenization response
 
 #### Cache placement
+
+`cache_placement` is null when `cached_tokens` is empty or the placed engine is outside the profile store. Otherwise it carries these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -113,6 +118,8 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 
 #### Attempt failures
 
+Each `attempt_failures` entry carries these fields:
+
 | Field | Meaning |
 | --- | --- |
 | `at` | Monotonic time of the failure. |
@@ -126,21 +133,13 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `retry_reason` | `allowed`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. |
 | `backoff_s` | Scheduled backoff seconds. |
 
-| Property | Value |
-| --- | --- |
-| Entry limit | At most `serving.max_attempts`. |
-| Cancellation during backoff | The last entry keeps `retry_scheduled: true`. |
+`attempt_failures` holds at most `serving.max_attempts` entries. After a cancellation during backoff, the last entry keeps `retry_scheduled: true`.
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 
 ### Separating transfer and decode queueing
 
-For requests whose first byte follows prefill:
-
-| Request | `first_byte_s - ttft_s` contains |
-| --- | --- |
-| Crossed | KV transfer plus decode queueing. |
-| Locally decoded | Decode queueing. |
+For a crossed request whose first byte follows prefill, `first_byte_s - ttft_s` contains KV transfer plus decode queueing. For a locally decoded request, it contains decode queueing.
 
 ## Attainment accounting
 
@@ -169,6 +168,8 @@ Accept deployments on the client's all-offer score.
 
 ## Journal events
 
+Each router event row carries an `at` timestamp, in Unix wall-clock seconds for `engine_lifecycle` and on the router monotonic clock for every other event.
+
 | `event` | Written when | Fields beside `at` |
 | --- | --- | --- |
 | `below_floor` | Live prefill engines fall below `min_prefill`. | `live_prefill`, `min_prefill`, `ejected`, `quarantined` |
@@ -180,15 +181,12 @@ Accept deployments on the client's all-offer score.
 | `monitoring_degraded` | Consecutive failed monitoring passes reach `controller.monitor_failure_limit`. | `stage`, `class`, `core_consecutive` |
 | `monitoring_recovered` | A fully successful monitoring pass clears degraded state. | |
 
-| Event | `at` clock |
-| --- | --- |
-| `engine_lifecycle` | Unix wall-clock seconds |
-| Every other event | Router monotonic clock |
-
 A failed profile-generation check during a health or inference recovery probe:
 
 - ejects the engine
 - writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
+
+That event carries these fields:
 
 | Field | Meaning |
 | --- | --- |

@@ -56,7 +56,7 @@ def add_format(parser: argparse.ArgumentParser) -> None:
 
 
 def protect_environment(name: str) -> None:
-    """Redact a configured credential whose variable may have an arbitrary name."""
+    """Redact the value of environment variable `name` from command output."""
     if (result := _active.get()) is not None and name and (value := os.environ.get(name)):
         result.secrets.add(value)
 
@@ -68,7 +68,7 @@ def set_operation(operation: str) -> None:
 
 
 def set_data(data: Mapping[str, Any]) -> None:
-    """Attach structured operation data independently of diagnostic prose."""
+    """Merge `data` into the result's structured operation data."""
     if (result := _active.get()) is not None:
         result.data.update(data)
 
@@ -90,7 +90,7 @@ def _signature(path: Path) -> tuple[int, int] | None:
 
 
 def add_artifact(kind: str, path: str | Path) -> None:
-    """Track an artifact before work so failures retain its actual final state."""
+    """Track an artifact path with its signature before the command changes it."""
     if (result := _active.get()) is not None:
         resolved = Path(path).expanduser().absolute()
         result.artifacts.setdefault(resolved, (kind, _signature(resolved)))
@@ -146,8 +146,7 @@ class _RedactedStream:
 
 @contextmanager
 def _child_stdout(diagnostics: _RedactedStream) -> Iterator[None]:
-    # Python stream replacement leaves inherited descriptors unchanged. Spool child
-    # diagnostics to disk, keeping Python progress on a duplicate of the original stderr.
+    # Python stream replacement leaves inherited descriptors 1 and 2 unchanged.
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as capture:
         saved_stdout, saved_stderr = os.dup(1), os.dup(2)
         original_stream = diagnostics.stream
@@ -210,7 +209,7 @@ def _redactor() -> Callable[[str], str]:
 
 
 def output_arguments(argv: list[str]) -> tuple[list[str], bool]:
-    """Separate output selection before dispatch or any command side effects."""
+    """Strip `--format` from `argv`; return the rest and whether JSON was requested."""
     stripped: list[str] = []
     requested = False
     index = 0
@@ -336,8 +335,7 @@ def invoke(
             },
         )
 
-        # Schema identity, status codes and hashes are wire metadata. Apply credential
-        # redaction to operator data and diagnostic text before JSON escaping.
+        # Schema identities and digest values pass through credential redaction.
         schemas = {contract.schema for contract in CONTRACTS.values()}
 
         def clean(value: Any, key: str = "") -> Any:

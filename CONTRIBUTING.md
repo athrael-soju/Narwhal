@@ -51,6 +51,8 @@ make sync
 make sync VENV_PYTHON=/path/to/venv/bin/python
 ```
 
+These targets run the checks:
+
 | Command                    | Action                                                                                                                       |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `make check`               | Runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
@@ -142,6 +144,8 @@ Update the docs whenever a config field, route, journal field, metric, CLI flag,
 
 ## Repository layout
 
+Each top-level directory holds one part of the project:
+
 | Path           | Contents                                         |
 | -------------- | ------------------------------------------------ |
 | `src/narwhal/` | Python package and scheduling implementation     |
@@ -153,6 +157,8 @@ Update the docs whenever a config field, route, journal field, metric, CLI flag,
 | `overrides/`   | MkDocs theme template and build hooks            |
 
 ### Source responsibilities
+
+Each area of the Python package lives in one package or module:
 
 | Area                                                                                | Package                                               |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -202,26 +208,16 @@ Site automation provides host credentials, the source distribution, network conf
 
 ## Issues
 
-Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose) to report a failure, request a feature, or suggest a documentation correction.
+Use the [issue chooser](https://github.com/athrael-soju/Narwhal/issues/new/choose) to report a failure, request a feature, or suggest a documentation correction. New issues receive a label from their source:
 
-| Label           | Use for                                      |
-| --------------- | -------------------------------------------- |
-| `bug`           | A confirmed failure or regression            |
-| `enhancement`   | A new capability or behaviour change         |
-| `documentation` | A change to operator or contributor guidance |
+| Label           | Use for                                      | Set by                        |
+| --------------- | -------------------------------------------- | ----------------------------- |
+| `bug`           | A confirmed failure or regression            | Bug report form               |
+| `enhancement`   | A new capability or behaviour change         | Feature request form          |
+| `documentation` | A change to operator or contributor guidance | Documentation correction form |
+| `triage`        | An issue awaiting its label                  | Blank issue                   |
 
-Combine labels when several apply.
-
-New issues receive a label from their source:
-
-| Source                        | Label applied   |
-| ----------------------------- | --------------- |
-| Bug report form               | `bug`           |
-| Feature request form          | `enhancement`   |
-| Documentation correction form | `documentation` |
-| Blank issue                   | `triage`        |
-
-Maintainers replace `triage` with the applicable label. Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
+Combine labels when several apply. Maintainers replace `triage` with the applicable label. Set a milestone when the issue contributes to a planned deliverable, and link prerequisite or related issues in its description.
 
 ### Milestone delivery
 
@@ -238,10 +234,7 @@ For each newly scoped milestone:
 9. Merge the parent PR after all sub-issues close and the milestone criteria pass.
 10. Close the parent issue and the milestone.
 
-| Issue        | Records                                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| Parent issue | Outcome, scope, exclusions, dependencies, acceptance criteria, integration branch, and starting commit |
-| Sub-issue    | Package, prerequisites, acceptance criteria, and required checks                                       |
+The parent issue records the outcome, scope, exclusions, dependencies, acceptance criteria, integration branch, and starting commit. Each sub-issue records its package, prerequisites, acceptance criteria, and required checks.
 
 Link cross-milestone prerequisites explicitly. Deliver shared contracts through the defining milestone's merge to `main`, then update dependent integration branches from `main` after it lands.
 
@@ -257,11 +250,7 @@ Keep hardware and model identities out of public milestone and issue text, comme
 
 Review the diff and commit messages and run the local checks before pushing. Push your branch to your fork, or to `athrael-soju/Narwhal` as a maintainer, and open a pull request in `athrael-soju/Narwhal`.
 
-| PR                | Target branch                                       |
-| ----------------- | --------------------------------------------------- |
-| Sub-issue         | [Milestone integration branch](#milestone-delivery) |
-| Parent milestone  | `main`                                              |
-| Standalone change | `main`                                              |
+A sub-issue PR targets its [milestone integration branch](#milestone-delivery). A parent milestone PR or a standalone change targets `main`.
 
 Keep each branch to one coherent change, and open a draft while implementation or evidence gathering continues.
 

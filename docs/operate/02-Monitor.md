@@ -18,23 +18,11 @@ description: Interpret Narwhal router health, readiness and placement state duri
 
 ### Backend exhaustion
 
-Active router responses when every engine is excluded from placement:
-
-| Request | Response |
-| --- | --- |
-| `/health` | `status: degraded` |
-| `/ready` | HTTP 503 with `reason: no available engines` |
-| New completion requests | HTTP 503, retryable error code `backend_unavailable` |
+When every engine is excluded from placement, the active router's `/health` reports `status: degraded` and `/ready` returns HTTP 503 with `reason: no available engines`. New completion requests receive HTTP 503 with the retryable error code `backend_unavailable`.
 
 ### Whole-wave lifecycle hold
 
-Active router responses until whole-wave readmission succeeds:
-
-| Request | Response |
-| --- | --- |
-| `/health` | `status: maintenance` |
-| `/ready` | HTTP 503 with `reason` = lifecycle reason |
-| New completion requests | HTTP 503, error code `standby`, error message = lifecycle reason |
+Until whole-wave readmission succeeds, the active router's `/health` reports `status: maintenance` and `/ready` returns HTTP 503 with the lifecycle reason as `reason`. New completion requests receive HTTP 503 with error code `standby` and the lifecycle reason as the error message.
 
 ### Temporary holds
 
@@ -42,12 +30,7 @@ Active router responses until whole-wave readmission succeeds:
 
 ### Router control and replacement
 
-Signals in `/ready`:
-
-| Signal | Meaning | Use |
-| --- | --- | --- |
-| HTTP status | Traffic eligibility | Load balancers route client traffic |
-| `control_ready: true` | A valid lease and healthy engine monitoring | Standby routers copy the state handoff |
+The HTTP status of `/ready` shows traffic eligibility, and load balancers route client traffic by it. `control_ready: true` in `/ready` shows a valid lease and healthy engine monitoring to the standby routers that copy the state handoff.
 
 A replacement router:
 
@@ -84,9 +67,4 @@ Prometheus and Grafana setup: [Setting up observability](../Observability.md).
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
-Telemetry sources:
-
-| Source | Scope |
-| --- | --- |
-| Request journals | Per-request placement and timing |
-| Metrics | Process-level summaries since the last counter reset |
+Request journals record per-request placement and timing. Metrics hold process-level summaries since the last counter reset.

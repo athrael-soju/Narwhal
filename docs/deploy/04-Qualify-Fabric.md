@@ -8,7 +8,7 @@ Measure each directed host edge against its source cache group's budget while th
 
 ## Building the source budget
 
-Initial trial parameters:
+The `calculate` command sizes the budget from these initial trial parameters:
 
 | Parameter                     | Value | `calculate` flag        |
 | ----------------------------- | :---: | ----------------------- |
@@ -196,12 +196,7 @@ Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
 ## Measuring `ucx_rdma`
 
-The test measures one-way RDMA writes between host-memory buffers.
-
-| Fabric                              | GID selection                                             |
-| ----------------------------------- | --------------------------------------------------------- |
-| RDMA over Converged Ethernet (RoCE) | A global identifier (GID) index, selected in steps 4 to 7 |
-| Native InfiniBand                   | The site's active port and GID selection                  |
+The test measures one-way RDMA writes between host-memory buffers. On RDMA over Converged Ethernet (RoCE), steps 4 to 7 select a global identifier (GID) index. On native InfiniBand, use the site's active port and GID selection.
 
 1. Install `perftest` on each host that is missing it:
 
@@ -275,10 +270,7 @@ The test measures one-way RDMA writes between host-memory buffers.
 
 ## Completing the matrix and matching retained evidence
 
-| KV handoff           | Qualified by                                                      |
-| -------------------- | ----------------------------------------------------------------- |
-| Between engine hosts | This matrix                                                       |
-| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#running-preflight) |
+This matrix qualifies KV handoffs between engine hosts. The [Gate F preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
 
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
@@ -303,12 +295,7 @@ Link inputs:
 - The utility version
 - The measurement parameters
 
-| Link inputs   | Action                         |
-| ------------- | ------------------------------ |
-| Any changed   | Collect a new directed sample. |
-| All identical | Reuse the retained sample.     |
-
-Reuse a retained sample:
+When any link input changes, collect a new directed sample. When all link inputs are identical, reuse the retained sample:
 
 1. Set `CURRENT_EDGE_PREFIX` to the current link record prefix.
 2. Set `RETAINED_EDGE_PREFIX` to the retained evidence prefix.
@@ -324,12 +311,7 @@ Reuse a retained sample:
       --out "$CURRENT_EDGE_PREFIX.comparison.json"
     ```
 
-`--sample` value by transport:
-
-| Transport  | `--sample` value           |
-| ---------- | -------------------------- |
-| `ucx_tcp`  | The retained `iperf3` JSON |
-| `ucx_rdma` | The retained `.txt` report |
+For `ucx_tcp`, `--sample` takes the retained `iperf3` JSON. For `ucx_rdma`, it takes the retained `.txt` report.
 
 | `reuse-edge` exit code | Meaning                                                                                 |
 | :--------------------: | --------------------------------------------------------------------------------------- |

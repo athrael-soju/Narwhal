@@ -8,10 +8,7 @@ description: Reconcile client offers with the Narwhal router journal and record 
 
 `requests.jsonl` holds one terminal record per scheduled offer, identified by request sequence and `client_rid`.
 
-| Offer | Record |
-| --- | --- |
-| Scheduling miss | `sent: false` and outcome `client_schedule_miss` |
-| Sent offer | Scheduled and actual starts, HTTP status, output count, input count, time to first token (TTFT), time per output token (TPOT), and any error detail at termination |
+A scheduling miss records `sent: false` and outcome `client_schedule_miss`. A sent offer records its scheduled and actual starts, HTTP status, output count, input count, time to first token (TTFT), time per output token (TPOT), and any error detail at termination.
 
 A response is complete when:
 
@@ -22,38 +19,18 @@ A response is complete when:
 
 `batched_token_events` counts stream events that carry more than one token under the helper's `stream_interval: 1`.
 
-Client TTFT and TPOT follow the [measurement contract](01-Profile.md#1-defining-the-measurement-contract).
+Client TTFT and TPOT follow the [measurement contract](01-Profile.md#1-defining-the-measurement-contract). Latency percentiles use complete responses.
 
-Latency percentiles use complete responses.
+The join key is `client_rid`. The client sends it as the offer's `x-request-id` header, and the router journal stores it from `x-request-id`. For runner points, the [benchmark evidence collector](06-Benchmark-Evidence.md) runs this join.
 
-Join key `client_rid`:
-
-| Side | `client_rid` |
-| --- | --- |
-| Client | Sent as the offer's `x-request-id` header |
-| Router journal | Stored from `x-request-id` |
-
-For runner points, the [benchmark evidence collector](06-Benchmark-Evidence.md) runs this join.
-
-Deployment attainment is `within_candidate_limits / offered` from the client `summary.json`:
-
-| Term        | Counts                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| Numerator   | Completed responses within the TTFT limit and, for outputs over one token, the TPOT limit |
-| Denominator | Every scheduled scored offer, including unsent scheduling misses                         |
+Deployment attainment is `within_candidate_limits / offered` from the client `summary.json`. The numerator counts completed responses within the TTFT limit and, for outputs over one token, the TPOT limit. The denominator counts every scheduled scored offer, including unsent scheduling misses.
 
 - A timeout or disconnect after partial output counts as a miss.
 - The warmup in `warmup.json` is excluded from scoring.
 
 ## 11. Checking throughput denominators and client limits
 
-Each `summary.json` throughput divides by the elapsed time through the final response drain:
-
-| Throughput | Numerator |
-| --- | --- |
-| Request throughput | Completed requests |
-| Output token throughput | Output tokens |
-| SLO-qualified throughput | SLO-qualified requests |
+Each `summary.json` throughput divides its count by the elapsed time through the final response drain. Request throughput counts completed requests, output token throughput counts output tokens, and SLO-qualified throughput counts SLO-qualified requests.
 
 Before assigning a serving throughput ceiling, compare:
 
@@ -64,17 +41,9 @@ Before assigning a serving throughput ceiling, compare:
 
 ## 12. Preserving run integrity
 
-Each trial writes to a new directory:
+Each trial writes to a new directory with mode `0700` and creates its files with mode `0600`.
 
-| Path | Mode |
-| --- | :---: |
-| Trial directory | `0700` |
-| Files in the trial directory | `0600` |
-
-| Record | Build identity |
-| --- | --- |
-| Trial `manifest.json` | Management checkout Git revision and helper SHA-256 |
-| Router journal `meta` row | Installed router package version, Git description, and source digest |
+The trial `manifest.json` records the management checkout Git revision and helper SHA-256. The router journal `meta` row records the installed router package version, Git description, and source digest.
 
 ### Confirming KV transfer after load
 

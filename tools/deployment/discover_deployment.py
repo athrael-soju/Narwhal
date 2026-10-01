@@ -247,7 +247,7 @@ def service_url(env: dict[str, str], node: int, field: str) -> str:
 
 
 def derive_hosts(env: dict[str, str]) -> list[Host]:
-    """Group equal management destinations before any SSH connection."""
+    """Return one host per distinct SSH destination with the roles assigned to it."""
     nodes = sorted(
         int(match[1])
         for name in env

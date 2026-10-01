@@ -32,7 +32,7 @@ class ProfileFittingTests(unittest.TestCase):
             fit_prefill_samples(bad)
 
     def test_the_block_step_needs_two_spare_lengths_beyond_its_four_terms(self):
-        """Five lengths leave one residual, so the step waits for a sixth length."""
+        """The block step stays unfitted until six lengths leave two residuals."""
 
         def curve(length):
             return 0.25 + 0.0001 * length + (0.05 if splits_prefill(length, 16) else 0.0)
@@ -135,8 +135,7 @@ class ProfileFittingTests(unittest.TestCase):
     def test_cross_validation_scores_each_held_out_corner(self):
         """The four corner fits each miss the held-out observation by four."""
         samples = [(1, 10, 10), (1, 20, 20), (2, 10, 30), (2, 20, 44)]
-        # The nonnegative constraint binds on some three-point fits, so use
-        # a positive intercept to keep every held-out fit in the interior.
+        # The offset keeps every held-out fit off the nonnegative constraint.
         samples = [(r, k, y + 100) for r, k, y in samples]
         expected = sum(4 / y for _, _, y in samples) / 4
         self.assertAlmostEqual(decode_cross_validation_mape(samples), expected, places=10)

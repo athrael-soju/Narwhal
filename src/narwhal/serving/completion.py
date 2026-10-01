@@ -44,7 +44,6 @@ def completion_body_error(body: Any) -> tuple[str, str | None] | None:
     """Validate router-interpreted fields and supported response formats.
 
     Return (message, param) for a rejected body, or None on success.
-    Error messages identify the field and validation rule.
     """
     if not isinstance(body, dict):
         return "the request body must be a JSON object", None
@@ -69,9 +68,8 @@ def completion_body_error(body: Any) -> tuple[str, str | None] | None:
             return "every item in messages must be an object", "messages"
     xargs = body.get("vllm_xargs")
     if isinstance(xargs, dict):
-        # Full cache reports re-announce cached blocks, including positions that sliding-window
-        # and Mamba groups leave empty, which the residency sidecars would record as resident.
-        # Transfer parameters would replace the router's own KV and encoder-cache handoff.
+        # Full cache reports mark empty sliding-window and Mamba positions as resident.
+        # Transfer parameters replace the router's own KV and encoder-cache handoff.
         for key in ("kv_cache_report_mode", "kv_transfer_params", "ec_transfer_params"):
             if key in xargs:
                 return f"vllm_xargs.{key} is reserved for Narwhal", "vllm_xargs"
@@ -149,8 +147,7 @@ def _chat_delta(
 def reassemble(lines: list[str], *, endpoint: str) -> dict[str, Any]:
     """Fold validated SSE into the response shape of the requested endpoint.
 
-    Chunks reach this fold already filtered by the client's exposure choice,
-    so token identity present in them was requested and survives the merge.
+    Token IDs left in the client-filtered chunks survive the merge.
     """
     chat = endpoint == "/v1/chat/completions"
     merged: dict[str, Any] = {"index": 0, "finish_reason": "stop"}

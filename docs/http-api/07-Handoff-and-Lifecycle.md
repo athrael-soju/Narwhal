@@ -14,6 +14,8 @@ The high-availability (HA) standby router polls this route before takeover.
 
 ### Handoff fields
 
+The handoff document carries these fields:
+
 | Field               | Meaning                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------- |
 | `schema`            | `narwhal.handoff`                                                                     |
@@ -41,6 +43,8 @@ The high-availability (HA) standby router polls this route before takeover.
 
 ### Restored and process-local state
 
+A new router process applies each handoff field as follows:
+
 | State                                                                                    | New router process                                       |
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `roles`                                                                                  | Restored for unpinned engines                            |
@@ -60,12 +64,7 @@ The new process resets:
 - floor history
 - monitoring-failure counters
 
-State handoff sources:
-
-| Recovery                                         | State handoff source                                 |
-| ------------------------------------------------ | ---------------------------------------------------- |
-| `narwhal-serve --resume` after a process restart | `recovery.state_path`, written by the running router |
-| Warm standby takeover                            | Latest polled, lease-validated state handoff         |
+After a process restart, `narwhal-serve --resume` reads the state handoff from `recovery.state_path`, written by the running router. A warm standby takeover uses the latest polled, lease-validated state handoff.
 
 ## Lifecycle API
 
@@ -115,11 +114,11 @@ Drains one engine, or every configured engine as a whole wave.
 | `wave`       | Boolean             | `false` | Drain every configured engine as one wave |
 | `deadline_s` | Number of seconds   | `300`   | Drain deadline, positive and finite       |
 
-| Condition                                    | Rule                                                                      |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| `wave` is `false`                            | Name one engine while at least one other engine is eligible for placement |
-| `wave: true`                                 | Name every configured engine, or send an empty `engines` list             |
-| `recovery.engine_restart_policy: whole_wave` | Every drain must be a whole-wave drain                                    |
+A drain request follows these rules:
+
+- With `wave: false`, name one engine while at least one other engine is eligible for placement.
+- With `wave: true`, name every configured engine, or send an empty `engines` list.
+- Under `recovery.engine_restart_policy: whole_wave`, every drain must be a whole-wave drain.
 
 ```json
 {
@@ -127,6 +126,8 @@ Drains one engine, or every configured engine as a whole wave.
   "deadline_s": 300
 }
 ```
+
+The drain route returns these error statuses:
 
 |  HTTP | Meaning                                                                  |
 | :---: | ------------------------------------------------------------------------ |
@@ -151,16 +152,13 @@ Lifecycle readmission requires a complete `engine_contract`.
 }
 ```
 
-| Field     | Type                | Default | Meaning                                  |
-| --------- | ------------------- | ------- | ---------------------------------------- |
-| `engines` | Array of engine IDs | `[]`    | Engines to readmit                       |
-| `wave`    | Boolean             | `false` | Readmit the active whole wave as one set |
+`engines` lists the engine IDs to readmit and defaults to `[]`. `wave` is a Boolean that defaults to `false`.
 
-| Condition         | Rule                                                  |
-| ----------------- | ----------------------------------------------------- |
-| `wave` is `false` | Name one engine                                       |
-| Active whole wave | Send `wave: true` with the wave's complete engine set |
-| `wave: true`      | An empty `engines` list names every configured engine |
+A readmission request follows these rules:
+
+- With `wave: false`, name one engine.
+- With `wave: true`, the request readmits the active whole wave as one set, and an empty `engines` list names every configured engine.
+- During an active whole wave, send `wave: true` with the wave's complete engine set.
 
 Readmission checks:
 
@@ -175,10 +173,9 @@ Readmission checks:
 
 Checks 1 to 4 cover the candidate and its role-permitted peers.
 
-| Condition                                                           | Result                                                         |
-| ------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Missing profiles, missing generation evidence, or a digest mismatch | Readmission fails with an error naming the engine to reprofile |
-| Engine the breaker ejected transiently                              | Readmission accepts its current process                        |
+Missing profiles, missing generation evidence, or a digest mismatch fail readmission with an error naming the engine to reprofile. For an engine the breaker ejected transiently, readmission accepts its current process.
+
+A failed readmission returns one of these statuses:
 
 |  HTTP | Meaning                                                                      |
 | :---: | ---------------------------------------------------------------------------- |

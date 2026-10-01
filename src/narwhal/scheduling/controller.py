@@ -114,7 +114,7 @@ class ReactiveController:
         self.demand.saw_completion(input_len, wanted_len, observed_len, at=at)
 
     def note_prefill_risk(self, request: Request, *, at: float | None = None) -> bool:
-        """Arm an urgent evaluation when one offered prefill exceeds its projected SLO."""
+        """Arm an urgent evaluation when `request`'s projected TTFT breaches the SLO."""
         seen = self._clock() if at is None else at
         projection = self.scorer.project_prefill(seen, request)
         if projection is None or not projection.breached:
@@ -133,7 +133,7 @@ class ReactiveController:
         return True
 
     def consume_prefill_risk(self, now: float) -> PrefillRecovery | None:
-        """Consume one coalesced event after recomputing risk from live queued work."""
+        """Take the pending event; return a recovery when live queued work breaches the SLO."""
         urgency = self._prefill_urgency
         if urgency is None:
             return None
@@ -149,7 +149,7 @@ class ReactiveController:
         )
 
     def clear_prefill_risk(self) -> None:
-        """Start a new control-ownership epoch with empty urgent state."""
+        """Drop any pending prefill risk event."""
         self._prefill_urgency = None
 
     @property
@@ -158,7 +158,7 @@ class ReactiveController:
         return self._prefill_urgency is not None
 
     def _rearm_prefill_risk(self, now: float) -> bool:
-        """Publish a fresh event when live queued work remains above its SLO."""
+        """Arm a fresh event when live queued work still breaches the SLO."""
         projection = self.scorer.project_prefill(now)
         if projection is None or not projection.breached:
             return False
@@ -224,9 +224,9 @@ class ReactiveController:
         )
 
     def restore_floor(self) -> int:
-        """Move healthy decode engines until the live prefill floor is met.
+        """Move up to one decode engine to prefill below the live prefill floor; return the count.
 
-        Preserve the configured decode floor and report any remaining prefill deficit.
+        The configured decode floor is preserved.
         """
         live = self.scheduler.live_instances()
         target = self._clamp_prefill_target(

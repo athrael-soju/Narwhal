@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-# Each engine leg failure increments one per-engine streak. Liveness counts
-# failed sweeps. These names are also state keys and metric label values.
+# Breaker class names, also used as state keys and metric label values.
+# Liveness counts failed sweeps.
 LEG_CONNECTION = "connection"
 LEG_TIMEOUT = "timeout"
 LEG_OVERLOAD = "overload"
@@ -51,7 +51,7 @@ class Request:
     phase: Phase = Phase.PREFILL
     prefill_instance: str | None = None
     output_len: int = 0
-    # The requested cap feeds decode demand. output_len counts delivered tokens.
+    # Requested output cap; output_len counts delivered tokens.
     wanted_len: int = 0
     # Monotonic ingress time for end-to-end TTFT projections.
     arrived_at: float | None = None
@@ -76,10 +76,7 @@ class Request:
 
 @dataclass
 class Instance:
-    """A stateless engine endpoint and its resident requests.
-
-    Separate prefill and decode maps match the scheduler's phase-specific costs.
-    """
+    """A stateless engine endpoint and its resident requests."""
 
     iid: str
     url: str

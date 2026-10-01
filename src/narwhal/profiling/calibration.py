@@ -48,7 +48,7 @@ def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
 
 
 def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
-    """Check a completed calibration against this fleet's current configuration."""
+    """Return mismatches between a calibration document and this fleet's configuration."""
     problems: list[str] = []
     if document.get("schema") != SCHEMA or document.get("schema_version") != 1:
         return ["first-token calibration has an unknown schema or version"]

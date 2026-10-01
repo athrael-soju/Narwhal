@@ -249,8 +249,7 @@ def create_app(
             await asyncio.gather(*probes, return_exceptions=True)
             await router.engines.aclose()
             await router.residency_client.aclose()
-            # A standby must retain its polled primary handoff. Recheck the
-            # lease after cleanup, which can outlast the ownership window.
+            # Only a router still holding the lease after cleanup writes the final handoff.
             if persist_final_state and (lease is None or lease.valid()):
                 with contextlib.suppress(OSError):
                     handoff_state.write(cfg.state_path, handoff_state.snapshot(router))

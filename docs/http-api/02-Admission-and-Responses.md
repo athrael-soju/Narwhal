@@ -34,14 +34,11 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 `/ready` reports the reason for each `503` refusal.
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) modes:
-
-| Mode                   | Enforced                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------ |
-| `predictive` (default) | Every `open` check and limit, plus the predictive TTFT, decode-capacity, and `slo.tpot_s` checks |
-| `open`                 | Router saturation checks and the HTTP retention, queue, and phase-concurrency limits             |
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks and the HTTP retention, queue, and phase-concurrency limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit.
 
 ### Admission counters
+
+The router keeps these admission counters:
 
 | Counter            | Increments on                                                      |
 | ------------------ | ------------------------------------------------------------------ |
@@ -82,13 +79,9 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembled responses carry the engine's response metadata and these derived fields:
+Assembled responses carry the engine's response metadata. `finish_reason` and `stop_reason` come from the last choice that reports each.
 
-| Field                             | Source                                                      |
-| --------------------------------- | ----------------------------------------------------------- |
-| `finish_reason`, `stop_reason`    | Last choice that reports each                               |
-| `usage`                           | Non-null engine `usage`, including a later usage-only frame |
-| `usage`, when the engine omits it | Computed from input length and measured output token count  |
+`usage` carries the non-null engine `usage`, including one from a later usage-only frame. When the engine omits `usage`, the router computes it from the input length and the measured output token count.
 
 ## Token identity and output accounting
 
@@ -101,18 +94,8 @@ Decode requests to supporting engines include:
 }
 ```
 
-Every event with text, reasoning, tool calls, or refusals carries a token-ID list:
+Every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-| Token-ID list                                | Result                                        |
-| -------------------------------------------- | --------------------------------------------- |
-| Nonnegative integers                         | Accepted                                      |
-| Missing or malformed, including a Boolean ID | Decode attempt or profiling measurement fails |
-
-`token_accounting` by engine:
-
-| Engine             | Router reports                  |
-| ------------------ | ------------------------------- |
-| Supplies token IDs | `token_accounting: token_ids`   |
-| Omits token IDs    | `token_accounting: unavailable` |
+The router reports `token_accounting: token_ids` for an engine that supplies token IDs. For an engine that omits them, it reports `token_accounting: unavailable`.
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses.

@@ -77,8 +77,7 @@ class RequestStreamResponse(StreamingResponse):
         timer = asyncio.timeout(remaining)
         try:
             async with timer:
-                # The response now owns the original deadline. An outer ingress
-                # cancellation would bypass this timeout's explicit SSE error.
+                # This timer replaces the ingress timer for the original deadline.
                 if self.lifecycle.ingress_timer is not None:
                     self.lifecycle.ingress_timer.reschedule(None)
                 await super().__call__(scope, receive, record_send)
@@ -98,8 +97,7 @@ class RequestStreamResponse(StreamingResponse):
                     "code": "expired",
                 }
             }
-            # Send immediately on a writable transport; cancel on backpressure
-            # because the request deadline has expired.
+            # A zero timeout cancels the write on backpressure.
             async with asyncio.timeout(0):
                 await send(
                     {

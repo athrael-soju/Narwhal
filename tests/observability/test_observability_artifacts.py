@@ -37,8 +37,8 @@ class MonitoringArtifactTests(unittest.TestCase):
                 self.assertEqual(
                     {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}, expected
                 )
-                # A bind mount exposes its root directly. Container UIDs need search/read
-                # within each mount; host ancestors retain the deployment account's access.
+                # Container UIDs need search/read on each mount root and its contents;
+                # host ancestors retain the deployment account's access.
                 for mount in root.iterdir():
                     for path in [mount, *mount.rglob("*")]:
                         mode = path.stat().st_mode
@@ -53,7 +53,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                     self.assertEqual((root / target).read_bytes(), (source / relative).read_bytes())
                 for path, mode in original_modes.items():
                     self.assertEqual(path.stat().st_mode, mode, str(path))
-                # Repair a prior private staging directory during the same startup command.
+                # Staging restores readable modes on a prior private staging directory.
                 for path in root.rglob("*"):
                     path.chmod(0o700 if path.is_dir() else 0o600)
                 artifacts.stage_artifacts(contract, root, source)

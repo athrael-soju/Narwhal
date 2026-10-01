@@ -89,8 +89,7 @@ class ServingIngress:
             state.finish("expired", error="original request deadline expired", status=504)
             if started:
                 raise
-            # Send the timeout response immediately if the transport is writable;
-            # cancel the write as soon as it blocks.
+            # A zero timeout cancels the write as soon as it blocks.
             async with asyncio.timeout(0):
                 await JSONResponse(
                     {

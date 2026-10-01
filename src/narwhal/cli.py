@@ -134,7 +134,7 @@ def serve(argv: list[str] | None = None) -> int:
         level=LOG_LEVELS[args.log_level],
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    # httpx emits one INFO line per engine leg. Keep it only for debug runs.
+    # httpx logs one INFO line per engine leg.
     if LOG_LEVELS[args.log_level] != "DEBUG":
         logging.getLogger("httpx").setLevel(logging.WARNING)
     if (error := _port_in_use(args.port, args.host)) is not None:

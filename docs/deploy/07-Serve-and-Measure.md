@@ -31,13 +31,13 @@ Replace `<served-model>` with the fleet model.
 
 3. Retain these responses before load:
 
-    | Response          | Shows                                                                   |
-    | ----------------- | ----------------------------------------------------------------------- |
-    | `/health`         | Liveness status and instance counts.                                    |
-    | `/ready`          | Admission state.                                                        |
-    | `/narwhal/state`  | Engine inventory and role split.                                        |
-    | `/metrics`        | Router metrics.                                                         |
-    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`. |
+    | Response          | Shows                                                                  |
+    | ----------------- | ---------------------------------------------------------------------- |
+    | `/health`         | Liveness status and instance counts                                    |
+    | `/ready`          | Admission state                                                        |
+    | `/narwhal/state`  | Engine inventory and role split                                        |
+    | `/metrics`        | Router metrics                                                         |
+    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state` |
 
 ## Starting the monitoring stack on the router
 
@@ -87,24 +87,18 @@ Retain the target-discovery and dashboard-verification output.
     - The source revision.
     - The tunnel mappings.
 
-Tunnel settings:
-
-| Tunnel property | Value                                                 |
-| --------------- | ----------------------------------------------------- |
-| Local ports     | Workstation loopback.                                 |
-| Remote address  | `127.0.0.1` on the router.                            |
-| Host key        | Verified against the recorded SSH host key.           |
-| Authentication  | The router role's configured password, key, or agent. |
-| Log             | `runs/access-<id>/`                                   |
-| Latency         | Includes SSH network and encryption overhead.         |
+The tunnel listens on workstation loopback ports and forwards them to `127.0.0.1` on the router. It verifies the router against the recorded SSH host key, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
 
 ### Troubleshooting the tunnel
 
-| Symptom                                                             | Fix                                                                          |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| A workstation port is already in use                                | 1. Pick another local port in `--forward`.<br>2. Match the client URL to it. |
-| A forwarded request fails after SSH connects                        | Inspect the listener on the router host.                                     |
-| A service listens on an address other than the router's `127.0.0.1` | Pass one tunnel per remote address, each with `--remote-address`.            |
+If a workstation port is already in use:
+
+1. Pick another local port in `--forward`.
+2. Match the client URL to it.
+
+If a forwarded request fails after SSH connects, inspect the listener on the router host.
+
+If a service listens on an address other than the router's `127.0.0.1`, pass one tunnel per remote address, each with `--remote-address`.
 
 ## Running the initial capacity trial
 

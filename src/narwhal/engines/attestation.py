@@ -315,12 +315,10 @@ def build_app(
 ) -> FastAPI:
     """Build a sidecar that stops attesting after its engine process changes.
 
-    With `residency`, the sidecar also serves the engine's resident prefix
-    blocks. Without it, the residency routes answer 404 and callers price the
-    engine cold.
+    The residency routes serve `residency`, or answer 404 when it is None.
     """
     app = FastAPI(title="narwhal-engine-attestation")
-    # A restarted sidecar serves a new epoch, so subscribers resynchronise.
+    # Each sidecar process serves its own epoch.
     epoch = uuid4().hex
 
     async def current_identity() -> EngineIdentity:

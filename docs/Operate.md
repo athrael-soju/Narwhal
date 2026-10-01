@@ -4,12 +4,7 @@ description: Operate a Narwhal fleet with a warm-standby router pair in a shared
 
 # Operating Narwhal
 
-Each model fleet runs one router pair in a shared lease domain:
-
-| Router | Role |
-| --- | --- |
-| Lease holder | Admits and places requests |
-| Peer | Standby |
+Each model fleet runs one router pair in a shared lease domain. The lease holder admits and places requests, and its peer runs as standby.
 
 ```text
 clients

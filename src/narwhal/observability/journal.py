@@ -15,10 +15,9 @@ from ..provenance import stamp_line
 
 @dataclass
 class RunJournal:
-    """Append completed requests to a JSONL journal.
+    """Append completed requests to a JSONL journal under a per-process run ID.
 
-    Each process gets a run ID so readers can separate appended sessions.
-    `extra` stamps run metadata into the provenance row; set it before open.
+    `extra` adds run metadata to the provenance row and must be set before `open`.
     """
 
     path: Path

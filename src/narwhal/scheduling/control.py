@@ -43,25 +43,21 @@ class SLO:
 
 @dataclass
 class Thresholds:
-    """Pool-load and timing thresholds for role changes.
+    """Pool-load and timing thresholds for role changes."""
 
-    `expand` and `shrink` are pool loads, so 1.0 is exactly at target.
-    `cooldown_s` guards P->D only.
-    """
-
+    # Pool loads; 1.0 is at target.
     expand: float = 1.0
     shrink: float = 0.5
+    # Applies to P-to-D changes only.
     cooldown_s: float = 10.0
-    # Require repeated crossings before the monitoring loop changes a role.
+    # Consecutive threshold crossings before a role change.
     sustained_intervals: int = 3
     # Minimum residence time before another role change.
     dwell_s: float = 0.0
     # Sustained decode pressure may bypass cooldown while prefill remains below
     # shrink. Zero disables the bypass.
     panic_ratio: float = 0.0
-    # Refuse a decode-to-prefill flip whose donor carries more resident decode
-    # streams than this. Heavy flips trigger a delayed decode-latency storm on
-    # the donor's legacy lanes; zero disables the guard.
+    # Maximum resident decode streams on a decode-to-prefill donor. Zero disables the guard.
     flip_resident_guard: int = 0
 
     def __post_init__(self) -> None:
@@ -95,10 +91,7 @@ class PrefillFloor:
         self._met = live() >= minimum
 
     def refresh(self) -> None:
-        """Update prefill-floor breach accounting.
-
-        Counting begins after the fleet first reaches the configured floor.
-        """
+        """Update prefill-floor breach accounting and emit edge events."""
         now = self._clock()
         below = self.prefill_live() < self.minimum
         if not below:

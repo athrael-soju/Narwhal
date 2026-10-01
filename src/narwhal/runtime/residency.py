@@ -1,10 +1,7 @@
 """Router view of each engine sidecar's resident prefix blocks.
 
-The router reads a sidecar snapshot, then applies the sidecar's ordered
-changes. It resynchronises from a fresh snapshot when it starts, when the
-sidecar reports that the requested changes are gone, when the sidecar epoch
-or the engine process changes, and after any failed refresh. The router
-prices an engine cold when it has no sidecar or its sidecar serves no residency.
+A view resynchronises from a fresh snapshot on start, on lost changes, on a
+sidecar epoch or engine process change, and after any failed refresh.
 """
 
 from __future__ import annotations
@@ -43,7 +40,7 @@ class EngineResidency:
         return cached_prefix_blocks(self.groups.values(), identities, self.block_size)
 
     def forget(self, reason: str) -> None:
-        """Drop the view so the engine is priced cold until the next snapshot."""
+        """Drop the view; the engine prices cold until the next snapshot."""
         self.known = False
         self.reason = reason
         self.epoch = None
@@ -123,7 +120,7 @@ class ResidencySubscriptions:
 
     async def refresh(self, client: httpx.AsyncClient) -> None:
         """Bring every engine's view up to date; failures leave that engine cold."""
-        # Sidecars refresh concurrently, so one slow sidecar delays the pass by one timeout.
+        # One slow sidecar delays the concurrent pass by one timeout.
         await asyncio.gather(*(self._refresh_one(client, iid) for iid in self._specs))
 
     async def _refresh_one(self, client: httpx.AsyncClient, iid: str) -> None:

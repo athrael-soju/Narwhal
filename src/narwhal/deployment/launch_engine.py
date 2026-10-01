@@ -43,8 +43,8 @@ FLAG_OPTIONS = {
     "--enable-prefix-caching",
     "--no-enable-prefix-caching",
 }
-# vLLM binds these per-plan sockets; a host subscriber connects to the same files.
-# Launch directories can exceed the socket path limit, so the sockets use a short root.
+# Short root for the per-plan sockets vLLM binds and host subscribers connect to;
+# launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
 KV_EVENTS_MOUNT = "/narwhal-kv-events"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
@@ -140,8 +140,7 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
 def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:
     """Select cache-event publication from the backend's own launch settings.
 
-    Publication follows prefix caching unless the operator disables it with vLLM's
-    own `--kv-events-config`. Narwhal selects the local IPC endpoints.
+    Publication follows prefix caching unless `--kv-events-config` disables it.
     """
     if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
         raise ValueError("runtime.extra_args must select prefix caching at most once")
@@ -790,7 +789,7 @@ def check(run: Path, plan: dict) -> None:
             matches = expected in inspection.get("RepoDigests", [])
         if not matches:
             raise ValueError("local image identity differs from the launch plan")
-    # Resolve tokenizer metadata in the serving namespace, including image-local paths.
+    # Tokenizer metadata resolves in the serving namespace, including image-local paths.
     script = (
         "from pathlib import Path\n"
         + inspect.getsource(requires_remote_code)
@@ -1419,7 +1418,7 @@ def validate_shared_gpu(run: Path, plan: dict) -> None:
         raise ValueError(
             f"{plan['role']}: CUDA_VISIBLE_DEVICES={selected!r} differs from shared GPU {expected}"
         )
-    # Resolve CUDA ordinals in the serving runtime; NVML indices can use another order.
+    # CUDA ordinals resolve in the serving runtime; NVML indices can use another order.
     script = """import torch
 from uuid import UUID
 if torch.cuda.device_count() != 1:
@@ -1579,7 +1578,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                         f"{role}: free GPU memory is below its {budget_mib} MiB allocation"
                     )
                 cid = _create_container(run, plan)
-                # Retain ownership before filesystem or Docker start failures can intervene.
+                # Ownership is recorded before any filesystem or Docker start failure.
                 started.append((run, cid, record))
                 record["container_id"] = cid
                 write_private(run / "container.id", cid + "\n")

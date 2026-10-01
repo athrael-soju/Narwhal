@@ -19,54 +19,43 @@ The fleet's `engine_contract` lists the [compatibility fields](../configuration/
 
 ### KV transfer for vLLM engines
 
-KV transfer across the configured ring or mesh is allowed for a vLLM engine with the effective `kv_both` role when all three requirements hold:
-
-| Requirement | Provider |
-| --- | --- |
-| Attestation inputs captured from the live process | [Gate E](../deploy/05-Attest.md#capturing-the-attestation-inputs) |
-| The process bound to its image, NIXL connector, and runtime features | Attestation sidecar |
-| The attested process validated | [`narwhal-check`](../cli/Check.md) |
+A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh when three requirements hold. [Gate E](../deploy/05-Attest.md#capturing-the-attestation-inputs) captures the attestation inputs from the live process. The attestation sidecar binds the process to its image, NIXL connector and runtime features, and [`narwhal-check`](../cli/Check.md) validates the attested process.
 
 ## How a request executes
 
-| Stage | Behavior |
-| --- | --- |
-| Admission | The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission). |
-| Pricing | The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing) for cached prefixes. |
-| Predictive check | With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check). |
-| Prefill | The chosen engine holds the prompt KV as the producer and returns a typed KV handoff. |
-| Decode | An eligible engine consumes the handoff and runs decode. |
-| Streaming | Tokens stream to the client. |
-| Journal | The request journal records admission, placement, retries, transfers, timing, and the final outcome. |
+A completion request passes through these stages:
 
-When every seat is occupied, `serving.queue_capacity` sets the outcome:
+1. The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission).
+2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing) for cached prefixes.
+3. With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check).
+4. The chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff.
+5. An eligible engine consumes the handoff and runs decode.
+6. Tokens stream to the client.
+7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.
 
-| `serving.queue_capacity` | Outcome |
-| --- | --- |
-| Positive, queue has space | The request waits in a bounded FIFO queue under its original deadline. |
-| Positive, queue full | Retryable refusal. |
-| `0` (the default) | Retryable refusal. |
+When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue under its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal.
 
 A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 
-| Topology | How roles are assigned | In practice |
-| --- | --- | --- |
-| Aggregated serving | Every engine does both prefill and decode, with local KV | Long prefills share a scheduler with decode batches |
-| Static disaggregation | Fixed prefill pool and fixed decode pool | An operator changes pool membership by hand |
-| Adaptive cold-swap | Engines change pools by draining and relaunching | Capacity arrives after restart, weight load, and validation |
-| Adaptive hot-swap | Dual-capability engines form logical prefill and decode pools | Weights stay loaded |
+A fleet's topology sets how its engines divide prefill and decode work.
 
 ### Aggregated serving
+
+Every engine does both prefill and decode, with local KV. Long prefills share a scheduler with decode batches.
 
 ![Four identical replicas, each serving prefill and decode.](../assets/architectures/aggregated.svg)
 
 ### Static disaggregation
 
+A fixed prefill pool and a fixed decode pool serve requests. An operator changes pool membership by hand.
+
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
 
 ### Adaptive cold-swap
+
+Engines change pools by draining and relaunching. Capacity arrives after restart, weight load, and validation.
 
 ![One engine draining and restarting in the decode pool.](../assets/architectures/coldswap.svg)
 
@@ -81,6 +70,8 @@ A cold-swap move runs these steps:
 Use cold-swap for traffic shifts longer than this sequence.
 
 ### Adaptive hot-swap
+
+Dual-capability engines form logical prefill and decode pools, and their weights stay loaded.
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
 

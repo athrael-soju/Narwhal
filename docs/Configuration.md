@@ -4,25 +4,17 @@ description: Reference for Narwhal fleet files and deployment inputs, from the e
 
 # Narwhal fleet configuration and deployment reference
 
-| Models  | Deployment                              | Model selection |
-| ------- | --------------------------------------- | --------------- |
-| One     | One router process and one engine fleet |                 |
-| Several | One router and one fleet per model      | Ingress         |
+A fleet file configures one router process and one engine fleet for one model. A deployment with several models runs one router and one fleet per model, and ingress selects the model.
 
-Annotated example fleet file:
+Print an annotated example fleet file:
 
 ```bash
 .venv/bin/narwhal-check --print-example-config
 ```
 
-Fleet file path:
+`narwhal-serve`, `narwhal-profile` and `narwhal-check` read the fleet file named by `--fleet`. `create_app()` reads the path from the `NARWHAL_FLEET` environment variable.
 
-| Consumer                                            | Setting                              |
-| --------------------------------------------------- | ------------------------------------ |
-| `narwhal-serve`, `narwhal-profile`, `narwhal-check` | `--fleet`                            |
-| `create_app()`                                      | `NARWHAL_FLEET` environment variable |
-
-Fleet file header:
+Every fleet file declares this header:
 
 ```json
 {
@@ -33,13 +25,7 @@ Fleet file header:
 
 The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#checking-interface-compatibility-before-deployment).
 
-Responsibilities under fleet schema version 1:
-
-| Component       | Handles                                        |
-| --------------- | ---------------------------------------------- |
-| Ingress         | Client identity and content capture            |
-| Narwhal router  | One global admission budget                    |
-| Request records | Timings, identifiers, placements, and outcomes |
+Under fleet schema version 1, ingress handles client identity and content capture. The Narwhal router holds one global admission budget, and request records hold timings, identifiers, placements and outcomes.
 
 ## Fleet and deployment contracts
 

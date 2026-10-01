@@ -19,8 +19,7 @@ def main() -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0):
         raise OSError(ctypes.get_errno(), "could not enable isolated helper reaping")
-    # A caught signal resets to the default when the helper execs. The supervisor
-    # stays alive through TERM so descendants retain an ownership anchor.
+    # The supervisor survives TERM; caught handlers reset to default in the exec'd helper.
     signal.signal(signal.SIGTERM, lambda signum, frame: None)
     signal.signal(signal.SIGINT, lambda signum, frame: None)
     child = subprocess.Popen(sys.argv[3:])
@@ -30,8 +29,7 @@ def main() -> None:
         json.dump({"returncode": code}, output)
     temporary.replace(result)
     while not release.exists():
-        # Reap adopted workers that finish while the controller decides whether
-        # to clean the tree or retain the successful native engine generation.
+        # Adopted workers are reaped until the controller writes the release file.
         try:
             while os.waitpid(-1, os.WNOHANG)[0]:
                 pass

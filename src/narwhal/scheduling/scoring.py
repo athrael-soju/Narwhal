@@ -107,7 +107,7 @@ class SplitSnapshot:
 
     @property
     def decode_recovery_ratio(self) -> float:
-        """Include capped decode slots when dispatch holds decode work in Narwhal."""
+        """Return the larger of decode pressure and capped decode-slot occupancy."""
         return max(self.decode_pressure, self._decode_slots(self.current_decode))
 
     def _decode_slots(self, decode: int) -> float:
@@ -123,7 +123,7 @@ class SplitSnapshot:
 
     @property
     def prefill_recovery_ratio(self) -> float:
-        """Include known waiting work when dispatch slots hide prefill pressure."""
+        """Return prefill pressure, raised by resident prefill work while requests queue."""
         if self.queued_prefill_s <= 0 or self.current_prefill <= 0:
             return self.prefill_pressure
         return max(
@@ -162,18 +162,12 @@ class SplitSnapshot:
                 self.resident_prefill_s / (prefill * self.ttft_slo),
             )
         tpot_ratio = demand.decode_engines / (decode * self.utilization)
-        # Waiting requests form future batches. Price their drain time and
-        # check each shape against the profile; only current residents belong
-        # in the simultaneous decode batch.
-        # A role change does not migrate resident decode requests. A decoder
-        # switched to prefill keeps its current requests until they finish, so
-        # reducing the target decode pool must not manufacture a larger batch
-        # on the remaining engines for the profile-domain and KV checks.
+        # Only current residents form the simultaneous decode batch. Resident decode
+        # requests stay on their engine after a role change.
         resident_engines = max(decode, self.active_decode_instances or self.current_decode)
         tokens = self.resident_decode_tokens / resident_engines
         requests = self.resident_decode_requests / resident_engines
-        # A fractional fleet average means some engines are idle. Check one
-        # actual request on each busy engine, not a nonexistent sub-request.
+        # A fractional per-engine average checks one request on each busy engine.
         active_requests = 1.0 if 0 < requests < 1 else requests
         active_tokens = tokens / requests if 0 < requests < 1 else tokens
         profiles = next(
@@ -313,12 +307,9 @@ class SplitScorer:
         *,
         additional_prefill: tuple[Instance, ...] = (),
     ) -> PrefillProjection | None:
-        """Project FIFO prefill completion across the current live pool.
+        """Project FIFO prefill completion across the current live prefill pool.
 
-        The global admission queue has no engine assignment. List scheduling
-        translates its FIFO order into the earliest profiled completion on the
-        current prefill pool. A supplied request joins the projection during
-        the interval before router publication in `monitor.waiting`.
+        A supplied `request` joins the projection when absent from `monitor.waiting`.
         """
         pool = [*self.scheduler.live_instances(Role.PREFILL), *additional_prefill]
         if not pool:

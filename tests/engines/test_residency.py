@@ -213,7 +213,7 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
         self.assertIsNotNone(index.changes_after(-1))
         self.apply(index, 2, stored([2], prompt[4:], parent=1))
-        # The log holds at most three changed blocks, so batch 0 leaves it.
+        # The log holds at most three changed blocks.
         self.assertIsNone(index.changes_after(-1))
         self.assertEqual(len(index.changes_after(0).changes), 2)
         # The batch-count bound applies with the block bound.
@@ -433,7 +433,7 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(1, 9)))), 2)
 
     def test_residency_stays_unknown_until_replay_rounds_reach_the_stream(self):
-        """Between replay rounds the index is consistent but stale, so it serves nothing."""
+        """Between replay rounds the stale index serves nothing."""
         publisher = FakePublisher(self.directory, replay_limit=2, replay_gap_s=0.1)
         self.addCleanup(publisher.close)
         for _ in range(8):

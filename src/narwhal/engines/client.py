@@ -64,10 +64,8 @@ class _GapBoundStream(httpx.AsyncByteStream):
         await self.stream.aclose()
 
 
-# Detail markers opening the EngineError detail of failure shapes the
-# breaker classifies explicitly. The classifier below and the router's
-# controller risk note key on these prefixes, so the raises use them too.
-# (Names avoid the substring that trips the hardcoded-secret lint.)
+# EngineError detail prefixes for failure shapes the breaker classifies explicitly;
+# the router's controller risk note matches them too.
 FIRST_OUTPUT_DETAIL = "no first token within"
 STREAM_SILENCE_DETAIL = "engine went silent between tokens"
 STREAM_UNTERMINATED_DETAIL = "stream ended before the [DONE] terminator"
@@ -148,8 +146,7 @@ def _status_class(status: int) -> str:
 class EngineClient:
     """Pooled HTTP client with separate request and control connections.
 
-    Prefill, decode and tokenization share the data pool. Health and recovery
-    probes use the reserved control pool.
+    Health and recovery probes use the reserved control pool.
     """
 
     def __init__(
@@ -169,16 +166,13 @@ class EngineClient:
         model: str = "",
         engine_api_key: str | None = None,
     ) -> None:
-        # The read timeout bounds gaps between transport chunks. The decode
-        # leg adds a first-token deadline; request lifecycle owns the total deadline.
         self.kv = kv or NixlConnector()
         self.dialect = dialect or VllmDialect()
         # The served model name used in inference-probe requests.
         self.model = model
-        # 0 disables the chunk-gap bound.
+        # Bounds gaps between transport chunks; 0 disables the bound.
         self._read_timeout = read_timeout_s if read_timeout_s > 0 else None
-        # An unvalidated config passes 0 to mean derive; a standalone caller
-        # has no fleet context, so it keeps the small explicit budget.
+        # 0 is the unvalidated config's derive marker; a standalone client uses 2.
         control_connections = control_connections if control_connections > 0 else 2
         self.control_connections = control_connections
         self._data_timeout = httpx.Timeout(
@@ -202,12 +196,9 @@ class EngineClient:
         self._health_timeout = health_timeout_s
         self._connect_timeout = connect_timeout_s
         self._pool_timeout = pool_timeout_s
-        # HTTPX's networking transport reports request I/O through its public
-        # trace extension after acquiring a pool connection. Injected transports
-        # need not implement that extension or have a connection pool.
+        # Only HTTPX's own transport reports pool waits through the trace extension.
         self._trace_pool_wait = transport is None or isinstance(transport, httpx.AsyncHTTPTransport)
-        # Attach the engine credential to each leg and probe. A caller-supplied
-        # authorization header takes precedence.
+        # A caller-supplied authorization header overrides the engine credential.
         self._engine_api_key = engine_api_key
 
     def _auth(self, headers: dict[str, str] | None) -> dict[str, str]:
@@ -246,11 +237,9 @@ class EngineClient:
     async def healthy(self, url: str) -> bool | None:
         """Probe the engine through the control pool.
 
-        `True` is a passing health check. `False` is an endpoint-side
-        failure: connect or read timeout, connect error, or a non-200
-        answer. `None` means the local control pool was exhausted, or a
-        timeout surfaced beyond `LATE_TIMEOUT_FACTOR` times the health
-        budget; both are inconclusive and say nothing about the engine.
+        Return True on success, False on an endpoint-side failure, and None when
+        the control pool is exhausted or a timeout surfaces beyond
+        `LATE_TIMEOUT_FACTOR` times the health budget.
         """
         loop = asyncio.get_running_loop()
         # Lateness counts from the first connection event, after any wait for the pool.
@@ -282,8 +271,7 @@ class EngineClient:
     ) -> int | None:
         """Ask the engine for the exact input length within `timeout_s`.
 
-        Without `strict`, unavailable counts return None for callers that own a
-        documented fallback. Strict callers receive the actual failure.
+        Without `strict`, an unavailable count returns None; with it, the failure raises.
         """
         result = await self.tokenize(url, body, timeout_s, strict=strict)
         return None if result is None else result.count
@@ -293,8 +281,8 @@ class EngineClient:
     ) -> Tokenization | None:
         """Ask the engine for the exact input length and prompt token IDs.
 
-        Failures follow `token_count`. Token IDs are None when the response
-        omits them or they disagree with the count.
+        Failures follow `token_count`; token IDs are None when absent or inconsistent
+        with the count.
         """
         if self.dialect.tokenize_path is None:
             return None
@@ -406,9 +394,8 @@ class EngineClient:
     ) -> AsyncGenerator[str, None]:
         """Stream raw SSE lines from the decode leg.
 
-        The first-token deadline starts before opening the HTTP stream.
-        After the first generated token, the read timeout bounds gaps between
-        transport chunks. Same-engine decode strips transfer parameters.
+        The first-token deadline covers opening the stream; the read timeout
+        bounds chunk gaps after the first token.
         """
         try:
             leg = self.kv.decode_body(body, kv_params, url=url, endpoint=endpoint)
@@ -418,8 +405,7 @@ class EngineClient:
         budget_s = first_token_timeout_s or 0.0
         deadline = asyncio.get_running_loop().time() + budget_s if budget_s > 0 else None
         first = True  # no generated token observed yet
-        # HTTPX applies its read timeout to headers and pre-token body reads
-        # too. Use the first-output budget there and raw-chunk gaps afterward.
+        # HTTPX's read timeout also covers headers and pre-token body reads.
         timeouts = self._data_timeout.as_dict()
         if deadline is not None:
             timeouts["read"] = None
@@ -501,12 +487,9 @@ class EngineClient:
     async def probe_inference(
         self, url: str, *, prefill_url: str | None = None, deadline_s: float | None = None
     ) -> InferenceProbe | None:
-        """Verify an engine's inference path through the control pool.
+        """Verify an engine's inference path, or return None without a model.
 
-        Prefill must return a KV handoff; decode must emit a token followed by
-        [DONE]. `prefill_url` selects the producer for a crossed transfer probe.
-        Each probe uses a unique prompt and each leg has its own deadline.
-        Returns None when the model is unspecified.
+        `prefill_url` selects the producer for a crossed transfer probe.
         """
         if not self.model:
             return None
@@ -569,13 +552,12 @@ class EngineClient:
             "prompt": prompt,
             "max_tokens": 1,
             "stream": True,
-            # A model may end this prompt at once, so the probe forces the output it measures.
+            # A model may end this prompt at once.
             **self.dialect.decode_probe_extras(1),
         }
         body = self.kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)
         timeouts = self._control.timeout.as_dict()
-        # Use probe_inference's absolute per-leg deadline while waiting
-        # for the first token.
+        # probe_inference's per-leg deadline bounds the wait for the first token.
         timeouts["read"] = None
         try:
             async with self._control.stream(

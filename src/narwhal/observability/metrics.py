@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from ..contracts import METRICS, current
 
-# Concentrate histogram resolution around the SLO boundary.
+# Histogram bucket edges as fractions of the SLO.
 _SLO_FRACTIONS = (0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0)
 
 
@@ -36,7 +36,7 @@ class Histogram:
             self.counts = [0] * len(self.buckets)
 
     def observe(self, value: float) -> None:
-        """Record one observation."""
+        """Add `value` to the bucket counts, sum and count."""
         self.total += value
         self.n += 1
         for i, edge in enumerate(self.buckets):
@@ -356,7 +356,7 @@ def _render_outcomes(state: dict) -> list[str]:
         "counter",
         [({}, state.get("unserved", 0))],
     )
-    # Pruning expired outcome buckets can lower these totals, so use gauges.
+    # Pruning expired outcome buckets can lower these totals.
     attainment = state.get("attainment") or {}
     out += _lines(
         "narwhal_attainment_evidence_covered_seconds",
@@ -376,7 +376,7 @@ def _render_outcomes(state: dict) -> list[str]:
         "gauge",
         [({}, attainment.get("buckets", 0))],
     )
-    # Emitted only once beyond-span evidence has actually been dropped.
+    # Present after beyond-span evidence has been dropped.
     if attainment.get("pruned_buckets", 0) or attainment.get("pruned_outcomes", 0):
         out += _lines(
             "narwhal_attainment_evidence_pruned_total",
@@ -535,7 +535,7 @@ def _render_availability(state: dict) -> list[str]:
     return out
 
 
-# Every caller and target pair exists from startup, so the first role change counts in increase().
+# Each caller and target pair renders at 0 from startup; increase() skips a series' first sample.
 FLIP_KEYS = ("decode_floor:decode", "floor_recovery:prefill", "reactive:decode", "reactive:prefill")
 
 

@@ -60,10 +60,7 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-rolling-back).
 
-| `diff` result | Installed-release documents on the candidate |
-| --- | --- |
-| Identical manifests | Pass validation. |
-| Changed `schema` or `write` for an interface | Fail validation for that interface. |
+When the manifests are identical, installed-release documents pass validation on the candidate. When `schema` or `write` changes for an interface, that interface's installed-release documents fail validation on the candidate.
 
 ## Schema version changes
 

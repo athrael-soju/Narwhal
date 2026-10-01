@@ -201,7 +201,7 @@ def renderer_token(path: Path) -> str:
 
 
 def parse_prometheus_listener(value: str) -> Listener:
-    """Parse Prometheus' configured address and port."""
+    """Return the listener for an address:port or [address]:port value."""
     raw = value.strip()
     if raw.startswith("["):
         end = raw.find("]")
@@ -373,7 +373,7 @@ def _ss_line_matches_listener(line: str, listener: Listener) -> bool:
 
 
 def _address_matches_listener(value: str, listener: Listener) -> bool:
-    """Match one socket address to a configured listener."""
+    """Return whether a socket address matches the listener; wildcard hosts match any host."""
     if value.startswith("["):
         end = value.find("]")
         if end < 0 or value[end + 1 : end + 2] != ":":

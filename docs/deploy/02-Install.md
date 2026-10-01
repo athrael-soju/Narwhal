@@ -4,10 +4,7 @@ description: Package an approved Narwhal revision and install it on the router a
 
 # Gate B: Packaging and installing the approved revision
 
-| Command   | Action                                                         |
-| --------- | -------------------------------------------------------------- |
-| `prepare` | Bundles the approved commit, role files, and helper snapshots. |
-| `install` | Installs the approved commit on each host.                     |
+Gate B runs two `deploy_hosts.py` commands. `prepare` bundles the approved commit, role files, and helper snapshots. `install` installs the approved commit on each host.
 
 ## Building an immutable deployment package
 
@@ -30,7 +27,7 @@ Prepared <n> hosts in runs/deployment-env/first-deploy; private manifest and inp
 
 Keep the `--out` directory until the deployment finishes.
 
-Prepared run, files at mode 0600:
+The prepared run holds these files at mode 0600:
 
 | Path                                                                      | Content                                                                  |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -74,23 +71,17 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
     python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
     ```
 
-`install` behaviour on each host:
-
-| Host state                                         | `install` action                          |
-| -------------------------------------------------- | ----------------------------------------- |
-| Finished installation or matching transferred file | Reuses it.                                |
-| Changed source checkout                            | Stops at that host.                       |
-| Differing file                                     | Stops at that host.                       |
-| Router and engine roles on one host                | Installs every role environment together. |
+`install` reuses a finished installation or a matching transferred file. It stops at a host with a changed source checkout or a differing file. On a host with router and engine roles, it installs every role environment together.
 
 ## Recovering a failed installation
 
-| Failure                               | Recovery                                                                            |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| Transfer validation fails             | Compare the prepared hashes with the existing remote artifact before modifying it.  |
-| Revision validation fails             | Check that the bundle and role files came from the same prepared run.               |
-| A dependency installation stops early | Rerun the same `install --run` until the installed `narwhal-check --help` responds. |
-| A `.install-lock` remains             | Remove it after the installer that created it has exited.                           |
+If transfer validation fails, compare the prepared hashes with the existing remote artifact before modifying it.
+
+If revision validation fails, check that the bundle and role files came from the same prepared run.
+
+If a dependency installation stops early, rerun the same `install --run` until the installed `narwhal-check --help` responds.
+
+If a `.install-lock` remains, remove it after the installer that created it has exited.
 
 ## Opening installed role shells
 

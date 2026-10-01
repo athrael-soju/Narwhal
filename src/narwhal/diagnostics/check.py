@@ -276,14 +276,8 @@ async def gate_pace(
 ) -> set[str]:
     """Find live engines whose prefill pace exceeds the allowed tolerance.
 
-    The minimum of `repeats` filters one scheduling delay. Each repeat carries
-    the dialect's cold-probe fields, so an engine with prefix caching enabled
-    still prefills every repeat. Each engine is compared with the fleet median
-    and, when available, its saved profile.
-    Fewer than three engines require individual profiles to establish pace.
-
-    KV gates must skip failed engines because a stalled transfer can terminate
-    a healthy peer's engine core.
+    Pace compares against the fleet median and any saved profile; fewer than three
+    engines require profiles.
     """
     print("pace")
     dialect = lookup_dialect(cfg.dialect)
@@ -524,10 +518,8 @@ async def gate_consume(
 ) -> None:
     """Probe role-permitted transfers between distinct engines.
 
-    Ring mode covers each eligible producer and consumer with a peer. Mesh mode
-    covers every eligible ordered pair. Repeat each pair the requested number of times.
-    Each attempt carries fresh cold-probe fields in both legs, so a consumer's prefix
-    cache cannot replace the transfer under test.
+    Ring mode covers each eligible producer and consumer with a peer; mesh mode covers
+    every eligible ordered pair.
     """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
@@ -538,14 +530,13 @@ async def gate_consume(
     producers = [i for i in ids if can_produce(by_id[i])]
     consumers = [i for i in ids if can_consume(by_id[i])]
     if len(producers) < len(ids) or len(consumers) < len(ids):
-        # Probe only transfers that role pins permit in production. A stalled
-        # forbidden transfer can kill the healthy peer's engine core.
+        # A stalled forbidden transfer can kill the healthy peer's engine core.
         excluded = sorted(set(ids) - set(consumers)) + sorted(set(ids) - set(producers))
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
     dialect = lookup_dialect(cfg.dialect)
-    # Force output so a model that ends the probe prompt at once still proves the transfer.
+    # A model may end the probe prompt at once.
     body = {
         "model": cfg.model,
         "prompt": PROBE_PROMPT,
@@ -931,7 +922,7 @@ async def run(
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
-    # Use serving timeouts so preflight exercises the recorded configuration.
+    # Preflight uses the serving timeouts.
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,
@@ -970,7 +961,7 @@ async def run(
         if skip_kv:
             rep.skip("produce and consume: skipped by --no-kv")
         elif slow or incompatible:
-            # Protect healthy peers from transfers through a degraded engine.
+            # A stalled transfer can terminate a healthy peer's engine core.
             blocked = slow | incompatible
             names = ", ".join(sorted(blocked))
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")

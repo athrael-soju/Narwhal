@@ -37,7 +37,7 @@ def role_files(host: Host) -> list[str]:
 
 
 def profiling_limits(launches: dict[str, dict], fleet: dict) -> dict:
-    """Carry serving sequence limits into the router's measured sweep inputs."""
+    """Return the profiling-limits document from each engine's --max-num-seqs."""
     limits = {}
     for role, record in launches.items():
         args = record.get("runtime", {}).get("extra_args", [])
@@ -163,7 +163,7 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
 
 
 def load_run(run: Path, hosts: list[Host], env: dict[str, str]) -> dict:
-    """Verify prepared inputs and host assignments before starting an SSH operation."""
+    """Return the prepared manifest after checking its inputs and host assignments."""
     manifest = json.loads((run / "manifest.json").read_text())
     expected = json.loads(json.dumps(snapshot(hosts, env)))
     if any(manifest[key] != value for key, value in expected.items()):
@@ -285,7 +285,7 @@ def install(hosts: list[Host], manifest: dict, run: Path, ssh: SSH) -> None:
 
 
 def forward_ports(value: str) -> tuple[int, int]:
-    """Accept explicit local and remote ports before constructing SSH arguments."""
+    """Parse LOCAL_PORT:REMOTE_PORT into a port pair."""
     if not re.fullmatch(r"[0-9]{1,5}:[0-9]{1,5}", value):
         raise argparse.ArgumentTypeError("Use LOCAL_PORT:REMOTE_PORT")
     local, remote = map(int, value.split(":"))

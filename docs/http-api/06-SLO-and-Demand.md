@@ -18,11 +18,7 @@ description: SLO attainment per time bucket and demand accounting in the Narwhal
 | `pruned_buckets`  | Buckets aged out of retention                                           |
 | `pruned_outcomes` | Requests in pruned buckets                                              |
 
-| Property          | Value                                                |
-| ----------------- | ---------------------------------------------------- |
-| Counted requests  | Completed, failed, expired, and predictively refused |
-| Counts per bucket | TTFT-met, TPOT-met, and total requests               |
-| Window queries    | Include the whole boundary bucket                    |
+Each bucket counts completed, failed, expired, and predictively refused requests as TTFT-met, TPOT-met, and total counts. A window query includes the whole boundary bucket.
 
 ## Demand accounting
 
@@ -37,13 +33,11 @@ One demand window is `controller.reactive.window_s` seconds long.
 
 ### Input-size repricing
 
-| Offer                        | Input size in demand history                                    |
-| ---------------------------- | --------------------------------------------------------------- |
-| Parsed, at entry             | Local input-size estimate                                       |
-| Tokenized after admission    | Tokenization result, recorded at the original arrival timestamp |
-| Rejected before tokenization | Local input-size estimate                                       |
+Demand history records a parsed offer at entry with its local input-size estimate. When the offer is tokenized after admission, demand history records the tokenization result at the original arrival timestamp. An offer rejected before tokenization keeps the local input-size estimate.
 
 ### Bucketing and retention
+
+Demand history buckets and retains its evidence with these properties:
 
 | Property                      | Value                                                                      |
 | ----------------------------- | -------------------------------------------------------------------------- |
@@ -113,12 +107,7 @@ prefill_pressure_recovery
 decode_pressure_recovery
 ```
 
-Demand precision by consumer:
-
-| Consumer                                 | Precision      |
-| ---------------------------------------- | -------------- |
-| Source-pressure and movement-gate checks | Full precision |
-| State and journal records                | Rounded        |
+Source-pressure and movement-gate checks use demand at full precision. State and journal records round it.
 
 Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gates](../configuration/02-Serving-and-Role-Control.md#7-role-control) constrain each move.
 

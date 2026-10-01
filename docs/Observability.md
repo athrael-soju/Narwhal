@@ -4,13 +4,7 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
 # Setting up observability
 
-`make observe` starts three services for the deployed fleet:
-
-| Service | Role |
-| --- | --- |
-| Prometheus `3.14.0` | Router and engine metrics, alert rules |
-| Grafana `13.2.1` | Provisioned Narwhal Orchestrator dashboard |
-| Grafana Image Renderer `5.12.5` | PNG renders of dashboards and panels |
+`make observe` starts three monitoring services for the deployed fleet. Prometheus `3.14.0` collects router and engine metrics and evaluates the alert rules. Grafana `13.2.1` serves the provisioned **Narwhal Orchestrator** dashboard, and Grafana Image Renderer `5.12.5` renders dashboards and panels as PNG images.
 
 ## Monitoring tasks
 

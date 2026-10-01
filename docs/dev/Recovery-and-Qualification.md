@@ -4,36 +4,51 @@ description: Recovery procedures and reference GPU qualification checks for Narw
 
 # Narwhal dev recovery and qualification
 
-| Situation | Procedure |
-| --- | --- |
-| Failed stage | [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery) |
-| Interrupted Docker command | [Docker command reconciliation](#docker-command-reconciliation) |
-| Interrupted `narwhal dev` process | [Interrupted `narwhal dev` process](#interrupted-narwhal-dev-process) |
-| Optional qualification on the reference GPU | [Reference GPU timeout check](#reference-gpu-timeout-check) and [Reference GPU interruption check](#reference-gpu-interruption-check) |
+These procedures recover a Narwhal dev instance after a failed stage, an interrupted Docker command or an interrupted `narwhal dev` process. Two optional checks qualify timeout and interruption recovery on the reference GPU.
+
+<div class="grid cards" markdown>
+
+-   [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery)
+
+    ---
+
+    Recover from a failed stage.
+
+-   [Docker command reconciliation](#docker-command-reconciliation)
+
+    ---
+
+    Recover from an interrupted Docker command.
+
+-   [Interrupted `narwhal dev` process](#interrupted-narwhal-dev-process)
+
+    ---
+
+    Recover from an interrupted `narwhal dev` process.
+
+-   [Reference GPU timeout check](#reference-gpu-timeout-check)
+
+    ---
+
+    Optionally qualify a startup budget expiry on the reference GPU.
+
+-   [Reference GPU interruption check](#reference-gpu-interruption-check)
+
+    ---
+
+    Optionally qualify SIGINT and SIGKILL interruptions on the reference GPU.
+
+</div>
 
 ## Docker command reconciliation
 
 The engine deployment wrapper applies the stage budgets to Docker clients and native runtime checks.
 
-Each Docker create or run carries two labels:
+Each Docker create or run carries two labels. `io.narwhal.launch` holds the launch token from `docker-owner.json`, and `io.narwhal.operation` holds a unique operation token.
 
-| Label | Value |
-| --- | --- |
-| `io.narwhal.launch` | Launch token from `docker-owner.json` |
-| `io.narwhal.operation` | Unique operation token |
+A Docker client timeout or cancellation starts a reconciliation with the daemon. `NARWHAL_DOCKER_RECONCILE_SECONDS` sets the reconciliation budget, 30 seconds by default, and final cleanup takes up to 15 seconds at default settings.
 
-A Docker client timeout or cancellation starts a reconciliation with the daemon:
-
-| Setting | Value |
-| --- | --- |
-| Reconciliation budget | `NARWHAL_DOCKER_RECONCILE_SECONDS`, 30 seconds by default |
-| Final cleanup | Up to 15 seconds at default settings |
-
-| Resource | Reconciliation result |
-| --- | --- |
-| Containers the interrupted operation created | Removed |
-| Explicit target of an interrupted start | Removed |
-| Other containers in the launch directory | Kept, with their IDs recorded as preserved resources |
+Reconciliation removes the containers the interrupted operation created and the explicit target of an interrupted start. It keeps the other containers in the launch directory and records their IDs as preserved resources.
 
 Each reconciliation writes a `docker-reconcile-*.json` report with:
 
@@ -68,32 +83,24 @@ The twelve combinations:
 
 | Interruption barrier | Signal | Cleanup and fresh `down` | Fresh `status` | Operator action |
 | --- | --- | --- | --- | --- |
-| Child created, before identity capture | SIGINT | A fresh `down` reports `stopped`. | | |
-| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set. | | Identify the newly created service from its command and log. |
-| Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current. | | Inspect the service described by the pending write. |
-| Process record committed | SIGINT | Startup rolls back. | | |
-| Process record committed | SIGTERM | A fresh `down` terminates the recorded group. | | |
-| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group. | Reports `degraded`. | |
-| Profiling helper active | SIGINT | Startup rolls back. | | |
-| Profiling helper active | SIGTERM | Startup rolls back. | | |
-| Profiling helper active | SIGKILL | A fresh `down` recovers the helper and service records. | | |
-| Verification helper active | SIGTERM | A fresh `down` terminates the retained services. | Reports degraded verification. | |
-| Verification helper active | SIGKILL | A fresh `down` terminates the helpers and services. | | |
-| Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection. | Lists the surviving group. | Inspect the worker's identity. |
+| Child created, before identity capture | SIGINT | A fresh `down` reports `stopped` | | |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set | | Identify the newly created service from its command and log |
+| Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current | | Inspect the service described by the pending write |
+| Process record committed | SIGINT | Startup rolls back | | |
+| Process record committed | SIGTERM | A fresh `down` terminates the recorded group | | |
+| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group | Reports `degraded` | |
+| Profiling helper active | SIGINT | Startup rolls back | | |
+| Profiling helper active | SIGTERM | Startup rolls back | | |
+| Profiling helper active | SIGKILL | A fresh `down` recovers the helper and service records | | |
+| Verification helper active | SIGTERM | A fresh `down` terminates the retained services | Reports degraded verification | |
+| Verification helper active | SIGKILL | A fresh `down` terminates the helpers and services | | |
+| Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection | Lists the surviving group | Inspect the worker's identity |
 
 Stage documents record each observed descendant's boot ID and process start ticks.
 
-When the `narwhal dev` process dies abruptly:
+When the `narwhal dev` process dies abruptly, `status` lists matching interrupted helpers in `stage_processes`, and `down` terminates the helper supervisor process tree. Both commands retain stdout, stderr, and command evidence.
 
-| Command | Behavior | Stage evidence |
-| --- | --- | --- |
-| `status` | Lists matching interrupted helpers in `stage_processes`. | Retains stdout, stderr, and command evidence. |
-| `down` | Terminates the helper supervisor process tree. | Retains stdout, stderr, and command evidence. |
-
-| Recovery outcome | Stage record |
-| --- | --- |
-| Processes stopped | `recovered` |
-| Processes survive | `recovery_required`, with the surviving PIDs |
+The stage record reads `recovered` when the processes stop, and `recovery_required` with the surviving PIDs when processes survive.
 
 Recover a service left by a SIGKILL before its process or stage record commits:
 

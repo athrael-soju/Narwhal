@@ -125,7 +125,6 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
 def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> None:
     """List each CUDA engine's host peers' GPUs after its own in CUDA_VISIBLE_DEVICES.
 
-    The engine runs on its leading devices. UCX reaches the peer devices through CUDA IPC.
     Shared-device engines keep their single GPU.
     """
     for roles in hosts:

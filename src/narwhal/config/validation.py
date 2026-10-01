@@ -80,8 +80,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     for name, value in at_least_one:
         if value < 1:
             problems.append(f"{name} must be at least 1, got {value}")
-    # Resolve the derived control-pool budget; the stored int is what
-    # save() and /narwhal/state then report.
+    # The derived budget replaces 0 in the stored config.
     if config.control_connections < 0:
         problems.append(
             f"engine.control_connections must be nonnegative, got {config.control_connections}"
@@ -140,7 +139,6 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             f"{config.reactive_evidence_max_span_s}: the "
             "minimum evidence duration cannot outlast the bounded lookback"
         )
-    # The demand window must retain arrivals for the full evidence lookback.
     if config.reactive_evidence_max_span_s > config.reactive_window_s:
         problems.append(
             "controller.reactive.evidence_max_span_s "
@@ -172,7 +170,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             f"{config.thresholds.expand}: the band between them is where the "
             f"pool holds still"
         )
-    # A drift band at 1.0 would classify the profiled baseline as degraded.
+    # A drift band of 1.0 classifies the profiled baseline as degraded.
     if config.health_drift_band <= 1.0:
         problems.append(
             f"recovery.health.drift_band must exceed 1.0, got {config.health_drift_band}"
@@ -186,10 +184,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     ):
         if value < 1:
             problems.append(f"{name} must be at least 1, got {value}")
-    # A window opens on the first observation and closes once window_s has
-    # passed. The monitor contributes one residual per engine per pass.
-    # Bound the threshold by the configured cadence. Slow passes and missing
-    # observations can leave an actual window below this nominal count.
+    # Nominal count is one residual per engine per monitor pass. Slow passes
+    # and missing observations can leave fewer.
     if config.monitor_interval_s > 0 and config.health_window_s >= 1:
         nominal_samples = math.floor(config.health_window_s / config.monitor_interval_s)
         if nominal_samples < config.health_min_samples:
@@ -199,7 +195,6 @@ def validate(config: FleetConfig, source: str = "config") -> None:
                 f"{config.health_window_s} at controller.monitor_interval_s "
                 f"{config.monitor_interval_s}"
             )
-    # Ejection requires the streak to reach probation first.
     if config.health_evict_windows < config.health_probation_windows:
         problems.append(
             f"recovery.health.evict_windows {config.health_evict_windows} is below "
@@ -340,8 +335,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     ):
         if value <= 0:
             problems.append(f"{name} must be positive, got {value}")
-    # Accepted fit error beyond the movement margin lets profile noise
-    # masquerade as a projected improvement.
+    # Fit error above the movement margin can pass as a projected improvement.
     if config.profile_validation.max_decode_fit_mape > config.reactive_movement_margin:
         problems.append(
             "profiles.max_decode_fit_mape "

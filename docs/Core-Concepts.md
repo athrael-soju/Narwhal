@@ -34,6 +34,8 @@ A role move changes placement for new requests. Model weights, KV paths, and res
 
 ## Terms
 
+Each term links to the page that describes it in full.
+
 | Term                           | Meaning                                                                                                                                                                                                                                  | Reference                                                                                                                                                                                              |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Time to first token (TTFT)     | Router-measured time from request arrival to prefill completion, targeted by `slo.ttft_s`.                                                                                                                                               | [![Request timing documentation](https://img.shields.io/badge/docs-Request%20timing-0f766e)](http-api/03-Backend-and-Failures.md#request-scope-and-timing)                                             |

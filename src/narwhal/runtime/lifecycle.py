@@ -112,8 +112,8 @@ class LifecycleManager:
         now = time.time()
         wave_id = f"wave-{uuid.uuid4().hex[:12]}" if wave else ""
         for iid in ids:
-            # A managed engine may already have restarted while its peers
-            # failed. Keep the identity captured before that restart.
+            # A managed engine may have restarted while its peers failed; its
+            # pre-restart identity stays.
             old_start = (
                 self.records[iid].old_process_start
                 if iid in held and self.records[iid].restart_required
@@ -510,8 +510,7 @@ async def check_process_identities(
     manager: LifecycleManager = router.lifecycle
     contract = cfg.engine_contract
     if contract is None:
-        # Startup and takeover own readiness for contract-free fleets. A
-        # concurrent liveness sweep must not release a takeover's profile gate.
+        # For contract-free fleets, only startup and takeover release the profile gate.
         return []
     async with manager.lock:
         if not controls_fleet(router):

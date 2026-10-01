@@ -192,8 +192,7 @@ async def _prepare_once(
     router.scheduler.record_answer(prefill.iid, "prefill")
     router.monitor.first_token(prefill.iid, req.rid)
     handoff_s = router.cfg.serving.handoff_timeout_s
-    # The remote lease starts during the prefill HTTP call. Starting the age
-    # at local dispatch includes that delay and uses one monotonic clock.
+    # The handoff age counts from local prefill dispatch, before the remote lease starts.
     expires_at = began + handoff_s if handoff_s else None
     if expires_at is not None and router._clock() >= expires_at:
         raise HandoffExpired("prefill consumed the configured KV handoff age allowance")
@@ -340,8 +339,7 @@ async def _decode_attempt(
     headers: dict[str, str],
 ) -> AsyncGenerator[str, None]:
     router = state.router
-    # A lost router lease fences new prefills. An already dispatched original
-    # may drain its decode leg, preserving the warm-standby serving contract.
+    # A lost router lease fences new prefills; a dispatched original may still decode.
     if router.cfg.engine_restart_policy == "whole_wave" and router.lifecycle_blocked:
         raise NoEngine("whole-wave restart hold")
     if prepared.expires_at is not None and router._clock() >= prepared.expires_at:
@@ -389,13 +387,11 @@ async def _decode_attempt(
             router.decode_tokens_observed += n
             frame = rewrite_sse(line, expose_token_ids=bool(body.get("return_token_ids"))) + "\n\n"
             if state.first_at is None:
-                # Buffer role/usage metadata until output commits the attempt.
-                # Discard keepalives while the attempt is uncommitted.
+                # Before output commits the attempt, metadata buffers and keepalives drop.
                 if line.startswith("data:"):
                     metadata_bytes += len(frame.encode())
-                    # Prompt identity can exceed 64 KiB for ordinary long
-                    # documents. Charge it to the explicit retained-response
-                    # budget, including streams that must buffer before output.
+                    # Prompt token IDs can exceed 64 KiB; buffered metadata counts
+                    # against max_response_bytes.
                     if (
                         len(metadata) >= 64
                         or metadata_bytes > router.cfg.serving.max_response_bytes

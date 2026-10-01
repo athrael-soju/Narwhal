@@ -106,7 +106,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
 
     async def test_flip_counters_start_at_zero_for_every_caller(self):
-        """Role-change counters exist before the first flip, so increase() counts it."""
+        """Role-change counters export zero before the first flip."""
         response = await self.client.get("/metrics")
         for by, to in (
             ("reactive", "prefill"),
@@ -628,7 +628,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_flip_refusals_outlive_the_twenty_record_state_window(self):
         for count in range(1, 31):
-            # Only one decode engine remains, so the source floor refuses the move.
+            # The source floor refuses moving the only decode engine.
             self.assertIsNone(self.router.scheduler.flip(Role.PREFILL))
             response = await self.client.get("/metrics")
             self.assertIn(f"narwhal_flips_refused_total {count}\n", response.text)

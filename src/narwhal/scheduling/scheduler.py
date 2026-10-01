@@ -61,7 +61,7 @@ class GlobalScheduler:
         self.on_eject: Callable[[str], None] | None = None
         # Refreshes a request's cache evidence older than the given seconds from current residency.
         self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
-        # Apply cooldown to the opening P-to-D change as well.
+        # The opening P-to-D change also waits out the cooldown.
         self._last_p2d_flip = clock()
         self.panic_bypasses = 0
         self._panic_sustained = 0
@@ -69,10 +69,10 @@ class GlobalScheduler:
         # Bound telemetry retained for `/narwhal/state`.
         self._flip_history = flip_history
         self.flips: list[Flip] = []
-        # Distinguish unavailable SLO placements from refused role changes.
+        # Placements with no SLO-eligible candidate; refused role changes count separately.
         self.unserved = 0
         self.flips_refused: list[tuple[float, str, str]] = []
-        # Process-lifetime counters must outlive the bounded diagnostic histories.
+        # Process-lifetime counters, independent of the bounded histories.
         self._flip_counts: Counter[tuple[str, str]] = Counter()
         self._flip_reversals = 0
         self._flip_refusals = 0
@@ -348,8 +348,7 @@ class GlobalScheduler:
     def prefill_admission_price(self, request: Request, inst: Instance) -> float:
         """Return the prefill price for predictive admission.
 
-        Aggregate fallback requires an idle decode engine because the profile
-        covers isolated prefill and decode. Open admission uses normal placement.
+        Without live prefill engines, a busy decode engine prices at infinity.
         """
         if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
             return float("inf")
@@ -376,20 +375,8 @@ class GlobalScheduler:
     ) -> bool:
         """Return whether live decode engines hold `request`'s decode window.
 
-        Each request holds decode from its start to its projected last token: `request` from
-        `ready_s`, residents and requests waiting for a decode slot from now, and requests in
-        prefill from their projected prefill completion. Remaining output is the expected
-        output, then the `max_tokens` cap past the estimate. A request with an unknown
-        remainder holds decode indefinitely; `request`'s own window is then the instant
-        `ready_s`. Residents generate at their engine's token interval and other requests at
-        the fleet mean. Each interval is the profile's full-batch interval at the current mean
-        context, within the decode token bound, times the live correction. Peak slots and KV
-        tokens (prompt plus projected final output) over the window must fit the fleet: slots
-        sum `decode_max_requests`, capped by `concurrency` when positive, and tokens sum
-        `decode_token_limit`. The TPOT check admits when any engine meets the budget with its
-        residents generating at `ready_s`. A fleet without live decode engines, or with an
-        engine lacking a measured decode bound, admits. A request that misses the TPOT budget
-        on every idle engine admits; placement decides it.
+        Peak slots and KV tokens over the window must fit the fleet, and some engine must
+        meet the TPOT budget unless every idle engine misses it.
         """
         engines = self.live_instances(Role.DECODE)
         if not engines:
@@ -476,8 +463,7 @@ class GlobalScheduler:
     def cheapest_own_prefill(self, request: Request) -> float | None:
         """Return the request's cheapest isolated prefill cost.
 
-        This excludes resident queues and probation penalties, which can drain
-        while a request waits.
+        Resident queues and probation penalties are excluded.
         """
         floors = [
             prefill_seconds(profile, request)
@@ -501,13 +487,9 @@ class GlobalScheduler:
         return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
 
     def flip_cost(self, inst: Instance) -> Cost:
-        """Return the resident-work cost of changing an engine's role.
+        """Return `(indicator, resident work)` for changing an engine's role.
 
-        Prefill instance: `(I[D = empty], sum T(rp, i))`.
-        Decode instance:  `(I[P = empty], sum L(rd))`.
-
-        The indicator is 0 when the other type is still resident, so an
-        incompletely flipped instance sorts first under argmin.
+        The indicator is 0 while the other phase's work is still resident.
         """
         profile = self.profiles.get(inst.iid)
         if inst.role is Role.PREFILL:
@@ -526,7 +508,7 @@ class GlobalScheduler:
         candidate: Instance | None = None,
         bypass_dwell: bool = False,
     ) -> tuple[Instance | None, str]:
-        """Resolve the donor used by a score and the subsequent role change."""
+        """Return the donor for a change toward `target`, or None and the blocking reason."""
         source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         pool = [
             inst
@@ -569,10 +551,9 @@ class GlobalScheduler:
         bypass_dwell: bool = False,
         decision_details: dict[str, object] | None = None,
     ) -> Instance | None:
-        """Apply a live role change and record its timing, residents and events.
+        """Apply a live role change toward `target`; return the moved engine or None.
 
-        Recovery may nominate a candidate and bypass timing guards. Pins,
-        availability, role floors and transition bookkeeping still apply.
+        Pins, availability and role floors apply even with the bypass flags.
         """
         take_from = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         now = self._clock()
@@ -732,7 +713,7 @@ class GlobalScheduler:
         if not instances:
             raise RuntimeError("no schedulable instances")
 
-        # 1. Prefill instance already flipped to decode: no KV transfer needed.
+        # A prefill engine since flipped to decode keeps the request without a KV transfer.
         if (
             request.phase is Phase.DECODE
             and request.prefill_instance
@@ -745,8 +726,7 @@ class GlobalScheduler:
             if prior is not None and prior.role is Role.DECODE:
                 return prior
 
-        # Profiles assume sequential prefill and batched decode, so prefer the
-        # matching role whenever that pool has a live engine.
+        # Profiles model sequential prefill and batched decode.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
         candidates = self.role_pool(want, instances)
         if not candidates:
@@ -756,11 +736,9 @@ class GlobalScheduler:
             self.recheck_evidence(request, 0.0)
         prices = {i.iid: self.cost(request, i) for i in candidates}
 
-        # 2. Lowest-cost instance that also meets the SLO.
         chosen, served = self._cheapest(request, candidates, prices)
         if not served:
-            # Admission decides whether to accept an over-budget placement.
-            # Role changes belong to the monitoring controller.
+            # Admission decides over-budget placements.
             self.unserved += 1
         if request.phase is Phase.PREFILL and request.cached_tokens:
             request.cache_placement = self._cache_placement(request, chosen, candidates)
@@ -785,7 +763,7 @@ class GlobalScheduler:
     def _cache_placement(
         self, request: Request, chosen: Instance, candidates: list[Instance]
     ) -> dict[str, Any] | None:
-        """Record why cache evidence priced the chosen prefill engine as it did."""
+        """Return cache-evidence pricing details for the chosen prefill engine."""
         profile = self.profiles.get(chosen.iid)
         if profile is None:
             return None
@@ -838,11 +816,7 @@ class GlobalScheduler:
                 )
 
     def observe_control_load(self, prefill: float, decode: float) -> None:
-        """Update the sustained cooldown-bypass condition.
-
-        Decode must exceed the panic threshold while prefill remains below
-        `shrink`. This excludes fleet-wide spikes.
-        """
+        """Count consecutive passes with decode at panic load and prefill at most `shrink`."""
         armed = (
             self.th.panic_ratio > 0.0
             and decode >= self.th.panic_ratio * self.th.expand

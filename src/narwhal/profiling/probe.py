@@ -122,10 +122,7 @@ async def _tokenize_response(
     dialect: EngineDialect,
     timeout_s: float = 30.0,
 ) -> dict:
-    """Read the engine's tokenization response for `prompt`.
-
-    Profiling fails on a bad response because token count defines both fits' x axes.
-    """
+    """Return the engine's tokenization response for `prompt`; raise on a bad response."""
     path = dialect.tokenize_path
     if path is None:
         raise RuntimeError(f"the {dialect.name} dialect has no exact-count route")
@@ -194,9 +191,8 @@ async def make_prompt(
 ) -> tuple[str, int]:
     """Build a prompt near `target` tokens and return its fitted-axis count.
 
-    Dialects without an exact-count route use the configured character ratio.
-    An optional input bound requires exact counts and preserves the supplied
-    prefix while shortening the remainder. Sizing fails if it cannot fit.
+    Without an exact-count route, counts use `chars_per_token`; `max_input_tokens`
+    requires one and shortens only the text after `prefix`.
     """
     word = "benchmark "
     dialect = dialect or VllmDialect()
@@ -329,10 +325,9 @@ async def _one_decode_stream(
     tokens: int = DECODE_TOKENS,
     dialect: EngineDialect | None = None,
 ) -> None:
-    """Measure exact-token gaps while the complete cohort is decoding.
+    """Append exact-token gaps measured while the complete cohort decodes to `samples`.
 
-    Estimate the resident batch from client observations and exclude intervals
-    crossing a cohort arrival or departure.
+    Intervals crossing a cohort arrival or departure are excluded.
     """
     dialect = dialect or VllmDialect()
     if not dialect.token_ids:
@@ -412,7 +407,7 @@ async def _one_decode_stream(
                 ):
                     samples.append((float(state["requests"]), float(state["resident"]), now - last))
                 # vLLM can bundle final token IDs even with stream_interval=1.
-                # Keep exact token counts, but discard gaps around that event.
+                # Gaps adjacent to a multi-token chunk are discarded.
                 last = now if len(ids) == 1 else None
                 last_epoch = state["epoch"]
         if not done or not finished or mine != tokens:
@@ -465,9 +460,7 @@ async def _decode_cohort(
 def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
     """Size a retry so the first member still decodes when the last member joins.
 
-    A member that emitted `tokens` between the first arrival and the first
-    departure keeps `tokens` of full-cohort decode after the admission lag.
-    Returns None when the cohort already overlapped or the size exceeds `limit`.
+    Return None when the cohort already overlapped or the size exceeds `limit`.
     """
     first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
     if first is None or joined is None or left is None or joined < left or left <= first:
@@ -546,9 +539,8 @@ async def probe_decode(
                     (
                         statistics.median(s[0] for s in observed),
                         statistics.median(s[1] for s in observed),
-                        # Under colocated load, stalled tokens can arrive in a
-                        # burst. Mean gap retains the total service time;
-                        # median gap can report only the catch-up burst.
+                        # Mean gap keeps total service time when stalled
+                        # tokens arrive in a burst.
                         statistics.mean(s[2] for s in observed),
                     )
                 )
@@ -810,8 +802,7 @@ async def _require_cold(
 ) -> None:
     """Fail when the engine served prompt tokens from its prefix cache since `before`.
 
-    A missing counter, or one that went backwards after an engine restart,
-    records no count; profile generation checks reject a restarted engine.
+    A missing or decreasing counter records no count.
     """
     after = await prefix_cache_hits(client, url, timeout_s or 30.0)
     hit_tokens = None if before is None or after is None or after < before else after - before
@@ -856,7 +847,6 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence["prefill"] = prefill
-    # Check before the decode sweep so cached prefill fails early.
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
     prefill_fit, representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
     split = prefill_fit[3]
@@ -1004,7 +994,7 @@ class NeighbourLoad:
         self.elapsed: float | None = None
 
     async def start(self) -> None:
-        """Tokenize each peer's request shape before starting the timed load."""
+        """Start paced load on every peer and return after one warmup period."""
         jobs = []
         for index, (iid, url, role) in enumerate(self.peers):
             rate = self.workload.prefill_rps if role is Role.PREFILL else self.workload.decode_rps
@@ -1035,8 +1025,7 @@ class NeighbourLoad:
             jobs.append((iid, url, role, rate, prompt, output, index / len(self.peers) / rate))
         self.started = time.monotonic()
         self.tasks = [asyncio.create_task(self._serve(*job)) for job in jobs]
-        # Observe a full period before fitting the target. Reset counters so
-        # stored rates describe only the same interval as the latency sweep.
+        # Warmup lasts one full period; stored rates cover only the latency sweep.
         await asyncio.sleep(max(1.0 / job[3] for job in jobs))
         self._collect_task_errors()
         if self.errors:
@@ -1081,7 +1070,7 @@ class NeighbourLoad:
         return "; ".join(f"{iid}: {error}" for iid, error in self.errors.items())
 
     def evidence(self) -> dict[str, Any]:
-        """Retain completed traffic and errors for every configured neighbour."""
+        """Return completed traffic, rates and errors for every configured neighbour."""
         elapsed = self.elapsed or max(time.monotonic() - self.started, 1e-9)
         counts = {
             role: sum(self.counts[iid] for iid, _, peer_role in self.peers if peer_role is role)
@@ -1107,7 +1096,7 @@ class NeighbourLoad:
         }
 
     async def stop(self) -> dict[str, Any]:
-        """Require completed traffic from each peer before retaining its role mix."""
+        """Stop the load and return its evidence; raise when a peer failed or completed none."""
         self.elapsed = max(time.monotonic() - self.started, 1e-9)
         await _cancel(self.tasks)
         self._collect_task_errors()
@@ -1542,12 +1531,11 @@ async def run(
                 raise
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence
-            # Keep a completed engine's observations even if a later engine fails.
+            # Completed engines' observations survive a later engine's failure.
             evidence_path.parent.mkdir(parents=True, exist_ok=True)
             first = len(evidence_rows) == 1
             if first and not overwrite:
-                # Reserve the store before writing; exclusive creation also closes
-                # the race with another default-mode profiler after the initial check.
+                # Exclusive creation reserves the store against another default-mode profiler.
                 with store.path.open("x", encoding="utf-8"):
                     pass
             with evidence_path.open(

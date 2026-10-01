@@ -157,8 +157,7 @@ class RequestLifecycle:
             "retry_scheduled": False,
             "backoff_s": None,
         }
-        # One failure per attempt, including a pre-dispatch failure. Keep the
-        # diagnostic bound even if a future caller evaluates the same failure twice.
+        # One failure per attempt, including a pre-dispatch failure.
         if len(self.attempt_failures) < policy.max_attempts:
             self.attempt_failures.append(failure)
         if self.output_started:
@@ -181,7 +180,7 @@ class RequestLifecycle:
         self.release()
         self.phase = "backoff"
         self.request.phase = Phase.PREFILL
-        # Keep the original request in waiting demand throughout backoff.
+        # A request in backoff counts as waiting demand.
         self.router.monitor.waiting[self.rid] = self.request
         await self.wait(lambda: asyncio.sleep(delay))
         return True
@@ -204,8 +203,7 @@ class RequestLifecycle:
         req = self.request
         if not self.sized:
             router.unsized_offered += 1
-        # Invalid bodies carry no workload shape. Other unread bodies remain
-        # visible as unsized demand.
+        # Unread bodies other than invalid ones stay visible as unsized demand.
         self.resolve_demand(retain_unsized=terminal != "invalid")
         self.release()
         measured = self.tokens if router.engines.dialect.token_ids else None

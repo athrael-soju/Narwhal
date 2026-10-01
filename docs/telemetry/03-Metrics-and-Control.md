@@ -6,7 +6,7 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 ## Reading live state from Prometheus
 
-Starting values in a new router process:
+A new router process starts each series at these values:
 
 | Series | Starting value |
 | --- | --- |
@@ -17,6 +17,8 @@ Starting values in a new router process:
 Split journal rows by `run` when comparing restored outcome counts with offered counts.
 
 ### Metric families
+
+The router exports these series on `/metrics`, grouped by area:
 
 | Area | Series |
 | --- | --- |
@@ -48,6 +50,8 @@ The lifecycle gauges mirror fields of each engine's record in [`GET /narwhal/lif
 | `narwhal_engine_lifecycle_state` | gauge | `iid`, `state` | `1` on the series whose `state` label matches the engine's `state`. |
 
 ## Inspecting scheduling and role control
+
+These metrics track role changes and pool load:
 
 | Metric | Meaning |
 | --- | --- |
@@ -94,6 +98,8 @@ Demand histories clear on router restart.
 | `narwhal_demand_history_overflow_observations` | gauge | same `window` values | Observations merged past the cohort limit. |
 
 ## Inspecting consolidation gates
+
+These metrics expose the consolidation evidence that gates decode-to-prefill moves:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |

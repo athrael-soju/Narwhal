@@ -20,10 +20,7 @@ Prerequisites:
 - A router reserved for this run.
 - A router and engines that stay running through the benchmark.
 
-| Plan | Runner host |
-| --- | --- |
-| With an `evidence` object | A host that reads the router's append-only JSONL journal as a local file and reaches the router and every engine metrics endpoint |
-| Other plans | The workstation repository root, through the private router tunnel |
+For a plan with an `evidence` object, run the runner on a host that reads the router's append-only JSONL journal as a local file and reaches the router and every engine metrics endpoint. Run other plans from the workstation repository root, through the private router tunnel.
 
 ## Running a plan
 
@@ -79,6 +76,8 @@ Prerequisites:
 
 ## Plan fields
 
+A plan is a JSON object with these fields:
+
 | Field | Value |
 | --- | --- |
 | `schema` | `1` |
@@ -115,10 +114,7 @@ The new private `--out` directory holds:
 | `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, and evidence diagnostic count |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 
-| Runner exit | Condition |
-| :---: | --- |
-| `0` | Every point reaches `completed` |
-| `1` | The plan fails validation, or a point ends with another `condition` |
+The runner exits `0` when every point reaches `completed`. It exits `1` when the plan fails validation or a point ends with another `condition`.
 
 The runner stops at the first point that ends with one of these `result.json` conditions:
 

@@ -32,11 +32,10 @@ def controls_fleet(router: NarwhalRouter) -> bool:
 
 
 def control_ready(router: NarwhalRouter) -> bool:
-    """Keep backend availability separate from router control failures."""
+    """Return whether router control is ready, independent of backend availability."""
     return (
         controls_fleet(router)
-        # Monitoring failure counts as a missed standby probe even while the
-        # primary still owns its lease. Backend loss keeps handoffs flowing.
+        # Degraded monitoring counts as a missed standby probe while the primary holds its lease.
         and not router.monitoring_degraded
     )
 
@@ -92,9 +91,7 @@ async def standby_loop(
 ) -> None:
     """Shadow an active primary and claim its expired lease before takeover.
 
-    Loss of the primary HTTP path is insufficient while its shared lease is
-    valid. A missing, stale, incompatible, or wrong-epoch handoff keeps this
-    process non-ready.
+    A valid primary lease blocks takeover even when the primary HTTP path is lost.
     """
     doc = handoff_state.load(router.cfg.state_path)
     misses = 0

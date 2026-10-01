@@ -1,11 +1,7 @@
 """Bounded record of the prefix blocks one engine process holds on its GPU.
 
-The index applies an engine's ordered cache-event batches. It knows the
-engine's residency only when it has applied every batch since a known
-state: the engine's first batch, or a cache reset. A sequence gap, a first
-batch after the engine's start, an unreadable batch or an exceeded bound
-makes the residency unknown until the next cache reset. Unknown residency
-serves no blocks, so callers price that engine cold.
+Residency is known only while every batch since the engine's first batch or its
+last cache reset has applied.
 """
 
 from __future__ import annotations
@@ -40,9 +36,7 @@ BOUNDARY_KINDS = frozenset({"mamba"})
 class _Group:
     kind: str | None
     window: int | None = None
-    # Backend hash to its Narwhal identity and resident copies. vLLM can hold two physical
-    # copies of one hash and reports each store and eviction. The router rejects vLLM's full
-    # cache reports, so every store event is a new copy. None marks an unnamed block.
+    # Backend hash to [Narwhal identity or None, resident copies]; each store event adds a copy.
     blocks: dict[Hashable, list[Any]] = field(default_factory=dict)
     # Resident copies per named identity.
     names: Counter[bytes] = field(default_factory=Counter)
@@ -188,7 +182,7 @@ class ResidencyIndex:
             self._change_blocks -= self._changes.popleft()["size"]
 
     def mark_empty(self) -> None:
-        """Record that the engine has published no batch, so it holds no cached block."""
+        """Record an engine that has published no batch as holding no cached block."""
         with self._lock:
             if self.sequence is None:
                 self._reset("no cache events published")
@@ -304,11 +298,7 @@ class ResidencyIndex:
             }
 
     def changes_after(self, sequence: int) -> ResidencyChanges | None:
-        """Return the ordered batch changes after `sequence` with the index state.
-
-        Each change lists a group's identities that the batch made resident or
-        evicted. None means the caller needs a snapshot.
-        """
+        """Return the batch changes after `sequence`, or None when a snapshot is required."""
         with self._lock:
             if not self.known or not self.current or self.sequence is None:
                 return None
@@ -354,11 +344,7 @@ def cached_prefix_blocks(
 ) -> int:
     """Return how many leading prompt blocks the engine can reuse from every KV cache group.
 
-    Pass the identities of the prompt without its final token, which vLLM always
-    computes. Full-attention groups must hold each leading block. Sliding-window groups
-    must hold the contiguous blocks covering the window before the prefix end.
-    Boundary groups, such as Mamba state, must hold the block at the prefix
-    end. A group of any other kind, or without a known window, prices cold.
+    `identities` exclude the prompt's final token; vLLM always computes it.
     """
     groups = list(groups)
     if not groups or any(

@@ -15,8 +15,7 @@ from .model import _FIELD_NAMES, _REQUIRED_FIELDS, Profile
 
 
 def _reject_constant(name: str) -> NoReturn:
-    # json's default accepts NaN/Infinity tokens; no profile value may be
-    # non-finite because NaN comparisons pass every range check.
+    # Profile values must be finite; NaN passes every range comparison.
     raise ValueError(f"non-finite JSON constant {name}")
 
 
@@ -141,11 +140,10 @@ class ProfileStore:
         decode: int,
         roles: dict[str, Role] | None = None,
     ) -> tuple[Profile, ...]:
-        """Resolve a candidate shared-device mix without extrapolating variants.
+        """Return each selected engine's profile for a candidate mix, or () when any is unmeasured.
 
         A global split identifies a device mix only when the selected fleet has
-        one shared-device group. Legacy profiles remain available to fleets
-        without measured colocated variants.
+        one shared-device group.
         """
         selected = tuple(dict.fromkeys(iids))
         groups = {self._group_by_id.get(iid) for iid in selected if iid in self._group_by_id}
@@ -191,11 +189,7 @@ class ProfileStore:
         return tuple(profile for profile in self.all_profiles() if profile.iid == iid)
 
     def engine_set_diff(self, iids: Iterable[str]) -> tuple[list[str], list[str]]:
-        """Return (missing, extra) sorted ids between a fleet and the store.
-
-        `iids` is the configured engine set. Missing ids need profiles; extra ids
-        belong to engines outside that set.
-        """
+        """Return (missing, extra) sorted ids between the configured engine set and the store."""
         fleet = set(iids)
         stored = set(self._by_id) | {key[0] for key in self._by_mix}
         return sorted(fleet - stored), sorted(stored - fleet)
@@ -217,10 +211,7 @@ class ProfileStore:
     def mean_max_tokens(
         self, tpot_slo_s: float, batch_requests: float = 0.0, iids: Iterable[str] | None = None
     ) -> float | None:
-        """Return the mean decode capacity at the TPOT target.
-
-        `iids` scopes the mean to the configured engine set.
-        """
+        """Return the mean decode capacity at the TPOT target for the engines in `iids`."""
         profiles = self._rows_for(iids)
         if not profiles:
             return None
@@ -230,10 +221,7 @@ class ProfileStore:
     def mean_token_interval(
         self, batch_tokens: float, batch_requests: float = 0.0, iids: Iterable[str] | None = None
     ) -> float | None:
-        """Return the mean predicted decode interval at a batch size.
-
-        `iids` scopes the mean to the configured engine set.
-        """
+        """Return the mean predicted decode interval at a batch size for the engines in `iids`."""
         profiles = self._rows_for(iids)
         if not profiles:
             return None
@@ -249,10 +237,7 @@ class ProfileStore:
         correction: float = 1.0,
         iids: Iterable[str] | None = None,
     ) -> float | None:
-        """Return mean request capacity across the measured decode profiles.
-
-        `iids` scopes the mean to the configured engine set.
-        """
+        """Return the mean decode request capacity for the engines in `iids`."""
         profiles = self._rows_for(iids)
         if not profiles:
             return None
@@ -270,10 +255,7 @@ class ProfileStore:
     def covers_decode(
         self, batch_requests: float, batch_tokens: float, iids: Iterable[str] | None = None
     ) -> bool:
-        """Return whether every engine profile covers a decode point.
-
-        `iids` scopes coverage to the configured engine set.
-        """
+        """Return whether every profile for the engines in `iids` covers a decode point."""
         profiles = self._rows_for(iids)
         return bool(profiles) and all(
             profile.covers_decode(batch_requests, batch_tokens) for profile in profiles

@@ -39,10 +39,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 .venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-| Version                           | Source                                         | Peer compatibility hash |
-| --------------------------------- | ---------------------------------------------- | ----------------------- |
-| `contract.nixl_connector_version` | Installed connector's `NIXL_CONNECTOR_VERSION` | Included                |
-| `nixl_version`                    | Pinned NIXL package                            |                         |
+`contract.nixl_connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `nixl_version` records the pinned NIXL package.
 
 ### 3. Capturing the model dimensions
 
@@ -63,12 +60,7 @@ The capture requires the live container's plan and launcher hashes to match `lau
 
 ### 4. Capturing the cache grouping
 
-`cache-registration` writes one `cache-registration.json` per `ENGINE_RUN` from either source:
-
-| Source                         | Requirement                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| Startup log                    | Names exactly one layout across its `Using <layout> KV cache layout.` lines. |
-| `cache-layout.json`            | Holds one resolved layout across every TP rank.                              |
+`cache-registration` writes one `cache-registration.json` per `ENGINE_RUN` from either of two sources. The startup log must name exactly one layout across its `Using <layout> KV cache layout.` lines. The `cache-layout.json` file must hold one resolved layout across every TP rank.
 
 From the startup log:
 
@@ -85,12 +77,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-| Layouts in vLLM v0.30.0       | `is_block_outermost` |
-| ----------------------------- | -------------------- |
-| `BLHNC`, `BLNHC`, and `BHLNC` | `true`               |
-| `LBHNC`, `LBNHC`, and `LHBNC` | `false`              |
-
-`cache-registration.json` records the value as `cross_layers_blocks`.
+In vLLM v0.30.0, `is_block_outermost` is `true` for the `BLHNC`, `BLNHC`, and `BHLNC` layouts and `false` for the `LBHNC`, `LBNHC`, and `LHBNC` layouts. `cache-registration.json` records the value as `cross_layers_blocks`.
 
 ### 5. Comparing the layout with the representative's
 
@@ -110,10 +97,7 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-| Comparison with the representative                            | Fabric budget                                                                                                  |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Group signature, resolved layout, and page geometry all match | The engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#building-the-source-budget). |
-| Layout or page geometry differs                               | The engine needs a separate serving capture, budget, and edge comparisons.                                     |
+When the group signature, resolved layout, and page geometry all match the representative's, the engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#building-the-source-budget). When the layout or page geometry differs, the engine needs a separate serving capture, budget, and edge comparisons.
 
 ### 6. Capturing the transfer direction
 
@@ -165,10 +149,7 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-| Pinned API term | Meaning                              |
-| --------------- | ------------------------------------ |
-| `NixlConnector` | Alias for `NixlPullConnector`.       |
-| `kv_both`       | The engine produces and consumes KV. |
+In the pinned API, `NixlConnector` is an alias for `NixlPullConnector`, and `kv_both` means the engine produces and consumes KV.
 
 When the script finds zero or several connector classes in `image-check.log`, rerun the launcher's `check` for this launch plan.
 
@@ -298,10 +279,7 @@ Run once from the router shell after every sidecar passes:
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-| Failure                                      | Diagnosis                                                                  |
-| -------------------------------------------- | -------------------------------------------------------------------------- |
-| A sidecar fails                              | The error output names the engine and the failed checks.                   |
-| `Engine sidecars report different contracts` | Compare the `contract` objects in each engine's `engine-attestation.json`. |
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`.
 
 Recovery:
 

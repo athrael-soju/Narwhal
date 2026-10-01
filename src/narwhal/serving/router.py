@@ -87,7 +87,6 @@ class NarwhalRouter:
         cfg.serving.validate()
         self.journal = journal
         if max_concurrent is not None and max_concurrent > cfg.max_connections:
-            # Check admission capacity against the pool before building clients.
             raise ValueError(
                 f"max_concurrent {max_concurrent} exceeds max_connections "
                 f"{cfg.max_connections}: admission would outrun the dispatch pool"
@@ -100,7 +99,7 @@ class NarwhalRouter:
         self.lease_holder = ""
         self.failover_blocked = ""
         self.lifecycle_blocked = ""
-        # Share one injectable monotonic clock across scheduling and measurement.
+        # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
         self.profiles = ProfileStore(cfg.profiles_path)
         self.residency = ResidencySubscriptions(cfg.engines)
@@ -150,8 +149,7 @@ class NarwhalRouter:
             advisory=cfg.advisory,
             on_floor_event=self.journal.write,
             on_control_event=self.journal.write,
-            # Attainment buckets align with the monitor cadence and keep four
-            # controller windows, the deepest evidence horizon any consumer reads.
+            # Four controller windows cover the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
             decode_concurrency=cfg.serving.decode_concurrency,
@@ -194,8 +192,7 @@ class NarwhalRouter:
         self._verification_at: dict[str, float] = {}
         self._verification_tasks: set[asyncio.Task[None]] = set()
         self.peer_release = PeerRelease(self._clock)
-        # The fleet's dialect fixes the decode token-accounting mode; stamp it
-        # into the journal's run metadata when the journal opens.
+        # The journal writes this into its run metadata when it opens.
         journal.extra = {"token_accounting": self._token_accounting()}
         self.served = 0
         self.slo_met = 0
@@ -250,7 +247,7 @@ class NarwhalRouter:
         self.monitor.on_capacity_change = self.dispatcher.notify
         self.retry_budget = RetryBudget(cfg.serving.retry_budget, cfg.serving.retry_replenish)
         self.queue_wait = slo_histogram(cfg.serving.queue_timeout_s or cfg.slo.ttft_s)
-        # Measure how long admitted work occupies capacity.
+        # Request ID to the time it took an admission seat.
         self._seat_since: dict[str, float] = {}
         self.seat = slo_histogram(cfg.slo.ttft_s)
         self.monitoring = MonitoringLedger(clock, on_event=self.journal.write)
@@ -273,12 +270,7 @@ class NarwhalRouter:
     ) -> tuple[int, dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         """Return the input token count and the prefix-cache evidence for the prompt.
 
-        Already-tokenized prompts supply their exact count locally. Other
-        requests query the live engine with the fewest resident requests. A
-        failed exact-count call fails the request, and later requests skip that
-        engine for a backoff that doubles with each consecutive failure and ends
-        at its next successful count. Disabled or unavailable token counting
-        uses the local estimate and no cache evidence.
+        A failed exact count raises EngineError and backs off that engine.
         """
         prompt = body.get("prompt")
         if (
@@ -332,9 +324,7 @@ class NarwhalRouter:
     ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         """Return cached tokens and residency sequence per engine, and the matched block identities.
 
-        Identities cover the prompt minus its final token. Multimodal requests, requests
-        with an uncounted render field, fleets without an engine contract and out-of-range
-        token IDs return empty evidence.
+        Identities cover the prompt minus its final token.
         """
         return self.residency.match(_hash_prompt(*self._evidence_inputs(body, token_ids)))
 
@@ -492,29 +482,22 @@ class NarwhalRouter:
     ) -> None:
         """Classify a failed leg and update breaker state.
 
-        An upstream 4xx outside 408/429 confirms that the engine answered and
-        stands as transport evidence. Local pool starvation is no evidence at
-        all. Every other shape feeds one breaker class; at `eject_after` the
-        class decides whether the suspect resolves by a health probe or by
-        the two-leg inference probe.
+        A 4xx outside 408/429 counts as transport evidence; a local pool timeout counts as none.
         """
         if isinstance(exc, httpx.PoolTimeout):
-            # Preserve breaker state after local connection-pool exhaustion.
             log.info("%s leg waited out the local HTTP pool; no breaker evidence", iid)
             return
         status = exc.status if isinstance(exc, EngineError) else 500
         if 400 <= status < 500 and status not in (408, 429):
             self.scheduler.record_answer(iid, "transport")
             return
-        # Route 408/429 responses to the overload class. Decode read timeouts
-        # require inference verification, including timeouts before headers.
+        # Decode read timeouts, including those before headers, need inference verification.
         klass = (
             "stream"
             if decode_leg and isinstance(exc, httpx.ReadTimeout)
             else leg_failure_class(exc)
         )
         if klass is None:
-            # PoolTimeout and caller-side 4xx legs are handled above.
             return
         if klass == LEG_STREAM and progressed and first_output_timeout(exc):
             # A first-token timeout while the engine produced other output is overload.
@@ -571,7 +554,6 @@ class NarwhalRouter:
 
         verdict = await self.engines.healthy(url)
         if verdict is None:
-            # Preserve the suspect's state after control-pool exhaustion.
             log.info("suspect %s probe waited out the control pool; verdict deferred", iid)
             return
         if verdict:
@@ -686,7 +668,6 @@ class NarwhalRouter:
                 "limit": self.max_concurrent,
                 "rejected": self.rejected,
                 "refused": self.refused,
-                # Engine-authentication mode.
                 "engine_auth": self.cfg.engine_auth_mode(),
             },
             "serving": {

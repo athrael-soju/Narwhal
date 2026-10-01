@@ -41,9 +41,7 @@ class _Waiter:
 class AdmissionQueue(Generic[T]):
     """Wait in FIFO order until a callback can atomically reserve capacity.
 
-    The callback returns None when capacity is unavailable. The queue head
-    selects and reserves an engine synchronously, keeping its role stable.
-    Call notify after capacity or engine eligibility changes.
+    The callback returns None when capacity is unavailable.
     """
 
     def __init__(
@@ -87,8 +85,7 @@ class AdmissionQueue(Generic[T]):
                 remaining = expires - self._clock()
                 if remaining <= 0:
                     raise QueueExpired
-                # Clear before checking capacity so a notification during the check
-                # remains set when the waiter yields.
+                # A notification during the capacity check stays set for the next wait.
                 waiter.wake.clear()
                 if next(iter(self._pending)) is waiter:
                     result = reserve()

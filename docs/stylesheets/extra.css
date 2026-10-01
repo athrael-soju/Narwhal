@@ -285,18 +285,15 @@
   }
 }
 
-/* Span the same width as tables, whose wrapper extends 0.8rem past the
-   content and pads them by 0.15rem. */
+/* Table width: 0.8rem wrapper overhang minus 0.15rem table padding. */
 .md-typeset .narwhal-panel-row {
   display: flex;
   gap: 0.5rem;
   margin: 1em -0.65rem;
 }
 
-/* overrides/hooks/panel_rows.py sizes each item. In a plain row, flex-grow
-   is the image's pixel width, so the row fills the column at one image
-   height. In a stats row, flex-basis is the image's share of the page's
-   widest stats row, so stats images share one scale. */
+/* overrides/hooks/panel_rows.py sets each item's flex-grow (plain rows) or
+   flex-basis (stats rows) from image pixel widths. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;

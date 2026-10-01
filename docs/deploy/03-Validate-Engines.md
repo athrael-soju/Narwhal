@@ -58,14 +58,7 @@ Read the physical accelerator identity and count:
 )
 ```
 
-Record the accelerator product and the visible physical GPU count.
-
-On ROCm, read both from `rocminfo`:
-
-| Value     | `rocminfo` source                      |
-| --------- | -------------------------------------- |
-| GPU count | Agents with `Device Type` set to `GPU` |
-| Product   | `Marketing Name`                       |
+Record the accelerator product and the visible physical GPU count. On ROCm, count the `rocminfo` agents with `Device Type` set to `GPU`, and read the product from `Marketing Name`.
 
 In the router shell, check the `hardware` fields in `runs/deployment/fleet.json` against the host observations:
 
@@ -89,11 +82,9 @@ ss -ltnp
 
 A passing `test` command is silent and exits with status 0.
 
-| Finding                                                                                  | Action                                                            |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `ss -ltnp` shows a planned HTTP, attestation, NIXL side-channel, or transfer port in use | Free the port.                                                    |
-| `NARWHAL_ENGINE_IMAGE` holds a registry digest                                           | Compare the runtime's resolved digest with the configured digest. |
-| The provisioned checkpoint changed                                                       | Rerun discovery.                                                  |
+- If `ss -ltnp` shows a planned HTTP, attestation, NIXL side-channel, or transfer port in use, free the port.
+- If `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest with the configured digest.
+- If the provisioned checkpoint changed, rerun discovery.
 
 Check every declared device path:
 
@@ -154,7 +145,7 @@ Each output line names a signature group, its representative role, and its membe
 
 ## Preparing, checking, and starting each engine
 
-Launch plan properties:
+The launcher builds one launch plan per engine with these properties:
 
 | Property                      | Value                                                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -166,31 +157,25 @@ Launch plan properties:
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                         |
 | Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                      |
 | Cache events                  | Published by vLLM over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                           |
-| Cache event opt-out           | [Prefix caching and cache events](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events)                 |
+| Cache event opt-out           | [![Prefix caching and cache events documentation](https://img.shields.io/badge/docs-Prefix%20caching%20and%20cache%20events-0f766e)](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) |
 
-Prefix caching for the Gate G [capacity trial](../measure/03-Load-Trial.md):
-
-| Item     | Value                                                                                                           |
-| -------- | --------------------------------------------------------------------------------------------------------------- |
-| Flag     | vLLM's `--no-enable-prefix-caching` in `runtime.extra_args`                                                     |
-| Input    | [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy), written to `runtime.extra_args` by discovery |
-| Deadline | Before preparing the launch plans                                                                               |
+For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
 
 To add the flag after launch:
 
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.
 3. Restart each engine.
-4. Repeat the work for an engine restart with a changed attested `launch_digest` in the [repeat-work table](../Deploy.md#deployment-sequence).
+4. Repeat the work for an engine restart with a changed attested `launch_digest` from the [deployment sequence](../Deploy.md#deployment-sequence).
 
 For a separate tokenizer at `PATH`, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before preparing the launch plan.
 
-When a launch input changes, repeat the matching work:
+When the image, model, dtype, cache policy, TP allocation, or model arguments change:
 
-| Change                                                               | Work to repeat                                             |
-| -------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Image, model, dtype, cache policy, TP allocation, or model arguments | 1. Derive the groups.<br>2. Capture the live cache layout. |
-| Workload assumptions                                                 | Recalculate the fabric budget.                             |
+1. Derive the groups.
+2. Capture the live cache layout.
+
+When the workload assumptions change, recalculate the fabric budget.
 
 In every engine-role shell, prepare the launch plan:
 
@@ -239,19 +224,9 @@ A failed check names the failing package, tokenizer, or identity check.
 
 The checked tokenizer is the final `--tokenizer` value in the serving arguments, or the model directory by default.
 
-| Engine    | Check log           | Tokenizer path resolves in                                           |
-| --------- | ------------------- | -------------------------------------------------------------------- |
-| Container | `image-check.log`   | The image and its mounts, including `/model` for `NARWHAL_MODEL_DIR` |
-| Native    | `runtime-check.log` | The host                                                             |
+For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
-Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
-
-When the launch-plan hash or the launcher changes, take the matching action:
-
-| Change           | Action                                                   |
-| ---------------- | -------------------------------------------------------- |
-| Launch-plan hash | Prepare a fresh launch directory.                        |
-| Launcher         | Prepare a new deployment run in [Gate B](02-Install.md). |
+When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment run in [Gate B](02-Install.md).
 
 Start the engines:
 
@@ -287,10 +262,7 @@ When vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYO
 
 ### Docker command deadlines
 
-| Period                                  | Settings                                                                                            |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Docker command execution                | Stage budgets in [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery)     |
-| Cleanup after a timeout or cancellation | [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation) |
+Docker commands run within the stage budgets in [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery). Cleanup after a timeout or cancellation follows [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation).
 
 Before you reuse a failed deployment:
 
@@ -344,10 +316,7 @@ Before you reuse a failed deployment:
     PY_ENGINE
     ```
 
-| Situation                             | Action                                                                                   |
-| ------------------------------------- | ---------------------------------------------------------------------------------------- |
-| The probe reports another API version | Compare the container that serves the endpoint with the recorded image and container ID. |
-| Rerun after a repair                  | Use new capture filenames or a new launch directory.                                     |
+If the probe reports another API version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
 
 - Leave each serving container running through the workload trial.
 - Keep the engines idle during fabric qualification and profiling.
@@ -366,11 +335,6 @@ test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FA
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
-Compare the resolved layouts and page geometry within each signature group:
-
-| Result                            | Gate D budget                     |
-| --------------------------------- | --------------------------------- |
-| Every engine in the group matches | One budget for the group          |
-| An engine differs                 | A separate budget for that engine |
+Compare the resolved layouts and page geometry within each signature group. When every engine in the group matches, Gate D uses one budget for the group. An engine that differs gets a separate budget.
 
 [![Next: Gate D: Proving the transfer fabric against the serving cache](https://img.shields.io/badge/next-Gate%20D%3A%20Proving%20the%20transfer%20fabric%20against%20the%20serving%20cache-0f766e)](04-Qualify-Fabric.md)

@@ -1,8 +1,7 @@
 """Peer release rounds after an engine ejection or drain.
 
 A vLLM NIXL consumer keeps a producer's KV memory mapped until a consume request
-finds that producer idle for longer than the connector's `engine_ttl`. Each round
-sends one transfer probe through every live consumer, from another live producer.
+finds that producer idle for longer than the connector's `engine_ttl`.
 """
 
 from __future__ import annotations

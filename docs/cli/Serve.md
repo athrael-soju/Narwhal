@@ -6,6 +6,8 @@ description: Serving options, standby takeover and lease fencing for the narwhal
 
 Start a router: `narwhal-serve --fleet PATH`.
 
+`narwhal-serve` exits with these statuses:
+
 | Condition | Exit status |
 | --- | :--: |
 | `--host` and `--port` fail the bind check | `1` |

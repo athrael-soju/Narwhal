@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 class GenerationEvidence:
     """Profile-binding digest, its evidence, and the engine-process digest.
 
-    `digest` is the attested launch digest when the sidecar reports one, so an
-    identical relaunch keeps it; otherwise it equals `process_digest`.
+    `digest` is the attested launch digest when the sidecar reports one, otherwise
+    `process_digest`.
     """
 
     digest: str
@@ -51,7 +51,7 @@ async def read_generation(
     headers: dict[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> GenerationEvidence:
-    """Read a process identity and verify its sidecar before returning a generation."""
+    """Return the engine's profile generation, verifying its sidecar when `contract` is set."""
     identity = await fetch_engine_identity(
         spec.url, timeout_s=timeout_s, headers=headers, transport=transport
     )
@@ -75,7 +75,7 @@ def binding_digest(payload: dict[str, Any]) -> str:
 
 
 def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
-    """Name the engine whose saved measurements require a fresh profiling run."""
+    """Return a reprofile message when `saved` is absent or differs from `live`, else None."""
     if saved is None:
         return f"{iid} profile has no generation evidence; reprofile before admission"
     if saved != live:
@@ -84,7 +84,7 @@ def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
 
 
 def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
-    """Check every loaded variant before an engine regains scheduling eligibility."""
+    """Return reprofile messages for every loaded variant of engine `iid`."""
     profiles = store.profiles_for_engine(iid)
     if not profiles:
         return [f"{iid} has no loaded profile; reprofile before admission"]

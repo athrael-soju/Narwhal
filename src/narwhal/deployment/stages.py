@@ -77,7 +77,7 @@ def cancellation() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _reaper() -> Iterator[None]:
-    # Adopt grandchildren on Linux so termination also consumes their wait status.
+    # A Linux subreaper adopts grandchildren, and termination consumes their wait status.
     libc = ctypes.CDLL(None, use_errno=True)
     previous = ctypes.c_int()
     if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) or libc.prctl(36, 1, 0, 0, 0):

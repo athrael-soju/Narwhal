@@ -20,19 +20,11 @@ To open a monitoring tunnel:
 
 3. Keep the tunnel terminal open.
 
-| Interface | URL |
-| --- | --- |
-| Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
-| Prometheus | `http://127.0.0.1:19090` |
-
-Grafana grants anonymous Viewer access through the local tunnel.
+The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, and Prometheus opens at `http://127.0.0.1:19090`. Grafana grants anonymous Viewer access through the local tunnel.
 
 ## Isolating a second monitoring stack
 
-| Variable | Default |
-| --- | --- |
-| `NARWHAL_GRAFANA_BIND_ADDRESS` | `127.0.0.1` |
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `127.0.0.1:9090` |
+Grafana listens on `NARWHAL_GRAFANA_BIND_ADDRESS`, default `127.0.0.1`. Prometheus listens on `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`, default `127.0.0.1:9090`.
 
 When another monitoring deployment shares the router host, run `make observe` with distinct loopback listeners:
 
@@ -42,15 +34,9 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus binds | Grafana `Prometheus` datasource and readiness probes use |
-| --- | --- | --- |
-| Specific address | That address | That address |
-| Wildcard (`0.0.0.0` or `::`) | The wildcard | Loopback |
+Grafana binds port `3000` and the image renderer binds port `8081` on the Grafana address. When that address is a wildcard (`0.0.0.0` or `::`), Grafana binds the wildcard and the image renderer binds loopback.
 
-| `NARWHAL_GRAFANA_BIND_ADDRESS` | Grafana binds | Image renderer binds |
-| --- | --- | --- |
-| Specific address | That address, port `3000` | That address, port `8081` |
-| Wildcard (`0.0.0.0` or `::`) | The wildcard, port `3000` | Loopback, port `8081` |
+The Grafana `Prometheus` datasource and the readiness probes use the Prometheus address. When that address is a wildcard (`0.0.0.0` or `::`), Prometheus binds the wildcard and the datasource and probes use loopback.
 
 Tunnel to the `127.0.0.2` listeners:
 

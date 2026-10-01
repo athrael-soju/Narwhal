@@ -6,15 +6,9 @@ description: Prepare and run vLLM engines from engine launch records with narwha
 
 `narwhal-engine` prepares and runs vLLM engines from a `narwhal.engine-launch` record.
 
-| Backend | Runtime |
-| --- | --- |
-| `native` | The checked Python environment on Linux or WSL2 |
-| `container` | Docker |
+The `native` backend runs in the checked Python environment on Linux or WSL2. The `container` backend runs in Docker.
 
-| Variable | Backend | Use |
-| --- | --- | --- |
-| `NARWHAL_MODEL_REVISION` | `native` | Required model revision, a 40-character commit or a `sha256:` digest |
-| `NARWHAL_MODEL_PATH` | `native` | Local GGUF file, with its SHA-256 recorded by `prepare` |
+The `native` backend uses two variables. `NARWHAL_MODEL_REVISION` holds the required model revision, a 40-character commit or a `sha256:` digest. `NARWHAL_MODEL_PATH` names a local GGUF file, and `prepare` records its SHA-256.
 
 GGUF models:
 
@@ -23,6 +17,8 @@ GGUF models:
 - Pass the base model tokenizer and configuration through `--tokenizer` and `--hf-config-path` in `runtime.extra_args`.
 
 ## Actions
+
+Actions write their outputs to the launch directory.
 
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
@@ -37,6 +33,8 @@ GGUF models:
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `stop-native` | native | Native launch directory with process records | `native-stop.json` |
 
+Four actions run checks:
+
 | Action | Checks |
 | --- | --- |
 | `prepare` | Model configuration and cache-capture hook hashes |
@@ -46,12 +44,12 @@ GGUF models:
 
 Poll HTTP readiness when `start` returns.
 
-Actions write their outputs to the launch directory.
-
 To start again or capture an output again:
 
 1. Run `prepare` with a fresh `--out` directory.
 2. Run `check` on it.
+
+`narwhal-engine` options:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -84,17 +82,9 @@ Every plan selected for `start-shared` must meet these conditions:
 - The per-engine `gpu_memory_utilization` fractions sum to at most `shared_device.device_allowance`.
 - Each plan's CUDA device, as an ordinal or UUID prefix, resolves to `shared_device.gpu_uuid` in the checked runtime.
 
-Both backends apply the same memory check:
+Both backends apply the same memory check. Its baseline is the first prelaunch GPU reading. When each engine passes its readiness and identity checks, the check measures the whole-device memory increase over the baseline, counting other processes' allocations and frees during startup.
 
-| Property | Value |
-| --- | --- |
-| Baseline | The first prelaunch GPU reading |
-| Check point | Each engine passing its readiness and identity checks |
-| Measured value | Whole-device memory increase over the baseline, counting other processes' allocations and frees during startup |
-| Limit | `shared_device.device_allowance` times total device memory |
-| Record | Each ready engine's `shared-start.json` |
-
-Each `shared-start.json` has these fields, in MiB:
+The limit is `shared_device.device_allowance` times total device memory. Each ready engine's `shared-start.json` records the check with these fields, in MiB:
 
 - Baseline
 - Before and after readings
@@ -102,10 +92,7 @@ Each `shared-start.json` has these fields, in MiB:
 - Aggregate increase
 - Allowance
 
-| Backend | Recorded identity |
-| --- | --- |
-| `container` | Container ID, Linux PID, image ID, and serving arguments |
-| `native` | Linux PID, boot ID, process start tick, vLLM version, `/metrics` process start, model revision, and arguments |
+For each engine's identity, the `container` backend records the container ID, Linux PID, image ID, and serving arguments. The `native` backend records the Linux PID, boot ID, process start tick, vLLM version, `/metrics` process start, model revision, and arguments.
 
 `container` on failure:
 
@@ -119,19 +106,9 @@ Each `shared-start.json` has these fields, in MiB:
 - Keeps the startup cause, cleanup errors, and post-cleanup GPU reading in the failing engine's `shared-start.json`.
 - Records the stop of each ready engine in `native-stop.json`.
 
-| Native port check | Address source |
-| --- | --- |
-| Engine HTTP endpoint | `launch.json` |
-| NIXL side channel | `engine.env` |
-| Attestation sidecar | `NARWHAL_NODE_<n>_ATTESTATION_URL` |
+Native port checks read the engine HTTP endpoint address from `launch.json`, the NIXL side channel address from `engine.env`, and the attestation sidecar address from `NARWHAL_NODE_<n>_ATTESTATION_URL`.
 
-`NARWHAL_NODE_<n>_ATTESTATION_URL` source by context:
-
-| Context | Source |
-| --- | --- |
-| `prepare` | Environment at preparation |
-| `start-shared` | Environment at startup, overriding the preparation value |
-| `narwhal dev` | Instance fleet configuration |
+`prepare` reads `NARWHAL_NODE_<n>_ATTESTATION_URL` from the environment at preparation. `start-shared` reads it from the environment at startup, overriding the preparation value. Under `narwhal dev`, it comes from the instance fleet configuration.
 
 Serve the process-bound attestation that `native-capture` writes from the recorded engine environment:
 

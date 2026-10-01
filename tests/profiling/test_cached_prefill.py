@@ -180,7 +180,6 @@ class ColdSplitStepTests(unittest.TestCase):
                 one_step = [n for n in probe.PREFILL_LENS if not splits_prefill(n, block)]
                 self.assertGreaterEqual(len(one_step), 2)
         self.assertEqual(list(probe.PREFILL_LENS), sorted(probe.PREFILL_LENS))
-        # Two one-step lengths remain in a 4096-token context.
         short = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
         for block in (16, 512):
             with self.subTest(block=block, context=4096):
@@ -478,7 +477,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
                 self.refit({"samples": bad}, self.base())
 
     def test_refit_keeps_an_engine_cold_when_its_live_warm_sweep_stopped(self):
-        # A stopped sweep's samples would still form a fit.
+        # The samples alone form a fit.
         reason = "case prefix~8192 suffix~700 reused no cached prefix"
         row, evidence = self.refit({"samples": warm_samples(), "reason": reason}, self.base())
         self.assertIsNone(row["cached_ttft_a"])

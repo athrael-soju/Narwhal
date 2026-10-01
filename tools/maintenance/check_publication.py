@@ -60,7 +60,7 @@ def main() -> int:
             if PRIVATE_KEY.search(content):
                 reasons.append("private key material")
         if reasons:
-            # repr escapes control characters in filenames before writing to CI logs.
+            # repr escapes control characters in filenames.
             print(f"{name!r}: {', '.join(reasons)}", file=sys.stderr)
             failed = True
     if failed:

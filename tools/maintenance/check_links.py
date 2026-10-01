@@ -1,8 +1,4 @@
-"""Check source Markdown links locally.
-
-Canonical Narwhal URLs resolve against the checkout. Checks cover Markdown and HTML targets and
-skip fenced code and third-party URLs.
-"""
+"""Check source Markdown links locally."""
 
 from __future__ import annotations
 
@@ -34,7 +30,7 @@ def tracked_markdown() -> list[Path]:
 
 
 def prose(text: str) -> str:
-    """Remove fenced code before interpreting Markdown structure."""
+    """Return the text without fenced code blocks."""
     lines = []
     fence = ""
     for line in text.splitlines():

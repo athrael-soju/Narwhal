@@ -14,20 +14,11 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 - `curl`
 - network reachability from the router host to every engine metrics endpoint
 
-Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells).
-
-| Shell state | Value |
-| --- | --- |
-| Working directory | Deployed checkout |
-| Environment | `runs/deployment/.env.router` |
-| Python | `.venv` active |
+Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells). That shell runs in the deployed checkout, with `runs/deployment/.env.router` loaded and `.venv` active.
 
 ## Configuring the monitored deployment
 
-| Variable | Value |
-| --- | --- |
-| `NARWHAL_FLEET` | Fleet configuration file with the engine IDs and metrics URLs |
-| `NARWHAL_ROUTER_URL` | Router origin Prometheus scrapes, direct or through a stable local tunnel |
+`NARWHAL_FLEET` names the fleet configuration file with the engine IDs and metrics URLs. `NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel.
 
 Set both in the router-role shell:
 
@@ -50,6 +41,8 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 
 ### Readiness contract
 
+`make observe` returns when every component passes its check:
+
 | Component | Check |
 | --- | --- |
 | Prometheus | `/-/ready` answers and the build reports version `3.14.0` |
@@ -60,6 +53,8 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | `narwhal-router` job | Exactly one healthy target at `NARWHAL_ROUTER_URL` |
 | `engines` job | One healthy target per fleet engine, labelled with its `iid` |
 | Router readiness | `narwhal_router_ready` reports `1` |
+
+Each startup stage has a deadline:
 
 | Startup stage | Deadline |
 | --- | --- |
@@ -78,12 +73,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
   | python3 -m json.tool
 ```
 
-The response has one series for the router and one for each configured engine:
-
-| Value | Scrape |
-| :---: | --- |
-| `1` | Succeeded |
-| `0` | Failed |
+The response has one series for the router and one for each configured engine. A value of `1` marks a successful scrape, and `0` marks a failed scrape.
 
 Prometheus `/targets` shows the discovery state and scrape errors for each endpoint.
 
@@ -98,6 +88,8 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL` | `prometheus/targets/router.json`, `prometheus/targets/engines.json` |
 | `tools/observability/grafana/provisioning/` | `grafana-provisioning/` |
 | `tools/observability/grafana-narwhal.json` | `grafana-dashboards/narwhal.json` |
+
+The staged files and the renderer token have these modes:
 
 | Path | Mode |
 | --- | :---: |

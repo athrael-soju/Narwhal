@@ -1,10 +1,7 @@
 """Capture vLLM's resolved KV pages during a normal serving startup.
 
 The launcher installs this file as sitecustomize.py in a private, read-only
-container mount. Only serving containers set NARWHAL_CAPTURE_CACHE. A restart of
-the same launch keeps the first capture and stops if the pages differ. Before
-vLLM measures free GPU memory, a serving worker waits up to PEER_RELEASE_WAIT_S
-for memory that KV peers still map from a stopped engine.
+container mount.
 """
 
 import hashlib

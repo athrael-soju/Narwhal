@@ -1,9 +1,7 @@
 """Narwhal prefix-block identity for exact prompt tokens.
 
-An identity names one full cache block by its tokens, every earlier token,
-the block size and the cache namespace. Narwhal computes it the same way
-from request token IDs and from an engine's stored-block events, so the two
-can be compared without the backend's internal hash algorithm or seed.
+An identity covers one full block's tokens, every earlier token, the block size
+and the cache namespace, independent of the backend's hash algorithm or seed.
 """
 
 from __future__ import annotations
@@ -21,9 +19,8 @@ _TOKEN_BYTES = 8
 class CacheNamespace:
     """Inputs outside the token sequence that decide whether blocks are shareable.
 
-    `model` and `tokenizer` are identity strings that every engine in a fleet
-    shares, such as the served model and the fleet engine contract. `adapter`
-    names a LoRA adapter and `cache_salt` carries a request's cache salt.
+    `model` and `tokenizer` are fleet-wide identity strings, such as the served
+    model and the fleet engine contract.
     """
 
     model: str
@@ -58,8 +55,7 @@ def block_identities(
 ) -> list[bytes]:
     """Return one identity per full block of `token_ids`.
 
-    Without `parent`, the tokens start at the first prompt token. A partial
-    final block has no identity because engines cache only full blocks.
+    Without `parent`, the tokens start at the first prompt token.
     """
     current = namespace.root(block_size) if parent is None else parent
     identities = []

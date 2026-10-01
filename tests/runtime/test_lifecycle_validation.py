@@ -301,7 +301,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.validate()).passed)
 
     async def test_inactive_profile_variant_must_match_the_verified_generation(self):
-        """Checking the selected row alone would admit a stale colocated variant."""
+        """Readmission rejects a stale colocated variant beside a current selected row."""
         original = self.router.profiles.get("e0")
         variant = replace(
             original,

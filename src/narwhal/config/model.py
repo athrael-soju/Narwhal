@@ -137,14 +137,11 @@ class HardwareSpec:
 
 @dataclass(frozen=True)
 class ProfileValidationPolicy:
-    """Decode-profile error limits enforced by fleet preflight.
+    """Decode-profile error limits enforced by fleet preflight."""
 
-    `max_decode_fit_mape` caps in-sample error; `max_decode_cv_mape` caps
-    leave-one-cell-out cross-validation error. The fit limit must be at or
-    below the controller's movement margin.
-    """
-
+    # In-sample MAPE limit; must not exceed the controller's movement margin.
     max_decode_fit_mape: float = 0.05
+    # Leave-one-cell-out cross-validation MAPE limit.
     max_decode_cv_mape: float = 0.13
 
     def __post_init__(self) -> None:
@@ -169,11 +166,10 @@ class FleetConfig:
     # Compute and expose controller decisions without changing engine roles.
     advisory: bool = False
     reactive_window_s: float = 120.0
-    # Minimum elapsed arrival-evidence span before D-to-P consolidation. The
-    # shipped default is half the shipped 120 s demand window.
+    # Minimum elapsed arrival-evidence span before D-to-P consolidation.
     reactive_evidence_span_s: float = 60.0
-    # Close the evidence window when arrivals or time since the last risk
-    # event span this duration, allowing consolidation under sparse traffic.
+    # The evidence window closes when arrivals or time since the last risk
+    # event span this duration.
     reactive_evidence_max_span_s: float = 120.0
     # Minimum arrival samples inside the evidence span.
     reactive_evidence_min_arrivals: int = 10
@@ -197,7 +193,7 @@ class FleetConfig:
     # Liveness sweeps detect dead engines while traffic is idle. Zero disables sweeps.
     liveness_every: int = 10
     liveness_misses: int = 2
-    # Whole-wave recovery protects engines that retain stale peer registrations.
+    # "individual" or "whole_wave"; whole_wave drains and readmits engines as one wave.
     engine_restart_policy: str = "individual"
     tokenize_timeout_s: float = 2.0
     # Data-pool capacity also bounds admitted originals; phase waits hold no connection.
@@ -216,21 +212,21 @@ class FleetConfig:
     graceful_timeout_s: float = 30.0
     profiles_path: Path = Path("runs/profiles.json")
     request_timeout_s: float = 600.0
-    # Prefill has a separate deadline because it is one forward pass.
+    # Prefill-leg deadline, separate from `request_timeout_s`.
     prefill_timeout_s: float = 120.0
     # Character-ratio fallback; calibrate against the served tokenizer.
     chars_per_token: float = 3.8
     tokenize: bool = True
     # Environment variable supplying the credential attached to each engine leg.
     engine_api_key_env: str = ""
-    # Maximum gap between decode chunks. Size this from the TPOT failure
-    # budget. 0 disables the bound, leaving only the request deadline.
+    # Maximum gap between decode chunks; size it from the TPOT failure budget.
+    # 0 disables the bound.
     decode_read_timeout_s: float = 60.0
     # Set above the measured crossed-handoff p99 for the served context range.
     first_token_timeout_s: float = 2.5
     # Ignored run output containing process-bound crossed-handoff measurements.
     first_token_calibration_path: Path | None = None
-    # Hold a failed engine out of placement while health checks catch up.
+    # Seconds a failed engine stays out of placement.
     failure_quarantine_s: float = 0.0
     # Predictive admission returns 429 when every placement exceeds the TTFT
     # budget. The margin supplies hysteresis at the boundary.
@@ -262,7 +258,6 @@ class FleetConfig:
     profile_validation: ProfileValidationPolicy = field(default_factory=ProfileValidationPolicy)
 
     def __post_init__(self) -> None:
-        # Programmatic construction gets the same finiteness gate as the loader.
         problems = [
             f"{name} must be finite, got {getattr(self, name)}"
             for name in _FINITE_FLOAT_FIELDS
@@ -289,13 +284,13 @@ class FleetConfig:
         return max(self.first_token_timeout_s or 0.0, self.health_timeout_s)
 
     def engine_auth_mode(self) -> str:
-        """Return the engine-authentication mode."""
+        """Return "engine-credential" when `engine_api_key_env` is set, else "boundary"."""
         if self.engine_api_key_env:
             return "engine-credential"
         return "boundary"
 
     def resolve_engine_key(self) -> str | None:
-        """Resolve the engine credential when constructing a network client."""
+        """Return the engine credential from the environment, or None when unconfigured."""
         if not self.engine_api_key_env:
             return None
         key = os.environ.get(self.engine_api_key_env)

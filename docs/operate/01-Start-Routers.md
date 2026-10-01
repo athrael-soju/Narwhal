@@ -6,6 +6,8 @@ description: Define the production boundary and start a Narwhal primary and stan
 
 ## 1. Production boundary
 
+A production deployment divides the work between Narwhal and the site's components:
+
 | Component | Responsibility |
 | --- | --- |
 | Site automation | Provisions GPU hosts and engine processes |
@@ -38,17 +40,11 @@ Inspect state handoff contracts before a router change:
 narwhal-check --print-contract-versions
 ```
 
-| Handoff contract versions on both routers | Procedure |
-| --- | --- |
-| Match | [Rolling upgrade](04-Upgrade-and-Validate.md#101-rolling-upgrade-with-compatible-handoff-versions) |
-| Differ | [Upgrading across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrading-across-a-handoff-version-change) |
+When the handoff contract versions match on both routers, follow the [rolling upgrade](04-Upgrade-and-Validate.md#101-rolling-upgrade-with-compatible-handoff-versions). When they differ, follow [Upgrading across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrading-across-a-handoff-version-change).
 
 ## 3. Configuring the client path
 
-| Network | Interfaces |
-| --- | --- |
-| Public ingress | Completion routes clients use |
-| Private | `/narwhal/*`, `/metrics`, `/health`, `/ready`, engine APIs, attestation endpoints |
+Public ingress carries the completion routes clients use. The private network carries `/narwhal/*`, `/metrics`, `/health`, `/ready`, the engine APIs, and the attestation endpoints.
 
 Ingress must:
 
@@ -71,13 +67,7 @@ Configure the load balancer from the shipped [HAProxy configuration](https://git
 
 Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set.
 
-Router pair requirements:
-
-| Item | Requirement |
-| --- | --- |
-| Shared lease path | POSIX `flock`, coherent reads, and atomic rename |
-| Host clock offset | Below `--lease-safety-margin` |
-| `--lease-ttl` | Above the sum of `--lease-renew-interval` and `--lease-safety-margin` |
+The shared lease path must support POSIX `flock`, coherent reads, and atomic rename. The host clock offset must stay below `--lease-safety-margin`. `--lease-ttl` must exceed the sum of `--lease-renew-interval` and `--lease-safety-margin`.
 
 Start the first router, with its private listen address as `--host`:
 
@@ -108,11 +98,6 @@ Admission sequence:
 
 ### Lease behavior
 
-| Condition | Behavior |
-| --- | --- |
-| A router holds a valid lease and admits traffic | `/ready` returns HTTP 200. |
-| The network partitions | The active lease holder fences itself before its local lease deadline. |
-| The lease expires during a partition | The standby claims the lease. |
-| Shared storage becomes unavailable | Both routers withdraw readiness. |
-| A standby or fenced router shuts down | It retains its saved primary state handoff. |
-| The active lease holder shuts down | It persists its latest counters before releasing control. |
+A router that holds a valid lease and admits traffic returns HTTP 200 from `/ready`. During a network partition, the active lease holder fences itself before its local lease deadline, and the standby claims the lease at expiry. When shared storage becomes unavailable, both routers withdraw readiness.
+
+A standby or fenced router retains its saved primary state handoff when it shuts down. The active lease holder persists its latest counters before releasing control at shutdown.

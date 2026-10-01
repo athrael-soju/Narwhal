@@ -14,24 +14,15 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.
 
-Fit binding:
+When the fleet configuration sets `engine_contract`, a live sweep binds each fit to the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when the attestation carries launch evidence, otherwise to its `attestation_digest`. When the configuration omits `engine_contract`, a live sweep binds each fit to the live process identity.
 
-| Fleet configuration | A live sweep binds each fit to |
-| --- | --- |
-| Sets `engine_contract` | The `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when the attestation carries launch evidence, otherwise its `attestation_digest` |
-| Omits `engine_contract` | The live process identity |
-
-Live sweep order:
-
-| Engines in a live sweep | Measurement order |
-| --- | --- |
-| On separate devices | At the same time |
-| In one `shared_device.group` | One after another |
-| All engines under `--colocated` | One after another |
+A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
 
 Every mode rejects symlink destinations.
 
 ## Selection, refitting, and output
+
+These options select engines, choose the mode, and set the output files.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -126,6 +117,8 @@ A profiling run aborts when any of these conditions occurs:
 - the representative prefill fit exceeds 20% mean error or 50% worst-point error
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, or its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control in the warm prefill sweep
+
+On success, each mode prints:
 
 | Mode | Success output |
 | --- | --- |

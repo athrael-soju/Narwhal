@@ -39,10 +39,7 @@ class RetryPolicy:
 
 
 class RetryBudget:
-    """Bound retry work to initial credits plus credits earned by completions.
-
-    Each retry consumes one credit. Successful original requests refill the bucket.
-    """
+    """Bound retry work to initial credits plus credits earned by completions."""
 
     def __init__(self, capacity: int, replenish: float) -> None:
         self.capacity = capacity
@@ -80,7 +77,7 @@ def leg_failure_reason(exc: BaseException) -> str | None:
     if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
         return "engine_dead"
     if isinstance(exc, httpx.PoolTimeout):
-        # Preserve engine availability after a local connection-pool timeout.
+        # A local connection-pool timeout leaves engine availability unchanged.
         return "local_pool"
     if isinstance(exc, httpx.TimeoutException | TimeoutError):
         return "timeout"

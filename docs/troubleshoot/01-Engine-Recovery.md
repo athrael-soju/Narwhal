@@ -18,13 +18,7 @@ Prerequisites:
 3. Save the engine boot log.
 4. Save the supervisor exit reason.
 
-| Case | Procedure |
-| --- | --- |
-| `recovery.engine_restart_policy` is `individual` | The steps below |
-| `recovery.engine_restart_policy` is `whole_wave` | [Whole-wave recovery](#whole-wave-recovery) |
-| Planned restart | [Restarting one engine](../operate/03-Restart-Engines.md#7-restarting-one-engine) |
-
-Steps for `individual` recovery:
+For a planned restart, follow [Restarting one engine](../operate/03-Restart-Engines.md#7-restarting-one-engine). When `recovery.engine_restart_policy` is `whole_wave`, follow [Whole-wave recovery](#whole-wave-recovery). When it is `individual`, recover the engine with these steps:
 
 1. Start the engine.
 2. Verify its endpoints per [Replacing the process](../operate/03-Restart-Engines.md#72-replacing-the-process).

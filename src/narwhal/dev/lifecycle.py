@@ -140,7 +140,7 @@ def _busy(root: Path) -> bool:
 
 
 def _run(root: Path, module: str, args: list[str], log: str) -> None:
-    # Preserve write order so buffered progress cannot follow the final diagnostic.
+    # Unbuffered output keeps progress ahead of the final diagnostic.
     command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
     result = stages.run(

@@ -27,7 +27,7 @@ class PrefixIdentityTests(unittest.TestCase):
         self.assertEqual(stored, request)
 
     def test_partial_final_block_has_no_identity(self):
-        """Engines cache full blocks only, so the trailing tokens never match."""
+        """Trailing tokens short of a full block have no identity."""
         namespace = CacheNamespace(MODEL, TOKENIZER)
         self.assertEqual(
             block_identities(namespace, tokens(23), 8), block_identities(namespace, tokens(16), 8)

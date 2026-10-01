@@ -8,11 +8,7 @@ description: Top-level keys, a minimal fleet definition and the engine compatibi
 
 ### 1.1 Top-level keys
 
-| Top-level key                                                                                                                                      | Result   |
-| -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery`, or `profiles` | Accepted |
-| Annotation key starting with `_`                                                                                                                   | Accepted |
-| Other key                                                                                                                                          | Error    |
+A fleet file accepts the top-level keys `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery` and `profiles`, and annotation keys that start with `_`. Any other top-level key is an error.
 
 Use JSON-native types:
 
@@ -31,10 +27,7 @@ fleet.json: controller.monitor_interval_s must be a number; serving.max_connecti
 
 ### 1.2 Paths
 
-| Caller              | Relative paths                            | Resolved from                |
-| ------------------- | ----------------------------------------- | ---------------------------- |
-| Deployment workflow | Fleet and profile paths                   | Checkout root                |
-| `narwhal-serve`     | `profiles.path` and `recovery.state_path` | Working directory at startup |
+The deployment workflow resolves relative fleet and profile paths from the checkout root. `narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` from its working directory at startup.
 
 ### 1.3 Environment loading
 
@@ -56,13 +49,9 @@ An engine `url` or `attestation_url` expands from the environment when the entir
 }
 ```
 
-| Value                                                     | Result                                          |
-| --------------------------------------------------------- | ----------------------------------------------- |
-| `${NAME}` in `url` or `attestation_url`, with `NAME` set  | Value of `NAME`                                 |
-| `${NAME}` with `NAME` unset or blank                      | Error that names the URL field and the variable |
-| Partial reference, or default syntax such as `${NAME:-x}` | Error                                           |
-| Resolved value that contains `${`                         | Error                                           |
-| `$NAME`, or `${...}` in any other field                   | Literal text                                    |
+With `NAME` set, the field takes the value of `NAME`. With `NAME` unset or blank, loading fails with an error that names the URL field and the variable.
+
+A partial reference, default syntax such as `${NAME:-x}`, and a resolved value that contains `${` are errors. `$NAME`, and `${...}` in any other field, stay literal text.
 
 Save resolved URLs from `FleetConfig.save()` to a Git-ignored fleet path.
 
@@ -123,17 +112,9 @@ The group's `gpu_memory_utilization` values sum to at most its `device_allowance
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` meets these requirements:
+A complete `engine_contract` sets every [contract field](#32-contract-fields) to a nonempty string, positive integer or boolean. `image_digest` is optional.
 
-| [Contract field](#32-contract-fields) | Requirement                                   |
-| ------------------------------------- | --------------------------------------------- |
-| `image_digest`                        | Optional                                      |
-| Every other field                     | Nonempty string, positive integer, or boolean |
-
-| Action with an incomplete `engine_contract` | Error                                                 |
-| ------------------------------------------- | ----------------------------------------------------- |
-| Lifecycle drain                             | `lifecycle drain requires a complete engine_contract` |
-| Readmission                                 | `readmission requires a complete engine_contract`     |
+With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
 
 ### 3.1 Hardware block
 
@@ -191,10 +172,7 @@ Fill in the fleet contract:
     .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
     ```
 
-| Sidecar contracts       | `finalize-fleet` result                           |
-| ----------------------- | ------------------------------------------------- |
-| Complete and identical  | `engine_contract` written into the `--fleet` file |
-| Incomplete or different | Exit status 1                                     |
+When the sidecar contracts are complete and identical, `finalize-fleet` writes the `engine_contract` into the `--fleet` file. When they are incomplete or differ, `finalize-fleet` exits with status 1.
 
 Each [attestation document](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares this identity:
 
@@ -217,10 +195,7 @@ Sidecar identity values, read at startup:
 - the engine's `/version`
 - the `process_start_time_seconds` metric from the engine's `/metrics`
 
-| Condition                                                                     | Sidecar result               |
-| ----------------------------------------------------------------------------- | ---------------------------- |
-| `/version` at startup differs from `vllm_version` in the attestation document | Exits with an error          |
-| Either identity value is unreadable or differs from its startup value         | Every route returns HTTP 503 |
+When `/version` at startup differs from `vllm_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
 
 Each sidecar response carries:
 

@@ -6,12 +6,7 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.
 
-A template selects the model, runtime, and memory budget.
-
-| Template | Configuration |
-| --- | --- |
-| Installed template | One prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less |
-| Optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) | A measured four-engine configuration |
+A template selects the model, runtime, and memory budget. The installed template runs one prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) is a measured four-engine configuration.
 
 ## Lifecycle
 
@@ -33,6 +28,8 @@ narwhal dev down
 | `status` | Reports `starting`, `launched`, `ready`, `degraded`, or `stopped`. |
 | `down` | Stops the recorded process groups with SIGKILL for survivors and reports `stopped`. |
 
+`status` reports one of these states:
+
 | `status` report | Condition |
 | --- | --- |
 | `starting` | `up` is in progress |
@@ -41,12 +38,7 @@ narwhal dev down
 | `degraded` | `problems` lists a process, health, readiness, evidence, or verification failure |
 | `stopped` | The recorded processes have stopped |
 
-Running `init` again on an existing instance keeps existing files, operator edits, and saved values of omitted settings.
-
-| Explicitly supplied settings | Result |
-| --- | --- |
-| Match the saved instance | `status: reused` |
-| Conflict with a saved setting | Exit `2` listing the differing settings |
+Running `init` again on an existing instance keeps existing files, operator edits, and saved values of omitted settings. When the explicitly supplied settings match the saved instance, `init` reports `status: reused`. When they conflict with a saved setting, `init` exits `2` and lists the differing settings.
 
 To change initialization settings, run `narwhal dev init --instance runs/new-instance` with the desired template and flags.
 
@@ -63,12 +55,7 @@ A failed `verify`:
 
 ## Output and exit codes
 
-Text mode output:
-
-| Stream | Content |
-| --- | --- |
-| stdout | The returned state, as one JSON document |
-| stderr | Preparation progress, profiling progress, and error diagnostics |
+In text mode, stdout carries the returned state as one JSON document. stderr carries preparation progress, profiling progress, and error diagnostics.
 
 Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
 
@@ -80,19 +67,11 @@ Save the state with a stdout redirect, such as `narwhal dev up > result.json`.
 | `degraded`, a failed `verify`, or a later `status` while the instance retains that failure | `1` |
 | An instance configuration error, a runtime package error, or a failed `init` check | `2` |
 
-With `--format json` the state is the versioned [command result](../Command-Results.md) with these added exit codes:
-
-| Case | Exit code |
-| --- | :--: |
-| `degraded` | `3` |
-| Operational error | `4` |
+With `--format json`, the state is the versioned [command result](../Command-Results.md). JSON mode adds exit code `3` for `degraded` and `4` for an operational error.
 
 ## Options
 
-| Scope | Options |
-| --- | --- |
-| Every subcommand | `--instance` and `--format` |
-| `init` | Every other option below |
+`--instance` and `--format` apply to every subcommand. Every other option applies to `init`.
 
 Print the installed distribution version with `narwhal --version`.
 
@@ -153,10 +132,7 @@ The replay saves transition and latency checks.
 
 ## Run directories and recovery
 
-| Directory | Contents |
-| --- | --- |
-| `run-*` | Per `up`: router fleet configuration, effective commands, engine logs, cache layouts, attestations, measured profiles, whole-device VRAM samples, and the request journal. |
-| `verify-*` | Preflight log, directed transfer evidence, routed response, and metrics. |
+Each `up` writes a `run-*` directory with the router fleet configuration, effective commands, engine logs, cache layouts, attestations, measured profiles, whole-device VRAM samples, and the request journal. A `verify-*` directory holds the preflight log, directed transfer evidence, routed response, and metrics.
 
 If `up` fails:
 

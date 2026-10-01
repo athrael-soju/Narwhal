@@ -4,12 +4,7 @@ description: Compare SLO-qualified throughput between cold and cache-aware prefi
 
 # Cache-aware placement trial
 
-The trial compares the throughput of requests that meet the service-level objectives (SLOs) between two arms on the same fleet:
-
-| Arm | Prefill pricing |
-| --- | --- |
-| Baseline | Every engine cold |
-| Cache-aware | The warm fit of each engine that holds the request's prefix |
+The trial compares the throughput of requests that meet the service-level objectives (SLOs) between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices each engine that holds the request's prefix at its warm fit.
 
 Both arms run with the backend's prefix caching on.
 
@@ -24,16 +19,11 @@ Record these in the private execution record before the first measured run:
 
 The arms differ only in the cache-event entry of `runtime.extra_args`.
 
-Each run's score is its `qualified_rps_including_drain` and `attainment`.
-
-Refusals and failures count as misses.
+Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusals and failures count as misses.
 
 ## Choosing the workload shape
 
-| Symbol | Meaning |
-| --- | --- |
-| `L` | Input tokens of every request in a workload |
-| `B` | Engine cache block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state` |
+`L` is the input token count of every request in a workload. `B` is the engine cache block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
 
 For a prompt of `L = k*B + s` tokens with `0 < s < B`, an engine with boundary-state groups, such as Mamba state, keeps its boundary state at `k*B`.
 
@@ -45,12 +35,7 @@ For a repeated-prefix workload on such an engine:
 
 On an engine with full-attention groups only, the cached prefix is the largest multiple of `B` within both the shared prefix and `L - 1` tokens.
 
-An engine prices a cached prefix with its warm fit when both lengths lie inside its measured warm domain in the [profile fields](../telemetry/02-Profiles.md#profile-fields):
-
-| Length | Range |
-| --- | --- |
-| Cached prefix | `cached_min_prefix_tokens` to `cached_max_prefix_tokens` |
-| Uncached suffix | `cached_min_suffix_tokens` to `cached_max_suffix_tokens` |
+An engine prices a cached prefix with its warm fit when both lengths lie inside its measured warm domain in the [profile fields](../telemetry/02-Profiles.md#profile-fields). The domain spans `cached_min_prefix_tokens` to `cached_max_prefix_tokens` for the cached prefix and `cached_min_suffix_tokens` to `cached_max_suffix_tokens` for the uncached suffix.
 
 Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-decode-sweeps):
 
@@ -62,10 +47,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 
 ## Preparing each arm
 
-| Arm | `runtime.extra_args` | Residency routes | Router pricing |
-| --- | --- | --- | --- |
-| Baseline | `["--kv-events-config", "{\"enable_kv_cache_events\": false}"]` added | HTTP 404 from every sidecar | Every engine cold |
-| Cache-aware | Launcher default | Served by every sidecar | Each engine holding a prefix at its warm fit |
+The baseline arm adds `["--kv-events-config", "{\"enable_kv_cache_events\": false}"]` to `runtime.extra_args`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
 
 For each arm:
 
@@ -108,12 +90,7 @@ Replace each `<...>` value with the recorded choice.
 
 Give the second pass's repeated-prefix workload, `repeated-2`, a distinct `--seed`.
 
-Prompts by workload:
-
-| Workload | Request prompt |
-| --- | --- |
-| Repeated-prefix | One of the family prefixes followed by a suffix unique to its run and sequence |
-| Cold control | A unique prefix for every request |
+Each repeated-prefix request prompt is one of the family prefixes followed by a suffix unique to its run and sequence. Each cold control request has a unique prefix.
 
 ## Setting the offered rates
 
@@ -127,22 +104,15 @@ Prompts by workload:
 2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Joining client offers to the router journal](04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal).
 3. Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#cache-placement) record of each row with `placed_cached_tokens` above 0.
 
-Next step by comparison result:
-
-| `predicted_prefill_s` against `cold_prefill_s` | Next step |
-| --- | --- |
-| Below on every row | Start the measured runs |
-| At or above on any row | Revisit the workload shape and the warm prefill lengths |
+When `predicted_prefill_s` is below `cold_prefill_s` on every row, start the measured runs. When it is at or above `cold_prefill_s` on any row, revisit the workload shape and the warm prefill lengths.
 
 ## Running each point
 
-Run these in each arm, in this order:
+In each arm:
 
-| Stage | Points in order |
-| --- | --- |
-| Warm-up | One unscored 120-second run at the low rate |
-| Pass 1 | `repeated-1` low, control low, `repeated-1` high, control high |
-| Pass 2 | Control high, `repeated-2` high, control low, `repeated-2` low |
+1. Run one unscored 120-second warm-up at the low rate.
+2. Run pass 1: `repeated-1` low, control low, `repeated-1` high, control high.
+3. Run pass 2: control high, `repeated-2` high, control low, `repeated-2` low.
 
 Run one point:
 
@@ -154,12 +124,7 @@ Run one point:
   --ttft <ttft-s> --tpot <tpot-s> --attainment <attainment>
 ```
 
-Point flags:
-
-| Flag | Value |
-| --- | --- |
-| `--requests` | 60 seconds of offers at the point's rate |
-| `--run-seed` | A distinct seed for each point, shared by both arms |
+Set `--requests` to 60 seconds of offers at the point's rate. Give each point a distinct `--run-seed`, shared by both arms.
 
 A run that exits with [status `0` or `2`](03-Load-Trial.md#8-measuring-05-requests) writes `summary.json` with:
 
@@ -205,12 +170,10 @@ In the cache-aware arm, report these per rate over journal rows with a `cache_pl
 - the estimation error of `cache_placement.predicted_prefill_s` against `upstream_seconds.prefill`
 - the share of rows where `cache_placement.cold_choice_iid` differs from `cache_placement.placed_iid`
 
-Overhead measures to report:
+Report these overhead measures:
 
-| Measure | Source |
-| --- | --- |
-| Residency resynchronisations | The change in each engine's `residency` `resyncs` between the run's `state-before.json` and `state-after.json` |
-| Sidecar and router CPU and memory | Host process accounting |
+- residency resynchronisations, from the change in each engine's `residency` `resyncs` between the run's `state-before.json` and `state-after.json`
+- sidecar and router CPU and memory, from host process accounting
 
 Compare the arms on the mean of the two passes at each point.
 

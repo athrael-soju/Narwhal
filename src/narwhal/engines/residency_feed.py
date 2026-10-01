@@ -1,11 +1,7 @@
 """Keep a residency index current from one vLLM engine's cache-event sockets.
 
-vLLM publishes numbered event batches on a PUB socket and keeps a bounded
-buffer of recent batches behind a ROUTER replay socket. It keeps no full
-snapshot. The feed subscribes, then replays from sequence 0 so the index
-sees the engine's complete history when that history is still buffered.
-Later gaps replay from the missing sequence. History the buffer no longer
-holds leaves the index unknown until the engine resets its cache.
+History past vLLM's bounded replay buffer leaves the index unknown until the
+engine resets its cache.
 """
 
 from __future__ import annotations
@@ -72,8 +68,7 @@ class ResidencyFeed:
     def _replay(self, start: int) -> tuple[list[tuple[int, bytes]], bool] | None:
         """Return batches replayed from `start` and whether the end marker arrived.
 
-        None means no replay answered. vLLM's ROUTER socket drops messages past
-        its high-water mark, so a long replay can lose batches or its end marker.
+        None means no replay answered. A long replay can lose batches or its end marker.
         """
         if self.replay_endpoint is None:
             return None
@@ -101,9 +96,8 @@ class ResidencyFeed:
     def _catch_up(self, start: int, until: int | None = None) -> bool | None:
         """Apply buffered batches from `start` in replay rounds.
 
-        Each round applies the contiguous run it received and asks again from
-        the first missing batch. Returns False when the buffer was empty, None
-        when no replay answered, and True otherwise.
+        Return False when the buffer was empty, None when no replay answered, and
+        True otherwise.
         """
         expected = start
         applied = False
@@ -163,7 +157,7 @@ class ResidencyFeed:
             self.index.set_current(False)
             history = self._catch_up(0)
             if history is False and not subscriber.poll(0):
-                # vLLM's replay buffer only drops old batches, so an empty buffer means none.
+                # An empty replay buffer means vLLM has published no batch.
                 self.index.mark_empty()
             elif history is None:
                 self.index.lose("cache-event replay is unavailable")

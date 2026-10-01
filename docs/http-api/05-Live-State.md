@@ -10,10 +10,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 
 ### Top-level fields
 
-| Counters | New router process |
-| --- | --- |
-| `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused` | Restored from the state handoff on resume and takeover |
-| Other counters | Start at zero |
+The state document carries these top-level fields:
 
 | Field                   | Meaning                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -64,14 +61,39 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `flips_refused`         | The 20 most recent rejected role changes                                              |
 | `flips`                 | Role changes retained up to `flip_history`                                            |
 
-| Topic                                             | Reference                                                                         |
-| ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `lifecycle`                                       | [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)      |
-| `attainment`, `demand_history`, `demand_evidence` | [SLO attainment and demand accounting](06-SLO-and-Demand.md)                      |
-| `peer_release`                                    | [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)    |
-| Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) |
+On resume and takeover, a new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, and `admission.refused` from the state handoff. Other counters start at zero.
+
+<div class="grid cards" markdown>
+
+-   [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)
+
+    ---
+
+    The drain state, resident work, and lifecycle events in `lifecycle`.
+
+-   [SLO attainment and demand accounting](06-SLO-and-Demand.md)
+
+    ---
+
+    The `attainment`, `demand_history`, and `demand_evidence` objects.
+
+-   [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)
+
+    ---
+
+    The release rounds that `peer_release` reports.
+
+-   [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal)
+
+    ---
+
+    Per-request evidence for one client request.
+
+</div>
 
 ### `health`
+
+Each engine's `health` entry holds its drift-window accounting:
 
 | Field               | Meaning                                                              |
 | ------------------- | -------------------------------------------------------------------- |
@@ -85,23 +107,19 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 ### `breaker`
 
-| Field       | Meaning                                                                                                                                                                   |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed sweeps |
-| `verifying` | Engines with a health or inference probe in flight, each as `iid` and probe `kind`                                                                                        |
+`breaker.failures` holds the consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed sweeps.
+
+`breaker.verifying` lists the engines with a health or inference probe in flight, each as `iid` and probe `kind`.
 
 ### `peer_release`
 
 Under `recovery.engine_restart_policy: individual`, `peer_release` holds one entry per ejected engine and per engine in lifecycle state `drained`, `deadline_exceeded`, `validating`, or `blocked`.
 
-Entry fields:
-
-| Field          | Meaning                                                         |
-| -------------- | --------------------------------------------------------------- |
-| `rounds`       | Release rounds sent since the ejection or the last state change |
-| `next_round_s` | Seconds until the next round, `null` after the last round       |
+Each entry's `rounds` counts the release rounds sent since the ejection or the last state change. Its `next_round_s` gives the seconds until the next round, or `null` after the last round.
 
 ### `residency`
+
+Each engine's `residency` entry tracks its prefix-residency synchronization with its attestation sidecar:
 
 | Field             | Meaning                                                      |
 | ----------------- | ------------------------------------------------------------ |
@@ -173,6 +191,8 @@ The router takes a new snapshot when:
 
 ### Pool and SLO fields
 
+These objects carry the pool, load, SLO, and floor state:
+
 | Object           | Fields                                                                            |
 | ---------------- | --------------------------------------------------------------------------------- |
 | `pools`          | `prefill`, `decode` engine-ID arrays                                              |
@@ -183,6 +203,8 @@ The router takes a new snapshot when:
 | `resident.<iid>` | `prefill`, `decode` in-flight counts                                              |
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
+
+The `below_floor` and `decode_floor` fields hold these values:
 
 | Field                      | Meaning                                                                     |
 | -------------------------- | --------------------------------------------------------------------------- |
@@ -249,6 +271,8 @@ Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode
 
 Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix.
 
+`eligibility_rule` takes one of these values:
+
 | `eligibility_rule`        | Proposal                                                             |
 | ------------------------- | -------------------------------------------------------------------- |
 | `source_shrink`           | Ordinary consolidation                                               |
@@ -256,6 +280,8 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request |
 
 #### Projected-TTFT recovery fields
+
+A projected-TTFT recovery evaluation adds these fields to `control.last_decision`:
 
 | Field                          | Meaning                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------- |

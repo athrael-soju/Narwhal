@@ -21,6 +21,8 @@ Profile store document:
 
 The profiler fails the run when an engine's process digest changes between the start and end of its sweep.
 
+The saved digest and the `.samples.json` sidecar contents depend on the fleet:
+
 | Fleet | Saved digest | `.samples.json` sidecar keeps |
 | --- | --- | --- |
 | With `engine_contract` and a launch digest in the attestation | Attested launch digest. | The full attestation response. |
@@ -44,10 +46,7 @@ For a stored profile with missing generation evidence or a digest that differs f
 
 Preflight checks the measured decode bounds and fit errors.
 
-| Fleet | Load updated profiles |
-| --- | --- |
-| With `engine_contract` | [Activate the fresh store with router resume](../operate/03-Restart-Engines.md#activating-replacement-profiles). |
-| Otherwise | Restart the router. |
+To load updated profiles on a fleet with `engine_contract`, [activate the fresh store with router resume](../operate/03-Restart-Engines.md#activating-replacement-profiles). On other fleets, restart the router.
 
 A malformed profile aborts the operation and names the affected file, engine, and field:
 
@@ -61,6 +60,8 @@ Before preflight or router startup:
 2. Confirm that the profile store's `iid` set matches the configured fleet.
 
 ### Profile fields
+
+Each profile row carries these fields:
 
 | Field | JSON type | Constraint |
 | --- | --- | --- |
@@ -86,6 +87,8 @@ Before preflight or router startup:
 | `colocated_prefill_engines`, `colocated_decode_engines` | integer | Positive measured role mix totalling at least two engines, required with `colocated_group`. |
 | `colocated_prefill_rps`, `colocated_decode_rps` | number | Nonnegative neighbour load, required with `colocated_group`. |
 
+Profile loading handles invalid input as follows:
+
 | Input | Result |
 | --- | --- |
 | `true`, `"96"`, or `1.5` in an integer field | Rejected. |
@@ -109,21 +112,10 @@ Samples missing either need a fresh sweep.
 
 ### Decode capacity derived from the profile
 
-Narwhal caps decode concurrency for each fitted engine at the priced context length:
+Narwhal caps decode concurrency for each fitted engine at the priced context length.
 
-| Condition | Decode request limit |
-| --- | --- |
-| `context_tokens <= 0` or `decode_max_requests` is `null` | Zero. |
-| Otherwise | The smallest of `decode_max_requests`, a positive `serving.decode_concurrency`, and the KV budget divided by `context_tokens`, at least `1`. |
+When `context_tokens <= 0` or `decode_max_requests` is `null`, the decode request limit is zero. Otherwise the limit is the smallest of `decode_max_requests`, a positive `serving.decode_concurrency`, and the KV budget divided by `context_tokens`, at least `1`.
 
-| Profile | KV budget |
-| --- | --- |
-| With `kv_capacity_tokens` | The smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. |
-| Otherwise | `decode_max_kv_tokens`. |
+For a profile with `kv_capacity_tokens`, the KV budget is the smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. Otherwise the KV budget is `decode_max_kv_tokens`.
 
-Token interval floors for decode request capacity:
-
-| Input | Floor |
-| --- | --- |
-| Batch requests | `decode_min_requests` |
-| Resident KV tokens | `decode_min_kv_tokens` |
+Decode request capacity prices the token interval with at least `decode_min_requests` batch requests and at least `decode_min_kv_tokens` resident KV tokens.

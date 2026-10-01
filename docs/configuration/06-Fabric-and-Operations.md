@@ -6,12 +6,9 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 ## 17. Fabric workload qualification
 
-| Fabric helper property | Value                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| Snapshot               | `tools/deployment/fabric_budget.py`, copied by `deploy_hosts.py prepare` for every engine host |
-| Snapshot hash          | SHA-256 in the prepared manifest and in `NARWHAL_FABRIC_BUDGET_SHA256`                         |
-| Installed path         | `runs/deployment-tools/fabric_budget.py`, verified by `deploy_hosts.py install`                |
-| Path variable          | `NARWHAL_FABRIC_BUDGET_TOOL`                                                                   |
+`deploy_hosts.py prepare` copies a snapshot of the fabric helper, `tools/deployment/fabric_budget.py`, for every engine host. The prepared manifest and `NARWHAL_FABRIC_BUDGET_SHA256` hold the snapshot's SHA-256.
+
+`deploy_hosts.py install` verifies the installed snapshot at `runs/deployment-tools/fabric_budget.py`, and `NARWHAL_FABRIC_BUDGET_TOOL` holds its path.
 
 If the helper changes, start a new preparation directory.
 
@@ -84,30 +81,17 @@ The budget is the total rate over all TP ranks that one directed host edge must 
 
 Each matching source role's private comparison budget holds the representative's budget rate and hash.
 
-The captured layout holds:
-
-| Layout group     | Items                                                                                                      |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| Page sizing      | Per-layer page bytes for each TP rank, token block size, and extra blocks for state and boundary allowance |
-| Image and launch | Image identity, package versions, application revision, launch-plan hash                                   |
+The captured layout holds per-layer page bytes for each TP rank, the token block size, and extra blocks for state and boundary allowance. It also holds the image identity, package versions, application revision and launch-plan hash.
 
 ### 17.3 Uniform-cache options
 
 Deployments use `--runtime-layout` for every model.
 
-Offline estimates use these cache sources:
-
-| Option                | Cache source                                                       | Requires                                                    |
-| --------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
-| `--uniform-cache`     | Analytical attention or multi-head latent attention (MLA) estimate | `--element-bytes` of `1`, `2`, or `4`, and `--block-tokens` |
-| `--bytes-per-token N` | Measured override                                                  | `--element-bytes` of `1`, `2`, or `4`, and `--block-tokens` |
+Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
 
 ### 17.4 Link evidence
 
-| Transport  | Measured rate                                               | `record-edge` input                     |
-| ---------- | ----------------------------------------------------------- | --------------------------------------- |
-| `ucx_tcp`  | Aggregate received bitrate that the iperf3 receiver reports | iperf3 JSON as `--sample`               |
-| `ucx_rdma` | Average Gbit/s from the retained perftest report            | `--gbps`, with the report as `--sample` |
+For `ucx_tcp`, the measured rate is the aggregate received bitrate that the iperf3 receiver reports, and `record-edge` takes the iperf3 JSON as `--sample`. For `ucx_rdma`, the measured rate is the average Gbit/s from the retained perftest report, and `record-edge` takes that rate as `--gbps` with the report as `--sample`.
 
 `fabric_budget.py link` prints a SHA-256 link fingerprint per directed pair over these inputs:
 
@@ -118,6 +102,8 @@ Offline estimates use these cache sources:
 - transport
 - utility version
 - test parameters
+
+These `fabric_budget.py` commands compare a link sample with a budget:
 
 | Command       | Result                                                                                                              |
 | ------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -147,10 +133,7 @@ To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
 ## 19. Request journal
 
-| `narwhal-serve` option | Request timing records                                                                                                                                          |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default                | [`journal.jsonl`](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation) |
-| `--journal PATH`       | `PATH`                                                                                                                                                          |
+`narwhal-serve` writes request timing records to [`journal.jsonl`](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation). `--journal PATH` writes them to `PATH`.
 
 ---
 
@@ -158,11 +141,8 @@ To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
 - Keep the exact fleet configuration beside every scored run.
 - Replace the engine URLs in that configuration before publishing an artifact.
-
-| Data                                                                 | Location                                                   |
-| -------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Live fleet files                                                     | A Git-ignored path, such as `runs/` or `config/fleet.json` |
-| Real host allocations, credentials, runtime evidence, launch records | Git-ignored private paths                                  |
+- Keep live fleet files in a Git-ignored path, such as `runs/` or `config/fleet.json`.
+- Keep real host allocations, credentials, runtime evidence and launch records in Git-ignored private paths.
 
 ---
 

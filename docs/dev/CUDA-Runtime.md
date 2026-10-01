@@ -61,9 +61,4 @@ Pinned runtime rules:
 - `narwhal dev init` requires the package versions and GGUF plugin hashes of the selected template.
 - Reapply the pinned plugin sources after every plugin wheel reinstall.
 
-For a model outside the standard Hugging Face cache, pass these options to `narwhal dev init`:
-
-| Option | Value |
-| --- | --- |
-| `--model` | The GGUF file |
-| `--model-dir` | The tokenizer directory |
+For a model outside the standard Hugging Face cache, pass the GGUF file with `--model` and the tokenizer directory with `--model-dir` to `narwhal dev init`.

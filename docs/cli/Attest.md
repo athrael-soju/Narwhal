@@ -6,20 +6,9 @@ description: narwhal-attest serves the attestation document of one vLLM engine o
 
 `narwhal-attest` is an HTTP sidecar that serves the attestation document of one vLLM engine.
 
-Start conditions:
+Start the sidecar while vLLM runs. For a container engine, run it as root. For other engines, run it as the engine's user.
 
-| Condition | Value |
-| --- | --- |
-| Engine state | vLLM running |
-| Sidecar user for a container engine | root |
-| Sidecar user for other engines | The engine's user |
-
-Identity checks:
-
-| Condition | Result |
-| --- | --- |
-| At startup, the engine's vLLM version differs from the attestation document | Exit status 1 |
-| While the sidecar runs, the engine's vLLM version or process start time changes or becomes unreadable | Every route returns HTTP 503 |
+At startup, the sidecar exits with status 1 when the engine's vLLM version differs from the attestation document. While the sidecar runs, every route returns HTTP 503 when the engine's vLLM version or process start time changes or becomes unreadable.
 
 ## Options
 
@@ -39,10 +28,7 @@ The contract tool's `serve` action passes `--kv-events` and `--model` when both 
 - the checked launch has prefix caching on
 - the checked launch publishes cache events
 
-| Install | Contract tool command |
-| --- | --- |
-| Checkout | `tools/deployment/attestation_contract.py serve` |
-| Installed package | `python -m narwhal.deployment.attestation_contract serve` |
+In a checkout, the contract tool command is `tools/deployment/attestation_contract.py serve`. In an installed package, it is `python -m narwhal.deployment.attestation_contract serve`.
 
 ## Residency
 
@@ -50,17 +36,9 @@ With `--kv-events` set, the sidecar serves a bounded index of prefix blocks on t
 
 ### Routes
 
-| Route | Returns |
-| --- | --- |
-| `GET /v1/residency` | A snapshot |
-| `GET /v1/residency/events?after=N` | The sidecar's `epoch`, the last applied `sequence`, `block_size`, `reason`, and the `changes` applied after sequence `N` |
+`GET /v1/residency` returns a snapshot. `GET /v1/residency/events?after=N` returns the sidecar's `epoch`, the last applied `sequence`, `block_size`, `reason`, and the `changes` applied after sequence `N`.
 
-Snapshot fields:
-
-| Level | Fields |
-| --- | --- |
-| Top level | `known`, `reason`, `sequence`, `block_size`, `groups`, `epoch`, `process_start_time_seconds` |
-| Each `groups` entry | `group`, `kind`, `sliding_window`, block `identities`, and the count of `unnamed` blocks |
+A snapshot carries `known`, `reason`, `sequence`, `block_size`, `groups`, `epoch`, and `process_start_time_seconds`. Each `groups` entry carries `group`, `kind`, `sliding_window`, block `identities`, and the count of `unnamed` blocks.
 
 `changes` holds one entry per event batch, in sequence order:
 
@@ -80,12 +58,7 @@ The events route returns HTTP 410 when any of these holds:
 
 On HTTP 410, resume from a new snapshot.
 
-Route status by sidecar state:
-
-| Sidecar state | Both routes return |
-| --- | :---: |
-| Residency off (`--kv-events` unset) | HTTP 404 |
-| Engine identity changed or unreadable | HTTP 503 |
+Both routes return HTTP 404 when residency is off (`--kv-events` unset). They return HTTP 503 when the engine identity changed or became unreadable.
 
 ### When residency is known
 
@@ -106,31 +79,13 @@ Residency becomes unknown when any of these happens:
 
 A snapshot with unknown residency has an empty `groups` list.
 
-Replay of buffered history:
+The sidecar replays buffered history from sequence 0 at sidecar start, and when a live batch arrives before the sidecar applies any batch. A gap in the live event stream starts a replay at the first missing sequence. During a replay, a snapshot reports `"known": false` with the reason `replaying buffered history`.
 
-| Trigger | Replay starts at |
-| --- | --- |
-| Sidecar start | Sequence 0 |
-| A live batch arrives before the sidecar applies any batch | Sequence 0 |
-| A gap in the live event stream | The first missing sequence |
-
-During a replay, a snapshot reports `"known": false` with the reason `replaying buffered history`.
-
-Residency recovery:
-
-| Engine | Restores residency |
-| --- | --- |
-| vLLM in development mode (`VLLM_SERVER_DEV_MODE=1`) | A prefix-cache reset through `POST /reset_prefix_cache`, or an engine restart |
-| Every other vLLM engine | An engine restart |
+On vLLM in development mode (`VLLM_SERVER_DEV_MODE=1`), a prefix-cache reset through `POST /reset_prefix_cache` or an engine restart restores residency. On every other vLLM engine, an engine restart restores it.
 
 ### Block identities
 
-Parent value of each block identity:
-
-| Block | Parent value |
-| --- | --- |
-| First block | The block size and the cache namespace |
-| Every later block | The previous block's identity |
+The first block's parent value is the block size and the cache namespace. Every later block takes the previous block's identity as its parent value.
 
 The cache namespace holds:
 
@@ -139,11 +94,7 @@ The cache namespace holds:
 - the LoRA adapter name
 - the request cache salt
 
-| Term | Meaning |
-| --- | --- |
-| Boundary group | A group holding only boundary state, such as Mamba state in vLLM's `align` mode |
-| `identities` in a boundary group | Names taken from complete groups stored in the same run |
-| `unnamed` count | Blocks keyed by multimodal or prompt-embedding hashes |
+A boundary group holds only boundary state, such as Mamba state in vLLM's `align` mode. Its `identities` are names taken from complete groups stored in the same run. The `unnamed` count covers blocks keyed by multimodal or prompt-embedding hashes.
 
 ### Reusable prefixes
 
@@ -158,10 +109,9 @@ A prefix is reusable when every KV cache group holds the blocks its kind require
 
 ### Residency limits
 
-| Case | Result |
-| --- | --- |
-| The sidecar starts or restarts after the engine publishes more than 10,000 batches | Residency unknown |
-| A KV handoff over NIXL for a hybrid attention and Mamba model | The receiving engine holds the prompt's attention blocks, zero Mamba state, and zero reusable blocks for that prefix |
+A sidecar that starts or restarts after the engine publishes more than 10,000 batches reports residency unknown.
+
+After a KV handoff over NIXL for a hybrid attention and Mamba model, the receiving engine holds the prompt's attention blocks, zero Mamba state, and zero reusable blocks for that prefix.
 
 Residency tracking requires:
 

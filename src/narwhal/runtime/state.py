@@ -74,8 +74,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
             "unserved": router.scheduler.unserved,
         },
         "lifecycle": router.lifecycle.handoff(),
-        # Save the newest risk event's age and counts. The receiver collects
-        # fresh arrival evidence for its consolidation window.
+        # The newest risk event's age and counts, without arrival evidence.
         "demand_risk": (controller.safety.risk_handoff() if controller is not None else None),
     }
     return versioned(HANDOFF, out)
@@ -201,7 +200,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     roles = doc.get("roles") or {}
     applied = 0
     pinned: frozenset[str] = router.scheduler.pinned
-    # Restore assignments directly; dwell and resident tracking start fresh.
+    # Dwell and resident tracking start fresh.
     for iid, name in roles.items():
         if iid in pinned:
             # Fleet configuration owns pinned roles across restarts.
@@ -215,7 +214,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     now = router._clock()
     ejected = [iid for iid in doc.get("ejected", []) if iid in router.monitor.instances]
     for iid in ejected:
-        # Force an immediate readmission probe after restart.
+        # A far-past ejection time makes the readmission probe due at once.
         router.scheduler.ejected[iid] = now - 1e9
     for iid, peers in doc.get("inference_sources", {}).items():
         router.scheduler.inference_suspects.add(iid)
@@ -235,8 +234,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     controller = router.controller
     risk = doc.get("demand_risk")
     if controller is not None and isinstance(risk, dict):
-        # An absent or null block restores no armed event; a carried one
-        # re-arms with its elapsed age re-anchored on this process's clock.
+        # The carried event re-arms with its age re-anchored on this process's clock.
         controller.safety.restore_risk(
             kind=str(risk["kind"]),
             age_s=float(risk.get("age_s", 0.0)),

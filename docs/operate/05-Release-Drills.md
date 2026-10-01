@@ -14,10 +14,7 @@ Run the release drills on an idle fleet with external admission closed:
 
 Keep the release, fleet configuration, profiles, engine build, supervisor commands, and drill results in the private deployment directory.
 
-| Earlier drill run | Status |
-| --- | --- |
-| Meets the pass conditions | Counts for this release |
-| Used a launcher other than the production supervisor | Repeat with the production supervisor |
+An earlier drill run that meets the pass conditions counts for this release. If an earlier drill used a launcher other than the production supervisor, repeat it with the production supervisor.
 
 ### Release drill pass conditions
 
@@ -141,11 +138,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     PY
     ```
 
-    | Lifecycle sample | Sampler result |
-    | --- | --- |
-    | Complete readmission | Prints `complete wave readmitted` and exits |
-    | Partial readmission | Fails its assertion |
-    | Ctrl+C | Stops early |
+    After a complete readmission, the sampler prints `complete wave readmitted` and exits. A partial readmission fails its assertion, and Ctrl+C stops the sampler early.
 
 #### Recovering and verifying
 
@@ -181,12 +174,7 @@ Already-stopped-engine case:
 3. Replace that process after the drain.
 4. Record the trigger and the branch tested.
 
-Drain responses for the stopped engine:
-
-| Engine state at the drain request | Drain response | Next step |
-| --- | --- | --- |
-| Ejected | Success, with the last process identity the router verified | |
-| In placement | Failure naming the missing identity | Retry the drain after the router ejects the engine |
+If the router has ejected the stopped engine at the drain request, the drain succeeds with the last process identity the router verified. If the stopped engine is in placement at the drain request, the drain fails and names the missing identity. Retry the drain after the router ejects the engine.
 
 ### Restoring service after the drill
 
@@ -204,7 +192,4 @@ Drain responses for the stopped engine:
 8. Match its result to the journal and the router's counters.
 9. Restore external admission.
 
-| Later change | Procedure | Evidence to keep |
-| --- | --- | --- |
-| Another process replacement that changes an engine's process generation | Fresh measurements, another activation | |
-| Router replacement with an outstanding hold on the same fleet | [Profile activation with resume](03-Restart-Engines.md#activating-replacement-profiles) | Both journals and the state snapshots |
+A later process replacement that changes an engine's process generation needs fresh measurements and another activation. For a later router replacement with an outstanding hold on the same fleet, follow [profile activation with resume](03-Restart-Engines.md#activating-replacement-profiles) and keep both journals and the state snapshots.

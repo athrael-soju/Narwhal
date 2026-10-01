@@ -65,16 +65,15 @@ A rejected `max_tokens` returns:
 
 ### Model handling
 
-| Requested `model`           | Result                            |
-| --------------------------- | --------------------------------- |
-| Configured model, or absent | Forwarded as the configured model |
-| Any other model             | HTTP `404` with `model_not_found` |
+The router forwards a request that names the configured model, or omits `model`, as the configured model. Any other model returns HTTP `404` with `model_not_found`.
 
 ### Sampling width
 
 `n` and `best_of` above 1 return HTTP `400`.
 
 ### Output and tool restrictions
+
+Non-streaming requests accept a narrower set of output and tool options:
 
 | Option       | Streaming request   | Accepted non-streaming values         |
 | ------------ | ------------------- | ------------------------------------- |
@@ -85,6 +84,8 @@ A rejected `max_tokens` returns:
 Other non-streaming values return HTTP `400` `invalid_request_error` with the option in `param`.
 
 ## Request identity and authentication
+
+Narwhal tracks three kinds of request ID:
 
 | ID                 | Scope                              | Where it appears                   |
 | ------------------ | ---------------------------------- | ---------------------------------- |

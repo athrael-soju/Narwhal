@@ -18,46 +18,26 @@ description: Freeze the deployment inputs and discover the hosts of a Narwhal vL
     set +a
     ```
 
-Set the SSH destinations:
+Set one `NARWHAL_NODE_<n>_SSH` destination for each engine `<n>`. Discovery requires at least two engines. `NARWHAL_ROUTER_SSH` sets the router's destination and defaults to the lowest-numbered engine's destination.
 
-| Variable               | Host                               | Default                                  |
-| ---------------------- | ---------------------------------- | ---------------------------------------- |
-| `NARWHAL_NODE_<n>_SSH` | Engine `<n>`, one entry per engine |                                          |
-| `NARWHAL_ROUTER_SSH`   | Router                             | The lowest-numbered engine's destination |
+A destination is `user@host` or an OpenSSH alias carrying the username, port, identity, and jump host. Roles that share a destination share one host entry and credential.
 
-Discovery requires at least two engines.
+For password authentication, set the destination variable with a `_PASSWORD` suffix, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Key authentication uses the configured identity or the SSH agent.
 
-A destination is `user@host` or an OpenSSH alias carrying the username, port, identity, and jump host.
-
-Roles that share a destination share one host entry and credential.
-
-| Authentication | Credential                                                                                |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| Password       | The destination variable with a `_PASSWORD` suffix, such as `NARWHAL_NODE_1_SSH_PASSWORD` |
-| Key            | The configured identity or the SSH agent                                                  |
-
-Default service URLs use the global address on `NARWHAL_FABRIC_INTERFACE`:
-
-| Service     | Default URL                                             |
-| ----------- | ------------------------------------------------------- |
-| Engine      | `http://<address>:<NARWHAL_ENGINE_PORT>`                |
-| Attestation | `http://<address>:<NARWHAL_ATTEST_PORT>/v1/attestation` |
+Default service URLs use the global address on `NARWHAL_FABRIC_INTERFACE`. The engine listens at `http://<address>:<NARWHAL_ENGINE_PORT>`, and the attestation service at `http://<address>:<NARWHAL_ATTEST_PORT>/v1/attestation`.
 
 Per-node overrides:
 
-| Override                                                       | Use when                                                      |
-| -------------------------------------------------------------- | ------------------------------------------------------------- |
-| `NARWHAL_NODE_<n>_IP`                                          | The interface has several global addresses.                   |
-| `NARWHAL_NODE_<n>_URL`                                         | The engine service is reachable through another address.      |
-| `NARWHAL_NODE_<n>_ATTESTATION_URL`                             | The attestation service is reachable through another address. |
-| `NARWHAL_NODE_<n>_ENGINE_PORT`, `NARWHAL_NODE_<n>_ATTEST_PORT` | The service is bound to a different port.                     |
+| Override                                                       | Use when                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| `NARWHAL_NODE_<n>_IP`                                          | The interface has several global addresses                   |
+| `NARWHAL_NODE_<n>_URL`                                         | The engine service is reachable through another address      |
+| `NARWHAL_NODE_<n>_ATTESTATION_URL`                             | The attestation service is reachable through another address |
+| `NARWHAL_NODE_<n>_ENGINE_PORT`, `NARWHAL_NODE_<n>_ATTEST_PORT` | The service is bound to a different port                     |
 
 ## Staging and identifying the checkpoint
 
-| Variable                    | Value                                        |
-| --------------------------- | -------------------------------------------- |
-| `NARWHAL_ENGINE_MODEL_NAME` | The served model name                        |
-| `NARWHAL_MODEL_DIR`         | The checkpoint directory on each engine host |
+Set `NARWHAL_ENGINE_MODEL_NAME` to the served model name and `NARWHAL_MODEL_DIR` to the checkpoint directory on each engine host.
 
 For an empty directory with a Hugging Face source:
 
@@ -71,14 +51,7 @@ For an empty directory with a Hugging Face source:
 
 4. Record the repository ID and commit SHA in the private record.
 
-Discovery compares the model directories across replicas:
-
-| Model directory content                             | Replica comparison      |
-| --------------------------------------------------- | ----------------------- |
-| Every regular file                                  | Path, size, and SHA-256 |
-| Root `README.md` and `.cache/huggingface/` metadata | Excluded                |
-
-A replica mismatch stops discovery with an error that names the first differing file.
+Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. A replica mismatch stops discovery with an error that names the first differing file.
 
 ## Running discovery and access checks
 
@@ -101,11 +74,7 @@ python3 tools/deployment/deploy_hosts.py plan
 python3 tools/deployment/deploy_hosts.py check-access
 ```
 
-| Command        | Result                                                                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------- |
-| Discovery      | Prints `Generated private configuration. Load config/deployment.env before preparation.`                      |
-| `plan`         | Prints each host ID and its roles.                                                                            |
-| `check-access` | Logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`. |
+Discovery prints `Generated private configuration. Load config/deployment.env before preparation.` `plan` prints each host ID and its roles. `check-access` logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`.
 
 Open a login shell on a role's host:
 
@@ -115,22 +84,11 @@ python3 tools/deployment/deploy_hosts.py shell --role engine-1
 
 `--role` accepts `router` or `engine-<n>`.
 
-Host-key handling:
-
-| Setting                   | Value                                                       |
-| ------------------------- | ----------------------------------------------------------- |
-| Store                     | `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts` |
-| Discovery                 | Records each new host key and matches stored keys.          |
-| Other deployment commands | Match every host key against the store.                     |
+The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts`. Discovery records each new host key and matches stored keys. Other deployment commands match every host key against the store.
 
 ### Discovery output
 
-Launch settings derived from the checkpoint:
-
-| Checkpoint condition                                   | Setting                         |
-| ------------------------------------------------------ | ------------------------------- |
-| `auto_map` in `config.json` or `tokenizer_config.json` | `--trust-remote-code`           |
-| Convolutional SSM transfer state                       | `VLLM_SSM_CONV_STATE_LAYOUT=DS` |
+Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`.
 
 Discovery detects convolutional SSM transfer state from any of these fields in `text_config`, or in the root configuration otherwise:
 
@@ -139,7 +97,7 @@ Discovery detects convolutional SSM transfer state from any of these fields in `
 - `linear_conv_kernel_dim` with a `linear_attention` entry in `layer_types`
 - a `layer_types` entry containing `mamba` or `ssm`
 
-Generated configuration, mode 0600:
+Discovery writes the generated configuration at mode 0600:
 
 | File                                | Content                                                                                                            |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -175,12 +133,7 @@ Rerun discovery after a change to the hardware, model, image, checkpoint, launch
 
 ## Confirming the launch policy
 
-| Engine roles on a GPU host | GPU allocation                                                |
-| -------------------------- | ------------------------------------------------------------- |
-| One                        | Every detected GPU, with tensor parallelism set to that count |
-| Several                    | Declare disjoint `NARWHAL_NODE_<n>_GPU_IDS` lists             |
-
-Every replica must have the same accelerator product, GPU count, and TP size.
+A GPU host with one engine role gives that engine every detected GPU, with tensor parallelism set to that count. For several engine roles on one GPU host, declare disjoint `NARWHAL_NODE_<n>_GPU_IDS` lists. Every replica must have the same accelerator product, GPU count, and TP size.
 
 Default serving policy:
 
@@ -202,28 +155,29 @@ Default serving policy:
 
 Override the policy in `.env` before discovery:
 
-| Field                                                                                    | Meaning                                                                                                                        |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size.                                                          |
-| `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size.                                                          |
-| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default vLLM arguments and holds one `--max-num-seqs` value.                                      |
-| `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment.                                     |
-| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths. |
-| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds.                                                                                      |
-| `NARWHAL_ENGINE_KEY`                                                                     | Engine API key that discovery names in `engine.engine_api_key_env`.                                                            |
+| Field                                                                                    | Meaning                                                                                                                       |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size                                                          |
+| `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default vLLM arguments and holds one `--max-num-seqs` value                                      |
+| `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment                                     |
+| `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds                                                                                      |
+| `NARWHAL_ENGINE_KEY`                                                                     | Engine API key that discovery names in `engine.engine_api_key_env`                                                            |
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
 ## Access failure handling
 
-A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`.
+A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. Record the first failing host and gate in the private record.
 
-| Symptom                              | Fix                                                                                                                                                  |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Missing access variable              | Set the named `.env` field.                                                                                                                          |
-| New or changed host key              | 1. Verify the destination and fingerprint independently, such as through the provider console.<br>2. Replace the entry in `NARWHAL_SSH_KNOWN_HOSTS`. |
-| Authentication or connection problem | Check the username, credential, route, SSH port, and firewall.                                                                                       |
+If an access variable is missing, set the named `.env` field.
 
-Record the first failing host and gate in the private record.
+If a host key is new or changed:
+
+1. Verify the destination and fingerprint independently, such as through the provider console.
+2. Replace the entry in `NARWHAL_SSH_KNOWN_HOSTS`.
+
+If authentication or the connection fails, check the username, credential, route, SSH port, and firewall.
 
 [![Next: Gate B: Packaging and installing the approved revision](https://img.shields.io/badge/next-Gate%20B%3A%20Packaging%20and%20installing%20the%20approved%20revision-0f766e)](02-Install.md)

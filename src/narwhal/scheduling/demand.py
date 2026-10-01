@@ -52,7 +52,7 @@ def _merge_arrivals(a: Arrival, b: Arrival) -> Arrival:
 
 
 class DemandModel:
-    """Own offered work, observed outputs, residency samples."""
+    """Offered work, observed outputs and decode-residency samples."""
 
     def __init__(
         self,
@@ -97,13 +97,13 @@ class DemandModel:
         self.last_demand = Demand(0.0, 0.0, 0, 0)
 
     def resolve_unsized(self, *, at: float, retain: bool) -> None:
-        """Resolve one body owner; retain unpriced offers without inventing a shape."""
+        """Resolve one pending unsized offer, recording it when `retain` is set."""
         self.unsized_pending -= 1
         if retain:
             self.unsized.add(True, at=at)
 
     def arrival_count(self, since: float | None = None) -> int:
-        """Include offers whose bodies are pending or unavailable after rejection."""
+        """Return arrivals since `since`, including unsized and pending offers."""
         return self.arrivals.count(since) + self.unsized.count(since) + self.unsized_pending
 
     def saw_arrival(
@@ -132,7 +132,7 @@ class DemandModel:
     ) -> Cohort[Arrival] | None:
         """Replace one local estimate with the admitted request's count and cache evidence.
 
-        Returns the arrival's cohort for later repricing.
+        Return the arrival's cohort.
         """
         arrival, expected = observation
         repriced = self.arrivals.replace(arrival, Arrival.of(input_len, cached_tokens), at=at)
@@ -164,10 +164,7 @@ class DemandModel:
         self.observed_decode.add((input_len, max(0, wanted_len), max(0, observed_len)), at=at)
 
     def sample(self) -> None:
-        """Sample decode residency for the demand window.
-
-        Window averaging removes the batch-sized sawtooth in decode residency.
-        """
+        """Add current decode residency, in engine equivalents, to the demand window."""
         resident = 0.0
         for inst in self.monitor.instances.values():
             profile = self.scheduler.profiles.get(inst.iid)
@@ -205,10 +202,7 @@ class DemandModel:
     ) -> tuple[float, float]:
         """Return prefill and decode demand in engine equivalents.
 
-        `horizon_s` restricts the offered/expected inputs to the trailing
-        span for the short-horizon trend estimate; resident decode is
-        whole-window state and stays. Callers without a horizon keep the
-        window semantics, including the `last_demand` update.
+        `horizon_s` limits offered inputs to a trailing span and skips the `last_demand` update.
         """
         window = horizon_s if horizon_s is not None else window_s
         profiles = tuple(
@@ -279,8 +273,7 @@ class DemandModel:
             input_len, wanted_len = expected_row.value
             expected_shape = (input_len, wanted_len, expected_row.overflow)
             if expected_shape not in buckets:
-                # A merged shape may contain several output buckets. Price its full
-                # cap; no learned ratio can safely stand for all of those requests.
+                # An overflow row may span several output buckets and prices its full cap.
                 output_len = (
                     wanted_len
                     if expected_row.overflow
@@ -373,8 +366,7 @@ class DemandModel:
         self,
     ) -> OutputEstimates:
         rows = list(self.observed_decode.rows())
-        # Keeping only the unsaturated subset would bias learned output lengths.
-        # Keep the last estimates learned without overflow until all overflow leaves the history.
+        # Any overflow row keeps the last estimates learned without overflow.
         if any(row.overflow for row in rows):
             return self._learned
         ratios: defaultdict[tuple[int, int], list[tuple[float, int]]] = defaultdict(list)
@@ -398,7 +390,7 @@ class DemandModel:
         return self._learned
 
     def history_summary(self) -> dict[str, dict[str, int | float]]:
-        """Expose bounded storage and shape overflow to operators."""
+        """Return storage and shape-overflow counts for each demand window."""
         return {
             "unsized": {**self.unsized.summary(), "pending": self.unsized_pending},
             "arrivals": self.arrivals.summary(),
@@ -424,11 +416,9 @@ class DemandModel:
         return self._estimates
 
     def output_estimator(self) -> Callable[[Request], int]:
-        """Return expected output tokens per request, 0 when unknown.
+        """Return a function giving expected output tokens per request, 0 when unknown.
 
-        A request lacking a shape estimate uses the fleet-wide delivered-output median. The
-        controller pass refreshes the snapshot; a snapshot older than the demand window
-        rebuilds here.
+        A request without a shape estimate takes the fleet-wide delivered-output median.
         """
         _, estimates, fleet = self._current_snapshot()
         return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
@@ -451,8 +441,8 @@ class DemandModel:
     ) -> int:
         """Estimate output length for one input and output bucket.
 
-        Use the requested cap until three matching requests finish, then apply
-        the median fraction delivered.
+        The requested cap applies until three matching requests finish; then the
+        median delivered fraction applies.
         """
         input_bucket = self._shape_bucket(input_len)
         ratios, outputs = self._output_estimates() if estimates is None else estimates
