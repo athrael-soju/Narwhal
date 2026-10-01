@@ -68,7 +68,7 @@ A replacement router:
 
 Prometheus and Grafana setup: [Set up observability](../Observability.md).
 
-[Dashboard](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) signals:
+[Dashboard](../observability/05-Dashboard.md) signals:
 
 | Signal | Operational question |
 | --- | --- |

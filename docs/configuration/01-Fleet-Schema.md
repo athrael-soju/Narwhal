@@ -91,7 +91,7 @@ Each engine entry takes these fields:
 | `url`             | required   | The vLLM HTTP base URL.                                                                                                       |
 | `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`.                            |
 | `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                                                 |
-| `pin`             | `false`    | When true, the engine keeps its configured role through role-controller moves and resume, and serves that role's phase alone. |
+| `pin`             | `false`    | When true, the engine keeps its configured role through role-controller moves and resume, and serves only that role's phase.  |
 | `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                                                          |
 
 ```json
@@ -229,7 +229,7 @@ Each sidecar response carries:
 - the two identity values, under `engine`
 - an `attestation_digest` over the rest of the response
 
-A document with launch evidence adds two fields to each response:
+An attestation document with launch evidence adds two fields to each sidecar response:
 
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence

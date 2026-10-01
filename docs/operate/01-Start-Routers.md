@@ -31,7 +31,7 @@ First-token calibration after an engine relaunch:
 | Relaunched engine | First-token calibration |
 | --- | --- |
 | Identical attested launch | Stays valid |
-| Changed launch digest | Recalibrate |
+| Changed attested `launch_digest` | Recalibrate |
 | Sidecar reports an attestation digest only | Recalibrate |
 | Fleet with `engine_contract` unset | Recalibrate |
 

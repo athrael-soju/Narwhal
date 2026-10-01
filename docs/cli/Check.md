@@ -109,10 +109,14 @@ The `--calibration-out` file holds:
 - the candidate deadline
 - the engines' process generations
 
+Calibration timeouts:
+
 | Scope | Timeout |
 | --- | --- |
 | Wait for first output | `--observation-timeout-s` |
 | Whole attempt | `serving.request_timeout_s` |
+
+Calibration handoffs:
 
 | Handoff property | Value |
 | --- | --- |
@@ -126,13 +130,23 @@ The artifact is valid evidence when all of these hold:
 - every group has at least 100 completed attempts
 - the attempt numbers are distinct
 - the attempt numbers cover the configured sample count
-- with `engine_contract`, each engine's attestation digest matches its value at the start of the run
-- for other fleets, each engine's vLLM version and process start time match their values at the start of the run
+- each engine's identity matches its value at the start of the run
 - the final checks passed
 - the candidate deadline is strictly below `serving.request_timeout_s`
 - `engine.first_token_timeout_s` is above the candidate deadline
 
-The artifact is incomplete when an attempt fails, an engine's attestation digest, vLLM version or process start time changes during the run, or reading or verifying an engine's identity fails.
+Engine identity during calibration:
+
+| Fleet configuration | Identity |
+| --- | --- |
+| Sets `engine_contract` | The attestation digest |
+| Omits `engine_contract` | The vLLM version and process start time |
+
+The artifact is incomplete when any of these happens:
+
+- an attempt fails
+- an engine's identity changes during the run
+- reading or verifying an engine's identity fails
 
 ## The `slo` gate
 

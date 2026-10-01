@@ -24,7 +24,7 @@ The profiler fails the run when an engine's process digest changes between the s
 | Fleet | Saved digest | `.samples.json` sidecar keeps |
 | --- | --- | --- |
 | With `engine_contract` and a launch digest in the attestation | Attested launch digest. | The full attestation response. |
-| With `engine_contract` and an attestation that omits launch evidence | Attestation digest, which changes with each process. | The full attestation response. |
+| Other fleets with `engine_contract` | Per-process attestation digest. | The full attestation response. |
 | Otherwise | Digest of the process identity from `/version` and `/metrics`. | The process identity. |
 
 The attested launch digest covers:
@@ -35,6 +35,7 @@ The attested launch digest covers:
 - packages
 - model configuration and revision
 - launcher, launch-record, and cache-capture hook hashes
+- the image check's `ucx_version` and `peer_release` values
 
 An engine restarted from an identical launch keeps its launch digest.
 
@@ -76,7 +77,7 @@ Before preflight or router startup:
 | `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer | Positive measured resident-KV range with `min <= max`. |
 | `decode_fit_mape`, `decode_cv_mape` | number | Nonnegative fit error and leave-one-out cross-validation error. |
-| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) `c + b*S + d*P + a*(2*P*S + S*S) + ttft_split*s` for `P` cached prefix tokens and `S` uncached suffix tokens. |
+| `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) `c + b*S + d*P + a*(2*P*S + S*S) + ttft_split*s` for `P` cached prefix tokens, `S` uncached suffix tokens, and `s` of 1 for a suffix that ends inside a cache block past its first, otherwise 0. |
 | `cached_cv_mape` | number, optional | Nonnegative leave-one-case-out warm prefill error. |
 | `cached_min_prefix_tokens`, `cached_max_prefix_tokens` | integer, optional | Positive measured cached-prefix range with `min <= max`. |
 | `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured uncached-suffix range with `min <= max`. |
@@ -94,10 +95,12 @@ Before preflight or router startup:
 | A field outside this table | Profile loading aborts. |
 | A partial set of `cached_` fields | Profile loading aborts. |
 
-| Request with a cached prefix | Prefill price |
+Prefill price for a request with a cached prefix:
+
+| Condition | Prefill price |
 | --- | --- |
-| Profile sets the `cached_` fields and the request lies within their measured domain | Warm prefill fit |
-| Otherwise | Cold prefill curve over the full input |
+| The profile sets the `cached_` fields, and the cached prefix and uncached suffix lie within their measured ranges | Warm prefill fit. |
+| Otherwise | Cold prefill curve over the full input. |
 
 For the `profile has no generation evidence` error from preflight, router startup, or recovery on a row missing `generation_digest`:
 
@@ -125,4 +128,9 @@ Narwhal caps decode concurrency for each fitted engine at the priced context len
 | With `kv_capacity_tokens` | The smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. |
 | Otherwise | `decode_max_kv_tokens`. |
 
-Decode request capacity prices a batch at its token interval with requests raised to at least `decode_min_requests` and resident KV tokens raised to at least `decode_min_kv_tokens`.
+Token interval floors for decode request capacity:
+
+| Input | Floor |
+| --- | --- |
+| Batch requests | `decode_min_requests` |
+| Resident KV tokens | `decode_min_kv_tokens` |

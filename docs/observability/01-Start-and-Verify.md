@@ -46,7 +46,7 @@ Run:
 make observe
 ```
 
-The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
+The command starts Prometheus, Grafana and the Grafana Image Renderer, then returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
 
 ### Readiness contract
 
@@ -55,7 +55,7 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | Prometheus | `/-/ready` answers and the build reports version `3.14.0` |
 | Grafana | `/api/health` reports database `ok` and version `13.2.1` |
 | Grafana datasource | The `Prometheus` datasource points at the Prometheus listener |
-| Dashboard | `narwhal-router` loads with its `router` selector defaulting to All (regex `.*`) |
+| Dashboard | `narwhal-router` loads from Grafana's `dashboard.grafana.app/v2beta1` API with its `router` selector defaulting to All (regex `.*`) |
 | Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present |
 | `narwhal-router` job | Exactly one healthy target at `NARWHAL_ROUTER_URL` |
 | `engines` job | One healthy target per fleet engine, labelled with its `iid` |
@@ -106,6 +106,8 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | Mounted files | `0644` |
 
 Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only.
+
+`make observe` creates `runs/observability/renderer-token` with mode `0600` on first use and passes it to Grafana and the renderer on every run.
 
 Each `make observe` run regenerates the staged files and resets their permissions.
 

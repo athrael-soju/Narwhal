@@ -46,7 +46,7 @@ The high-availability (HA) standby router polls this route before takeover.
 | `roles`                                                                                  | Restored for unpinned engines                            |
 | `ejected`                                                                                | Restored, with a readmission probe due at once           |
 | `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
-| Other `inference_sources` suspect outside `ejected`                                      | Live suspect                                             |
+| Other `inference_sources` suspect outside `ejected`                                      | Kept live, with an inference probe due at once           |
 | `counters`, `lifecycle`                                                                  | Restored                                                 |
 | `demand_risk`                                                                            | Restored, with its age measured on the new process clock |
 

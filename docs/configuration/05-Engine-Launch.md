@@ -122,11 +122,13 @@ To change GPU allocation or runtime policy:
 | `environment`  | GPU visibility and `UCX_NET_DEVICES`               |
 | `vllm_args`    | `--tensor-parallel-size` with the record's TP size |
 
-| Engine                                                    | Exported GPU visibility                                       |
-| --------------------------------------------------------- | ------------------------------------------------------------- |
-| CUDA engine colocated with other CUDA engines on its host | Its `gpu_ids`, followed by the GPUs of the other CUDA engines |
-| Shared-device engine                                      | Its single GPU                                                |
-| Every other engine                                        | Its `gpu_ids`                                                 |
+Derived GPU visibility:
+
+| Engine                                                                         | Exported GPU visibility                              |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| CUDA engine with dedicated GPUs, colocated with other such engines on its host | Its `gpu_ids`, followed by the GPUs of those engines |
+| Shared-device engine                                                           | Its single GPU                                       |
+| Every other engine                                                             | Its `gpu_ids`                                        |
 
 Colocated CUDA engines with dedicated GPUs:
 
@@ -140,8 +142,8 @@ CUDA IPC engines, colocated with dedicated GPUs or sharing a device, with `trans
 
 | Setting | Value |
 | --- | --- |
-| vLLM NIXL `engine_ttl` | 60 seconds |
-| `UCX_CUDA_IPC_CACHE` | `n`, or the `runtime.environment` value |
+| `UCX_CUDA_IPC_CACHE` | The `runtime.environment` value, otherwise the UCX default |
+| vLLM NIXL `engine_ttl` | 60 seconds when `UCX_CUDA_IPC_CACHE` is `n` |
 
 [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) describes how these settings free a stopped engine's GPU memory.
 

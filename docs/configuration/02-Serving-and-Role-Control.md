@@ -22,6 +22,8 @@ Admission modes:
 | `predictive` | Returns HTTP 429 when a request fails a time to first token (TTFT) or decode admission check. |
 | `open`       | Disables predictive refusals.                                                                 |
 
+Predictive refusals:
+
 | Refusal                                                                                  | Response                                                                            |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Backlog-driven                                                                           | `Retry-After` header with the projected wait beyond the budget                      |
@@ -41,6 +43,8 @@ The decode check admits the request outright in either case:
 - zero live decode engines
 - a live decode engine whose profile or profiled `decode_max_requests` is unset
 
+Decode hold by request:
+
 | Request                           | Holds decode                                                         |
 | --------------------------------- | -------------------------------------------------------------------- |
 | The checked request               | From its predicted prefill completion                                |
@@ -48,23 +52,29 @@ The decode check admits the request outright in either case:
 | Request resident in decode        | From now until its projected last token                              |
 | Request in prefill                | From its predicted prefill completion until its projected last token |
 
+Remaining output:
+
 | Delivered output                                   | Remaining output                       |
 | -------------------------------------------------- | -------------------------------------- |
 | Below the expected output                          | Expected output minus delivered output |
 | At or past the expected output, with an output cap | Output cap minus delivered output      |
 | At or past the expected output, uncapped           | Unknown                                |
 
+Unknown remaining output:
+
 | Unknown remaining output on | Effect                                                        |
 | --------------------------- | ------------------------------------------------------------- |
 | Another request             | The request holds decode indefinitely                         |
 | The checked request         | The window is the instant of its predicted prefill completion |
+
+Token interval by request:
 
 | Request             | Token interval                     |
 | ------------------- | ---------------------------------- |
 | Resident in decode  | Its decode engine's interval       |
 | Every other request | Fleet mean of the engine intervals |
 
-An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode KV token bound, times the [decode correction](#71-load-definitions).
+An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode key-value (KV) token bound, times the [decode correction](#71-load-definitions).
 
 The capacity check applies when peak projected work over the window exceeds 1 slot.
 
@@ -75,15 +85,19 @@ The capacity check passes when that peak fits both budgets:
 | Slots     | 1                                          | Sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive                            |
 | KV tokens | Prompt plus delivered and remaining output | Sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile) |
 
-The TPOT check passes in either case:
+The time per output token (TPOT) check passes in either case:
 
 - a live decode engine meets `slo.tpot_s` with the request and its residents generating at the request's prefill completion
 - the request misses `slo.tpot_s` on every idle decode engine
+
+Output terms:
 
 | Term       | Definition                                                                     |
 | ---------- | ------------------------------------------------------------------------------ |
 | Output cap | `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset |
 | Bucket     | The request's power-of-two prompt and output-cap sizes                         |
+
+Expected output by request:
 
 | Request                                                    | Expected output                                                                          |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -127,6 +141,8 @@ Retained completion requests:
 | Retained-request ceiling   | Admission limit plus `serving.queue_capacity`                                                                                   |
 | New request at the ceiling | HTTP 429 before body parsing, counted as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers)                    |
 
+Attempt failures:
+
 | Failure                                                                 | Result                                                |
 | ----------------------------------------------------------------------- | ----------------------------------------------------- |
 | Transient transport error before visible output                         | Retried when `serving.max_attempts` is greater than 1 |
@@ -153,6 +169,8 @@ Tune queueing and retries:
 
 A streaming response holds its HTTP status and headers until the first output frame.
 
+Failure results:
+
 | Failure                                                  | Client receives                                  |
 | -------------------------------------------------------- | ------------------------------------------------ |
 | Prefill failure                                          | HTTP error                                       |
@@ -166,6 +184,8 @@ A streaming response holds its HTTP status and headers until the first output fr
 Treat an error event, or a stream that ends before the success terminator, as a failed response.
 
 Fit client-side retries inside the caller's remaining deadline.
+
+---
 
 ## 5. Placement
 
@@ -187,7 +207,7 @@ For a request sized with exact token IDs, the router records each engine's cache
 
 Each prefill placement rechecks those blocks against the engine's current view.
 
-Projected-TTFT evaluations and role-split scoring reuse a waiting request's cache evidence checked within the last 0.25 s while every engine behind that evidence keeps a known residency view.
+Projected-TTFT evaluations and role-split scoring reuse a waiting request's cache evidence checked within the last 0.25 seconds while every engine behind that evidence keeps a known residency view.
 
 An engine that holds a cached prefix prices the request's prefill with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix).
 
@@ -221,9 +241,9 @@ The router prices a request on the cold curve of its full input in these cases:
 - the engine's profile holds a cold fit only
 - the case lies outside the warm fit's measured domain
 
-Role pins, health holds, drains, ejections, and capacity limits apply to every placement.
+The request journal records each placement priced with cache evidence in [`cache_placement`](../telemetry/01-Journal.md#cache-placement).
 
-The [request journal](../telemetry/01-Journal.md) records each placement priced with cache evidence in `cache_placement`.
+---
 
 ## 6. Request deadlines and engine HTTP behaviour
 
@@ -276,6 +296,8 @@ A change to an engine's generation digest makes the calibration artifact stale.
 
 An engine relaunch during calibration makes the calibration artifact insufficient.
 
+Calibration artifact checks:
+
 | Calibration artifact  | Preflight      | Router startup |
 | --------------------- | -------------- | -------------- |
 | Empty path            | Logs a warning | Logs a warning |
@@ -316,11 +338,15 @@ Set these timeouts from latency measured under the intended load:
 | `engine.pool_timeout_s`    | Pool waits                   |
 | `engine.health_timeout_s`  | Health and identity requests |
 
+Probe timeouts:
+
 | Timeout                                                                                                              | Result             |
 | -------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection                         | Inconclusive probe |
 | Health probe exceeds `engine.health_timeout_s`                                                                       | Failed probe       |
 | Health probe timeout surfaces more than 1.5 times `engine.health_timeout_s` after the probe's first connection event | Inconclusive probe |
+
+Inconclusive probe result by caller:
 
 | Caller                 | Inconclusive probe                      |
 | ---------------------- | --------------------------------------- |
@@ -329,6 +355,8 @@ Set these timeouts from latency measured under the intended load:
 | Preflight reach        | Failed `/health` check                  |
 | Readmission probe      | Engine stays ejected                    |
 | Readmission validation | Failed `/health` check                  |
+
+---
 
 ## 7. Role control
 

@@ -74,6 +74,8 @@ The events route returns HTTP 410 when any of these holds:
 
 On HTTP 410, resume from a new snapshot.
 
+Route status by sidecar state:
+
 | Sidecar state | Both routes return |
 | --- | :---: |
 | Residency off (`--kv-events` unset) | HTTP 404 |
@@ -98,16 +100,22 @@ Residency becomes unknown when any of these happens:
 
 A snapshot with unknown residency has an empty `groups` list.
 
-During a replay of buffered history, including after a sidecar restart or a gap in the live event stream, a snapshot reports `"known": false` with the reason `replaying buffered history`.
+Replay of buffered history:
 
-A sidecar that receives a live batch before applying any batch replays the history from sequence 0.
+| Trigger | Replay starts at |
+| --- | --- |
+| Sidecar start | Sequence 0 |
+| A live batch arrives before the sidecar applies any batch | Sequence 0 |
+| A gap in the live event stream | The first missing sequence |
+
+During a replay, a snapshot reports `"known": false` with the reason `replaying buffered history`.
 
 Residency recovery:
 
 | Engine | Restores residency |
 | --- | --- |
-| vLLM in development mode | A prefix-cache reset or an engine restart |
-| Production engine | An engine restart |
+| vLLM in development mode (`VLLM_SERVER_DEV_MODE=1`) | A prefix-cache reset through `POST /reset_prefix_cache`, or an engine restart |
+| Every other vLLM engine | An engine restart |
 
 ### Block identities
 
@@ -145,6 +153,8 @@ A prefix is reusable when every KV cache group holds the blocks its kind require
 ### Residency limits
 
 vLLM's replay buffer holds the latest 10,000 event batches.
+
+Limit cases:
 
 | Case | Result |
 | --- | --- |

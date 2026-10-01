@@ -71,7 +71,12 @@ The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fiel
 | `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
 | Lifecycle hold | Takes draining and recovering engines out of placement. |
 
-The role controller scores splits over live engines, so it keeps moving roles while an engine is ejected, draining or recovering. It holds while a configured role has no live engine.
+Role control while an engine is ejected, quarantined, draining, or recovering:
+
+| Condition | Behavior |
+| --- | --- |
+| Every role with assigned engines keeps a live engine | The role controller scores splits over the live engines and can move roles. |
+| A role with assigned engines has zero live engines | The role controller skips split scoring and records a held decision. |
 
 Existing requests finish on their assigned engines after a role change.
 
@@ -104,11 +109,13 @@ Each advisory decision records:
 
 A readmitted engine rejoins placement in its last assigned role.
 
-### Aggregate fallback from an idle decode engine
+### Aggregate fallback
 
 If failures or drains empty a phase's pool, the scheduler places that phase on a live unpinned engine of the other role.
 
 With only pinned engines of the other role live, the router answers HTTP 503 before prefill.
+
+Predictive admission on a decode engine that takes prefill:
 
 | Fallback engine state | Predictive admission |
 | --- | --- |

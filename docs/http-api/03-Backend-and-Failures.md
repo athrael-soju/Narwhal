@@ -98,9 +98,11 @@ data: {"error": ...}
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
-A failed count puts its engine in a count backoff of 1 s that doubles with each consecutive failure up to 30 s.
+A failed count puts its engine in a count backoff of 1 second that doubles with each consecutive failure up to 30 seconds.
 
 The engine's next successful count resets its backoff.
+
+Exact-count engine selection:
 
 | Live engines outside count backoff | Exact count goes to                                             |
 | ---------------------------------- | --------------------------------------------------------------- |
@@ -130,11 +132,11 @@ Decode-leg failures by breaker class:
 
 Inference-probe suspect placement:
 
-| Suspect                                                                                              | Placement during the probe |
-| ---------------------------------------------------------------------------------------------------- | -------------------------- |
-| Every role the engine places stays placeable through other live engines                              | Held out                   |
-| Held out when another engine's ejection or drain leaves zero other live engines for a role it places | Returned to placement      |
-| Any other suspect                                                                                    | Kept                       |
+| Condition                                                                                                | Placement during the probe |
+| -------------------------------------------------------------------------------------------------------- | -------------------------- |
+| Every role the suspect places stays placeable through other live engines                                 | Held out                   |
+| Another engine's ejection or drain leaves zero other live engines for a role the held-out suspect places | Returned to placement      |
+| Any other case                                                                                           | Kept in placement          |
 
 Inference probes apply the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s` to each leg.
 
@@ -178,8 +180,8 @@ Each retry receives:
 
 With `recovery.failure_quarantine_s > 0`, a failed engine's placement depends on its role coverage:
 
-| Failed engine                                                                                        | Placement after the failure                          |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Every role the engine places stays placeable through other live engines                              | Held out for `recovery.failure_quarantine_s` seconds |
-| Held out when another engine's ejection or drain leaves zero other live engines for a role it places | Returned to placement                                |
-| Any other failed engine                                                                              | Kept                                                 |
+| Condition                                                                                               | Placement after the failure                          |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Every role the failed engine places stays placeable through other live engines                          | Held out for `recovery.failure_quarantine_s` seconds |
+| Another engine's ejection or drain leaves zero other live engines for a role the held-out engine places | Returned to placement                                |
+| Any other case                                                                                          | Kept in placement                                    |

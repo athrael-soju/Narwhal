@@ -41,6 +41,12 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
 
     Pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on eight-GPU engines.
 
+</div>
+
+## Placement trials
+
+<div class="grid cards" markdown>
+
 -   [Cache-aware placement trial](measure/08-Cache-Aware-Trial.md)
 
     ---

@@ -21,7 +21,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `schema_version`        | State schema version, `1`                                                             |
 | `journal_run`           | Request-journal run ID of the current router process                                  |
 | `served`                | Completed requests                                                                    |
-| `slo_met`               | Completed requests within the TTFT and TPOT SLOs                                      |
+| `slo_met`               | Completed requests within `slo.ttft_s` and `slo.tpot_s`                               |
 | `failed`                | Requests ending in error                                                              |
 | `offered`               | Completion arrivals                                                                   |
 | `unsized_offered`       | Arrivals that terminated before workload sizing                                       |
@@ -68,6 +68,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | ------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `lifecycle`                                       | [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)      |
 | `attainment`, `demand_history`, `demand_evidence` | [SLO attainment and demand accounting](06-SLO-and-Demand.md)                      |
+| `peer_release`                                    | [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)    |
 | Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) |
 
 ### `health`
@@ -91,14 +92,14 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 ### `peer_release`
 
-One entry per ejected engine and per engine in lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`, under `recovery.engine_restart_policy` `individual`:
+Under `recovery.engine_restart_policy: individual`, `peer_release` holds one entry per ejected engine and per engine in lifecycle state `drained`, `deadline_exceeded`, `validating`, or `blocked`.
 
-| Field          | Meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| `rounds`       | Release rounds sent since the ejection or the last state change           |
-| `next_round_s` | Seconds until the next round, `null` after the last round                 |
+Entry fields:
 
-[Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) describes the rounds.
+| Field          | Meaning                                                         |
+| -------------- | --------------------------------------------------------------- |
+| `rounds`       | Release rounds sent since the ejection or the last state change |
+| `next_round_s` | Seconds until the next round, `null` after the last round       |
 
 ### `residency`
 
@@ -123,9 +124,9 @@ One entry per ejected engine and per engine in lifecycle state `drained`, `deadl
 | Residency refresh fails with another error                    | `residency refresh failed: <ExceptionClass>` |
 | Sidecar snapshot reports `known: false`                       | Sidecar's reason                             |
 
-The router prices prefill cold on an engine with `known: false`.
+For an engine with `known: false`, the router prices each request's prefill on the cold curve of its full input.
 
-The router refreshes every engine's residency view every `controller.monitor_interval_s`.
+The router refreshes every engine's residency view every `controller.monitor_interval_s` seconds.
 
 The router takes a new snapshot when:
 
@@ -222,7 +223,7 @@ Optional fields, by evaluation stage:
 
 | Field                                             | Meaning                                                                                                    |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `current_prefill`, `current_decode`               | Current split across live engines                                                                          |
+| `current_prefill`, `current_decode`               | Current prefill and decode split                                                                           |
 | `prefill_work`, `decode_work`                     | Estimated prefill and decode demand, in engines                                                            |
 | `arrivals`                                        | Arrivals in the demand window                                                                              |
 | `output_observations`                             | Completed-output observations in demand history                                                            |
@@ -237,7 +238,7 @@ Optional fields, by evaluation stage:
 | `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery` |
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                    |
 | `recovery_prefill_ratio`, `queued_prefill_s`      | Inputs to the [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)                        |
-| `recovery_decode_ratio`                           | Decode recovery pressure including capped decode slots                                                     |
+| `recovery_decode_ratio`                           | Value of the [decode recovery ratio](06-SLO-and-Demand.md#decode-recovery-ratio)                           |
 | `eligibility_rule`                                | Rule that made a scored proposal eligible                                                                  |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                   |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |
@@ -287,7 +288,7 @@ Blocked and held decisions keep the proposed split and objective change.
 - profile coverage
 - KV capacity
 - role floors
-- a role with no live engine while fleet health is changing
+- a role with zero live engines while fleet health is changing
 - pins
 - cooldown
 - dwell

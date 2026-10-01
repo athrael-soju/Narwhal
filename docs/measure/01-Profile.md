@@ -72,16 +72,16 @@ The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
 | `s` | 1 for a prompt that ends inside a cache block past the first, otherwise 0 |
 | Cache block size | Read from `vllm:cache_config_info` |
 
-The profile sets `ttft_split` when all of these hold:
+The profiler sets `ttft_split` when all of these hold:
 
 - The sweep has at least six lengths.
 - At least two lengths end within the first block or on a block boundary.
 - At least two lengths end between later block boundaries.
-- The split term halves the fit error.
+- The fit with the split term has under half the mean error of the plain fit.
 
 Otherwise `ttft_split` is `null`.
 
-The default lengths 256, 1024, and 4096 end within the first block or on a block boundary for 16-token and 512-token blocks.
+Of the default `--prefill-lens`, 256, 1024, and 4096 end within the first block or on a block boundary for 16-token and 512-token blocks.
 
 ### Decode sweep
 
@@ -98,13 +98,13 @@ A decode cell is one decode input length and concurrency pair.
 
 The warm sweep measures prefill for a prompt whose prefix sits in the engine's prefix cache.
 
-A warm case is one `--cached-prefix-lens` and `--cached-suffix-lens` pair within `max_model_len`.
+A warm case is one `--cached-prefix-lens` and `--cached-suffix-lens` pair whose prefix, suffix, and one output token fit the live `max_model_len`.
 
 Each case runs three times with three requests per run:
 
 | Request | Cache salt | Prompt | Recorded |
 | --- | --- | --- | --- |
-| Primer | Fresh | Prefix and suffix words up to the block after the prefix's last full block | |
+| Primer | Fresh | Prefix plus up to eight padding words, ending inside a block past the prefix's last full block | |
 | Warm | The primer's | Prefix and suffix | Latency, cached tokens from the hit counter, uncached tokens |
 | Cold control | Fresh | Prefix and suffix | Latency |
 
@@ -138,10 +138,15 @@ An engine keeps cold pricing when any of these hold:
 - A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words.
 - `vllm:prefix_cache_hits_total` becomes unreadable during the warm sweep.
 - A warm case reuses zero cached tokens.
-- The warm samples fall short of a warm fit.
+- The measured warm cases cover fewer than two prefix lengths, two suffix lengths, or five cases.
 - The held-out error exceeds 20%.
 
 The profiler prints the reason and records it in `cached_prefill.reason`.
+
+When a warm-sweep cold control reuses a cached prefix, the profile fails with `a cold control reused a cached prefix; reserve the engine`:
+
+1. Reserve the engine.
+2. Rerun the profile.
 
 Roll out the warm fit:
 
@@ -149,7 +154,7 @@ Roll out the warm fit:
 2. Set `profiles.path` in a copy of the private fleet file to a new path.
 3. Profile one engine with `--only <iid>` against the fleet copy.
 4. Compare its held-out error with the recorded threshold.
-5. Profile every engine with `--overwrite` against the private fleet file.
+5. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.
 
 ## 3. Retain profile samples and fits
 

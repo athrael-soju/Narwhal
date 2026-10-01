@@ -6,7 +6,7 @@ description: Engine monitoring, failure handling, readmission and durable contro
 
 ## Monitoring and readiness
 
-Monitor pass stages:
+Monitoring stages:
 
 | Stage | Work |
 | --- | --- |
@@ -16,10 +16,9 @@ Monitor pass stages:
 | `rollover` | Interval rollover |
 | `readmission` | Readmission and [peer release](#peer-memory-release) rounds |
 | `liveness` | Liveness probes |
+| `residency` | Prefix residency refresh from attestation sidecars, on its own loop every `controller.monitor_interval_s` |
 | `handoff` | State handoff persistence |
 | `telemetry` | Floor-state refresh and loop logging |
-
-Prefix residency refresh from attestation sidecars runs on its own `residency` loop every `controller.monitor_interval_s`, and its failures count toward the monitor-failure streak.
 
 Each pass with a failed stage extends the monitor-failure streak.
 
@@ -98,17 +97,23 @@ A stopped engine's GPU memory stays allocated while a host peer holds that mappi
 | Part | Behavior |
 | --- | --- |
 | vLLM NIXL connector | A consume request evicts each producer idle for longer than `engine_ttl` and removes its NIXL agent. |
-| Engine launcher | Sets `engine_ttl` to 60 seconds for engines with CUDA IPC peers. |
-| Engine launcher | Sets `UCX_CUDA_IPC_CACHE` to `n` for engines with CUDA IPC peers, unless `runtime.environment` sets it. |
+| Engine launcher | Sets `engine_ttl` to 60 seconds for engines with CUDA IPC peers when `runtime.environment` sets `UCX_CUDA_IPC_CACHE` to `n`. |
 | UCX 1.22 or later in the engine image | Unmaps the producer's memory when NIXL removes its agent, with the CUDA IPC cache off. |
 | Router peer release rounds | Send each live KV consumer a transfer probe from another live producer. |
 | Engine startup | Waits up to 180 seconds for its GPU memory before vLLM measures it. |
+
+`UCX_CUDA_IPC_CACHE` in `runtime.environment` selects the trade-off for CUDA IPC engines:
+
+| `UCX_CUDA_IPC_CACHE` | Stopped peer's GPU memory | Transfers from a restarted or idle-evicted producer |
+| --- | --- | --- |
+| `y`, the UCX default | Stays mapped until a wave restart | Through the cached mapping |
+| `n`, with UCX 1.22 or later | Released by peer release rounds | Map and unmap the producer's KV memory on each transfer |
 
 `launch.peer_release` in an engine's attestation reports whether that engine releases a stopped peer's memory:
 
 | Engine | `peer_release` |
 | --- | --- |
-| Engine without CUDA IPC peers | `true` |
+| Engine with zero CUDA IPC peers | `true` |
 | UCX 1.22 or later with the CUDA IPC cache off | `true` |
 | Any other CUDA IPC engine | `false` |
 
@@ -188,6 +193,8 @@ With `recovery.failure_quarantine_s` above `0`, a failed engine's placement depe
 | Covered | Quarantined until the deadline |
 | Uncovered | Stays in placement |
 
+Quarantine end events:
+
 | Event | Result |
 | --- | --- |
 | Successful health or inference probe that meets the profile-match rule | Quarantine ends early. |
@@ -198,7 +205,15 @@ With `recovery.failure_quarantine_s` above `0`, a failed engine's placement depe
 
 Lifecycle readmission requires a complete `engine_contract`.
 
-Automatic recovery starts these checks once the ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds. An engine that fails automatic recovery stays blocked until readmission. While another engine stays in placement, other ejected engines keep recovering individually. After every placement peer is lost, recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recover-loss-of-every-placement-peer), and a blocked member holds it.
+Automatic recovery with `engine_contract` set, under `recovery.engine_restart_policy` `individual`:
+
+| Condition | Behavior |
+| --- | --- |
+| The ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds | Automatic recovery runs the readmission checks. |
+| The engine fails automatic recovery | The engine stays blocked until an operator requests readmission. |
+| A blocked engine waits while another engine stays in placement | Each other ejected engine recovers individually. |
+| Zero engines remain in placement | Recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recover-loss-of-every-placement-peer). |
+| A whole-wave member is blocked | The member holds the wave. |
 
 Readmission checks, in order:
 

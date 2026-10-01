@@ -100,25 +100,11 @@ recovery_prefill_ratio = max(
 
 Otherwise, `recovery_prefill_ratio` equals the observed prefill pressure.
 
-The decode recovery ratio is computed as follows when `serving.decode_concurrency` is positive and at least one engine has the decode role:
-
-```text
-recovery_decode_ratio = max(
-  observed decode pressure,
-  (decode residents on decode-role engines + requests waiting for a decode slot)
-    / (current decode engine count * serving.decode_concurrency)
-)
-```
-
-Otherwise, `recovery_decode_ratio` equals the observed decode pressure.
-
 Incomplete-demand decisions expose:
 
 - both observed phase ratios
 - `recovery_prefill_ratio`
 - `queued_prefill_s`
-
-Decisions held before candidate scoring also expose `recovery_decode_ratio`.
 
 `decision_basis` in incomplete-demand decisions is one of:
 
@@ -135,6 +121,22 @@ Demand precision by consumer:
 | State and journal records                | Rounded        |
 
 Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gates](../configuration/02-Serving-and-Role-Control.md#7-role-control) constrain each move.
+
+### Decode recovery ratio
+
+The decode recovery ratio is computed as follows when `serving.decode_concurrency` is positive and at least one engine has the decode role:
+
+```text
+recovery_decode_ratio = max(
+  observed decode pressure,
+  (decode residents on decode-role engines + requests waiting for a decode slot)
+    / (current decode engine count * serving.decode_concurrency)
+)
+```
+
+Otherwise, `recovery_decode_ratio` equals the observed decode pressure.
+
+Decisions held for demand history or fleet profiles before candidate scoring add `recovery_decode_ratio`.
 
 ### Consolidation evidence
 

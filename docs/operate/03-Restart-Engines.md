@@ -150,12 +150,19 @@ Verify placement:
 
 ### 7.4 Recover an unplanned ejection
 
-Automatic recovery validates an ejected engine once its `/health` returns HTTP 200 and its attestation sidecar responds. While another engine stays in placement, an engine that fails automatic recovery holds only its own recovery.
+Automatic recovery behavior:
+
+| Condition | Behavior |
+| --- | --- |
+| An ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds | Automatic recovery validates the engine. |
+| An engine fails automatic recovery while another engine stays in placement | Automatic recovery continues for every other ejected engine. |
+
+Recovery procedures:
 
 | Condition | Procedure |
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
-| A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | Peers still map the stopped engine's KV memory. The engine waits up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release); `/narwhal/state` reports the release rounds in `peer_release.<id>`. |
+| A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | 1. Wait up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release).<br>2. Read the engine's release rounds in [`peer_release.<id>`](../http-api/05-Live-State.md#peer_release) from `GET /narwhal/state`. |
 | That engine fails at startup with free GPU memory below its budget | A host peer keeps its memory mapped. `narwhal-check` names the cause. [Restart the engine wave](#8-restart-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
 | The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
@@ -193,7 +200,7 @@ Under `whole_wave`:
 
 ### 8.1 Drain the wave
 
-A wave member that stopped and was ejected before the drain keeps the process identity the router last verified for it, so the wave can include engines that already failed.
+For a wave member that stopped and was ejected before the drain, the drain records the process identity the router last verified.
 
 Drain the wave with a 600-second deadline:
 

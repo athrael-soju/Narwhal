@@ -27,7 +27,7 @@ To open a monitoring tunnel:
 
 Grafana grants anonymous Viewer access through the local tunnel.
 
-The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
+The [dashboard selectors](05-Dashboard.md#selectors) switch between router and engine scope.
 
 ## Isolate a second monitoring stack
 
@@ -48,6 +48,11 @@ make observe
 | --- | --- | --- |
 | Specific address | That address | That address |
 | Wildcard (`0.0.0.0` or `::`) | The wildcard | Loopback |
+
+| `NARWHAL_GRAFANA_BIND_ADDRESS` | Grafana binds | Image renderer binds |
+| --- | --- | --- |
+| Specific address | That address, port `3000` | That address, port `8081` |
+| Wildcard (`0.0.0.0` or `::`) | The wildcard, port `3000` | Loopback, port `8081` |
 
 Tunnel to the `127.0.0.2` listeners:
 

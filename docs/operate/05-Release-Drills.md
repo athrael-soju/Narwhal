@@ -177,9 +177,16 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 Already-stopped-engine case:
 
 1. Stop an engine before requesting the drain.
-2. Keep the failed drain response with its missing identity, the process start time from identity collection, and the successful retry.
+2. Keep the drain response and the process start time from identity collection.
 3. Replace that process after the drain.
 4. Record the trigger and the branch tested.
+
+Drain responses for the stopped engine:
+
+| Engine state at the drain request | Drain response |
+| --- | --- |
+| Ejected | Success, with the last process identity the router verified |
+| In placement | Failure naming the missing identity; the retry after ejection succeeds |
 
 ### Restore service after the drill
 

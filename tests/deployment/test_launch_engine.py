@@ -164,13 +164,14 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertNotIn("engine-only-secret", json.dumps(plan))
 
     def test_colocated_cuda_engines_share_the_host_pid_namespace(self):
-        for visible, shared, gpu_tls in (
-            ("0,1,2", True, "cuda"),
-            ("0", False, "cuda"),
-            ("0,1,2", True, "cuda_copy"),
+        for visible, shared, gpu_tls, cache in (
+            ("0,1,2", True, "cuda", None),
+            ("0,1,2", True, "cuda", "n"),
+            ("0", False, "cuda", "n"),
+            ("0,1,2", True, "cuda_copy", "n"),
         ):
             with (
-                self.subTest(visible=visible, gpu_tls=gpu_tls),
+                self.subTest(visible=visible, gpu_tls=gpu_tls, cache=cache),
                 tempfile.TemporaryDirectory() as folder,
             ):
                 record, env = launcher_inputs(Path(folder))
@@ -186,17 +187,23 @@ class EngineLauncherTests(unittest.TestCase):
                     "CUDA_VISIBLE_DEVICES": visible,
                     "UCX_NET_DEVICES": "fabric0",
                 }
-                plan, _ = build(record, env, Path(folder) / "launch")
+                if cache is not None:
+                    record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
+                plan, values = build(record, env, Path(folder) / "launch")
                 pid = (
                     plan["common"][plan["common"].index("--pid") + 1]
                     if "--pid" in plan["common"]
                     else None
                 )
                 self.assertEqual(pid, "host" if shared else None)
-                # CUDA IPC peers evict a stopped engine after the launcher's TTL.
+                # CUDA IPC peers with the IPC cache off evict a stopped engine after the TTL.
                 extra = plan["connector"]["kv_connector_extra_config"]
                 ipc = shared and gpu_tls == "cuda"
-                self.assertEqual(extra.get("engine_ttl"), ENGINE_TTL_S if ipc else None)
+                self.assertIs(plan["cuda_ipc_peers"], ipc)
+                self.assertEqual(
+                    extra.get("engine_ttl"), ENGINE_TTL_S if ipc and cache == "n" else None
+                )
+                self.assertEqual(values.get("UCX_CUDA_IPC_CACHE"), cache)
                 transfer_config = json.loads(
                     plan["args"][plan["args"].index("--kv-transfer-config") + 1]
                 )
@@ -360,10 +367,11 @@ class EngineLauncherTests(unittest.TestCase):
 
     def test_image_check_records_peer_release_for_cuda_ipc_peers(self):
         for ipc, ucx, cache, released in (
-            (True, "1.22.0", None, True),
-            (True, "1.21.0", None, False),
+            (True, "1.22.0", None, False),
+            (True, "1.22.0", "n", True),
+            (True, "1.21.0", "n", False),
             (True, "1.22.0", "y", False),
-            (True, None, None, False),
+            (True, None, "n", False),
             (False, None, None, True),
         ):
             with (
@@ -393,9 +401,9 @@ class EngineLauncherTests(unittest.TestCase):
                     prepare(run, env)
                 plan = load(run)
                 values = (run / "container.env").read_text().splitlines()
-                expected_cache = cache or ("n" if ipc else None)
                 self.assertEqual(
-                    f"UCX_CUDA_IPC_CACHE={expected_cache}" in values, expected_cache is not None
+                    [line for line in values if line.startswith("UCX_CUDA_IPC_CACHE=")],
+                    [f"UCX_CUDA_IPC_CACHE={cache}"] if cache else [],
                 )
                 output = (
                     "NARWHAL_TOKENIZER_READY=1\n"
@@ -413,6 +421,7 @@ class EngineLauncherTests(unittest.TestCase):
                 self.assertEqual(checked["ucx_version"], ucx)
                 self.assertIs(checked["peer_release"], released)
                 self.assertEqual("whole-wave restart" not in printed.getvalue(), released)
+                self.assertEqual("per transfer" in printed.getvalue(), ipc and released)
         self.assertFalse(releases_peers("1.21.9", "n"))
         self.assertTrue(releases_peers("1.22.0", "n"))
         self.assertTrue(releases_peers("2.0", "n"))

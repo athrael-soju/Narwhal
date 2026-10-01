@@ -4,12 +4,13 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
 # Set up observability
 
-`make observe` starts two services for the deployed fleet:
+`make observe` starts three services for the deployed fleet:
 
 | Service | Role |
 | --- | --- |
 | Prometheus `3.14.0` | Router and engine metrics, alert rules |
 | Grafana `13.2.1` | Provisioned Narwhal Orchestrator dashboard |
+| Grafana Image Renderer `5.12.5` | PNG renders of dashboards and panels for Grafana |
 
 ## Monitoring tasks
 
@@ -31,7 +32,7 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
     ---
 
-    Read the SLO headline, engine states, fleet events, role history, outcomes, latency, and pool panels.
+    Read the headline blocks, engine states, fleet events, role history, outcomes, latency, and pool panels.
 
 -   [GPU telemetry, alerts, and recovery](observability/03-Telemetry-and-Recovery.md)
 

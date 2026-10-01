@@ -266,7 +266,7 @@ def _render_refusals(state: dict) -> list[str]:
     out: list[str] = []
     out += _lines(
         "narwhal_refused_total",
-        "Requests predictive admission refused above the TTFT budget",
+        "Requests predictive admission refused for a projected TTFT or decode SLO miss",
         "counter",
         [({}, state.get("admission", {}).get("refused", 0))],
     )

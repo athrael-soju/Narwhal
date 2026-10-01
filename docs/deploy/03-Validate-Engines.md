@@ -383,4 +383,4 @@ Compare the resolved layouts and page geometry within each signature group:
 | Every engine in the group matches | One budget for the group          |
 | An engine differs                 | A separate budget for that engine |
 
-Continue with [Gate D: Prove the transfer fabric against the serving cache](04-Qualify-Fabric.md).
+[![Next: Gate D: Prove the transfer fabric against the serving cache](https://img.shields.io/badge/next-Gate%20D%3A%20Prove%20the%20transfer%20fabric%20against%20the%20serving%20cache-0f766e)](04-Qualify-Fabric.md)

@@ -85,7 +85,7 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-| Layouts in vLLM v0.29.0       | `is_block_outermost` |
+| Layouts in vLLM v0.30.0       | `is_block_outermost` |
 | ----------------------------- | -------------------- |
 | `BLHNC`, `BLNHC`, and `BHLNC` | `true`               |
 | `LBHNC`, `LBNHC`, and `LHBNC` | `false`              |

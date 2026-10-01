@@ -192,15 +192,15 @@ Correction paths by gate:
 | Hugging Face | [Snapshot download](https://huggingface.co/docs/huggingface_hub/guides/download)                                                                        |
 | Hugging Face | [Model cards](https://huggingface.co/docs/hub/model-cards)                                                                                              |
 | ROCm         | [Container device guidance](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html)                                           |
-| vLLM v0.29.0 | [NIXL connector usage](https://docs.vllm.ai/en/v0.29.0/features/nixl_connector_usage/)                                                                  |
-| vLLM v0.29.0 | [Mamba layout resolver](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/mamba/mamba_utils.py)                              |
-| vLLM v0.29.0 | [KV cache interface](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_interface.py)                                                   |
-| vLLM v0.29.0 | [KV cache grouping](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/core/kv_cache_utils.py)                                                   |
-| vLLM v0.29.0 | [NIXL metadata and compatibility hash](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py) |
-| vLLM v0.29.0 | [Model architecture conversion](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/transformers_utils/model_arch_config_convertor.py)               |
-| vLLM v0.29.0 | [KV cache layout enum](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/kv_cache_layout.py)                                                    |
-| vLLM v0.29.0 | [NIXL worker](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py)                       |
-| vLLM v0.29.0 | [Attention backend utilities](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/v1/attention/backends/utils.py)                                    |
-| vLLM v0.29.0 | [NIXL connector aliases](https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py)              |
+| vLLM v0.30.0 | [NIXL connector usage](https://docs.vllm.ai/en/v0.30.0/features/nixl_connector_usage/)                                                                  |
+| vLLM v0.30.0 | [Mamba layout resolver](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/model_executor/layers/mamba/mamba_utils.py)                              |
+| vLLM v0.30.0 | [KV cache interface](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/kv_cache_interface.py)                                                   |
+| vLLM v0.30.0 | [KV cache grouping](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/core/kv_cache_utils.py)                                                   |
+| vLLM v0.30.0 | [NIXL metadata and compatibility hash](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py) |
+| vLLM v0.30.0 | [Model architecture conversion](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/transformers_utils/model_arch_config_convertor.py)               |
+| vLLM v0.30.0 | [KV cache layout enum](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/kv_cache_layout.py)                                                    |
+| vLLM v0.30.0 | [NIXL worker](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py)                       |
+| vLLM v0.30.0 | [Attention backend utilities](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/attention/backends/utils.py)                                    |
+| vLLM v0.30.0 | [NIXL connector aliases](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py)              |
 | iperf3       | [Command reference](https://software.es.net/iperf/invoking.html)                                                                                        |
 | perftest     | [Repository](https://github.com/linux-rdma/perftest)                                                                                                    |

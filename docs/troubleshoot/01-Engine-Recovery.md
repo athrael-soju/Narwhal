@@ -47,9 +47,11 @@ If the lifecycle state becomes `blocked`:
 Triggers for whole-wave recovery:
 
 - `recovery.engine_restart_policy` is `whole_wave`
-- A stale-peer assertion
-- A transfer stall that kills a peer
-- A process replacement that invalidates shared peer state
+- a stale-peer assertion
+- a transfer stall that kills a peer
+- a process replacement that invalidates shared peer state
+
+Steps for whole-wave recovery:
 
 1. [Start a whole-wave drain](../operate/03-Restart-Engines.md#81-drain-the-wave).
 2. If drain identity capture fails, follow [Recover an unplanned whole-wave hold](../operate/03-Restart-Engines.md#83-recover-an-unplanned-whole-wave-hold).

@@ -8,25 +8,27 @@ description: TTFT-based admission, streaming and token accounting for Narwhal co
 
 The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_margin)`.
 
-| Condition                                                                                                                                       |  HTTP | Error `type`                                       | `Retry-After`                                      |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | :---: | -------------------------------------------------- | -------------------------------------------------- |
-| Malformed JSON or a wrong type in a field the router reads                                                                                      | `400` | `invalid_request_error` with the field in `param`  |                                                    |
-| Requested model differs from the configured model                                                                                               | `404` | `invalid_request_error`, code `model_not_found`    |                                                    |
-| `n > 1` or `best_of > 1`                                                                                                                        | `400` | `invalid_request_error`                            |                                                    |
-| Unsupported non-streaming audio, modality, or tool request                                                                                      | `400` | `invalid_request_error` with the option in `param` |                                                    |
-| Request exceeds `serving.max_request_bytes`                                                                                                     | `413` | `request_too_large`                                |                                                    |
-| HTTP retention limit is full                                                                                                                    | `429` | `server_overloaded_error`                          | `1`                                                |
-| Router loop lag, or the median token-counting and prefix-hashing time of at least 8 requests in the last 2 s, reaches a quarter of `slo.ttft_s` | `429` | `server_overloaded_error`                          | `1`                                                |
-| Admission queue is full                                                                                                                         | `429` | `server_overloaded_error`                          | `1`                                                |
-| Admission wait expires before response headers                                                                                                  | `504` | `queue_expired`                                    |                                                    |
-| Original request deadline expires before response headers                                                                                       | `504` | `request_expired` or `expired`                     |                                                    |
-| Projected TTFT exceeds the budget for a prompt that fits alone                                                                                  | `429` | `server_overloaded_error`                          | Budget overrun in seconds, rounded up, minimum `1` |
-| Prompt alone exceeds the TTFT budget                                                                                                            | `429` | `server_overloaded_error`                          |                                                    |
-| Zero prefill engines are live and the decode target holds resident decode work                                                                  | `429` | `server_overloaded_error`                          | `1`                                                |
-| Peak projected decode work over the request's decode window exceeds live decode capacity                                                        | `429` | `server_overloaded_error`                          | `1`                                                |
-| Decode load pushes the request past `slo.tpot_s` on every live decode engine                                                                    | `429` | `server_overloaded_error`                          | `1`                                                |
-| Zero engines are eligible for placement                                                                                                         | `503` | `backend_unavailable` or `no_schedulable_engines`  | `1`                                                |
-| Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring                          | `503` | `standby`                                          | `1`                                                |
+| Condition                                                                                                                    |  HTTP | Error `type`                                         | `Retry-After`                                      |
+| ---------------------------------------------------------------------------------------------------------------------------- | :---: | ---------------------------------------------------- | -------------------------------------------------- |
+| Malformed JSON or a wrong type in a field the router reads                                                                   | `400` | `invalid_request_error` with the field in `param`    |                                                    |
+| `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`                                      | `400` | `invalid_request_error` with `vllm_xargs` in `param` |                                                    |
+| Requested model differs from the configured model                                                                            | `404` | `invalid_request_error`, code `model_not_found`      |                                                    |
+| `n > 1` or `best_of > 1`                                                                                                     | `400` | `invalid_request_error`                              |                                                    |
+| Unsupported non-streaming audio, modality, or tool request                                                                   | `400` | `invalid_request_error` with the option in `param`   |                                                    |
+| Request exceeds `serving.max_request_bytes`                                                                                  | `413` | `request_too_large`                                  |                                                    |
+| HTTP retention limit is full                                                                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
+| Router event-loop lag reaches a quarter of `slo.ttft_s`                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
+| Median token-counting and prefix-hashing time of at least 8 requests in the last 2 seconds reaches a quarter of `slo.ttft_s` | `429` | `server_overloaded_error`                            | `1`                                                |
+| Admission queue is full                                                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
+| Admission wait expires before response headers                                                                               | `504` | `queue_expired`                                      |                                                    |
+| Original request deadline expires before response headers                                                                    | `504` | `request_expired` or `expired`                       |                                                    |
+| Projected TTFT exceeds the budget for a prompt that fits alone                                                               | `429` | `server_overloaded_error`                            | Budget overrun in seconds, rounded up, minimum `1` |
+| Prompt alone exceeds the TTFT budget                                                                                         | `429` | `server_overloaded_error`                            |                                                    |
+| Zero prefill engines are live and the decode target holds resident decode work                                               | `429` | `server_overloaded_error`                            | `1`                                                |
+| Peak projected decode work over the request's decode window exceeds live decode capacity                                     | `429` | `server_overloaded_error`                            | `1`                                                |
+| Decode load pushes the request past `slo.tpot_s` on every live decode engine                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
+| Zero engines are eligible for placement                                                                                      | `503` | `backend_unavailable` or `no_schedulable_engines`    | `1`                                                |
+| Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring       | `503` | `standby`                                            | `1`                                                |
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
@@ -34,10 +36,10 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 [`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) modes:
 
-| Mode                   | Enforced                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| `predictive` (default) | Predictive TTFT checks and the HTTP retention, queue, and phase-concurrency limits |
-| `open`                 | HTTP retention, queue, and phase-concurrency limits                                |
+| Mode                   | Enforced                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `predictive` (default) | Every `open` check and limit, plus the predictive TTFT, decode-capacity, and `slo.tpot_s` checks |
+| `open`                 | Router saturation checks and the HTTP retention, queue, and phase-concurrency limits             |
 
 ### Admission counters
 

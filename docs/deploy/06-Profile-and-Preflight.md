@@ -13,7 +13,7 @@ Run these steps from the router shell.
 3. Load the private engine URLs and credentials from the router environment.
 4. Warm the model.
 5. Pick input lengths and concurrency points that match production traffic.
-6. Place at least six prefill lengths:
+6. Include at least six lengths in `--prefill-lens`:
     - at least two that end within the first cache block or on a block boundary
     - at least two that end between later block boundaries
 7. Run the profiler:
@@ -38,7 +38,7 @@ The effective sweep has these bounds:
 | Prefill lengths      | Input plus one output token fits the live `max_model_len`. |
 | Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`. |
 
-Engines keep prefix caching on during profiling.
+Prefix caching can stay on during profiling.
 
 | Profiler error                                                                       | Fix                                                      |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -183,4 +183,4 @@ The gate reports the first-token time for each passing transfer.
 
 Keep the command, fleet file, preflight output, process identities, and profile store together.
 
-Continue with [Gate G: Start the service and validate capacity through the private path](07-Serve-and-Measure.md).
+[![Next: Gate G: Start the service and validate capacity through the private path](https://img.shields.io/badge/next-Gate%20G%3A%20Start%20the%20service%20and%20validate%20capacity%20through%20the%20private%20path-0f766e)](07-Serve-and-Measure.md)
