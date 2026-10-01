@@ -37,11 +37,13 @@ license-files = ["LICENSE", "NOTICE"]
 # Engine builds are pinned in fleet configuration.
 dependencies = [
   "fastapi>=0.141.1",
+  "httptools>=0.8.0",
   "httpx>=0.28.1",
   "msgpack>=1.2.2",
   "pydantic>=2.13.5",
   "pyzmq>=27.2.0",
   "uvicorn>=0.52.4",
+  "uvloop>=0.22.1; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +57,7 @@ dev = [
 ]
 docs = [
   "mkdocs-material==9.7.7",
+  "mkdocs-glightbox==0.5.2",
 ]
 
 [project.scripts]

@@ -28,15 +28,16 @@ Non-streaming calls return:
 
 Non-null values of these fields have these required types:
 
-| Field        | Required type    |
-| ------------ | ---------------- |
-| `model`      | String           |
-| `stream`     | Boolean          |
-| `n`          | Integer          |
-| `best_of`    | Integer          |
-| `max_tokens` | Integer          |
-| `prompt`     | String or array  |
-| `messages`   | Array of objects |
+| Field                   | Required type    |
+| ----------------------- | ---------------- |
+| `model`                 | String           |
+| `stream`                | Boolean          |
+| `n`                     | Integer          |
+| `best_of`               | Integer          |
+| `max_tokens`            | Integer          |
+| `max_completion_tokens` | Integer          |
+| `prompt`                | String or array  |
+| `messages`              | Array of objects |
 
 Other fields reach the engine as sent.
 
@@ -45,6 +46,7 @@ Invalid requests return HTTP `400` in an OpenAI error envelope:
 - malformed JSON
 - a JSON array or scalar body
 - a field of the wrong type
+- a `vllm_xargs` object that sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`
 
 Each invalid request writes one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
 
@@ -63,16 +65,15 @@ A rejected `max_tokens` returns:
 
 ### Model handling
 
-| Requested `model`           | Result                            |
-| --------------------------- | --------------------------------- |
-| Configured model, or absent | Forwarded as the configured model |
-| Any other model             | HTTP `404` with `model_not_found` |
+The router forwards a request that names the configured model, or omits `model`, as the configured model. Any other model returns HTTP `404` with `model_not_found`.
 
 ### Sampling width
 
 `n` and `best_of` above 1 return HTTP `400`.
 
 ### Output and tool restrictions
+
+Non-streaming requests accept a narrower set of output and tool options:
 
 | Option       | Streaming request   | Accepted non-streaming values         |
 | ------------ | ------------------- | ------------------------------------- |
@@ -84,13 +85,15 @@ Other non-streaming values return HTTP `400` `invalid_request_error` with the op
 
 ## Request identity and authentication
 
+Narwhal tracks three kinds of request ID:
+
 | ID                 | Scope                              | Where it appears                   |
 | ------------------ | ---------------------------------- | ---------------------------------- |
 | Router request ID  | One per client request             | `x-request-id` response header     |
 | Backend request ID | One per engine attempt and phase   | Engine requests and the KV handoff |
 | `client_rid`       | Trusted request ID sent by ingress | Request journal                    |
 
-[Configure ingress](../operate/01-Start-Routers.md#3-configure-the-client-path) to:
+[Configure ingress](../operate/01-Start-Routers.md#3-configuring-the-client-path) to:
 
 1. Authenticate the client.
 2. Strip the client's credentials.

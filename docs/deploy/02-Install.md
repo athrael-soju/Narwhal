@@ -2,14 +2,11 @@
 description: Package an approved Narwhal revision and install it on the router and engine hosts.
 ---
 
-# Gate B: Package and install the approved revision
+# Gate B: Packaging and installing the approved revision
 
-| Command   | Action                                                         |
-| --------- | -------------------------------------------------------------- |
-| `prepare` | Bundles the approved commit, role files, and helper snapshots. |
-| `install` | Installs the approved commit on each host.                     |
+Gate B runs two `deploy_hosts.py` commands. `prepare` bundles the approved commit, role files, and helper snapshots. `install` installs the approved commit on each host.
 
-## Build an immutable deployment package
+## Building an immutable deployment package
 
 In the management checkout:
 
@@ -30,7 +27,7 @@ Prepared <n> hosts in runs/deployment-env/first-deploy; private manifest and inp
 
 Keep the `--out` directory until the deployment finishes.
 
-Prepared run, files at mode 0600:
+The prepared run holds these files at mode 0600:
 
 | Path                                                                      | Content                                                                  |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -58,7 +55,7 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | `tools/deployment/launch_engine.py`      | `NARWHAL_ENGINE_LAUNCHER`    | `NARWHAL_ENGINE_LAUNCHER_SHA256`    |
 | `tools/deployment/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
-## Install engine 1 and the remaining hosts
+## Installing engine 1 and the remaining hosts
 
 1. Install the engine 1 host:
 
@@ -74,25 +71,19 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
     python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
     ```
 
-`install` behaviour on each host:
+`install` reuses a finished installation or a matching transferred file. It stops at a host with a changed source checkout or a differing file. On a host with router and engine roles, it installs every role environment together.
 
-| Host state                                         | `install` action                          |
-| -------------------------------------------------- | ----------------------------------------- |
-| Finished installation or matching transferred file | Reuses it.                                |
-| Changed source checkout                            | Stops at that host.                       |
-| Differing file                                     | Stops at that host.                       |
-| Router and engine roles on one host                | Installs every role environment together. |
+## Recovering a failed installation
 
-## Recover a failed installation
+If transfer validation fails, compare the prepared hashes with the existing remote artifact before modifying it.
 
-| Failure                               | Recovery                                                                            |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| Transfer validation fails             | Compare the prepared hashes with the existing remote artifact before modifying it.  |
-| Revision validation fails             | Check that the bundle and role files came from the same prepared run.               |
-| A dependency installation stops early | Rerun the same `install --run` until the installed `narwhal-check --help` responds. |
-| A `.install-lock` remains             | Remove it after the installer that created it has exited.                           |
+If revision validation fails, check that the bundle and role files came from the same prepared run.
 
-## Open installed role shells
+If a dependency installation stops early, rerun the same `install --run` until the installed `narwhal-check --help` responds.
+
+If a `.install-lock` remains, remove it after the installer that created it has exited.
+
+## Opening installed role shells
 
 Open the router shell:
 
@@ -114,4 +105,4 @@ Each shell opens with:
 - the role environment loaded
 - `.venv` active
 
-[![Next: Gate C: Validate and start every engine](https://img.shields.io/badge/next-Gate%20C%3A%20Validate%20and%20start%20every%20engine-0f766e)](03-Validate-Engines.md)
+[![Next: Gate C: Validating and starting every engine](https://img.shields.io/badge/next-Gate%20C%3A%20Validating%20and%20starting%20every%20engine-0f766e)](03-Validate-Engines.md)

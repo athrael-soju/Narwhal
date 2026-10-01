@@ -4,7 +4,7 @@ description: Diagnose requests and SLO attainment from the Narwhal JSON Lines re
 
 # Request journal
 
-## Diagnose a request from the journal
+## Diagnosing a request from the journal
 
 `--journal <path>` on `narwhal-serve` sets the JSON Lines journal path, `journal.jsonl` beside `profiles.path` by default.
 
@@ -55,6 +55,8 @@ Each original completion request and its retries share one terminal row.
 | `decode_tpot_s` | Time from first to last observed output token divided by `output_len - 1`. |
 | `prefill_iid`, `decode_iid` | Engines of the final attempt's prefill and decode legs. |
 | `crossed` | `true` when `decode_iid` differs from `prefill_iid`. |
+| `cached_tokens` | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
+| `cache_placement` | The prefill placement priced with [cache evidence](#cache-placement). |
 | `token_accounting` | `token_ids` for exact per-token identity, `unavailable` when the engine dialect omits token IDs. |
 | `refused`, `refused_cause` | `true` on a predictive refusal, with its [refusal cause](#refusal-causes). |
 | `rejected` | `true` on a capacity rejection. |
@@ -69,6 +71,8 @@ Each original completion request and its retries share one terminal row.
 | `upstream_seconds` | Summed HTTP leg seconds per phase (`prefill`, `decode`) across every attempt, failed or successful. |
 | `error` | Error detail on `failed`, `refused`, `rejected`, `expired`, and `invalid` rows. |
 
+These conditions set a field to `0` or null:
+
 | Condition | Field values |
 | --- | --- |
 | `input_sized` is false | `input_len` is `0`. |
@@ -77,6 +81,29 @@ Each original completion request and its retries share one terminal row.
 | Prefill incomplete | `ttft_s` and `tpot_s` are null. |
 | Zero visible output | `first_byte_s` is null. |
 | `terminal` is `completed` or `cancelled` | `error` is null. |
+
+`cached_tokens` lists each engine that input sizing finds holding at least one leading prompt block before the final prompt token. A prefill-placement recheck drops a listed engine when it finds zero matching blocks on it.
+
+`cached_tokens` is empty when:
+
+- the request sets `truncate_prompt_tokens`, `documents`, or `reasoning_effort`
+- a chat message carries a multimodal content part
+- `engine_contract.speculative_config` names a speculative-decoding setup
+- the fleet leaves `engine_contract` unset
+- input sizing uses the local estimate or a count-only tokenization response
+
+#### Cache placement
+
+`cache_placement` is null when `cached_tokens` is empty or the placed engine is outside the profile store. Otherwise it carries these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `placed_iid` | Engine chosen for the prefill leg. |
+| `placed_cached_tokens` | The chosen engine's `cached_tokens` entry. |
+| `evidence_sequence` | Sidecar residency sequence behind the cached count. |
+| `predicted_prefill_s` | Prefill seconds priced on the chosen engine. |
+| `cold_prefill_s` | Cold prefill seconds for the full input on the chosen engine. |
+| `cold_choice_iid` | Engine that cold pricing chooses among the same placement candidates. |
 
 #### Refusal causes
 
@@ -87,8 +114,11 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget. |
 | `queue` | The prompt alone fits the TTFT budget, and the cheapest placement including queueing exceeds it. |
 | `aggregate_unpriced` | Every candidate engine carries decode work. |
+| `decode` | Peak projected decode work over the request's decode window exceeds live decode capacity, or decode load pushes the request past `slo.tpot_s`. |
 
 #### Attempt failures
+
+Each `attempt_failures` entry carries these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -103,25 +133,17 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `retry_reason` | `allowed`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. |
 | `backoff_s` | Scheduled backoff seconds. |
 
-| Property | Value |
-| --- | --- |
-| Entry limit | At most `serving.max_attempts`. |
-| Cancellation during backoff | The last entry keeps `retry_scheduled: true`. |
+`attempt_failures` holds at most `serving.max_attempts` entries. After a cancellation during backoff, the last entry keeps `retry_scheduled: true`.
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 
-### Separate transfer and decode queueing
+### Separating transfer and decode queueing
 
-For requests whose first byte follows prefill:
-
-| Request | `first_byte_s - ttft_s` contains |
-| --- | --- |
-| Crossed | KV transfer plus decode queueing. |
-| Locally decoded | Decode queueing. |
+For a crossed request whose first byte follows prefill, `first_byte_s - ttft_s` contains KV transfer plus decode queueing. For a locally decoded request, it contains decode queueing.
 
 ## Attainment accounting
 
-Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
+Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
 
 An offer passes when the client received a completed response within the applicable limits.
 
@@ -146,6 +168,8 @@ Accept deployments on the client's all-offer score.
 
 ## Journal events
 
+Each router event row carries an `at` timestamp, in Unix wall-clock seconds for `engine_lifecycle` and on the router monotonic clock for every other event.
+
 | `event` | Written when | Fields beside `at` |
 | --- | --- | --- |
 | `below_floor` | Live prefill engines fall below `min_prefill`. | `live_prefill`, `min_prefill`, `ejected`, `quarantined` |
@@ -157,15 +181,12 @@ Accept deployments on the client's all-offer score.
 | `monitoring_degraded` | Consecutive failed monitoring passes reach `controller.monitor_failure_limit`. | `stage`, `class`, `core_consecutive` |
 | `monitoring_recovered` | A fully successful monitoring pass clears degraded state. | |
 
-| Event | `at` clock |
-| --- | --- |
-| `engine_lifecycle` | Unix wall-clock seconds |
-| Every other event | Router monotonic clock |
-
 A failed profile-generation check during a health or inference recovery probe:
 
 - ejects the engine
 - writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
+
+That event carries these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -173,4 +194,4 @@ A failed profile-generation check during a health or inference recovery probe:
 | `error` | Failed checks. |
 | `at` | Unix wall-clock seconds. |
 
-Inspect the engine's [profile generation evidence](02-Profiles.md#validate-the-engine-cost-model) before retrying recovery.
+Inspect the engine's [profile generation evidence](02-Profiles.md#validating-the-engine-cost-model) before retrying recovery.

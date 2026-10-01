@@ -14,12 +14,15 @@ from narwhal.contracts import ATTESTATION, versioned
 from narwhal.engines.attestation import (
     AttestationDocument,
     EngineIdentity,
+    _payload_digest,
     build_app,
     fetch_engine_identity,
+    launch_digest,
     make_attestation,
     parse_process_start,
     verify_attestation,
 )
+from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.residency import ResidencyIndex
 from tests.fixtures import ROOT
 
@@ -49,6 +52,36 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 for p in verify_attestation(payload, changed, self.identity)
             )
         )
+
+    def test_launch_evidence_is_signed_and_verified(self):
+        """A launch digest covers the contract and launch; tampering fails verification."""
+        launched = replace(self.document, launch={"args": ["--max-num-seqs", "64"]})
+        payload = make_attestation(launched, self.identity)
+        self.assertEqual(
+            payload["launch_digest"], launch_digest(self.contract.fields(), launched.launch)
+        )
+        self.assertEqual(verify_attestation(payload, self.contract, self.identity), [])
+        restarted = make_attestation(
+            launched, replace(self.identity, process_start_time_seconds=101)
+        )
+        self.assertEqual(restarted["launch_digest"], payload["launch_digest"])
+        self.assertNotEqual(restarted["attestation_digest"], payload["attestation_digest"])
+        tampered = copy.deepcopy(payload)
+        tampered["launch"]["args"] = ["--max-num-seqs", "32"]
+        tampered["attestation_digest"] = _payload_digest(tampered)
+        self.assertIn(
+            "launch_digest does not match the launch evidence",
+            verify_attestation(tampered, self.contract, self.identity),
+        )
+        unpaired = {k: v for k, v in payload.items() if k != "launch_digest"}
+        unpaired["attestation_digest"] = _payload_digest(unpaired)
+        self.assertIn(
+            "launch and launch_digest must appear together",
+            verify_attestation(unpaired, self.contract, self.identity),
+        )
+        legacy = make_attestation(self.document, self.identity)
+        self.assertNotIn("launch_digest", legacy)
+        self.assertEqual(verify_attestation(legacy, self.contract, self.identity), [])
 
     def test_tampering_and_response_shapes_report_failures(self):
         """Checksum and structural errors remain visible to preflight."""
@@ -186,3 +219,38 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await cold.get("/v1/residency")).status_code, 404)
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
+
+    async def test_residency_events_report_the_state_of_their_changes(self):
+        """A loss after the change read leaves the events body describing those changes."""
+
+        def handle(request):
+            if request.url.path == "/version":
+                return httpx.Response(200, json={"version": self.identity.vllm_version})
+            return httpx.Response(200, text="process_start_time_seconds 100\n")
+
+        index = ResidencyIndex("model", self.document.contract.fingerprint())
+        index.apply(0, [])
+        index.apply(1, [StoredBlocks((1,), None, (0, 1, 2, 3), 4)])
+        read = index.changes_after
+
+        def changes_after(after):
+            result = read(after)
+            index.lose("cache-event subscription failed")
+            return result
+
+        index.changes_after = changes_after
+        app = build_app(
+            self.document,
+            "http://engine",
+            self.identity,
+            transport=httpx.MockTransport(handle),
+            residency=index,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://sidecar"
+        ) as client:
+            events = (await client.get("/v1/residency/events", params={"after": 0})).json()
+        self.assertEqual(
+            (events["sequence"], events["block_size"], events["reason"], len(events["changes"])),
+            (1, 4, "complete event history", 1),
+        )

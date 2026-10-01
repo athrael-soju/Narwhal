@@ -34,6 +34,7 @@ from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
+from narwhal.types import Role
 from tests.fixtures import fleet, profile
 
 
@@ -47,6 +48,58 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         output = redirect_stdout(io.StringIO())
         output.__enter__()
         self.addCleanup(output.__exit__, None, None, None)
+
+    async def test_colocated_kv_engines_warn_about_individual_restarts(self):
+        """A host peer without attested release or another producer keeps the warning."""
+        self.assertEqual(await check.colocated_restart_risk(self.cfg), "")
+        third = replace(self.cfg.engines[0], iid="e9")
+        released: dict[int, bool] = {}
+
+        def colocate(engines):
+            for index, spec in enumerate(engines):
+                released.setdefault(8300 + index, True)
+                yield replace(
+                    spec,
+                    url=f"http://node-a.invalid:{8200 + index}",
+                    attestation_url=f"http://node-a.invalid:{8300 + index}/v1/attestation",
+                )
+
+        def respond(request):
+            return httpx.Response(
+                200, json={"launch": {"peer_release": released[request.url.port]}}
+            )
+
+        def unreachable(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        attested = httpx.MockTransport(respond)
+        pair = list(colocate(self.cfg.engines))
+        self.cfg.engines = pair
+        released[8300] = False
+        risk = await check.colocated_restart_risk(self.cfg, attested)
+        self.assertIn("engines e3 share a host with a KV consumer without attested peer", risk)
+        self.assertIn("e0, e3 share a host with a KV consumer that has no other producer", risk)
+        self.assertIn("whole-wave restart", risk)
+        released[8300] = True
+        risk = await check.colocated_restart_risk(self.cfg, attested)
+        self.assertNotIn("without attested peer release", risk)
+        self.assertIn("e0, e3 share a host with a KV consumer that has no other producer", risk)
+        self.cfg.engines = list(colocate([*pair, third]))
+        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
+        released[8301] = False
+        risk = await check.colocated_restart_risk(self.cfg, attested)
+        self.assertIn("engines e0, e9 share a host with a KV consumer without attested peer", risk)
+        released[8301] = True
+        pinned = [replace(spec, pin=True) for spec in self.cfg.engines]
+        pinned[2] = replace(pinned[2], role=Role.DECODE)
+        self.cfg.engines = pinned
+        risk = await check.colocated_restart_risk(self.cfg, attested)
+        self.assertIn("engines e0 share a host with a KV consumer that has no other producer", risk)
+        self.cfg.engines = list(colocate([*pair, third]))
+        risk = await check.colocated_restart_risk(self.cfg, httpx.MockTransport(unreachable))
+        self.assertIn("engines e0, e3, e9 share a host with a KV consumer without attested", risk)
+        self.cfg.engine_restart_policy = "whole_wave"
+        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
 
     async def test_reach_and_tokenize_account_for_unreachable_engines(self):
         """Failed health checks remove engines from subsequent exact-count probes."""

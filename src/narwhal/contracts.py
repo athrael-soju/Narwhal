@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,12 @@ def versioned(name: str, body: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"{name} body cannot replace {fields}")
     spec = _contract(name)
     return {"schema": spec.schema, "schema_version": spec.current, **body}
+
+
+def canonical_digest(value: Any) -> str:
+    """Return the SHA-256 digest of `value` serialized as sorted, compact JSON."""
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + sha256(raw).hexdigest()
 
 
 def validate_document(document: Any, name: str) -> int:

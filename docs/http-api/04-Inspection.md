@@ -75,12 +75,7 @@ The earliest matching row sets `reason`:
 | Pending engine identity validation  | `engine identity validation pending`                                                           |
 | Zero engines eligible for placement | `no available engines`                                                                         |
 
-`monitoring.degraded` transitions:
-
-| Transition | Condition                                                    |
-| ---------- | ------------------------------------------------------------ |
-| To `true`  | `controller.monitor_failure_limit` consecutive failed passes |
-| To `false` | One fully successful pass                                    |
+`monitoring.degraded` turns `true` after `controller.monitor_failure_limit` consecutive failed passes. One fully successful pass sets it back to `false`.
 
 A standby router counts each `control_ready: false` response from the active router's `/ready` as a missed takeover probe.
 
@@ -96,7 +91,7 @@ With zero eligible engines, the response is:
 }
 ```
 
-During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
+During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave):
 
 - `/health` reports `maintenance`
 - `/ready` reports the lifecycle reason
@@ -104,4 +99,4 @@ During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-
 
 ## `GET /metrics`
 
-Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.
+Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.

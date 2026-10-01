@@ -2,13 +2,13 @@
 description: Measure UCX TCP and RDMA bandwidth on each directed host edge of a Narwhal fleet against its KV cache budget.
 ---
 
-# Gate D: Prove the transfer fabric against the serving cache
+# Gate D: Proving the transfer fabric against the serving cache
 
 Measure each directed host edge against its source cache group's budget while the fleet is idle.
 
-## Build the source budget
+## Building the source budget
 
-Initial trial parameters:
+The `calculate` command sizes the budget from these initial trial parameters:
 
 | Parameter                     | Value | `calculate` flag        |
 | ----------------------------- | :---: | ----------------------- |
@@ -107,7 +107,7 @@ max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) *
 headroom / 1e9
 ```
 
-## Bind each sample to a directed route
+## Binding each sample to a directed route
 
 Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
@@ -140,7 +140,7 @@ Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 6. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source.
 7. Confirm that each route selects `NARWHAL_FABRIC_INTERFACE` and the discovered source address.
 
-## Measure `ucx_tcp`
+## Measuring `ucx_tcp`
 
 1. Install `iperf3` on each host that is missing it:
 
@@ -194,14 +194,9 @@ Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 | 1                       | The measured rate is below the budget.                       |
 | 2                       | An input file is invalid, or the output file already exists. |
 
-## Measure `ucx_rdma`
+## Measuring `ucx_rdma`
 
-The test measures one-way RDMA writes between host-memory buffers.
-
-| Fabric                              | GID selection                                             |
-| ----------------------------------- | --------------------------------------------------------- |
-| RDMA over Converged Ethernet (RoCE) | A global identifier (GID) index, selected in steps 4 to 7 |
-| Native InfiniBand                   | The site's active port and GID selection                  |
+The test measures one-way RDMA writes between host-memory buffers. On RDMA over Converged Ethernet (RoCE), steps 4 to 7 select a global identifier (GID) index. On native InfiniBand, use the site's active port and GID selection.
 
 1. Install `perftest` on each host that is missing it:
 
@@ -273,12 +268,9 @@ The test measures one-way RDMA writes between host-memory buffers.
 14. For multi-rail deployments, test every selected HCA port.
 15. Retain every report.
 
-## Complete the matrix and match retained evidence
+## Completing the matrix and matching retained evidence
 
-| KV handoff           | Qualified by                                                      |
-| -------------------- | ----------------------------------------------------------------- |
-| Between engine hosts | This matrix                                                       |
-| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight) |
+This matrix qualifies KV handoffs between engine hosts. The [Gate F preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
 
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
@@ -303,12 +295,7 @@ Link inputs:
 - The utility version
 - The measurement parameters
 
-| Link inputs   | Action                         |
-| ------------- | ------------------------------ |
-| Any changed   | Collect a new directed sample. |
-| All identical | Reuse the retained sample.     |
-
-Reuse a retained sample:
+When any link input changes, collect a new directed sample. When all link inputs are identical, reuse the retained sample:
 
 1. Set `CURRENT_EDGE_PREFIX` to the current link record prefix.
 2. Set `RETAINED_EDGE_PREFIX` to the retained evidence prefix.
@@ -324,12 +311,7 @@ Reuse a retained sample:
       --out "$CURRENT_EDGE_PREFIX.comparison.json"
     ```
 
-`--sample` value by transport:
-
-| Transport  | `--sample` value           |
-| ---------- | -------------------------- |
-| `ucx_tcp`  | The retained `iperf3` JSON |
-| `ucx_rdma` | The retained `.txt` report |
+For `ucx_tcp`, `--sample` takes the retained `iperf3` JSON. For `ucx_rdma`, it takes the retained `.txt` report.
 
 | `reuse-edge` exit code | Meaning                                                                                 |
 | :--------------------: | --------------------------------------------------------------------------------------- |
@@ -337,7 +319,7 @@ Reuse a retained sample:
 | 1                      | The retained sample is below the recalculated budget.                                   |
 | 2                      | The current link fingerprint or the retained sample differs from the recorded evidence. |
 
-## Troubleshoot an edge below its budget
+## Troubleshooting an edge below its budget
 
 When `record-edge` or `reuse-edge` exits 1:
 
@@ -345,4 +327,4 @@ When `record-edge` or `reuse-edge` exits 1:
 2. Fix the cause.
 3. Resample the directed edge until `record-edge` exits 0.
 
-[![Next: Gate E: Attest the live engine processes](https://img.shields.io/badge/next-Gate%20E%3A%20Attest%20the%20live%20engine%20processes-0f766e)](05-Attest.md)
+[![Next: Gate E: Attesting the live engines](https://img.shields.io/badge/next-Gate%20E%3A%20Attesting%20the%20live%20engines-0f766e)](05-Attest.md)

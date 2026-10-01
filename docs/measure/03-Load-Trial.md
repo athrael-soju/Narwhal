@@ -4,9 +4,9 @@ description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen 
 
 # Synthetic load trial
 
-## 7. Run the synthetic deployment trial
+## 7. Running the synthetic deployment trial
 
-1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
+1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
 2. Confirm that the 0.5 request/s rate passes.
 3. Wait for the router to drain.
 4. Send the same 200 requests at 1 request/s.
@@ -25,10 +25,10 @@ HTTP refusals, stream errors, timeouts, and scheduling misses count in the 200-o
 - The workload fits the accepted profile domain.
 - The workload fits the engine context limit.
 - All router traffic is trial traffic.
-- Each engine is [launched](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
+- Each engine is [launched](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
 - `checked.json` shows `"prefix_caching": false`.
 
-### Create the trial directory and workload
+### Creating the trial directory and workload
 
 ```bash
 make setup
@@ -48,15 +48,9 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
   --out "$TRIAL_DIR/workload"
 ```
 
-`prepare` writes `seed-response.json` and `workload.json` under `workload/`:
+`prepare` writes `seed-response.json` and `workload.json` under `workload/`. The workload uses the single served model from the router's `/v1/models`. Its seed request is one unscored 32-token completion from a fixed public seed prompt.
 
-| Item              | Value                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| Model             | The single served model from the router's `/v1/models`                                                          |
-| Seed request      | One unscored 32-token completion from a fixed public seed prompt                                                |
-| Token pool        | The returned prompt token IDs when they contain two or more distinct IDs, otherwise the 32 generated output IDs |
-| Preparation error | Fewer than two distinct IDs in the pool                                                                         |
-| Request `n`       | 8,192 input IDs drawn from the pool with `seed + n`                                                             |
+The token pool holds the seed request's returned prompt token IDs when they contain two or more distinct IDs, otherwise its 32 generated output IDs. Request `n` draws 8,192 input IDs from the pool with `seed + n`. Preparation fails when the pool holds fewer than two distinct IDs.
 
 Request parameters for both rates:
 
@@ -78,16 +72,15 @@ Each run manifest records:
 - httpx version
 - every command-line setting, including the client limits
 
-| Client limit        | Flag             | Default |
-| ------------------- | ---------------- | :-----: |
-| Concurrent requests | `--max-inflight` | 64      |
-| Scheduling lag      | `--max-lag`      | 0.05 s  |
+The client limits concurrent requests with `--max-inflight` (default 64) and scheduling lag with `--max-lag` (default 0.05 s).
 
 An offer over either limit becomes a terminal `client_schedule_miss` record with `client_schedule_valid: false` in the summary.
 
 Check client CPU and scheduling lag before raising either limit.
 
-## 8. Measure 0.5 request/s
+## 8. Measuring 0.5 request/s
+
+Run the first rate:
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -101,6 +94,8 @@ Check client CPU and scheduling lag before raising either limit.
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
+`load_trial.py run` exits with one of these codes:
+
 | Exit  | Meaning                                                | Required action                                          |
 | :---: | ------------------------------------------------------ | -------------------------------------------------------- |
 | `0`   | Schedule validity and candidate attainment both passed | Drain the router                                         |
@@ -108,14 +103,15 @@ Check client CPU and scheduling lag before raising either limit.
 | `2`   | Candidate attainment or client scheduling missed       | Inspect `client_schedule_valid` in `summary.json`        |
 | `130` | Interrupted run with partial artifacts                 | Keep the partial output and rerun into a new `--out` path |
 
-For exit code `2`:
+After exit code `2`, a `client_schedule_valid` value of `true` means the rate missed the attainment target. Keep the result and stop.
 
-| `client_schedule_valid` | Meaning                               | Required action                                                                   |
-| ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| `true`                  | The rate missed the attainment target | Keep the result and stop                                                          |
-| `false`                 | Client scheduling missed              | 1. Inspect `requests.jsonl`.<br>2. Repair client scheduling.<br>3. Repeat the rate. |
+A `client_schedule_valid` value of `false` means client scheduling missed:
 
-## 9. Measure 1 request/s
+1. Inspect `requests.jsonl`.
+2. Repair client scheduling.
+3. Repeat the rate.
+
+## 9. Measuring 1 request/s
 
 The router has drained when `/narwhal/state` reports zero for:
 

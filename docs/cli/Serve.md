@@ -6,6 +6,8 @@ description: Serving options, standby takeover and lease fencing for the narwhal
 
 Start a router: `narwhal-serve --fleet PATH`.
 
+`narwhal-serve` exits with these statuses:
+
 | Condition | Exit status |
 | --- | :--: |
 | `--host` and `--port` fail the bind check | `1` |
@@ -36,7 +38,7 @@ Takeover with `--standby-of URL` requires both:
 - `--standby-takeover-after` consecutive polls have failed.
 - The shared lease has expired.
 
-Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#4-start-a-router-pair).
+Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#4-starting-a-router-pair).
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |

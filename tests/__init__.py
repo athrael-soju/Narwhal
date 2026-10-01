@@ -8,7 +8,7 @@ from pathlib import Path
 import narwhal.deployment.launch_engine as _launcher
 import tools.deployment.launch_engine as _tool_launcher
 
-# Keep cache-event socket directories from test launch plans out of the shared /tmp root.
+# Per-run cache-event socket root for test launch plans.
 _KV_EVENTS_ROOT = Path(tempfile.mkdtemp(prefix="narwhal-test-"))
 atexit.register(shutil.rmtree, _KV_EVENTS_ROOT, True)
 for _module in (_launcher, _tool_launcher):

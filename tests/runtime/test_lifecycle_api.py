@@ -86,6 +86,42 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e0", self.router.scheduler.draining)
         self.assertIsNone(self.router.lifecycle.records["e0"].old_process_start)
 
+    async def test_wave_drain_keeps_a_stopped_members_last_verified_identity(self):
+        """An ejected member whose process already stopped drains with its last verified start."""
+        self.router.lifecycle.process_starts["e3"] = 90
+        self.router.scheduler.eject("e3")
+        with patch.object(
+            serving_app,
+            "capture_process_identities",
+            new=AsyncMock(
+                return_value=({"e0": 100}, {"e3": "process identity unreadable: ConnectError"})
+            ),
+        ):
+            response = await self.client.post("/narwhal/lifecycle/drain", json={"wave": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.router.lifecycle.records["e3"].old_process_start, 90)
+        self.assertEqual(self.router.lifecycle.records["e0"].old_process_start, 100)
+        with patch.object(
+            serving_app,
+            "validate_readmission",
+            new=AsyncMock(return_value=ValidationOutcome(starts={"e0": 101, "e3": 102})),
+        ):
+            response = await self.client.post("/narwhal/lifecycle/readmit", json={"wave": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.router.scheduler.draining, set())
+
+    async def test_unverified_stopped_member_still_blocks_the_drain(self):
+        """Without a verified identity, an ejected member's capture failure still holds it."""
+        self.router.scheduler.eject("e0")
+        with patch.object(
+            serving_app,
+            "capture_process_identities",
+            new=AsyncMock(return_value=({}, {"e0": "process identity unreadable: ConnectError"})),
+        ):
+            response = await self.client.post("/narwhal/lifecycle/drain", json={"engines": ["e0"]})
+        self.assertEqual(response.status_code, 503)
+        self.assertIsNone(self.router.lifecycle.records["e0"].old_process_start)
+
     async def test_fencing_during_capture_retains_captured_identity_and_hold(self):
         """Ownership loss after capture persists the hold before returning unavailable."""
 

@@ -8,35 +8,37 @@ description: TTFT-based admission, streaming and token accounting for Narwhal co
 
 The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_margin)`.
 
-| Condition                                                                                                              |  HTTP | Error `type`                                       | `Retry-After`                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | :---: | -------------------------------------------------- | -------------------------------------------------- |
-| Malformed JSON or a wrong type in a field the router reads                                                             | `400` | `invalid_request_error` with the field in `param`  |                                                    |
-| Requested model differs from the configured model                                                                      | `404` | `invalid_request_error`, code `model_not_found`    |                                                    |
-| `n > 1` or `best_of > 1`                                                                                               | `400` | `invalid_request_error`                            |                                                    |
-| Unsupported non-streaming audio, modality, or tool request                                                             | `400` | `invalid_request_error` with the option in `param` |                                                    |
-| Request exceeds `serving.max_request_bytes`                                                                            | `413` | `request_too_large`                                |                                                    |
-| HTTP retention limit is full                                                                                           | `429` | `server_overloaded_error`                          | `1`                                                |
-| Admission queue is full                                                                                                | `429` | `server_overloaded_error`                          | `1`                                                |
-| Admission wait expires before response headers                                                                         | `504` | `queue_expired`                                    |                                                    |
-| Original request deadline expires before response headers                                                              | `504` | `request_expired` or `expired`                     |                                                    |
-| Projected TTFT exceeds the budget for a prompt that fits alone                                                         | `429` | `server_overloaded_error`                          | Budget overrun in seconds, rounded up, minimum `1` |
-| Prompt alone exceeds the TTFT budget                                                                                   | `429` | `server_overloaded_error`                          |                                                    |
-| Zero prefill engines are live and the decode target holds resident decode work                                         | `429` | `server_overloaded_error`                          | `1`                                                |
-| Zero engines are eligible for placement                                                                                | `503` | `backend_unavailable` or `no_schedulable_engines`  | `1`                                                |
-| Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring | `503` | `standby`                                          | `1`                                                |
+| Condition                                                                                                                    |  HTTP | Error `type`                                         | `Retry-After`                                      |
+| ---------------------------------------------------------------------------------------------------------------------------- | :---: | ---------------------------------------------------- | -------------------------------------------------- |
+| Malformed JSON or a wrong type in a field the router reads                                                                   | `400` | `invalid_request_error` with the field in `param`    |                                                    |
+| `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`                                      | `400` | `invalid_request_error` with `vllm_xargs` in `param` |                                                    |
+| Requested model differs from the configured model                                                                            | `404` | `invalid_request_error`, code `model_not_found`      |                                                    |
+| `n > 1` or `best_of > 1`                                                                                                     | `400` | `invalid_request_error`                              |                                                    |
+| Unsupported non-streaming audio, modality, or tool request                                                                   | `400` | `invalid_request_error` with the option in `param`   |                                                    |
+| Request exceeds `serving.max_request_bytes`                                                                                  | `413` | `request_too_large`                                  |                                                    |
+| HTTP retention limit is full                                                                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
+| Router event-loop lag reaches a quarter of `slo.ttft_s`                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
+| Median token-counting and prefix-hashing time of at least 8 requests in the last 2 seconds reaches a quarter of `slo.ttft_s` | `429` | `server_overloaded_error`                            | `1`                                                |
+| Admission queue is full                                                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
+| Admission wait expires before response headers                                                                               | `504` | `queue_expired`                                      |                                                    |
+| Original request deadline expires before response headers                                                                    | `504` | `request_expired` or `expired`                       |                                                    |
+| Projected TTFT exceeds the budget for a prompt that fits alone                                                               | `429` | `server_overloaded_error`                            | Budget overrun in seconds, rounded up, minimum `1` |
+| Prompt alone exceeds the TTFT budget                                                                                         | `429` | `server_overloaded_error`                            |                                                    |
+| Zero prefill engines are live and the decode target holds resident decode work                                               | `429` | `server_overloaded_error`                            | `1`                                                |
+| Peak projected decode work over the request's decode window exceeds live decode capacity                                     | `429` | `server_overloaded_error`                            | `1`                                                |
+| Decode load pushes the request past `slo.tpot_s` on every live decode engine                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
+| Zero live engines can take the request's prefill or decode leg                                                                                      | `503` | `backend_unavailable` or `no_schedulable_engines`    | `1`                                                |
+| Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring       | `503` | `standby`                                            | `1`                                                |
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 `/ready` reports the reason for each `503` refusal.
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) modes:
-
-| Mode                   | Enforced                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| `predictive` (default) | Predictive TTFT checks and the HTTP retention, queue, and phase-concurrency limits |
-| `open`                 | HTTP retention, queue, and phase-concurrency limits                                |
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks and the HTTP retention, queue, and phase-concurrency limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit.
 
 ### Admission counters
+
+The router keeps these admission counters:
 
 | Counter            | Increments on                                                      |
 | ------------------ | ------------------------------------------------------------------ |
@@ -77,13 +79,9 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembled responses carry the engine's response metadata and these derived fields:
+Assembled responses carry the engine's response metadata. `finish_reason` and `stop_reason` come from the last choice that reports each.
 
-| Field                             | Source                                                      |
-| --------------------------------- | ----------------------------------------------------------- |
-| `finish_reason`, `stop_reason`    | Last choice that reports each                               |
-| `usage`                           | Non-null engine `usage`, including a later usage-only frame |
-| `usage`, when the engine omits it | Computed from input length and measured output token count  |
+`usage` carries the non-null engine `usage`, including one from a later usage-only frame. When the engine omits `usage`, the router computes it from the input length and the measured output token count.
 
 ## Token identity and output accounting
 
@@ -96,18 +94,8 @@ Decode requests to supporting engines include:
 }
 ```
 
-Every event with text, reasoning, tool calls, or refusals carries a token-ID list:
+Every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-| Token-ID list                                | Result                                        |
-| -------------------------------------------- | --------------------------------------------- |
-| Nonnegative integers                         | Accepted                                      |
-| Missing or malformed, including a Boolean ID | Decode attempt or profiling measurement fails |
-
-`token_accounting` by engine:
-
-| Engine             | Router reports                  |
-| ------------------ | ------------------------------- |
-| Supplies token IDs | `token_accounting: token_ids`   |
-| Omits token IDs    | `token_accounting: unavailable` |
+The router reports `token_accounting: token_ids` for an engine that supplies token IDs. For an engine that omits them, it reports `token_accounting: unavailable`.
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses.

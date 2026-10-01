@@ -30,14 +30,9 @@ NARWHAL_ENGINE_PORT
 NARWHAL_ATTEST_PORT
 ```
 
-Discovery writes these values to `config/deployment.env` for each engine `<n>`:
+For each engine `<n>`, discovery writes `NARWHAL_NODE_<n>_IP` to `config/deployment.env` with the unique global address of the chosen interface. It writes `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` as URLs on that address, with brackets around IPv6 hosts.
 
-| Variable                                                      | Value                                                 |
-| ------------------------------------------------------------- | ----------------------------------------------------- |
-| `NARWHAL_NODE_<n>_IP`                                         | Unique global address of the chosen interface         |
-| `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL` | URLs on that address, with brackets around IPv6 hosts |
-
-Per-node overrides:
+Set a per-node override for each of these conditions:
 
 | Condition                                              | Set                                                                                                   |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
@@ -59,12 +54,7 @@ The generated fleet references the derived variables:
 
 Discovery needs at least two engines with the same accelerator product, GPU count, and tensor parallel (TP) size.
 
-Discovery adds one fleet record per engine:
-
-| Engine                | Initial role |
-| --------------------- | ------------ |
-| First engine          | Prefill      |
-| Each remaining engine | Decode       |
+Discovery adds one fleet record per engine. The first engine starts in the prefill role, and each remaining engine starts in decode.
 
 A single-engine fleet is valid in the fleet schema, with both [role floors](02-Serving-and-Role-Control.md#72-role-floors) at `1`.
 
@@ -101,6 +91,8 @@ To change GPU allocation or runtime policy:
 
 ### 15.1 Allocation and transport fields
 
+Each launch record holds these allocation and transport fields:
+
 | Field                  | Deployment meaning                                                                                             |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `accelerator`          | Product identity to compare against host inspection and fleet hardware fields.                                 |
@@ -112,14 +104,16 @@ To change GPU allocation or runtime policy:
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                       |
 | `transfer.net_devices` | Ethernet interface names for TCP, or HCA:port names for RDMA.                                                  |
 | `transfer.devices`     | Transport device paths mapped into the container, required for RDMA.                                           |
+| `transfer.gpu_tls`     | UCX GPU transport, `cuda` (default) or `cuda_copy` on CUDA, and `rocm` on ROCm.                                |
 | `sources`              | Allocation, device, transfer, and runtime definitions that produced the record.                                |
 
-`deploy_hosts.py prepare` derives these record values:
+`deploy_hosts.py prepare` derives GPU visibility and `UCX_NET_DEVICES` in the record's `environment`, and `--tensor-parallel-size` with the record's TP size in `vllm_args`.
 
-| Record section | Derived value                                      |
-| -------------- | -------------------------------------------------- |
-| `environment`  | GPU visibility and `UCX_NET_DEVICES`               |
-| `vllm_args`    | `--tensor-parallel-size` with the record's TP size |
+A CUDA engine with dedicated GPUs, colocated with other such engines on its host, exports its `gpu_ids` followed by the GPUs of those engines as its GPU visibility. A shared-device engine exports its single GPU, and every other engine exports its `gpu_ids`.
+
+Colocated CUDA engines with dedicated GPUs run on their allocated GPUs. With `transfer.gpu_tls` set to `cuda`, they transfer KV to each other through CUDA IPC. Under the container backend, their containers share the host PID namespace.
+
+For [CUDA IPC engines](../concepts/03-Failure-and-State.md#peer-memory-release), colocated with dedicated GPUs or sharing a device, with `transfer.gpu_tls` set to `cuda`, `UCX_CUDA_IPC_CACHE` takes the `runtime.environment` value, otherwise the UCX default. The vLLM NIXL `engine_ttl` for these engines is 60 seconds when `UCX_CUDA_IPC_CACHE` is `n`.
 
 `install` copies the selected launch record into the engine checkout's `config/` directory.
 
@@ -136,13 +130,7 @@ When preparation reports an error in an `.env` input or a remote prerequisite:
 
 Every generated engine record contains a `runtime` object that `launch_engine.py` reads.
 
-Discovery fills the `runtime` object from these sources:
-
-| Value                                                 | Source                                                                          |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Package pins and supported runtime-environment fields | Selected image                                                                  |
-| Model dtype                                           | Model config                                                                    |
-| Launch policy                                         | [Environment launch policy](../deploy/01-Discover.md#confirm-the-launch-policy) |
+Discovery fills the `runtime` object with package pins and supported runtime-environment fields from the selected image, the model dtype from the model config, and the launch policy from the [environment launch policy](../deploy/01-Discover.md#confirming-the-launch-policy).
 
 Operator input for each `runtime` field:
 
@@ -155,12 +143,9 @@ Operator input for each `runtime` field:
 | `environment`       | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_`, or `SAFETENSORS_` prefix. |
 | `extra_args`        | vLLM options from the `extra_args` allowlist.                                                                                                                        |
 
-The `extra_args` allowlist:
+The `extra_args` allowlist accepts these options with a value: `--max-model-len`, `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--max-num-seqs`, `--reasoning-parser`, `--attention-backend`, `--tokenizer`, `--hf-config-path`, `--load-format` and `--kv-events-config`.
 
-| Form             | Options                                                                                                                                                                                                                       |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Option and value | `--max-model-len`, `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--max-num-seqs`, `--reasoning-parser`, `--attention-backend`, `--tokenizer`, `--hf-config-path`, `--load-format`, `--kv-events-config`            |
-| Flag             | `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager`, `--no-disable-hybrid-kv-cache-manager`, `--enable-prefix-caching`, `--no-enable-prefix-caching` |
+It accepts these flags: `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager`, `--no-disable-hybrid-kv-cache-manager`, `--enable-prefix-caching` and `--no-enable-prefix-caching`.
 
 The launcher rejects every other `extra_args` option.
 
@@ -173,19 +158,9 @@ The launcher sets these values itself:
 | `NixlConnector` with `kv_both`, UCX, and failure propagation                               | Launcher         |
 | GPU visibility, advertised addresses and ports, transport selection, engine authentication | Launcher         |
 
-`runtime.environment` rejects these names:
+`runtime.environment` rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`. It also rejects names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
 
-| Group                       | Names                                                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Launcher-managed variables  | `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, `VLLM_API_KEY` |
-| Credential and access names | Names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH`, or `SKIP_COMPAT`                                                                                                               |
-
-Discovery derives these settings from checkpoint metadata:
-
-| Metadata condition                                                             | Derived setting                 | Value in `NARWHAL_ENGINE_ARGS` or `NARWHAL_ENGINE_ENV` |
-| ------------------------------------------------------------------------------ | ------------------------------- | ------------------------------------------------------ |
-| Checkpoint model or tokenizer metadata contains an `auto_map`                  | `--trust-remote-code`           | Added to the configured arguments                      |
-| Model metadata identifies convolutional state-space model (SSM) transfer state | `VLLM_SSM_CONV_STATE_LAYOUT=DS` | Any other layout value fails discovery                 |
+When the checkpoint model or tokenizer metadata contains an `auto_map`, discovery adds `--trust-remote-code` to the arguments configured in `NARWHAL_ENGINE_ARGS`. When model metadata identifies convolutional state-space model (SSM) transfer state, discovery sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`, and any other layout value in `NARWHAL_ENGINE_ENV` fails discovery.
 
 Checks that `narwhal-engine check` runs before model startup:
 
@@ -197,17 +172,26 @@ Checks that `narwhal-engine check` runs before model startup:
 - convolutional-state layout of the pinned image, for SSM models
 - resolution of the serving arguments into vLLM's engine configuration
 
-`checked.json` records the launch-plan hash, the container image ID, and these values:
+`checked.json` records these values:
 
-| Field              | Value                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------- |
-| `vllm_api_version` | Value of `vllm.version.__version__`                                                   |
-| `prefix_caching`   | `true` when the resolved engine configuration keeps prefix caching on                 |
-| `kv_events`        | The resolved event and replay endpoints, or `null` when cache-event publishing is off |
+| Field               | Value                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `plan_sha256`       | SHA-256 of `launch.json`                                                                           |
+| `vllm_api_version`  | Value of `vllm.version.__version__`                                                                |
+| `prefix_caching`    | `true` when the resolved engine configuration keeps prefix caching on                              |
+| `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off              |
+| `ucx_version`       | Version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
+| `peer_release`      | `true` when this engine releases a stopped peer's KV memory                                        |
+| `image_id`          | Local image ID, for the container backend                                                          |
+| `backend`           | `native`, for the native backend                                                                   |
+| `python_executable` | The launch plan's Python interpreter, for the native backend                                       |
+| `expected_packages` | The launch plan's pinned package versions, for the native backend                                  |
 
 The check fails when the resolved endpoints differ from `launch.json`.
 
-The [live HTTP process check](../deploy/03-Validate-Engines.md#prove-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
+With `peer_release: false`, the check prints a warning that this engine keeps a stopped peer's GPU memory mapped.
+
+The [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
 
 The image's NIXL connector must implement the fleet's required `kv_both` behavior.
 
@@ -217,37 +201,24 @@ Record the application revision, launcher digest, and container ID with each dep
 
 ### 16.1 Prefix caching and cache events
 
-| Condition                                                              | Prefix caching |
-| ---------------------------------------------------------------------- | -------------- |
-| vLLM default                                                           | On             |
-| `extra_args` contains vLLM's `--no-enable-prefix-caching`              | Off            |
-| vLLM's resolved engine configuration turns it off for the model        | Off            |
-| vLLM turns it off during model load, for some attention configurations | Off            |
+vLLM turns prefix caching on by default. Prefix caching is off when `extra_args` contains vLLM's `--no-enable-prefix-caching`, when vLLM's resolved engine configuration turns it off for the model, or when vLLM turns it off during model load for some attention configurations.
 
 An engine with prefix caching off publishes zero block events.
 
-With prefix caching on, vLLM publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`:
+With prefix caching on, vLLM publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. `events.sock` carries published event batches, each with a sequence number. `replay.sock` takes replay requests for batches held in vLLM's replay buffer.
 
-| Socket        | Use                                                      |
-| ------------- | -------------------------------------------------------- |
-| `events.sock` | Published event batches, each with a sequence number     |
-| `replay.sock` | Replay requests for batches held in vLLM's replay buffer |
+In the path, `<uid>` is the effective user ID of the launching user and `<plan name>` is `narwhal-engine-<n>-<12 hex>`.
 
-| Path part     | Value                                   |
-| ------------- | --------------------------------------- |
-| `<uid>`       | Effective user ID of the launching user |
-| `<plan name>` | `narwhal-engine-<n>-<12 hex>`           |
+Each socket directory has these properties:
 
-Socket directories:
+| Property        | Value                                                                              |
+| --------------- | ---------------------------------------------------------------------------------- |
+| Mode            | `0700`, for the launching user                                                     |
+| Created by      | Preparation, the check, and each engine start                                      |
+| Container mount | Plan directory at `/narwhal-kv-events`                                             |
+| Record          | `kv_events` in `launch.json`, with the host directory and the endpoints vLLM binds |
 
-| Property                  | Value                                                                              |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| Mode                      | `0700`, for the launching user                                                     |
-| Created by                | Preparation, the check, and each engine start                                      |
-| Container mount           | Plan directory at `/narwhal-kv-events`                                             |
-| Record                    | `kv_events` in `launch.json`, with the host directory and the endpoints vLLM binds |
-| Removal, native engine    | Stopping the engine removes its plan directory                                     |
-| Removal, container engine | Remove the directory after removing the container                                  |
+Stopping a native engine removes its plan directory. For a container engine, remove the directory after removing the container.
 
 Preparation, the check, and engine start fail when either directory belongs to another user or grants group or other access.
 

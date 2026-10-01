@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
@@ -48,7 +49,7 @@ _RECOVERY_EVIDENCE = ("health", "verification")
 
 
 class EngineAvailability:
-    """Own endpoint hold-outs and the evidence that permits readmission."""
+    """Endpoint hold-outs and the evidence that permits readmission."""
 
     def __init__(
         self,
@@ -58,8 +59,10 @@ class EngineAvailability:
         eject_after: int,
         on_change: Callable[[], None],
         on_eject: Callable[[str], None],
+        pinned: frozenset[str] = frozenset(),
     ) -> None:
         self.monitor = monitor
+        self.pinned = pinned
         self._clock = clock
         self.eject_after = eject_after
         self.refresh_floor_state = on_change
@@ -74,12 +77,9 @@ class EngineAvailability:
         self.inference_suspects: set[str] = set()
 
     def record_failure(self, iid: str, klass: str = LEG_CONNECTION) -> str | None:
-        """Record a failed leg and return its breaker verdict.
+        """Record a failed leg and return its breaker verdict, or None below `eject_after`.
 
-        Each class has its own consecutive streak. At `eject_after`, connection
-        failures eject directly; timeout and overload require health verification;
-        inference-status, KV-handoff and stream failures require inference
-        verification. Ejected engines remain eligible for recovery probes.
+        Each class keeps its own consecutive streak.
         """
         if klass not in _VERDICT_BY_CLASS:
             raise ValueError(f"unknown breaker class {klass!r}")
@@ -93,10 +93,9 @@ class EngineAvailability:
         return verdict
 
     def quarantine(self, iid: str, seconds: float) -> bool:
-        """Hold a just-failed engine out of scheduling for `seconds`.
+        """Hold a failed engine out of new placement for `seconds`; return whether it was held.
 
-        Hold failed engines out of new placement while health checks catch up.
-        Preserve one eligible engine for aggregate fallback.
+        An engine whose removal leaves its role unserved stays live.
         """
         if seconds <= 0 or iid in self.ejected:
             return False
@@ -105,15 +104,18 @@ class EngineAvailability:
             return False
         now = self._clock()
         self._sweep_quarantine(now)
-        if not self._can_hold_out(iid):
+        if not self.role_covered_without(iid):
             return False
         self.quarantined[iid] = max(self.quarantined.get(iid, 0.0), now + seconds)
-        log.info("quarantined %s for %.1fs after an engine fault", iid, seconds)
+        if math.isinf(seconds):
+            log.info("quarantined %s until inference verification", iid)
+        else:
+            log.info("quarantined %s for %.1fs after an engine fault", iid, seconds)
         self.refresh_floor_state()
         return True
 
     def _sweep_quarantine(self, now: float) -> None:
-        """Expirations are lazy: prune them wherever candidates are drawn."""
+        """Drop quarantines that expired by `now`."""
         for iid in [k for k, until in self.quarantined.items() if until <= now]:
             del self.quarantined[iid]
 
@@ -149,6 +151,7 @@ class EngineAvailability:
         if self.on_eject is not None:
             self.on_eject(iid)
         self.quarantined.pop(iid, None)
+        self._release_uncovered_holds()
         self.refresh_floor_state()
         return True
 
@@ -158,20 +161,44 @@ class EngineAvailability:
             raise KeyError(iid)
         self.draining.add(iid)
         self.quarantined.pop(iid, None)
+        self._release_uncovered_holds()
         self.refresh_floor_state()
+
+    def _release_uncovered_holds(self) -> None:
+        """Return held engines whose roles no other live engine places."""
+        for iid in list(self.quarantined):
+            if not self.role_covered_without(iid):
+                del self.quarantined[iid]
+                log.warning("released hold on %s: no other live engine places its roles", iid)
 
     def finish_drain(self, iid: str) -> None:
         """Return a validated engine to placement."""
         if iid not in self.monitor.instances:
             raise KeyError(iid)
         self.draining.discard(iid)
-        # Readmission validation exercised health and generation: the recovery
-        # evidence clears the inference classes and lifts hold-outs.
+        # Readmission validation counts as verification evidence.
         self.record_answer(iid, "verification")
 
-    def _can_hold_out(self, iid: str) -> bool:
-        """Return whether another engine can receive aggregate work."""
-        return bool(self.live_instances(exclude={iid}))
+    def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
+        """Return the engines in `instances` that hold `role`, else the unpinned ones."""
+        return [i for i in instances if i.role is role] or [
+            i for i in instances if i.iid not in self.pinned
+        ]
+
+    def role_covered_without(self, iid: str) -> bool:
+        """Return whether another live engine places every role that `iid` places.
+
+        An engine places a role's legs when it holds that role or is unpinned.
+        """
+        inst = self.monitor.instances.get(iid)
+        if inst is None:
+            return True
+        others = self.live_instances(exclude={iid})
+        return all(
+            self.role_pool(role, others)
+            for role in Role
+            if inst.role is role or iid not in self.pinned
+        )
 
     def record_answer(self, iid: str, evidence: str) -> None:
         """Clear failure streaks for the paths exercised by the answer.
@@ -196,13 +223,9 @@ class EngineAvailability:
         self.refresh_floor_state()
 
     def breaker_snapshot(self) -> dict[str, Any]:
-        """Per-engine breaker streaks and pending verifications.
+        """Return per-engine breaker streaks and pending verifications.
 
-        Every configured engine reports every class, zeros included, so the
-        state block and its metric series keep their labels through clean
-        stretches. The liveness class counts sweep misses beside the leg
-        classes. Streaks are session-local: the handoff carries only the
-        ejections they produced.
+        Every configured engine reports every class, zeros included.
         """
         streaks = {
             iid: {

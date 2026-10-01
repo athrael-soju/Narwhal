@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from typing import Any
+
+from .fitting import cached_features, split_step
 
 _FLOAT_FIELDS = (
     "ttft_a",
@@ -19,6 +21,12 @@ _FLOAT_FIELDS = (
     "decode_cv_mape",
     "colocated_prefill_rps",
     "colocated_decode_rps",
+    "ttft_split",
+    "cached_ttft_a",
+    "cached_ttft_b",
+    "cached_ttft_c",
+    "cached_ttft_d",
+    "cached_cv_mape",
 )
 
 
@@ -34,17 +42,28 @@ _INT_FIELDS = (
     "decode_max_output_tokens",
     "colocated_prefill_engines",
     "colocated_decode_engines",
+    "ttft_block_tokens",
+    "cached_min_prefix_tokens",
+    "cached_max_prefix_tokens",
+    "cached_min_suffix_tokens",
+    "cached_max_suffix_tokens",
 )
 
 
 _REQUIRED_FIELDS = ("iid", "ttft_a", "ttft_b", "ttft_c", "tpot_slope", "tpot_intercept")
 
 
-_OPTIONAL_FLOAT_FIELDS = (
-    "decode_fit_mape",
-    "decode_cv_mape",
-    "colocated_prefill_rps",
-    "colocated_decode_rps",
+# Fields a warm prefill fit sets together.
+CACHED_PROFILE_FIELDS = (
+    "cached_ttft_a",
+    "cached_ttft_b",
+    "cached_ttft_c",
+    "cached_ttft_d",
+    "cached_cv_mape",
+    "cached_min_prefix_tokens",
+    "cached_max_prefix_tokens",
+    "cached_min_suffix_tokens",
+    "cached_max_suffix_tokens",
 )
 
 
@@ -56,37 +75,10 @@ _DECODE_BOUNDS = (
 )
 
 
-_OPTIONAL_DEFAULTS: dict[str, Any] = {
-    "generation_digest": None,
-    "kv_capacity_tokens": None,
-    "tpot_request_slope": 0.0,
-    "decode_min_requests": None,
-    "decode_max_requests": None,
-    "decode_min_kv_tokens": None,
-    "decode_max_kv_tokens": None,
-    "decode_fit_mape": None,
-    "decode_cv_mape": None,
-    "prefill_min_tokens": None,
-    "prefill_max_tokens": None,
-    "decode_min_output_tokens": None,
-    "decode_max_output_tokens": None,
-    "colocated_group": None,
-    "colocated_target_role": None,
-    "colocated_prefill_engines": None,
-    "colocated_decode_engines": None,
-    "colocated_prefill_rps": None,
-    "colocated_decode_rps": None,
-}
-
-
-_FIELD_NAMES = frozenset(_REQUIRED_FIELDS) | frozenset(_OPTIONAL_DEFAULTS)
-
-
 def _check(raw: Mapping[str, Any], label: str) -> None:
     """Raise on the first contract violation in one profile row.
 
-    `raw` maps field name to value; absent optional fields take their dataclass
-    defaults. `label` names the engine when `iid` is valid, or the row's position otherwise.
+    Absent optional fields in `raw` take their dataclass defaults.
     """
     where = f"profile {label}"
     iid = raw.get("iid")
@@ -134,6 +126,8 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
         ("decode_min_kv_tokens", "decode_max_kv_tokens"),
         ("prefill_min_tokens", "prefill_max_tokens"),
         ("decode_min_output_tokens", "decode_max_output_tokens"),
+        ("cached_min_prefix_tokens", "cached_max_prefix_tokens"),
+        ("cached_min_suffix_tokens", "cached_max_suffix_tokens"),
     ):
         if lo in values and hi in values and values[lo] > values[hi]:
             raise ValueError(f"{where}: {lo} must not exceed {hi}")
@@ -146,6 +140,12 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
     for name in (*_DECODE_BOUNDS, "decode_fit_mape", "decode_cv_mape"):
         if name not in values:
             raise ValueError(f"{where}: {name} is required on a current profile")
+    if ("ttft_block_tokens" in values) != ("ttft_split" in values):
+        raise ValueError(f"{where}: ttft_block_tokens and ttft_split go together")
+    cached = [name for name in CACHED_PROFILE_FIELDS if name in values]
+    if cached and len(cached) != len(CACHED_PROFILE_FIELDS):
+        missing = sorted(set(CACHED_PROFILE_FIELDS) - set(cached))
+        raise ValueError(f"{where}: a cached prefill fit requires {', '.join(missing)}")
     group = raw.get("colocated_group")
     role = raw.get("colocated_target_role")
     mix = (raw.get("colocated_prefill_engines"), raw.get("colocated_decode_engines"))
@@ -194,6 +194,19 @@ class Profile:
     colocated_decode_engines: int | None = None
     colocated_prefill_rps: float | None = None
     colocated_decode_rps: float | None = None
+    # Cache block size and the extra prefill step for a prompt ending past the first block.
+    ttft_block_tokens: int | None = None
+    ttft_split: float | None = None
+    # Warm prefill c + b*S + d*P + a*(2*P*S + S*S) for P cached and S uncached tokens.
+    cached_ttft_a: float | None = None
+    cached_ttft_b: float | None = None
+    cached_ttft_c: float | None = None
+    cached_ttft_d: float | None = None
+    cached_cv_mape: float | None = None
+    cached_min_prefix_tokens: int | None = None
+    cached_max_prefix_tokens: int | None = None
+    cached_min_suffix_tokens: int | None = None
+    cached_max_suffix_tokens: int | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -204,21 +217,57 @@ class Profile:
         _check({f.name: getattr(self, f.name) for f in fields(self)}, label)
 
     def prefill_time(self, input_len: int) -> float:
-        """Predict prefill time for an input length."""
-        x = float(input_len)
-        return max(0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c)
+        """Predict prefill time for an input length, adding `ttft_split` when it splits.
 
-    def covers_prefill(self, input_len: int) -> bool:
-        """Return whether a prompt length was in the measured prefill sweep."""
-        return (self.prefill_min_tokens is None or input_len >= self.prefill_min_tokens) and (
-            self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
+        A prompt below the measured sweep is priced at the sweep's shortest length.
+        """
+        tokens = max(input_len, self.prefill_min_tokens or 0)
+        x = float(tokens)
+        return max(
+            0.0, self.ttft_a * x * x + self.ttft_b * x + self.ttft_c + self._split_step(tokens)
         )
 
+    def _split_step(self, tokens: int) -> float:
+        """Return `ttft_split` when `tokens` computed tokens end inside a block past the first."""
+        return split_step(tokens, self.ttft_split, self.ttft_block_tokens)
+
+    def cached_prefill_time(self, prefix_tokens: int, suffix_tokens: int) -> float | None:
+        """Predict prefill time with `prefix_tokens` cached; None outside the warm fit's domain.
+
+        A suffix that ends inside a block past its first adds `ttft_split`.
+        """
+        if prefix_tokens <= 0:
+            return self.prefill_time(suffix_tokens)
+        if (
+            self.cached_ttft_a is None
+            or self.cached_ttft_b is None
+            or self.cached_ttft_c is None
+            or self.cached_ttft_d is None
+            or self.cached_min_prefix_tokens is None
+            or self.cached_max_prefix_tokens is None
+            or self.cached_min_suffix_tokens is None
+            or self.cached_max_suffix_tokens is None
+            or not self.cached_min_prefix_tokens <= prefix_tokens <= self.cached_max_prefix_tokens
+            or not self.cached_min_suffix_tokens <= suffix_tokens <= self.cached_max_suffix_tokens
+        ):
+            return None
+        attention, suffix, _, prefix = cached_features(float(prefix_tokens), float(suffix_tokens))
+        return max(
+            0.0,
+            self.cached_ttft_a * attention
+            + self.cached_ttft_b * suffix
+            + self.cached_ttft_d * prefix
+            + self.cached_ttft_c
+            + self._split_step(suffix_tokens),
+        )
+
+    def covers_prefill(self, input_len: int) -> bool:
+        """Return whether a prompt length is at most the measured prefill sweep's longest."""
+        return self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
+
     def covers_output(self, output_len: float) -> bool:
-        """Return whether an output length was in the measured decode sweep."""
-        return (
-            self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
-        ) and (self.decode_max_output_tokens is None or output_len <= self.decode_max_output_tokens)
+        """Return whether an output length reaches the measured decode sweep's minimum."""
+        return self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
         """Predict one decode iteration from active requests and their KV tokens."""
@@ -230,10 +279,7 @@ class Profile:
         )
 
     def max_tokens(self, tpot_slo_s: float, batch_requests: float = 0.0) -> float:
-        """Return the largest decode batch that meets `tpot_slo_s`.
-
-        Inverts `token_interval` after charging the active-request term.
-        """
+        """Return the largest decode batch, in KV tokens, that meets `tpot_slo_s`."""
         if self.decode_max_requests is not None and batch_requests > self.decode_max_requests:
             return 0.0
         fixed = self.tpot_intercept + self.tpot_request_slope * float(batch_requests)
@@ -249,33 +295,29 @@ class Profile:
         return capacity
 
     def covers_decode(self, batch_requests: float, batch_tokens: float) -> bool:
-        """Return whether a decode point is inside the measured profile domain."""
-        if batch_requests <= 0 or batch_tokens <= 0:
-            return True
-        bounds = (
-            (self.decode_min_requests, self.decode_max_requests, batch_requests),
-            (self.decode_min_kv_tokens, self.decode_max_kv_tokens, batch_tokens),
-        )
-        return all(lo is None or lo <= value for lo, _, value in bounds) and all(
-            hi is None or value <= hi for _, hi, value in bounds
-        )
+        """Return whether a decode point is at most the measured profile domain's largest."""
+        requests = self.decode_max_requests is None or batch_requests <= self.decode_max_requests
+        tokens = self.decode_max_kv_tokens is None or batch_tokens <= self.decode_max_kv_tokens
+        return requests and tokens
 
-    def decode_request_limit(self, context_tokens: float) -> int:
-        """Return the concurrent decode-request limit for the context length.
+    @property
+    def decode_token_limit(self) -> int | None:
+        """Return the decode KV token bound: measured domain and physical capacity."""
+        bounds = [b for b in (self.kv_capacity_tokens, self.decode_max_kv_tokens) if b is not None]
+        return min(bounds) if bounds else None
 
-        Return 0 for an invalid context or missing measured request bound.
+    def decode_request_limit(self, context_tokens: float, request_cap: int = 0) -> int:
+        """Return the concurrent decode-request limit for the context length, or 0 when unmeasured.
+
+        A positive `request_cap` bounds the limit.
         """
         measured = self.decode_max_requests
         if context_tokens <= 0 or measured is None or measured <= 0:
             return 0
         limits = [measured]
-        token_limit = self.kv_capacity_tokens
-        if self.decode_max_kv_tokens is not None:
-            token_limit = (
-                self.decode_max_kv_tokens
-                if token_limit is None
-                else min(token_limit, self.decode_max_kv_tokens)
-            )
+        if request_cap > 0:
+            limits.append(request_cap)
+        token_limit = self.decode_token_limit
         if token_limit is not None:
             limits.append(max(1, int(token_limit / context_tokens)))
         return max(1, min(limits))
@@ -287,8 +329,12 @@ class Profile:
         output_tokens: float,
         *,
         correction: float = 1.0,
+        request_cap: int = 0,
     ) -> float:
-        """Return measured-domain request capacity for one decode engine."""
+        """Return measured-domain request capacity for one decode engine.
+
+        A batch below the smallest measured batch takes that batch's token interval.
+        """
         if (
             context_tokens <= 0
             or output_tokens <= 0
@@ -296,15 +342,8 @@ class Profile:
             or not self.covers_output(output_tokens)
         ):
             return 0.0
-        hi = self.decode_request_limit(context_tokens)
+        hi = self.decode_request_limit(context_tokens, request_cap)
         if hi <= 0:
-            return 0.0
-        lo = 1
-        if self.decode_min_requests is not None:
-            lo = max(lo, self.decode_min_requests)
-        if self.decode_min_kv_tokens is not None:
-            lo = max(lo, math.ceil(self.decode_min_kv_tokens / context_tokens))
-        if lo > hi:
             return 0.0
         budget = tpot_slo_s / correction
         increment = self.tpot_request_slope + self.tpot_slope * context_tokens
@@ -312,13 +351,30 @@ class Profile:
             best = min(hi, math.floor((budget - self.tpot_intercept) / increment))
         else:
             best = hi
-        if best < lo:
+        if best < 1:
             return 0.0
         batch_tokens = best * context_tokens
-        interval = self.token_interval(batch_tokens, best) * correction
-        if interval <= 0 or interval > tpot_slo_s or not self.covers_decode(best, batch_tokens):
+        if not self.covers_decode(best, batch_tokens):
+            return 0.0
+        interval = (
+            self.token_interval(
+                max(batch_tokens, self.decode_min_kv_tokens or 0),
+                max(best, self.decode_min_requests or 1),
+            )
+            * correction
+        )
+        if interval <= 0 or interval > tpot_slo_s:
             return 0.0
         return best / (output_tokens * interval)
+
+
+_OPTIONAL_DEFAULTS: dict[str, Any] = {
+    f.name: f.default for f in fields(Profile) if f.default is not MISSING
+}
+_OPTIONAL_FLOAT_FIELDS = tuple(
+    name for name in _FLOAT_FIELDS if _OPTIONAL_DEFAULTS.get(name, MISSING) is None
+)
+_FIELD_NAMES = frozenset(f.name for f in fields(Profile))
 
 
 def decode_evidence_problems(

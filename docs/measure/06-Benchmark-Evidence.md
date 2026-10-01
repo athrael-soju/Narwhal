@@ -32,6 +32,8 @@ Put `evidence` at the top level of the plan, next to `schema` and `points`:
 }
 ```
 
+The `evidence` object takes these fields:
+
 | Field | Value |
 | --- | --- |
 | `journal_path` | The `narwhal-serve --journal` file |
@@ -48,11 +50,7 @@ The collector reads `warmup.json` and `summary.json` from the directory that hol
 2. Check the self-declared `identity` fields against the deployment and preflight records before accepting a GPU result.
 3. Keep the plan and everything under `runs/` private.
 
-| Input | Collector record |
-| --- | --- |
-| Fleet file and profiles | SHA-256 digests before each point and a report of changes during the point |
-| Retained client records, warmup, and summary files | SHA-256 digests |
-| `journal_run` in the router state | Metrics samples grouped by process, across restarts and standby takeovers |
+The collector records SHA-256 digests of the fleet file and profiles before each point and reports changes to them during the point. It records SHA-256 digests of the retained client records, warmup, and summary files. It groups metrics samples by process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
 
 ## Point files
 
@@ -67,15 +65,13 @@ The collector adds these files under `runs/<run>/<point>/`:
 | `client-*.snapshot.*` | Private copies when the configured client files live outside the point directory |
 | `summary.shareable.json` | Redacted publication copy: selected counts, anonymized role history, configuration digests, evidence gaps, and latency and throughput when the client wrote `summary.json` |
 
-| Private value | In `summary.shareable.json` |
-| --- | --- |
-| URLs, credentials, private file paths, request failure text | Removed |
-| Engine IDs | Replaced by `engine-1`, `engine-2`, and onward |
-| Engine image reference, GPU allocation | Replaced by their SHA-256 digests |
+`summary.shareable.json` removes URLs, credentials, private file paths, and request failure text. It replaces engine IDs with `engine-1`, `engine-2`, and onward, and replaces the engine image reference and GPU allocation with their SHA-256 digests.
 
 Before publishing `summary.shareable.json`, check the model and revision labels you supplied for sensitive data.
 
 ## Reconciliation
+
+The collector reconciles each point with these comparisons and raises the listed diagnostic on a mismatch:
 
 | Comparison | Scope | Diagnostic on mismatch |
 | --- | --- | --- |
@@ -84,10 +80,9 @@ Before publishing `summary.shareable.json`, check the model and revision labels 
 | Client offers against journal terminals, joined on `client_rid` | Points where both sides supply IDs | `client_journal_ids` |
 | Terminal classes against router counter deltas | Each `journal_run`, from that process's baseline and final sample | `counter_mismatch` |
 
-| Router counters | At process start |
-| --- | --- |
-| `narwhal_offered_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total` | Reset |
-| Served, failed, refused, rejected, and cancelled | Restored from the saved handoff state |
+At process start, `narwhal_offered_total`, `narwhal_expired_total`, and `narwhal_invalid_requests_total` reset. The served, failed, refused, rejected, and cancelled counters restore from the saved handoff state.
+
+The collector also raises these diagnostics:
 
 | Diagnostic | Raised when | Reports |
 | --- | --- | --- |

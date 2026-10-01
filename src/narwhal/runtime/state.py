@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("narwhal.state")
 
+HANDOFF_COUNTERS = (
+    "offered",
+    "unsized_offered",
+    "served",
+    "slo_met",
+    "expired",
+    "invalid_requests",
+    "failed",
+    "refused",
+    "rejected",
+    "cancelled",
+)
+
 
 @dataclass
 class HandoffReport:
@@ -51,22 +64,17 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "holder": str(router.lease_holder),
         "engines": sorted(router.monitor.instances),
         "roles": {iid: i.role.value for iid, i in router.monitor.instances.items()},
-        "ejected": sorted(set(router.scheduler.ejected) | router.scheduler.inference_suspects),
+        "ejected": sorted(router.scheduler.ejected),
         "inference_sources": {
             iid: sorted(router._inference_sources.get(iid, {""}))
             for iid in sorted(router.scheduler.inference_suspects)
         },
         "counters": {
-            "served": router.served,
-            "failed": router.failed,
+            **{name: getattr(router, name) for name in HANDOFF_COUNTERS},
             "unserved": router.scheduler.unserved,
-            "refused": router.refused,
-            "rejected": router.rejected,
-            "cancelled": router.cancelled,
         },
         "lifecycle": router.lifecycle.handoff(),
-        # Save the newest risk event's age and counts. The receiver collects
-        # fresh arrival evidence for its consolidation window.
+        # The newest risk event's age and counts, without arrival evidence.
         "demand_risk": (controller.safety.risk_handoff() if controller is not None else None),
     }
     return versioned(HANDOFF, out)
@@ -109,13 +117,12 @@ def validate(doc: Any) -> dict[str, Any]:
     engines = doc.get("engines", [])
     if not isinstance(sources, dict) or any(
         iid not in engines
-        or iid not in doc.get("ejected", [])
         or not isinstance(peers, list)
         or not peers
         or any(not isinstance(peer, str) or (peer and peer not in engines) for peer in peers)
         for iid, peers in sources.items()
     ):
-        raise ValueError("handoff inference_sources must name held engines and configured peers")
+        raise ValueError("handoff inference_sources must name configured engines and peers")
     risk = doc.get("demand_risk")
     if risk is not None:
         if not isinstance(risk, dict):
@@ -193,7 +200,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     roles = doc.get("roles") or {}
     applied = 0
     pinned: frozenset[str] = router.scheduler.pinned
-    # Restore assignments directly; dwell and resident tracking start fresh.
+    # Dwell and resident tracking start fresh.
     for iid, name in roles.items():
         if iid in pinned:
             # Fleet configuration owns pinned roles across restarts.
@@ -207,28 +214,27 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     now = router._clock()
     ejected = [iid for iid in doc.get("ejected", []) if iid in router.monitor.instances]
     for iid in ejected:
-        # Force an immediate readmission probe after restart.
+        # A far-past ejection time makes the readmission probe due at once.
         router.scheduler.ejected[iid] = now - 1e9
     for iid, peers in doc.get("inference_sources", {}).items():
         router.scheduler.inference_suspects.add(iid)
         router._inference_sources[iid] = set(peers)
+        # A suspect resolves through a readmission probe while another engine covers its role.
+        if iid not in router.scheduler.ejected and router.scheduler.role_covered_without(iid):
+            router.scheduler.ejected[iid] = now - 1e9
+            ejected.append(iid)
     # apply() bypasses the scheduler paths that normally update floor state.
     router.scheduler.refresh_floor_state()
 
     counters = doc.get("counters") or {}
-    router.served = int(counters.get("served", 0))
-    router.failed = int(counters.get("failed", 0))
+    for name in HANDOFF_COUNTERS:
+        setattr(router, name, int(counters.get(name, 0)))
     router.scheduler.unserved = int(counters.get("unserved", 0))
-    # Admission counters are cumulative across router restarts.
-    router.refused = int(counters.get("refused", 0))
-    router.rejected = int(counters.get("rejected", 0))
-    router.cancelled = int(counters.get("cancelled", 0))
     router.lifecycle.restore(doc.get("lifecycle"))
     controller = router.controller
     risk = doc.get("demand_risk")
     if controller is not None and isinstance(risk, dict):
-        # An absent or null block restores no armed event; a carried one
-        # re-arms with its elapsed age re-anchored on this process's clock.
+        # The carried event re-arms with its age re-anchored on this process's clock.
         controller.safety.restore_risk(
             kind=str(risk["kind"]),
             age_s=float(risk.get("age_s", 0.0)),

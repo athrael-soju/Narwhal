@@ -16,8 +16,7 @@ class HandoffExpired(Exception):
 class PrefillResult:
     """Producer-owned KV descriptor with immutable serialized parameters.
 
-    Visible generation starts at the consumer. The original request
-    lifecycle owns handoff expiry.
+    The original request lifecycle enforces handoff expiry.
     """
 
     connector: str
@@ -76,9 +75,7 @@ class KvConnector(ABC):
     ) -> dict[str, Any]:
         """Continue the original prompt, without exposing producer output.
 
-        Same-worker requests omit transfer parameters. The engine decides whether
-        to reuse cached KV or recompute the prompt.
-        None supports standalone inference probes with no producer leg.
+        Same-worker decode and a None `result` omit transfer parameters.
         """
         leg = {**body, "stream": True}
         leg.pop(self.param_key, None)
@@ -146,7 +143,7 @@ class NixlConnector(KvConnector):
         body["kv_transfer_params"] = params
 
 
-# Register a connector only after the fleet checks pass for every engine pair.
+# Each registered connector has passed the fleet checks for every engine pair.
 _REGISTRY: dict[str, KvConnector] = {c.name: c for c in (NixlConnector(),)}
 
 

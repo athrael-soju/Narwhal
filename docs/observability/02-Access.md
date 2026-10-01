@@ -2,11 +2,11 @@
 description: Open the Narwhal Grafana dashboard from a workstation and isolate a second monitoring stack.
 ---
 
-# Access dashboards and isolate listeners
+# Accessing dashboards and isolating listeners
 
-## Access the dashboard from a workstation
+## Accessing the dashboard from a workstation
 
-An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
+An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
 
 To open a monitoring tunnel:
 
@@ -20,21 +20,11 @@ To open a monitoring tunnel:
 
 3. Keep the tunnel terminal open.
 
-| Interface | URL |
-| --- | --- |
-| Grafana | `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` |
-| Prometheus | `http://127.0.0.1:19090` |
+The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, and Prometheus opens at `http://127.0.0.1:19090`. Grafana grants anonymous Viewer access through the local tunnel.
 
-Grafana grants anonymous Viewer access through the local tunnel.
+## Isolating a second monitoring stack
 
-The [dashboard selectors](https://github.com/athrael-soju/Narwhal/blob/main/tools/observability/README.md#dashboard) switch between router and engine scope.
-
-## Isolate a second monitoring stack
-
-| Variable | Default |
-| --- | --- |
-| `NARWHAL_GRAFANA_BIND_ADDRESS` | `127.0.0.1` |
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `127.0.0.1:9090` |
+Grafana listens on `NARWHAL_GRAFANA_BIND_ADDRESS`, default `127.0.0.1`. Prometheus listens on `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`, default `127.0.0.1:9090`.
 
 When another monitoring deployment shares the router host, run `make observe` with distinct loopback listeners:
 
@@ -44,10 +34,9 @@ NARWHAL_PROMETHEUS_LISTEN_ADDRESS=127.0.0.2:19090 \
 make observe
 ```
 
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus binds | Grafana `Prometheus` datasource and readiness probes use |
-| --- | --- | --- |
-| Specific address | That address | That address |
-| Wildcard (`0.0.0.0` or `::`) | The wildcard | Loopback |
+Grafana binds port `3000` and the image renderer binds port `8081` on the Grafana address. When that address is a wildcard (`0.0.0.0` or `::`), Grafana binds the wildcard and the image renderer binds loopback.
+
+The Grafana `Prometheus` datasource and the readiness probes use the Prometheus address. When that address is a wildcard (`0.0.0.0` or `::`), Prometheus binds the wildcard and the datasource and probes use loopback.
 
 Tunnel to the `127.0.0.2` listeners:
 
@@ -57,4 +46,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-[![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)
+[![Next: Reading the dashboard](https://img.shields.io/badge/next-Reading%20the%20dashboard-0f766e)](05-Dashboard.md)

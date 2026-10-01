@@ -157,8 +157,7 @@ class RequestLifecycle:
             "retry_scheduled": False,
             "backoff_s": None,
         }
-        # One failure per attempt, including a pre-dispatch failure. Keep the
-        # diagnostic bound even if a future caller evaluates the same failure twice.
+        # One failure per attempt, including a pre-dispatch failure.
         if len(self.attempt_failures) < policy.max_attempts:
             self.attempt_failures.append(failure)
         if self.output_started:
@@ -181,7 +180,7 @@ class RequestLifecycle:
         self.release()
         self.phase = "backoff"
         self.request.phase = Phase.PREFILL
-        # Keep the original request in waiting demand throughout backoff.
+        # A request in backoff counts as waiting demand.
         self.router.monitor.waiting[self.rid] = self.request
         await self.wait(lambda: asyncio.sleep(delay))
         return True
@@ -204,8 +203,7 @@ class RequestLifecycle:
         req = self.request
         if not self.sized:
             router.unsized_offered += 1
-        # Invalid bodies carry no workload shape. Other unread bodies remain
-        # visible as unsized demand.
+        # Unread bodies other than invalid ones stay visible as unsized demand.
         self.resolve_demand(retain_unsized=terminal != "invalid")
         self.release()
         measured = self.tokens if router.engines.dialect.token_ids else None
@@ -249,13 +247,16 @@ class RequestLifecycle:
             router.retry_budget.succeeded()
             if measured is not None:
                 router.controller.saw_completion(req.input_len, req.wanted_len, measured)
+        ttft_ok = completed and prefill_s is not None and prefill_s <= router.cfg.slo.ttft_s
+        tpot_ok = (
+            (completed and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s))
+            if self.prefilled_at is not None
+            else True
+        )
         if terminal not in ("cancelled", "rejected", "invalid"):
-            router.scheduler.note_outcome(
-                completed and prefill_s is not None and prefill_s <= router.cfg.slo.ttft_s,
-                (completed and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s))
-                if self.prefilled_at is not None
-                else True,
-            )
+            router.scheduler.note_outcome(ttft_ok, tpot_ok)
+        if ttft_ok and tpot_ok:
+            router.slo_met += 1
         if prefill_s is not None:
             router.ttft.observe(prefill_s)
         if tpot_s is not None:
@@ -282,6 +283,8 @@ class RequestLifecycle:
             "prefill_iid": self.prefill_iid,
             "decode_iid": self.decode_iid,
             "crossed": self.decode_iid is not None and self.decode_iid != self.prefill_iid,
+            "cached_tokens": dict(req.cached_tokens),
+            "cache_placement": req.cache_placement,
             "token_accounting": router._token_accounting(),
             "error": error,
             "terminal": terminal,

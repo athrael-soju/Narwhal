@@ -7,7 +7,7 @@ from importlib import metadata
 
 
 def add_version_argument(parser: argparse.ArgumentParser) -> None:
-    """Report the distribution selected by the executable's Python environment."""
+    """Add `--version`, reporting this environment's narwhal-inference distribution version."""
     try:
         version = metadata.version("narwhal-inference")
     except metadata.PackageNotFoundError:

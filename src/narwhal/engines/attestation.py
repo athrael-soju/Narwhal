@@ -8,7 +8,6 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -19,7 +18,13 @@ from fastapi import FastAPI, HTTPException
 
 from ..cli_support import add_version_argument
 from ..config import EngineContract
-from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
+from ..contracts import (
+    ATTESTATION,
+    ContractVersionError,
+    canonical_digest,
+    validate_document,
+    versioned,
+)
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
@@ -47,6 +52,7 @@ class AttestationDocument:
 
     contract: EngineContract
     sources: dict[str, str]
+    launch: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> AttestationDocument:
@@ -58,26 +64,17 @@ class AttestationDocument:
             validate_document(raw, ATTESTATION)
         except ContractVersionError as exc:
             raise ValueError(str(exc)) from exc
-        unknown = sorted(set(raw) - {"schema", "schema_version", "contract", "sources"})
+        unknown = sorted(set(raw) - {"schema", "schema_version", "contract", "sources", "launch"})
         if unknown:
             raise ValueError(f"unknown attestation field(s): {', '.join(unknown)}")
         contract = _read_contract(raw.get("contract"))
-        sources = raw.get("sources")
-        if not isinstance(sources, dict):
+        if not isinstance(raw.get("sources"), dict):
             raise ValueError("attestation sources must be an object")
-        if not all(
-            isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in sources.items()
-        ):
-            raise ValueError("attestation sources must map field names to nonempty strings")
-        unknown_sources = sorted(set(sources) - set(contract.fields()))
-        if unknown_sources:
-            raise ValueError(
-                f"sources name unknown contract field(s): {', '.join(unknown_sources)}"
-            )
-        missing_sources = sorted(_populated_fields(contract) - set(sources))
-        if missing_sources:
-            raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
-        return cls(contract=contract, sources=dict(sources))
+        sources = _read_sources(raw["sources"], contract)
+        launch = raw.get("launch")
+        if launch is not None and not isinstance(launch, dict):
+            raise ValueError("attestation launch must be an object")
+        return cls(contract=contract, sources=sources, launch=launch)
 
 
 def _read_contract(raw: Any) -> EngineContract:
@@ -143,6 +140,21 @@ def _read_contract(raw: Any) -> EngineContract:
     return contract
 
 
+def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
+    """Validate the evidence source named for each populated contract field."""
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
+    ):
+        raise ValueError("attestation sources must map field names to nonempty strings")
+    unknown_sources = sorted(set(raw) - set(contract.fields()))
+    if unknown_sources:
+        raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
+    missing_sources = sorted(_populated_fields(contract) - set(raw))
+    if missing_sources:
+        raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
+    return dict(raw)
+
+
 def _populated_fields(contract: EngineContract) -> set[str]:
     """Return fields for which the sidecar must name an evidence source."""
     return {
@@ -199,8 +211,16 @@ def make_attestation(
             },
         },
     )
+    if document.launch is not None:
+        payload["launch"] = document.launch
+        payload["launch_digest"] = launch_digest(document.contract.fields(), document.launch)
     payload["attestation_digest"] = _payload_digest(payload)
     return payload
+
+
+def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
+    """Digest the contract and launch evidence that fix an engine's timing."""
+    return canonical_digest({"contract": contract, "launch": launch})
 
 
 def verify_attestation(
@@ -220,14 +240,22 @@ def verify_attestation(
         "engine",
         "attestation_digest",
     }
-    unknown = sorted(set(payload) - expected_keys)
+    unknown = sorted(set(payload) - expected_keys - {"launch", "launch_digest"})
     missing = sorted(expected_keys - set(payload))
     if unknown:
         failures.append(f"unknown response field(s): {', '.join(unknown)}")
     if missing:
         failures.append(f"missing response field(s): {', '.join(missing)}")
+    if ("launch" in payload) != ("launch_digest" in payload):
+        failures.append("launch and launch_digest must appear together")
     if failures:
         return failures
+    if "launch" in payload and (
+        not isinstance(payload["launch"], dict)
+        or not isinstance(payload["contract"], dict)
+        or payload["launch_digest"] != launch_digest(payload["contract"], payload["launch"])
+    ):
+        failures.append("launch_digest does not match the launch evidence")
     try:
         validate_document(payload, ATTESTATION)
     except ContractVersionError as exc:
@@ -268,31 +296,12 @@ def verify_attestation(
 
 
 def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
-    raw = {
-        **({"schema": payload["schema"]} if "schema" in payload else {}),
-        "schema_version": payload.get("schema_version"),
-        "contract": payload.get("contract"),
-        "sources": payload.get("sources"),
-    }
-    contract = _read_contract(raw["contract"])
-    sources = raw["sources"]
-    if not isinstance(sources, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in sources.items()
-    ):
-        raise ValueError("attestation sources must map field names to nonempty strings")
-    unknown_sources = sorted(set(sources) - set(contract.fields()))
-    if unknown_sources:
-        raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
-    missing_sources = sorted(_populated_fields(contract) - set(sources))
-    if missing_sources:
-        raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
-    return AttestationDocument(contract, dict(sources))
+    contract = _read_contract(payload.get("contract"))
+    return AttestationDocument(contract, _read_sources(payload.get("sources"), contract))
 
 
 def _payload_digest(payload: dict[str, Any]) -> str:
-    unsigned = {k: v for k, v in payload.items() if k != "attestation_digest"}
-    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
-    return "sha256:" + sha256(raw).hexdigest()
+    return canonical_digest({k: v for k, v in payload.items() if k != "attestation_digest"})
 
 
 def build_app(
@@ -306,12 +315,10 @@ def build_app(
 ) -> FastAPI:
     """Build a sidecar that stops attesting after its engine process changes.
 
-    With `residency`, the sidecar also serves the engine's resident prefix
-    blocks. Without it, the residency routes answer 404 and callers price the
-    engine cold.
+    The residency routes serve `residency`, or answer 404 when it is None.
     """
     app = FastAPI(title="narwhal-engine-attestation")
-    # A restarted sidecar serves a new epoch, so subscribers resynchronise.
+    # Each sidecar process serves its own epoch.
     epoch = uuid4().hex
 
     async def current_identity() -> EngineIdentity:
@@ -364,8 +371,13 @@ def build_app(
         result = index.changes_after(after)
         if result is None:
             raise HTTPException(status_code=410, detail="resynchronise from the residency snapshot")
-        sequence, changes = result
-        return {"epoch": epoch, "sequence": sequence, "changes": changes}
+        return {
+            "epoch": epoch,
+            "sequence": result.sequence,
+            "block_size": result.block_size,
+            "reason": result.reason,
+            "changes": result.changes,
+        }
 
     return app
 

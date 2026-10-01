@@ -1,36 +1,74 @@
 # Observability asset contracts
 
-The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
+The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** dashboard, and the Grafana Image Renderer.
+
+Follow [Setting up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
 ## Dashboard
 
-**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. The first row reports admission, controller mode, engine reachability, terminal request rates, token rates and firing Narwhal alerts. The engine table shows current role, drain and ejection state, resident Narwhal work, native vLLM work and KV occupancy. Pool assignments and role history lead into TTFT, TPOT and request-wait quantiles, followed by request flow, exceptions and pool pressure.
+<a href="../../docs/observability/05-Dashboard.md"><img src="https://img.shields.io/badge/docs-Reading%20the%20dashboard-0f766e" alt="Reading the dashboard documentation"></a>
 
-The dashboard selects every router target in the data source when it opens. The shipped scrape configuration binds one router and one fleet to each data source, so the bare dashboard URL immediately populates router totals and pool pressure. **Engine detail** filters the engine table and role timeline.
+**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
+
+The shipped scrape configuration binds one router and one fleet to each Prometheus data source.
 
 The dashboard expects these label contracts:
 
 - Router series carry `job="narwhal-router"` and the Prometheus target's `instance`.
 - Engine series carry `job="engines"` and the fleet generator's stable `iid`.
-- vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting` and
-  `vllm:kv_cache_usage_perc` on each engine metrics endpoint.
+- vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting`,
+  `vllm:kv_cache_usage_perc`, `vllm:prefix_cache_hits_total`,
+  `vllm:prefix_cache_queries_total`, `vllm:generation_tokens_total` and
+  `vllm:prompt_tokens_by_source_total` or `vllm:prompt_tokens_total` on each
+  engine metrics endpoint.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
-Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collect sensor telemetry, then present those metrics through its hardware dashboard.
+Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
 
 ### Metric boundaries
 
-**Requests** counts completed, failed, expired, refused and rejected terminal outcomes per second, while client cancellations have their own counter. **Tokens** counts engine prompt tokens as prefill and router-observed output tokens as decode. Each panel sums `increase()` over the displayed interval, so router and engine counter resets preserve the interval count.
+The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
 
-**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** uses the same `instance` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. The dashboard selects one router before calculating quantiles, while `narwhal_slo_seconds` supplies that process's configured TTFT and TPOT lines. Aggregating latency buckets across routers requires identical SLO-derived bucket edges.
+**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance`, `slo` and `le`. **Request waiting time** uses the same `instance`, `slo` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
 
-Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
+Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) defines the metric groups and lifecycle.
+[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 
-`make observe` stages `tools/observability/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
+`make observe` stages the dashboard for Grafana:
+
+<table width="100%" align="center">
+  <thead>
+    <tr>
+      <th align="left" width="30%">Item</th>
+      <th align="left" width="70%">Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Source dashboard</td>
+      <td><code>tools/observability/grafana-narwhal.json</code></td>
+    </tr>
+    <tr>
+      <td>Schema</td>
+      <td><code>dashboard.grafana.app/v2alpha1</code></td>
+    </tr>
+    <tr>
+      <td>Staged copy</td>
+      <td><code>runs/observability/mounts/grafana-dashboards/narwhal.json</code></td>
+    </tr>
+    <tr>
+      <td>Grafana poll interval</td>
+      <td>30 seconds</td>
+    </tr>
+  </tbody>
+</table>
+
+Grafana replaces UI edits with the staged file.
+
+Refresh the staged copy and verify provisioning after changing the source dashboard:
 
 ```bash
 make observe
@@ -41,4 +79,8 @@ Validate changed queries against traffic, idle engines, failed scrapes, router r
 
 ## Alert rules
 
-Prometheus loads `tools/observability/prometheus-alerts.yml` and publishes firing rules through `ALERTS`, which drives the dashboard's **Fleet events** table. Production monitoring loads the same rule file and routes page and warning severities through the deployment's existing alert manager. Preserve the `job` and `iid` labels when relabelling targets because engine reachability and scoped alert rows depend on them.
+Alert rules in `tools/observability/prometheus-alerts.yml`:
+
+- Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
+- Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
+- Target relabelling keeps the `job` and `iid` labels for engine reachability and scoped alert rows.

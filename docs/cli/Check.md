@@ -22,22 +22,17 @@ General options:
 
 `--print-example-config` takes precedence over `--print-contract-versions`.
 
-Transfer probe options for preflight:
+KV transfer probe and evidence options for preflight:
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--repeats N` | 1 | Probes per pair. |
 | `--ring` | off | Test `consume` in a ring. |
 | `--no-kv` | off | Skip `produce` and `consume`. |
+| `--evidence-out PATH` | optional | Save full-mesh KV evidence to a new JSON file. |
+| `--verify-evidence PATH` | optional | Check saved evidence against the current fleet, profiles, and engine processes. |
 
-KV evidence options:
-
-| Option | Default | Description | Mutually exclusive with |
-| --- | --- | --- | --- |
-| `--evidence-out PATH` | optional | Save full-mesh KV evidence to a new JSON file. | `--ring`, `--no-kv`, `--verify-evidence` |
-| `--verify-evidence PATH` | optional | Check saved evidence against the current fleet, profiles, and engine processes. | `--evidence-out` |
-
-Both evidence options require an `engine_contract` in the fleet configuration.
+`--evidence-out` is mutually exclusive with `--ring`, `--no-kv`, and `--verify-evidence`. Both evidence options require an `engine_contract` in the fleet configuration.
 
 Options for first-token calibration:
 
@@ -49,32 +44,22 @@ Options for first-token calibration:
 | `--observation-timeout-s SECONDS` | optional | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
 | `--calibration-out PATH` | optional | Raw samples and group summaries file. | New JSON file under `runs/`. |
 
-`--calibrate-first-token` rules:
+`--calibrate-first-token` follows these rules:
 
-| Rule | Options |
-| --- | --- |
-| Requires | `--input-tokens`, `--observation-timeout-s`, `--calibration-out` |
-| Mutually exclusive with | The evidence options, `--ring`, `--no-kv`, a `--repeats` value other than 1 |
-| Required by | `--samples`, `--input-tokens`, `--observation-timeout-s`, `--calibration-out` |
-| `--input-tokens` includes | The longest input the service admits |
+- It requires `--input-tokens`, `--observation-timeout-s`, and `--calibration-out`.
+- `--samples`, `--input-tokens`, `--observation-timeout-s`, and `--calibration-out` each require it.
+- It is mutually exclusive with the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1.
+- `--input-tokens` must include the longest input the service admits.
 
 ## What a KV probe does
 
-| Property | Value |
-| --- | --- |
-| Prompt | `"benchmark " * 64`, tokenized for the model under test |
-| `consume` input | A KV handoff from an eligible peer |
-| `consume` pairs | Every eligible ordered pair, or a ring with `--ring` |
-| Output tokens | Four |
-| Output flags | vLLM's `min_tokens` and `ignore_eos` |
-| Cache salt per probe | One unique `cache_salt` shared by both legs |
-| Cache salt per `pace` repeat | Fresh |
-| First-token deadline | `engine.first_token_timeout_s` |
-| Probe deadline | `serving.request_timeout_s` |
-| Probe success | A stream end before the probe deadline |
-| Missed first-token deadline | Elapsed time reported |
-| Transfer after a miss | Unconfirmed |
-| Next step after a miss | Calibration |
+Each probe sends the prompt `"benchmark " * 64`, tokenized for the model under test, and asks for four output tokens with vLLM's `min_tokens` and `ignore_eos`. Both legs of a probe share one unique `cache_salt`, and each `pace` repeat uses a fresh one.
+
+`consume` takes a KV handoff from an eligible peer. It tests every eligible ordered pair, or a ring with `--ring`.
+
+The first-token deadline is `engine.first_token_timeout_s`, and the probe deadline is `serving.request_timeout_s`. A probe succeeds when its stream ends before the probe deadline.
+
+When a probe misses the first-token deadline, `narwhal-check` reports the elapsed time and the transfer stays unconfirmed. After a miss, run first-token calibration.
 
 ## Recording and verifying KV evidence
 
@@ -100,7 +85,7 @@ narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 
 ## First-token calibration
 
-Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before recording evidence for a fleet.
+Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before recording evidence for a fleet.
 
 The `--calibration-out` file holds:
 
@@ -109,31 +94,31 @@ The `--calibration-out` file holds:
 - the candidate deadline
 - the engines' process generations
 
-| Scope | Timeout |
-| --- | --- |
-| Wait for first output | `--observation-timeout-s` |
-| Whole attempt | `serving.request_timeout_s` |
+During calibration, `--observation-timeout-s` bounds the wait for first output, and `serving.request_timeout_s` bounds the whole attempt.
 
-| Handoff property | Value |
-| --- | --- |
-| Forced output tokens | Four |
-| Forced output token cap | The producer's and consumer's live context limits |
-| Output tokens at a `max_model_len - 1` target | One |
-| Successful sample | A produced token and a valid stream end |
+Each calibration handoff forces four output tokens, capped by the producer's and consumer's live context limits. A handoff at a `max_model_len - 1` target gets one output token. A sample succeeds when it produces a token and a valid stream end.
 
 The artifact is valid evidence when all of these hold:
 
 - every group has at least 100 completed attempts
 - the attempt numbers are distinct
 - the attempt numbers cover the configured sample count
-- the process generations are unchanged
+- each engine's identity matches its value at the start of the run
 - the final checks passed
 - the candidate deadline is strictly below `serving.request_timeout_s`
 - `engine.first_token_timeout_s` is above the candidate deadline
 
-The artifact is incomplete when an attempt fails, a generation changes, or a generation check errors.
+When the fleet configuration sets `engine_contract`, an engine's identity during calibration is its attestation digest. Otherwise, it is the vLLM version and process start time.
+
+The artifact is incomplete when any of these happens:
+
+- an attempt fails
+- an engine's identity changes during the run
+- reading or verifying an engine's identity fails
 
 ## The `slo` gate
+
+The `slo` gate runs three checks against each engine's profile:
 
 | Check | Fails when |
 | --- | --- |

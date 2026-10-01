@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..config.model import EngineContract, EngineSpec
+from ..contracts import canonical_digest
 from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
 
 if TYPE_CHECKING:
@@ -18,10 +17,19 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class GenerationEvidence:
-    """Generation digest and the process evidence used to derive it."""
+    """Profile-binding digest, its evidence, and the engine-process digest.
+
+    `digest` is the attested launch digest when the sidecar reports one, otherwise
+    `process_digest`.
+    """
 
     digest: str
     document: dict[str, Any]
+    process_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.process_digest:
+            object.__setattr__(self, "process_digest", self.digest)
 
 
 def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
@@ -32,8 +40,7 @@ def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
             "process_start_time_seconds": identity.process_start_time_seconds,
         }
     }
-    raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-    return GenerationEvidence("sha256:" + sha256(raw).hexdigest(), document)
+    return GenerationEvidence(canonical_digest(document), document)
 
 
 async def read_generation(
@@ -44,7 +51,7 @@ async def read_generation(
     headers: dict[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> GenerationEvidence:
-    """Read a process identity and verify its sidecar before returning a generation."""
+    """Return the engine's profile generation, verifying its sidecar when `contract` is set."""
     identity = await fetch_engine_identity(
         spec.url, timeout_s=timeout_s, headers=headers, transport=transport
     )
@@ -59,11 +66,16 @@ async def read_generation(
     failures = verify_attestation(payload, contract, identity)
     if failures:
         raise ValueError(f"{spec.iid}: attestation: {'; '.join(failures)}")
-    return GenerationEvidence(payload["attestation_digest"], payload)
+    return GenerationEvidence(binding_digest(payload), payload, payload["attestation_digest"])
+
+
+def binding_digest(payload: dict[str, Any]) -> str:
+    """Return the digest profiles bind to in a verified attestation response."""
+    return str(payload.get("launch_digest") or payload["attestation_digest"])
 
 
 def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
-    """Name the engine whose saved measurements require a fresh profiling run."""
+    """Return a reprofile message when `saved` is absent or differs from `live`, else None."""
     if saved is None:
         return f"{iid} profile has no generation evidence; reprofile before admission"
     if saved != live:
@@ -72,7 +84,7 @@ def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
 
 
 def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
-    """Check every loaded variant before an engine regains scheduling eligibility."""
+    """Return reprofile messages for every loaded variant of engine `iid`."""
     profiles = store.profiles_for_engine(iid)
     if not profiles:
         return [f"{iid} has no loaded profile; reprofile before admission"]

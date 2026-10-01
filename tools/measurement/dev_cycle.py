@@ -76,7 +76,7 @@ def assess(before, after, reports, recipe):
 def phase_report(directory, phase):
     report = lifecycle.read(directory / "summary.json")
     rows = [json.loads(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
-    # The burst exercises overload; preserve its SLO result alongside movement acceptance.
+    # HTTP 429 TTFT admission rejections count as valid outcomes.
     valid = (
         report["client_schedule_valid"]
         and report["completed"] > 0
@@ -103,7 +103,7 @@ async def replay(client, out, instance, template):
     timeout = recipe["timeout_s"]
     base = instance["router_url"]
     await trial.drain(client, base, timeout)
-    # Expire verification's short arithmetic request from the rolling demand window.
+    # Earlier requests leave the rolling demand window after window_s + step_s.
     delay = template["controller"]["reactive"]["window_s"]
     delay += template["controller"]["reactive"]["step_s"]
     print(f"Clearing demand history for {delay:g} seconds.", flush=True)

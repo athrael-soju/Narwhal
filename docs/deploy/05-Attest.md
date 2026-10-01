@@ -2,9 +2,9 @@
 description: Generate and serve attestation documents for the live vLLM engines of a Narwhal fleet.
 ---
 
-# Gate E: Attest the live engines
+# Gate E: Attesting the live engines
 
-## Check the router inventory
+## Checking the router inventory
 
 On the router, confirm that `runs/deployment/fleet.json` lists:
 
@@ -19,11 +19,11 @@ Gate C inputs in each engine's `ENGINE_RUN` directory:
 - `container.id` and the container logs.
 - `cache-layout.json`.
 
-## Capture the attestation inputs
+## Capturing the attestation inputs
 
 Run these steps in each engine's role shell.
 
-### 1. Save the startup log
+### 1. Saving the startup log
 
 ```bash
 export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
@@ -33,18 +33,15 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 
 The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
-### 2. Capture the NIXL connector version
+### 2. Capturing the NIXL connector version
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
 ```
 
-| Version                           | Source                                         | Peer compatibility hash |
-| --------------------------------- | ---------------------------------------------- | ----------------------- |
-| `contract.nixl_connector_version` | Installed connector's `NIXL_CONNECTOR_VERSION` | Included                |
-| `nixl_version`                    | Pinned NIXL package                            |                         |
+`contract.nixl_connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `nixl_version` records the pinned NIXL package.
 
-### 3. Capture the model dimensions
+### 3. Capturing the model dimensions
 
 ```bash
 umask 077
@@ -61,14 +58,9 @@ The capture requires the live container's plan and launcher hashes to match `lau
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
 | `model_architecture` | Resolved architecture                                                                                          |
 
-### 4. Capture the cache grouping
+### 4. Capturing the cache grouping
 
-`cache-registration` writes one `cache-registration.json` per `ENGINE_RUN` from either source:
-
-| Source                         | Requirement                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| Startup log (the usual choice) | Names exactly one layout across its `Using <layout> KV cache layout.` lines. |
-| `cache-layout.json`            | Holds one resolved layout across every TP rank.                              |
+`cache-registration` writes one `cache-registration.json` per `ENGINE_RUN` from either of two sources. The startup log must name exactly one layout across its `Using <layout> KV cache layout.` lines. The `cache-layout.json` file must hold one resolved layout across every TP rank.
 
 From the startup log:
 
@@ -85,14 +77,9 @@ python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-| Layouts in vLLM v0.29.0       | `is_block_outermost` |
-| ----------------------------- | -------------------- |
-| `BLHNC`, `BLNHC`, and `BHLNC` | `true`               |
-| `LBHNC`, `LBNHC`, and `LHBNC` | `false`              |
+In vLLM v0.30.0, `is_block_outermost` is `true` for the `BLHNC`, `BLNHC`, and `BHLNC` layouts and `false` for the `LBHNC`, `LBNHC`, and `LHBNC` layouts. `cache-registration.json` records the value as `cross_layers_blocks`.
 
-`cache-registration.json` records the value as `cross_layers_blocks`.
-
-### 5. Compare the layout with the representative's
+### 5. Comparing the layout with the representative's
 
 ```bash
 export REPRESENTATIVE_LAYOUT='<layout name from representative cache-layout.json>'
@@ -110,12 +97,9 @@ print(f"Resolved layout {actual} matches the cache representative.")
 PY_CACHE_MATCH
 ```
 
-| Comparison with the representative                            | Fabric budget                                                                                                  |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Group signature, resolved layout, and page geometry all match | The engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#build-the-source-budget). |
-| Layout or page geometry differs                               | The engine needs a separate serving capture, budget, and edge comparisons.                                     |
+When the group signature, resolved layout, and page geometry all match the representative's, the engine inherits the representative's [Gate D fabric budget](04-Qualify-Fabric.md#building-the-source-budget). When the layout or page geometry differs, the engine needs a separate serving capture, budget, and edge comparisons.
 
-### 6. Capture the transfer direction
+### 6. Capturing the transfer direction
 
 ```bash
 python3 - <<'PY_TRANSFER_MODE'
@@ -165,18 +149,15 @@ print(f"Captured transfer_mode={mode} from {connector}")
 PY_TRANSFER_MODE
 ```
 
-| Pinned API term | Meaning                              |
-| --------------- | ------------------------------------ |
-| `NixlConnector` | Alias for `NixlPullConnector`.       |
-| `kv_both`       | The engine produces and consumes KV. |
+In the pinned API, `NixlConnector` is an alias for `NixlPullConnector`, and `kv_both` means the engine produces and consumes KV.
 
 When the script finds zero or several connector classes in `image-check.log`, rerun the launcher's `check` for this launch plan.
 
-### 7. Confirm the connector in the startup log
+### 7. Confirming the connector in the startup log
 
 Confirm that the serving startup log names the connector class recorded in step 6.
 
-### 8. Capture handshake enforcement
+### 8. Capturing handshake enforcement
 
 ```bash
 python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
@@ -196,9 +177,9 @@ When the capture fails:
 2. Check a new plan.
 3. Restart the engine from the new plan.
 
-## Generate and serve the attestation
+## Generating and serving the attestation
 
-### 1. Generate the document
+### 1. Generating the document
 
 ```bash
 .venv/bin/python tools/deployment/attestation_contract.py generate \
@@ -206,12 +187,12 @@ When the capture fails:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
-### 2. Confirm the attested process
+### 2. Confirming the attested process
 
 1. Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`.
 2. Confirm the document describes the running process.
 
-### 3. Start the sidecar
+### 3. Starting the sidecar
 
 Run it as the engine's user, or as root for container engines.
 
@@ -221,11 +202,11 @@ Run it as the engine's user, or as root for container engines.
 
 When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
 
-### 4. Check the sidecar from the router
+### 4. Checking the sidecar from the router
 
 From the router, request the sidecar's `/health` and `/v1/attestation` over the trusted control network.
 
-### 5. Verify the sidecar against the engine
+### 5. Verifying the sidecar against the engine
 
 In a second shell for the same engine role:
 
@@ -274,11 +255,11 @@ print("Both sidecar endpoints passed; attestation matches the live engine and co
 PY_ATTEST_CHECK
 ```
 
-### 6. Repeat for every engine
+### 6. Repeating for every engine
 
 Run the capture, generate, and serve steps for each engine.
 
-### 7. Finalize the fleet contract
+### 7. Finalizing the fleet contract
 
 Run once from the router shell after every sidecar passes:
 
@@ -298,10 +279,7 @@ Run once from the router shell after every sidecar passes:
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-| Failure                                      | Diagnosis                                                                  |
-| -------------------------------------------- | -------------------------------------------------------------------------- |
-| A sidecar fails                              | The error output names the engine and the failed checks.                   |
-| `Engine sidecars report different contracts` | Compare the `contract` objects in each engine's `engine-attestation.json`. |
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`.
 
 Recovery:
 
@@ -311,4 +289,4 @@ Recovery:
 
 Leave every engine and sidecar running through profiling, preflight, and the trial.
 
-[![Next: Gate F: Profile once and run the live KV contract](https://img.shields.io/badge/next-Gate%20F%3A%20Profile%20once%20and%20run%20the%20live%20KV%20contract-0f766e)](06-Profile-and-Preflight.md)
+[![Next: Gate F: Profiling once and running the live KV contract](https://img.shields.io/badge/next-Gate%20F%3A%20Profiling%20once%20and%20running%20the%20live%20KV%20contract-0f766e)](06-Profile-and-Preflight.md)

@@ -1,16 +1,13 @@
 """Router view of each engine sidecar's resident prefix blocks.
 
-The router reads a sidecar snapshot, then applies the sidecar's ordered
-changes. It resynchronises from a fresh snapshot when it starts, when the
-sidecar reports that the requested changes are gone, when the sidecar epoch
-or the engine process changes, and after any failed refresh. An engine
-without a sidecar, or whose sidecar serves no residency, is priced cold.
+A view resynchronises from a fresh snapshot on start, on lost changes, on a
+sidecar epoch or engine process change, and after any failed refresh.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,7 +40,7 @@ class EngineResidency:
         return cached_prefix_blocks(self.groups.values(), identities, self.block_size)
 
     def forget(self, reason: str) -> None:
-        """Drop the view so the engine is priced cold until the next snapshot."""
+        """Drop the view; the engine prices cold until the next snapshot."""
         self.known = False
         self.reason = reason
         self.epoch = None
@@ -69,6 +66,43 @@ class ResidencySubscriptions:
         """Return the router's residency view of `iid`."""
         return self.views[iid]
 
+    def block_sizes(self) -> set[int]:
+        """Return the block sizes of known views that report one."""
+        return {view.block_size for view in self.views.values() if view.known and view.block_size}
+
+    def match(
+        self,
+        identities_by_size: dict[int, list[bytes]],
+        engines: Iterable[str] | None = None,
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return cached tokens and residency sequence per engine, and the matched identities.
+
+        `engines` limits the match to those engines' views.
+        """
+        views = (
+            self.views.items()
+            if engines is None
+            else [(iid, self.views[iid]) for iid in engines if iid in self.views]
+        )
+        matched: dict[int, int] = {}
+        cached: dict[str, int] = {}
+        sequences: dict[str, int] = {}
+        for iid, view in views:
+            size = view.block_size
+            if not view.known or not size or size not in identities_by_size:
+                continue
+            blocks = view.cached_prefix_blocks(identities_by_size[size])
+            if blocks > 0:
+                cached[iid] = blocks * size
+                matched[size] = max(matched.get(size, 0), blocks)
+                if view.sequence is not None:
+                    sequences[iid] = view.sequence
+        return (
+            cached,
+            sequences,
+            {size: identities_by_size[size][:n] for size, n in matched.items()},
+        )
+
     def snapshot(self) -> dict[str, dict[str, Any]]:
         """Return each engine's synchronisation state without block identities."""
         return {
@@ -86,7 +120,7 @@ class ResidencySubscriptions:
 
     async def refresh(self, client: httpx.AsyncClient) -> None:
         """Bring every engine's view up to date; failures leave that engine cold."""
-        # Sidecars refresh concurrently, so one slow sidecar delays the pass by one timeout.
+        # One slow sidecar delays the concurrent pass by one timeout.
         await asyncio.gather(*(self._refresh_one(client, iid) for iid in self._specs))
 
     async def _refresh_one(self, client: httpx.AsyncClient, iid: str) -> None:
@@ -100,8 +134,11 @@ class ResidencySubscriptions:
             if following and await self._follow(client, base, view):
                 return
             await self._resync(client, base, view)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            view.forget(f"residency refresh failed: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            # State reasons carry the failure class and status only, never the sidecar URL.
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            detail = type(exc).__name__ if status is None else f"HTTP {status}"
+            view.forget(f"residency refresh failed: {detail}")
 
     async def _follow(self, client: httpx.AsyncClient, base: str, view: EngineResidency) -> bool:
         """Apply ordered changes; return False when a snapshot is required."""
@@ -114,6 +151,8 @@ class ResidencySubscriptions:
         body = response.json()
         if body["epoch"] != view.epoch:
             return False
+        view.block_size = body["block_size"]
+        view.reason = body.get("reason", view.reason)
         for change in body["changes"]:
             if view.sequence is None or change["sequence"] != view.sequence + 1:
                 return False

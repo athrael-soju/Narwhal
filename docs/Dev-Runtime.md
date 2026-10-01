@@ -14,14 +14,12 @@ For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefi
 
 The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on and pinned to the RTX 5090.
 
-## Prepare Ubuntu or WSL2
+## Preparing Ubuntu or WSL2
 
 1. Install the NVIDIA driver for your host:
 
-    | Host | Driver |
-    | --- | --- |
-    | Native Ubuntu | A driver compatible with the CUDA runtime you plan to use |
-    | WSL2 | The Windows driver from [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) |
+    - On native Ubuntu, install a driver compatible with the CUDA runtime you plan to use.
+    - On WSL2, install the Windows driver from [NVIDIA's CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/).
 
 2. Keep the checkout, the model, the virtual environment, and the instance directory on the Linux filesystem.
 3. Run every command from an Ubuntu shell, inside WSL2 on a Windows host.
@@ -35,38 +33,21 @@ The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on a
 
 5. Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
 
-## Install the runtime and model
+## Installing the runtime and model
 
 Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md).
 
 ## Template and GPU allocation
 
-Two `init` flags set the GPU memory allocation:
+Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, the share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache. The installed template sets it to `0.35`.
 
-| Flag | Template field | Default | Meaning |
-| --- | --- | --- | --- |
-| `--gpu-memory-utilization` | `allocation.gpu_memory_utilization` | Template value, `0.35` installed | Share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache |
-| `--device-allowance` | `allocation.device_allowance` | Template value, `0.8` installed | Cap on the sum of the engine fractions and on whole-device memory growth during startup |
+`--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The installed template sets it to `0.8`.
 
 `init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB installed).
 
-The shipped template sets development SLO targets:
+The shipped template sets development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
-| Target | Template field | Value |
-| --- | --- | --- |
-| Time to first token (TTFT) | `slo.ttft_s` | 5 seconds |
-| Time per output token (TPOT) | `slo.tpot_s` | 500 ms |
-
-Replace these placeholder targets with values measured on your card.
-
-A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve.
-
-Template fields that pin the hardware:
-
-| Field | Effect |
-| --- | --- |
-| `gpu.product` | GPU product name |
-| `gpu.minimum_total_mib` | Minimum total VRAM |
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM.
 
 Create a custom template:
 
@@ -84,7 +65,7 @@ Create a custom template:
 3. Initialize a fresh instance with
    `narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
 
-## Initialize and verify an instance
+## Initializing and verifying an instance
 
 Run the lifecycle commands with the interface name from `ip`:
 
@@ -122,12 +103,7 @@ narwhal dev status
 
 Run every later lifecycle command in the Python environment that ran `init`.
 
-Each command writes to two streams:
-
-| Stream | Content |
-| --- | --- |
-| stdout | The [lifecycle result](cli/Dev.md) as one JSON document |
-| stderr | Preparation, profiling, and error diagnostics |
+Each command writes the [lifecycle result](cli/Dev.md) to stdout as one JSON document, and preparation, profiling, and error diagnostics to stderr.
 
 For scripts, `--format json` returns [versioned command results and automation exit codes](Command-Results.md).
 
@@ -138,16 +114,11 @@ curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
 
-Optional: [forward these metrics to a Prometheus and Grafana host](observability/04-WSL2.md).
+The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to Prometheus and Grafana on a separate host.
 
-Two `narwhal dev` options change the layout and target:
+`--port-base` on `narwhal dev init` selects a different port layout, and `--instance` on any command targets another instance.
 
-| Option | Effect |
-| --- | --- |
-| `--port-base` on `narwhal dev init` | Selects a different port layout |
-| `--instance` on any command | Targets another instance |
-
-## Inspect and stop the instance
+## Inspecting and stopping the instance
 
 The run directory that `status` prints holds:
 
@@ -180,12 +151,9 @@ For a runtime change or engine restart:
 
 ## Stage deadlines and recovery
 
-`dev up` and `dev verify` run subprocess stages with time budgets.
+`dev up` and `dev verify` run subprocess stages with time budgets. `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the budget for every stage, default 300 seconds.
 
-| Variable | Default | Scope |
-| --- | --- | --- |
-| `NARWHAL_STAGE_TIMEOUT_SECONDS` | 300 seconds | Every stage |
-| `NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` | | One stage, with `<NAME>` as the stage name in uppercase and hyphens replaced by underscores |
+`NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` sets the budget for one stage. `<NAME>` is the stage name in uppercase, with hyphens replaced by underscores.
 
 Stage names:
 
@@ -205,16 +173,9 @@ NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=720 narwhal dev up
 NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 ```
 
-Budgets and fixed limits:
+A stage budget covers the stage's work, helper imports, and subprocess startup. Each profiled role split gets a fresh stage budget.
 
-| Limit | Value |
-| --- | --- |
-| Stage budget | Covers the stage's work, helper imports, and subprocess startup |
-| Profiled role split | A fresh stage budget for each split |
-| Engine health check in native shared startup | 180 seconds per engine |
-| HTTP health request | 2-second timeout per request |
-| Routed verification request | 30-second timeout |
-| Cleanup grace periods | Added to the execution budget |
+Native shared startup allows 180 seconds for each engine health check. Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
 
 `narwhal dev` stops the stage's supervised processes when:
 
@@ -222,12 +183,12 @@ Budgets and fixed limits:
 - `narwhal dev` receives SIGINT (Ctrl-C) during a stage
 - `narwhal dev` receives SIGTERM during a stage
 
-Cleanup steps:
+Cleanup runs in two steps:
 
-| Step | Signal | Wait | Variable |
-| :---: | --- | --- | --- |
-| 1 | SIGTERM | Up to 10 seconds | `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS` |
-| 2 | SIGKILL to surviving processes | Up to 5 seconds | `NARWHAL_STAGE_KILL_GRACE_SECONDS` |
+1. `narwhal dev` sends SIGTERM and waits up to `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS`, 10 seconds by default.
+2. `narwhal dev` sends SIGKILL to surviving processes and waits up to `NARWHAL_STAGE_KILL_GRACE_SECONDS`, 5 seconds by default.
+
+Both grace periods add to the execution budget.
 
 Files next to each stage log:
 
@@ -237,12 +198,9 @@ Files next to each stage log:
 | `*.stdout`, `*.stderr` | The stage's private output |
 | `*.stage.json` | The budget, wall-clock start, elapsed time, exit status, process identities, cleanup escalation, and surviving PIDs |
 
-Failed command outcomes:
+When `up` fails, startup rolls back and `lifecycle.json` records the original failure and teardown errors.
 
-| Failed command | Result | Report |
-| --- | --- | --- |
-| `up` | Startup rolls back. | `lifecycle.json` records the original failure and teardown errors. |
-| `verify` | The attempt directory stays. | `status` reports `degraded` with the reason until a later `verify` succeeds or `down` completes. |
+When `verify` fails, the attempt directory stays. `status` reports `degraded` with the reason until a later `verify` succeeds or `down` completes.
 
 Recover from a failed stage, with `PATH` as the instance directory:
 
@@ -253,7 +211,7 @@ Recover from a failed stage, with `PATH` as the instance directory:
 
 If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 
-## Contribute another GPU recipe
+## Contributing another GPU recipe
 
 Contribute a template for a new small CUDA GPU:
 

@@ -39,9 +39,16 @@ copyright: Copyright &copy; athrael-soju
 
 plugins:
   - search
+  - glightbox:
+      manual: true
+      background: none
 
 hooks:
   - overrides/hooks/llms_txt.py
+  - overrides/hooks/panel_rows.py
+
+validation:
+  anchors: warn
 
 markdown_extensions:
   - admonition
@@ -57,45 +64,47 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Install from PyPI: Install-from-PyPI.md
+  - Installing from PyPI: Install-from-PyPI.md
   - Narwhal dev:
       - Overview: Dev-Runtime.md
-      - Install the CUDA runtime: dev/CUDA-Runtime.md
+      - Installing the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
       - Recovery and qualification: dev/Recovery-and-Qualification.md
-  - Deploy a fleet:
+  - Deploying a fleet:
       - Overview: Deploy.md
-      - A. Discover the fleet: deploy/01-Discover.md
-      - B. Install Narwhal: deploy/02-Install.md
-      - C. Validate and start engines: deploy/03-Validate-Engines.md
-      - D. Qualify fabric: deploy/04-Qualify-Fabric.md
-      - E. Attest live engines: deploy/05-Attest.md
-      - F. Profile once and preflight: deploy/06-Profile-and-Preflight.md
-      - G. Serve and measure: deploy/07-Serve-and-Measure.md
+      - A. Discovering the fleet: deploy/01-Discover.md
+      - B. Installing Narwhal: deploy/02-Install.md
+      - C. Validating and starting engines: deploy/03-Validate-Engines.md
+      - D. Qualifying the fabric: deploy/04-Qualify-Fabric.md
+      - E. Attesting live engines: deploy/05-Attest.md
+      - F. Profiling and running preflight: deploy/06-Profile-and-Preflight.md
+      - G. Serving and measuring: deploy/07-Serve-and-Measure.md
   - Deployment operations:
-      - Measure a fleet:
+      - Measuring a fleet:
           - Overview: Measure.md
           - Measurement contract and profiling: measure/01-Profile.md
           - Targets and deployment freeze: measure/02-Targets-and-Freeze.md
           - Synthetic load trial: measure/03-Load-Trial.md
-          - Reconcile and accept: measure/04-Reconcile-and-Accept.md
+          - Reconciling and accepting: measure/04-Reconcile-and-Accept.md
           - Ordered benchmark points: measure/05-Benchmark-Runner.md
           - Benchmark evidence bundle: measure/06-Benchmark-Evidence.md
           - GPU benchmark qualification: measure/07-GPU-Qualification.md
-      - Set up observability:
+          - Cache-aware placement trial: measure/08-Cache-Aware-Trial.md
+      - Setting up observability:
           - Overview: Observability.md
-          - Start and verify monitoring: observability/01-Start-and-Verify.md
-          - Access dashboards and isolate listeners: observability/02-Access.md
+          - Starting and verifying monitoring: observability/01-Start-and-Verify.md
+          - Accessing dashboards and isolating listeners: observability/02-Access.md
+          - Reading the dashboard: observability/05-Dashboard.md
           - GPU telemetry, alerts, and recovery: observability/03-Telemetry-and-Recovery.md
-          - Monitor a WSL2 development fleet: observability/04-WSL2.md
-      - Operate Narwhal:
+          - Monitoring a WSL2 development fleet: observability/04-WSL2.md
+      - Operating Narwhal:
           - Overview: Operate.md
           - Production boundary and router pair: operate/01-Start-Routers.md
           - Router state and placement monitoring: operate/02-Monitor.md
           - Engine restart and process replacement: operate/03-Restart-Engines.md
           - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
           - Release drills: operate/05-Release-Drills.md
-      - Troubleshoot a fleet:
+      - Troubleshooting a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md
           - Router failover and rollback: troubleshoot/02-Router-Recovery.md

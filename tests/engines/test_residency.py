@@ -1,5 +1,6 @@
 """Check residency tracking against vLLM-shaped cache events and ZeroMQ sockets."""
 
+import random
 import tempfile
 import threading
 import time
@@ -16,7 +17,7 @@ from narwhal.engines.kv_events import (
     decode_batch,
 )
 from narwhal.engines.prefix import CacheNamespace, block_identities
-from narwhal.engines.residency import ResidencyIndex
+from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
 from narwhal.engines.residency_feed import ResidencyFeed
 
 MODEL, TOKENIZER = "model", "contract"
@@ -171,15 +172,67 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(index, 0, stored([1, 2], prompt))
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
         self.assertEqual(index.cached_prefix_blocks(names), 1)
-        sequence, changes = index.changes_after(0)
-        self.assertEqual(sequence, 1)
-        self.assertEqual(changes[0]["groups"]["0"]["removed"], [names[1].hex()])
-        self.assertEqual(index.changes_after(1), (1, []))
+        result = index.changes_after(0)
+        self.assertEqual((result.sequence, result.block_size), (1, 4))
+        self.assertEqual(result.changes[0]["groups"]["0"]["removed"], [names[1].hex()])
+        result = index.changes_after(1)
+        self.assertEqual((result.sequence, result.changes), (1, []))
         self.assertIsNone(index.changes_after(5))
         self.apply(index, 2, {"type": "AllBlocksCleared"})
         self.assertTrue(index.known)
         self.assertEqual(index.cached_prefix_blocks(names), 0)
-        self.assertTrue(index.changes_after(1)[1][0]["cleared"])
+        self.assertTrue(index.changes_after(1).changes[0]["cleared"])
+
+    def test_changes_report_net_presence_per_batch_with_duplicate_copies(self):
+        """vLLM can hold one hash twice; a batch's change lists only net transitions."""
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        prompt = tuple(range(12))
+        names = identities(tuple(range(16)))
+        removed = {"type": "BlockRemoved", "group_idx": 0}
+        self.apply(index, 0, stored([1, 2, 3], prompt))
+        # Block 4 arrives and leaves within one batch.
+        self.apply(
+            index, 1, stored([4], (12, 13, 14, 15), parent=3), {**removed, "block_hashes": [4]}
+        )
+        delta = index.changes_after(0).changes[0]["groups"]["0"]
+        self.assertEqual((delta["stored"], delta["removed"]), ([], []))
+        # A second copy of block 3 arrives and one copy leaves.
+        self.apply(index, 2, stored([3], prompt[8:], parent=2), {**removed, "block_hashes": [3]})
+        self.assertEqual(index.cached_prefix_blocks(names), 3)
+        self.assertEqual(index.changes_after(1).changes[0]["groups"]["0"]["removed"], [])
+        self.apply(index, 3, {**removed, "block_hashes": [3]})
+        self.assertEqual(index.cached_prefix_blocks(names), 2)
+        self.assertEqual(
+            index.changes_after(2).changes[0]["groups"]["0"]["removed"], [names[2].hex()]
+        )
+
+    def test_change_log_bound_and_mixed_block_sizes(self):
+        index = ResidencyIndex(MODEL, TOKENIZER, max_change_blocks=3)
+        prompt = tuple(range(8))
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
+        self.assertIsNotNone(index.changes_after(-1))
+        self.apply(index, 2, stored([2], prompt[4:], parent=1))
+        # The log holds at most three changed blocks.
+        self.assertIsNone(index.changes_after(-1))
+        self.assertEqual(len(index.changes_after(0).changes), 2)
+        # The batch-count bound applies with the block bound.
+        bounded = ResidencyIndex(MODEL, TOKENIZER, max_changes=2, max_change_blocks=3)
+        for sequence in range(4):
+            self.apply(
+                bounded, sequence, stored([sequence + 1], range(4 * sequence, 4 * sequence + 4))
+            )
+        self.assertIsNone(bounded.changes_after(0))
+        self.assertEqual(len(bounded.changes_after(1).changes), 2)
+        self.apply(index, 3, stored([9], prompt, group=1, size=8))
+        self.assertFalse(index.known)
+        self.assertIn("block size 8", index.snapshot()["reason"])
+
+    def test_a_lost_feed_reports_its_reason_during_replay(self):
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        index.set_current(False)
+        index.lose("cache-event subscription failed: ZMQError")
+        self.assertIn("subscription failed", index.snapshot()["reason"])
 
     def test_missing_history_stays_unknown_until_a_cache_reset(self):
         """Late starts, gaps and unreadable batches serve no blocks."""
@@ -239,6 +292,28 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(windowless, 0, stored([1], prompt[:4], kind="sliding_window"))
         self.assertEqual(windowless.cached_prefix_blocks(names), 0)
 
+    def test_duplicate_and_out_of_order_batches_change_nothing(self):
+        """A replayed or late batch whose sequence was already applied is ignored."""
+        prompt = tuple(range(8))
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
+        # Replayed batch 0 and a late batch 1.
+        self.apply(index, 0, stored([1, 2], prompt))
+        self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [1], "group_idx": 0})
+        self.assertTrue(index.known)
+        self.assertEqual(index.sequence, 1)
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
+        # A duplicate store inside one batch leaves one resident block.
+        self.apply(
+            index,
+            2,
+            stored([3], tuple(range(4, 8)), parent=1),
+            stored([3], tuple(range(4, 8)), parent=1),
+        )
+        self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 2)
+        self.assertEqual(len(index.snapshot()["groups"][0]["identities"]), 2)
+
     def test_bound_offload_tiers_and_unnamed_blocks(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_blocks=2)
         prompt = tuple(range(12))
@@ -255,8 +330,16 @@ class ResidencyIndexTests(unittest.TestCase):
         index = ResidencyIndex(MODEL, TOKENIZER)
         index.mark_empty()
         self.assertTrue(index.known)
+        self.assertEqual(index.reason, "no cache events published")
         self.apply(index, 0, stored([1], range(4)))
         self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(4)))), 1)
+        self.assertEqual(index.snapshot()["reason"], "complete event history")
+        lost = ResidencyIndex(MODEL, TOKENIZER)
+        lost.mark_empty()
+        lost.lose("feed stopped")
+        self.apply(lost, 0, stored([1], range(4)))
+        self.assertFalse(lost.known)
+        self.assertIn("feed stopped", lost.reason)
 
 
 class ResidencyFeedTests(unittest.TestCase):
@@ -302,7 +385,73 @@ class ResidencyFeedTests(unittest.TestCase):
         index = ResidencyIndex(MODEL, TOKENIZER)
         self.run_feed(publisher, index)
         self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
-        self.assertTrue(index.known)
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+
+    def test_a_live_gap_serves_nothing_until_its_replay_catches_up(self):
+        """A batch missed on the live socket leaves the index unknown during its replay."""
+        publisher = FakePublisher(self.directory, replay_gap_s=0.3)
+        self.addCleanup(publisher.close)
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        self.run_feed(publisher, index)
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+        publisher.publish(batch())
+        self.assertTrue(wait_for(lambda: index.sequence == 0))
+        publisher.publish(batch(), deliver=False)
+        publisher.publish(batch(), deliver=False)
+        publisher.publish(batch())
+        self.assertTrue(
+            wait_for(
+                lambda: index.snapshot()["reason"] == "replaying buffered history",
+                timeout=2,
+            )
+        )
+        self.assertTrue(wait_for(lambda: index.sequence == 3 and index.snapshot()["known"]))
+
+    def test_a_batch_before_the_first_live_read_replays_the_missed_history(self):
+        """Batches published after an empty replay and before the first live read are recovered."""
+        publisher = FakePublisher(self.directory)
+        self.addCleanup(publisher.close)
+
+        class Racing(ResidencyFeed):
+            first = True
+
+            def _catch_up(self, start, until=None):
+                result = super()._catch_up(start, until)
+                if self.first:
+                    self.first = False
+                    publisher.publish(batch(stored([b"a"], [1, 2, 3, 4])), deliver=False)
+                    publisher.publish(batch(stored([b"b"], [5, 6, 7, 8], parent=b"a")))
+                    time.sleep(0.3)
+                return result
+
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        feed = Racing(index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.5)
+        feed.start()
+        self.addCleanup(feed.stop)
+        self.assertTrue(wait_for(lambda: index.sequence == 1))
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
+        self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(1, 9)))), 2)
+
+    def test_residency_stays_unknown_until_replay_rounds_reach_the_stream(self):
+        """Between replay rounds the stale index serves nothing."""
+        publisher = FakePublisher(self.directory, replay_limit=2, replay_gap_s=0.1)
+        self.addCleanup(publisher.close)
+        for _ in range(8):
+            publisher.publish(batch())
+        index = ResidencyIndex(MODEL, TOKENIZER)
+        feed = ResidencyFeed(
+            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.3, poll_s=0.02
+        )
+        feed.start()
+        self.addCleanup(feed.stop)
+        self.assertTrue(wait_for(lambda: index.sequence is not None and index.sequence >= 1))
+        snapshot = index.snapshot()
+        self.assertEqual(
+            (snapshot["known"], snapshot["reason"]), (False, "replaying buffered history")
+        )
+        self.assertIsNone(index.changes_after(0))
+        self.assertTrue(wait_for(lambda: index.snapshot()["known"], timeout=8))
+        self.assertEqual(index.sequence, 7)
 
     def test_truncated_replays_continue_from_the_first_missing_batch(self):
         """A replay that loses its tail and end marker resumes until the history is complete."""
@@ -363,3 +512,88 @@ class ResidencyFeedTests(unittest.TestCase):
         self.run_feed(silent, blind)
         self.assertTrue(wait_for(lambda: "replay is unavailable" in blind.reason))
         self.assertFalse(blind.known)
+
+
+class CachedPrefixBlockWindowTests(unittest.TestCase):
+    def test_window_groups_match_a_full_rescan(self):
+        rng = random.Random(7)
+        ids = [bytes([n]) * 32 for n in range(24)]
+
+        def rescan(full, window, needed, boundary):
+            best = 0
+            for count, identity in enumerate(ids, start=1):
+                if identity not in full:
+                    break
+                if identity in boundary and all(
+                    i in window for i in ids[max(0, count - needed) : count]
+                ):
+                    best = count
+            return best
+
+        for _ in range(400):
+            full = set(ids[: rng.randint(0, 24)])
+            window = {i for i in ids if rng.random() < 0.8}
+            boundary = {i for i in ids if rng.random() < 0.5}
+            window_tokens = rng.randint(2, 40)
+            needed = -(-(window_tokens - 1) // 4)
+            groups = [
+                ("full_attention", None, full),
+                ("sliding_window", window_tokens, window),
+                ("mamba", None, boundary),
+            ]
+            self.assertEqual(
+                cached_prefix_blocks(groups, ids, 4), rescan(full, window, needed, boundary)
+            )
+
+    def test_group_mixes_match_a_block_by_block_scan(self):
+        """Every mix of group kinds, windows and holes matches a block-by-block scan."""
+        rng = random.Random(11)
+        kinds = ("full_attention", "mla_attention", None, "sliding_window", "mamba", "chunked")
+        for _ in range(3000):
+            ids = [bytes([rng.randrange(256), n]) for n in range(rng.randrange(0, 24))]
+            groups = []
+            for _ in range(rng.randrange(0, 4)):
+                kind = rng.choice(kinds)
+                window = rng.choice((None, 1, 5, 9, 17)) if kind == "sliding_window" else None
+                held = {i for i in ids if rng.random() < rng.choice((0.5, 0.9, 1.0))}
+                groups.append((kind, window, held))
+            block_size = rng.choice((None, 4))
+            with self.subTest(ids=len(ids), groups=[(k, w) for k, w, _ in groups]):
+                self.assertEqual(
+                    cached_prefix_blocks(groups, ids, block_size),
+                    scanned_prefix_blocks(groups, ids, block_size),
+                )
+
+
+def scanned_prefix_blocks(groups, identities, block_size):
+    """Scan every block for every group rule, as vLLM checks a prefix hit."""
+    full_kinds = {None, "full_attention", "mla_attention", "sink_full_attention"}
+    window_kinds = {"sliding_window", "sliding_window_mla"}
+    if not groups or any(
+        kind not in full_kinds | window_kinds | {"mamba"}
+        or (kind in window_kinds and (not window or not block_size))
+        for kind, window, _ in groups
+    ):
+        return 0
+    best = 0
+    for count in range(1, len(identities) + 1):
+        prefix = identities[:count]
+        fits = True
+        for kind, window, blocks in groups:
+            if kind in full_kinds:
+                fits = fits and all(identity in blocks for identity in prefix)
+            elif kind in window_kinds:
+                needed = min(count, -(-(window - 1) // block_size))
+                fits = fits and all(identity in blocks for identity in prefix[count - needed :])
+            else:
+                fits = fits and prefix[-1] in blocks
+        if not all(
+            identity in blocks
+            for kind, _, blocks in groups
+            if kind in full_kinds
+            for identity in prefix
+        ):
+            break
+        if fits:
+            best = count
+    return best

@@ -5,14 +5,45 @@ from __future__ import annotations
 import json
 from typing import Any
 
-_INTEGER_FIELDS = ("n", "best_of", "max_tokens")
+_INTEGER_FIELDS = ("n", "best_of", "max_tokens", "max_completion_tokens")
+# Request fields that change the prefilled tokens outside the counted render.
+UNCOUNTED_RENDER_FIELDS = ("truncate_prompt_tokens", "documents", "reasoning_effort")
+
+
+def output_cap(body: dict[str, Any]) -> int:
+    """Return the requested output cap from `max_completion_tokens` or `max_tokens`, 0 if unset."""
+    for name in ("max_completion_tokens", "max_tokens"):
+        value = body.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return 0
+
+
+def _multimodal(body: dict[str, Any]) -> bool:
+    """Return whether a chat request carries non-text content parts."""
+    for message in body.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list) and any(
+            not isinstance(part, dict) or part.get("type") != "text" for part in content
+        ):
+            return True
+    return False
+
+
+def cacheable_render(body: dict[str, Any]) -> bool:
+    """Return whether the counted render covers every prefilled token of the request.
+
+    Non-text chat content and a set `UNCOUNTED_RENDER_FIELDS` field make it uncacheable.
+    """
+    return not _multimodal(body) and all(
+        body.get(field) is None for field in UNCOUNTED_RENDER_FIELDS
+    )
 
 
 def completion_body_error(body: Any) -> tuple[str, str | None] | None:
     """Validate router-interpreted fields and supported response formats.
 
     Return (message, param) for a rejected body, or None on success.
-    Error messages identify the field and validation rule.
     """
     if not isinstance(body, dict):
         return "the request body must be a JSON object", None
@@ -35,6 +66,13 @@ def completion_body_error(body: Any) -> tuple[str, str | None] | None:
             return "messages must be an array", "messages"
         if any(not isinstance(item, dict) for item in messages):
             return "every item in messages must be an object", "messages"
+    xargs = body.get("vllm_xargs")
+    if isinstance(xargs, dict):
+        # Full cache reports mark empty sliding-window and Mamba positions as resident.
+        # Transfer parameters replace the router's own KV and encoder-cache handoff.
+        for key in ("kv_cache_report_mode", "kv_transfer_params", "ec_transfer_params"):
+            if key in xargs:
+                return f"vllm_xargs.{key} is reserved for Narwhal", "vllm_xargs"
     if not stream:
         if body.get("audio") is not None:
             return "non-streaming audio output is not supported", "audio"
@@ -109,8 +147,7 @@ def _chat_delta(
 def reassemble(lines: list[str], *, endpoint: str) -> dict[str, Any]:
     """Fold validated SSE into the response shape of the requested endpoint.
 
-    Chunks reach this fold already filtered by the client's exposure choice,
-    so token identity present in them was requested and survives the merge.
+    Token IDs left in the client-filtered chunks survive the merge.
     """
     chat = endpoint == "/v1/chat/completions"
     merged: dict[str, Any] = {"index": 0, "finish_reason": "stop"}

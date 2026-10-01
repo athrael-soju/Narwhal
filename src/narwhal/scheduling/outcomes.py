@@ -11,8 +11,7 @@ class OutcomeWindow:
 
     def __init__(self, clock: Callable[[], float], bucket_s: float, retained_s: float) -> None:
         self._clock = clock
-        # Fixed-width buckets bound storage independently of request rate.
-        # Retain the complete bucket containing the horizon boundary.
+        # The bucket containing the horizon boundary is retained whole.
         if not (math.isfinite(bucket_s) and bucket_s > 0):
             raise ValueError(f"outcome_bucket_s must be positive, got {bucket_s}")
         if not (math.isfinite(retained_s) and retained_s > 0):
@@ -52,9 +51,7 @@ class OutcomeWindow:
     def outcome_counts(self, since_s: float) -> tuple[int, int, int]:
         """Return (ttft_ok, tpot_ok, total) recorded at or after `since_s`.
 
-        Evidence granularity is one bucket: the bucket containing `since_s`
-        counts whole, so a window narrower than a bucket approximates to one
-        bucket. Counting scans the bounded bucket map.
+        The bucket containing `since_s` counts whole.
         """
         start = math.floor(since_s / self.bucket_s)
         ttft_ok = tpot_ok = total = 0

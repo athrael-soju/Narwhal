@@ -11,6 +11,7 @@ import httpx
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.profiling.model import Profile
 from narwhal.serving.app import create_app
+from narwhal.serving.completion import completion_body_error, output_cap
 from narwhal.serving.router import NarwhalRouter
 from narwhal.types import Role
 
@@ -347,13 +348,20 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
             ({"audio": {"format": "wav"}}, "audio"),
             ({"modalities": ["text", "audio"]}, "modalities"),
             ({"tools": [{"type": "custom"}]}, "tools"),
+            ({"stream": True, "vllm_xargs": {"kv_cache_report_mode": "full"}}, "vllm_xargs"),
+            ({"vllm_xargs": {"kv_transfer_params": {"do_remote_decode": True}}}, "vllm_xargs"),
+            ({"vllm_xargs": {"ec_transfer_params": {}}}, "vllm_xargs"),
         ):
             with self.subTest(fields=fields):
                 response = await self.post(**fields)
                 self.assertEqual(response.status_code, 400, response.text)
                 self.assertEqual(response.json()["error"]["param"], param)
+        response = await self.post(
+            endpoint="/v1/completions", vllm_xargs={"kv_cache_report_mode": "full"}
+        )
+        self.assertEqual(response.json()["error"]["param"], "vllm_xargs")
         self.assertFalse(self.calls)
-        self.assertEqual(self.router.invalid_requests, 3)
+        self.assertEqual(self.router.invalid_requests, 7)
 
     async def test_upstream_error_cannot_be_folded_into_success(self):
         self.frames = [
@@ -382,3 +390,16 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("non-streaming", response.json()["error"]["message"])
         self.assertEqual(self.router.served, 0)
         self.assertEqual(self.router.failed, 4)
+
+
+class OutputCapTests(unittest.TestCase):
+    def test_the_output_cap_reads_either_token_limit_field(self):
+        self.assertEqual(output_cap({"max_completion_tokens": 32}), 32)
+        self.assertEqual(output_cap({"max_tokens": 16, "max_completion_tokens": 32}), 32)
+        self.assertEqual(output_cap({"max_tokens": 16}), 16)
+        self.assertEqual(output_cap({"max_tokens": True}), 0)
+        self.assertEqual(output_cap({}), 0)
+        self.assertEqual(
+            completion_body_error({"max_completion_tokens": "8"}),
+            ("max_completion_tokens must be an integer", "max_completion_tokens"),
+        )

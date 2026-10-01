@@ -16,22 +16,23 @@ from hashlib import sha256
 from importlib import resources
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit
 
 import httpx
 
 from .. import command_results as results
 from ..cli_support import add_version_argument
-from ..config import FleetConfig
+from ..config import EngineSpec, FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
-from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from ..engines.client import EngineClient, EngineError, first_output_timeout
 from ..engines.connector import PrefillResult
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing, sse_token_count
 from ..engines.validation import can_consume, can_produce, validation_pairs
 from ..profiling.calibration import calibrate, verify_calibration
-from ..profiling.generation import generation_problem, read_generation
+from ..profiling.generation import binding_digest, generation_problem, read_generation
 from ..profiling.model import decode_evidence_problems
 from ..profiling.probe import engine_context_limit, make_prompt
 from ..profiling.store import ProfileStore
@@ -67,6 +68,63 @@ class Report:
         """Report a configuration risk without changing gate outcomes."""
         print(f"  WARN  {msg}")
         self.warnings.append(msg)
+
+
+async def colocated_restart_risk(
+    cfg: FleetConfig, transport: httpx.AsyncBaseTransport | None = None
+) -> str:
+    """Name host-sharing KV producers whose host peers cannot release their GPU memory.
+
+    A stopped producer's memory frees once every host peer that consumes KV attests peer
+    release and has another producer for its release probe.
+    """
+    contract = cfg.engine_contract
+    if cfg.engine_restart_policy != "individual" or contract is None or not contract.connector:
+        return ""
+    hosts: dict[str, list[EngineSpec]] = {}
+    for spec in cfg.engines:
+        hosts.setdefault(urlsplit(spec.url).hostname or "", []).append(spec)
+    shared = [spec for specs in hosts.values() if len(specs) > 1 for spec in specs]
+    released: dict[str, bool] = {}
+    async with httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport) as client:
+        for spec in shared:
+            release = None
+            if spec.attestation_url:
+                with contextlib.suppress(httpx.HTTPError, ValueError, AttributeError):
+                    response = await client.get(spec.attestation_url)
+                    response.raise_for_status()
+                    release = response.json().get("launch", {}).get("peer_release")
+            released[spec.iid] = release is True
+    unreleased: set[str] = set()
+    unprobed: set[str] = set()
+    for specs in hosts.values():
+        for stopped in specs:
+            if len(specs) < 2 or not can_produce(stopped):
+                continue
+            for peer in specs:
+                if peer is stopped or not can_consume(peer):
+                    continue
+                if not released[peer.iid]:
+                    unreleased.add(stopped.iid)
+                if not any(
+                    can_produce(other) and other.iid not in (stopped.iid, peer.iid)
+                    for other in cfg.engines
+                ):
+                    unprobed.add(stopped.iid)
+    causes = [
+        f"{', '.join(sorted(iids))} {cause}"
+        for iids, cause in (
+            (unreleased, "share a host with a KV consumer without attested peer release"),
+            (unprobed, "share a host with a KV consumer that has no other producer to probe"),
+        )
+        if iids
+    ]
+    if not causes:
+        return ""
+    return (
+        f"engines {'; '.join(causes)}; that peer keeps a stopped engine's GPU memory mapped, "
+        "so recover a crashed engine with a whole-wave restart"
+    )
 
 
 async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set[str]:
@@ -218,14 +276,8 @@ async def gate_pace(
 ) -> set[str]:
     """Find live engines whose prefill pace exceeds the allowed tolerance.
 
-    The minimum of `repeats` filters one scheduling delay. Each repeat carries
-    the dialect's cold-probe fields, so an engine with prefix caching enabled
-    still prefills every repeat. Each engine is compared with the fleet median
-    and, when available, its saved profile.
-    Fewer than three engines require individual profiles to establish pace.
-
-    KV gates must skip failed engines because a stalled transfer can terminate
-    a healthy peer's engine core.
+    Pace compares against the fleet median and any saved profile; fewer than three
+    engines require profiles.
     """
     print("pace")
     dialect = lookup_dialect(cfg.dialect)
@@ -435,6 +487,7 @@ async def _pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         "vllm_version": identity.vllm_version,
         "process_start_time_seconds": identity.process_start_time_seconds,
         "attestation_digest": payload["attestation_digest"],
+        **({"launch_digest": payload["launch_digest"]} if "launch_digest" in payload else {}),
         "contract_fingerprint": cfg.engine_contract.fingerprint(),
         "cache_layout_sources": {
             name: sources[name] for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
@@ -465,10 +518,8 @@ async def gate_consume(
 ) -> None:
     """Probe role-permitted transfers between distinct engines.
 
-    Ring mode covers each eligible producer and consumer with a peer. Mesh mode
-    covers every eligible ordered pair. Repeat each pair the requested number of times.
-    Each attempt carries fresh cold-probe fields in both legs, so a consumer's prefix
-    cache cannot replace the transfer under test.
+    Ring mode covers each eligible producer and consumer with a peer; mesh mode covers
+    every eligible ordered pair.
     """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
@@ -479,14 +530,13 @@ async def gate_consume(
     producers = [i for i in ids if can_produce(by_id[i])]
     consumers = [i for i in ids if can_consume(by_id[i])]
     if len(producers) < len(ids) or len(consumers) < len(ids):
-        # Probe only transfers that role pins permit in production. A stalled
-        # forbidden transfer can kill the healthy peer's engine core.
+        # A stalled forbidden transfer can kill the healthy peer's engine core.
         excluded = sorted(set(ids) - set(consumers)) + sorted(set(ids) - set(producers))
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
     dialect = lookup_dialect(cfg.dialect)
-    # Force output so a model that ends the probe prompt at once still proves the transfer.
+    # A model may end the probe prompt at once.
     body = {
         "model": cfg.model,
         "prompt": PROBE_PROMPT,
@@ -564,7 +614,7 @@ async def gate_consume(
                     output_tokens=tokens,
                 )
         except EngineError as exc:
-            deadline_exceeded = exc.status == 504 and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
+            deadline_exceeded = exc.status == 504 and first_output_timeout(exc)
             if deadline_exceeded:
                 rep.fail(
                     f"{src} -> {dst}: first-token deadline {cfg.first_token_timeout_s:g}s "
@@ -666,7 +716,11 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             rep.fail(problem)
         if problems:
             continue
-        quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}"
+        quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
+            f"+{p.ttft_split:.4f} past {p.ttft_block_tokens}-token blocks"
+            if p.ttft_split is not None
+            else ""
+        )
         interval = f"{p.tpot_request_slope:.2e}q+{p.tpot_slope:.2e}b+{p.tpot_intercept:.4f}"
         rep.ok(
             f"{spec.iid} ttft={quadratic} tpot={interval} "
@@ -868,7 +922,7 @@ async def run(
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
-    # Use serving timeouts so preflight exercises the recorded configuration.
+    # Preflight uses the serving timeouts.
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,
@@ -894,6 +948,8 @@ async def run(
         else:
             for calibration_problem in await verify_calibration(cfg):
                 rep.fail(calibration_problem)
+        if restart_risk := await colocated_restart_risk(cfg):
+            rep.warn(restart_risk)
         incompatible = await gate_contract(cfg, live, rep)
         store = gate_profile(cfg, rep)
         stale = await gate_profile_generation(cfg, store, live, rep)
@@ -905,7 +961,7 @@ async def run(
         if skip_kv:
             rep.skip("produce and consume: skipped by --no-kv")
         elif slow or incompatible:
-            # Protect healthy peers from transfers through a degraded engine.
+            # A stalled transfer can terminate a healthy peer's engine core.
             blocked = slow | incompatible
             names = ", ".join(sorted(blocked))
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")
@@ -949,7 +1005,9 @@ async def run(
                         generation_failures.add(f"{iid} process changed after directed KV probes")
                     for profile in store.profiles_for_engine(iid):
                         problem = generation_problem(
-                            iid, profile.generation_digest, str(current["attestation_digest"])
+                            iid,
+                            profile.generation_digest,
+                            binding_digest(current),
                         )
                         if problem:
                             generation_failures.add(problem)

@@ -4,6 +4,7 @@ import copy
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,7 +56,12 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         doc = copy.deepcopy(self.doc)
         doc["roles"] = {"e0": "decode", "e3": "prefill", "stale": "invalid"}
         doc["counters"] = {
+            "offered": 30,
+            "unsized_offered": 2,
             "served": 8,
+            "slo_met": 7,
+            "expired": 3,
+            "invalid_requests": 1,
             "failed": 2,
             "unserved": 3,
             "refused": 4,
@@ -70,16 +76,40 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.monitor.instances["e3"].role, Role.PREFILL)
         self.assertEqual(
             (
+                self.router.offered,
+                self.router.unsized_offered,
                 self.router.served,
+                self.router.slo_met,
+                self.router.expired,
+                self.router.invalid_requests,
                 self.router.failed,
                 self.router.refused,
                 self.router.rejected,
                 self.router.cancelled,
             ),
-            (8, 2, 4, 5, 6),
+            (30, 2, 8, 7, 3, 1, 2, 4, 5, 6),
         )
         self.assertIn("e3", self.router.scheduler.ejected)
         self.assertEqual(self.router._inference_sources["e3"], {"e0"})
+
+    def test_a_restored_suspect_stays_live_while_it_alone_serves_its_role(self):
+        for pinned, ejected in ((True, False), (False, True)):
+            with self.subTest(pinned=pinned):
+                root = self.root / f"pinned-{pinned}"
+                root.mkdir()
+                cfg = fleet(root)
+                cfg.engines = [replace(spec, pin=pinned) for spec in cfg.engines]
+                source, target = (create_app(cfg).state.router for _ in range(2))
+                for router in (source, target):
+                    self.addAsyncCleanup(router.engines.aclose)
+                    router.lifecycle.process_starts = {"e0": 100, "e3": 100}
+                source.scheduler.inference_suspects.add("e3")
+                source._inference_sources["e3"] = {"e0"}
+                doc = state.snapshot(source)
+                self.assertEqual(doc["ejected"], [])
+                self.assertTrue(state.apply(target, doc).applied)
+                self.assertIn("e3", target.scheduler.inference_suspects)
+                self.assertEqual("e3" in target.scheduler.ejected, ejected)
 
     def test_restore_rejects_fleet_policy_and_identity_gaps(self):
         """An incompatible handoff leaves the replacement router's counters untouched."""

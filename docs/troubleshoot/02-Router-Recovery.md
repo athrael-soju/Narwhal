@@ -24,23 +24,15 @@ The recovered standby:
 - returns HTTP 503 from `/ready`
 - rejects direct completion requests with HTTP 503
 
-When both routers return HTTP 503 from `/ready`, read the refusal reasons:
-
-| Refusal reason | Action |
-| --- | --- |
-| Lease storage or clock bound | Repair the storage or clock with the lease holder and fencing left in place. |
-| Any other reason | Fix what the reason names. |
+When both routers return HTTP 503 from `/ready`, read the refusal reasons. If a reason names lease storage or a clock bound, repair the storage or clock with the lease holder and fencing left in place. For any other reason, fix what the reason names.
 
 ### State handoff is stale or incompatible
 
-| Cause | Standby `/ready` |
-| --- | --- |
-| The previous lease epoch's state handoff expired, or the previous router exited before persisting one | HTTP 503, reason `no fresh handoff` |
-| Contract version mismatch or wrong epoch in the state handoff | HTTP 503 |
+The standby's `/ready` returns HTTP 503 with reason `no fresh handoff` when the previous lease epoch's state handoff expired or the previous router exited before persisting one. A contract version mismatch or a wrong epoch in the state handoff also returns HTTP 503 from the standby's `/ready`.
 
 1. Keep client traffic stopped.
 2. Restore a compatible router release.
-3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set).
+3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keeping-one-deployment-set).
 
 If handoff restoration fails:
 
@@ -53,5 +45,5 @@ If handoff restoration fails:
 
 ## Router rollback
 
-1. Follow [Roll back](../operate/04-Upgrade-and-Validate.md#103-roll-back).
-2. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).
+1. Follow [Rolling back](../operate/04-Upgrade-and-Validate.md#103-rolling-back).
+2. Run the drills in [Validating every release](../operate/05-Release-Drills.md#11-validating-every-release).

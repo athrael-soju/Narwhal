@@ -11,6 +11,8 @@ Prerequisites:
 1. Complete the host setup in [Narwhal dev](../Dev-Runtime.md).
 2. Complete the shared [CUDA runtime and model installation](CUDA-Runtime.md).
 
+The reference runs with these settings:
+
 | Setting | Value |
 | --- | --- |
 | Context limit per engine | 4,096 tokens, input plus output |
@@ -19,7 +21,7 @@ Prerequisites:
 | Device share for all four engines | Up to 0.5 |
 | Free VRAM required by `narwhal dev init` | Half the total VRAM plus 2,048 MiB |
 
-## Select the RTX 5090 template
+## Selecting the RTX 5090 template
 
 Export the packaged reference template:
 
@@ -37,7 +39,7 @@ The template pins:
 - a minimum of 30,000 MiB total VRAM
 - the same runtime and model hashes as the installed small-GPU template
 
-## Launch and verify the reference
+## Launching and verifying the reference
 
 1. Run `ip -brief -4 address`.
 2. Find the Linux network interface that carries a single IPv4 address.
@@ -50,10 +52,7 @@ The template pins:
     narwhal dev status
     ```
 
-| Command | Result |
-| --- | --- |
-| `up` | Profiles the engines and starts the router |
-| `verify` | Checks the 12 eligible directed KV transfers and one routed arithmetic request, and reports `ready` |
+`up` profiles the engines and starts the router. `verify` checks the 12 eligible directed KV transfers and one routed arithmetic request, and reports `ready`.
 
 Run later lifecycle commands in the virtual environment that ran `init`.
 
@@ -66,12 +65,7 @@ Default ports:
 | Attestation | 18201 and up |
 | NIXL side channel | 5701 and up |
 
-Options for another layout or instance:
-
-| Option | Effect |
-| --- | --- |
-| `narwhal dev init --port-base` | Selects a different port layout |
-| `--instance` on each command | Addresses another instance |
+[`narwhal dev init --port-base` and `--instance`](../Dev-Runtime.md#initializing-and-verifying-an-instance) select another port layout or instance.
 
 Send a routed chat completion:
 
@@ -85,7 +79,7 @@ The expected response content is `5`.
 
 Forward metrics to Prometheus and Grafana with the [WSL2 monitoring example](../observability/04-WSL2.md).
 
-## Replay all three role splits
+## Replaying all three role splits
 
 The `role_cycle` in the reference template fixes the token pool, random seeds, and workload order.
 
@@ -104,47 +98,31 @@ python -m tools.measurement.dev_cycle --instance runs/dev
 narwhal dev down --instance runs/dev
 ```
 
-Replay phases:
+The replay moves through the split sequence 2P:2D, 1P:3D, 2P:2D, 3P:1D, 2P:2D and takes about two minutes. It runs three phases:
 
 | Phase | Input / output tokens | Requests | Requests/s | Maximum in flight |
-| --- | --- | :---: | :---: | :---: |
+| --- | :---: | :---: | :---: | :---: |
 | Decode | 256 / 128 | 24 | 0.5 | 8 |
 | Prefill steady | 3,840 / 1 | 35 | 1 | 8 |
 | Prefill burst | 3,840 / 1 | 12 | 100 | 12 |
 
-| Item | Value |
-| --- | --- |
-| Split sequence | 2P:2D, 1P:3D, 2P:2D, 3P:1D, 2P:2D |
-| Duration | About two minutes |
+The replay passes when:
 
-Acceptance criteria:
+- the observed splits match the split sequence, with every move made by the role controller on the same engine processes
+- every Decode and Prefill steady request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets
+- every Prefill burst request completes or returns an HTTP 429 response that cites the TTFT budget
 
-| Scope | Accepted outcome |
-| --- | --- |
-| Role cycle | The observed splits match the split sequence, with every move made by the role controller on the same engine processes. |
-| Decode and Prefill steady | Every request meets the template's time to first token (TTFT) and time per output token (TPOT) budgets. |
-| Prefill burst | Every request completes or returns an HTTP 429 response that cites the TTFT budget. |
+The replay writes its records to a `cycle-*` directory beneath the instance. `--out DIR` writes them to `DIR`, a fresh directory.
 
-Replay records directory:
-
-| Option | Directory |
-| --- | --- |
-| Default | A `cycle-*` directory beneath the instance |
-| `--out DIR` | `DIR`, a fresh directory |
-
-| Content | Holds |
-| --- | --- |
-| `summary.json` | Observed splits, per-phase latency, and the acceptance result |
-| `grafana_range` in `summary.json` | Timestamps for the dashboard's `from` and `to` URL parameters |
-| Other files | The template, effective fleet, source hashes, request rows, and router state |
+`summary.json` holds the observed splits, per-phase latency, and the acceptance result. Its `grafana_range` holds timestamps for the dashboard's `from` and `to` URL parameters. The other record files hold the template, effective fleet, source hashes, request rows, and router state.
 
 Exit codes:
 
 | Code | Meaning |
-| :--: | --- |
-| `0` | The role cycle and every phase passed. |
-| `1` | Setup or execution failed. |
-| `2` | A completed replay failed the role cycle or a phase. |
+| :---: | --- |
+| `0` | The role cycle and every phase passed |
+| `1` | Setup or execution failed |
+| `2` | A completed replay failed the role cycle or a phase |
 
 ## Reference operating limits
 
@@ -154,6 +132,8 @@ State and metrics endpoints:
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
+
+The reference template sets these profiling, SLO and role-control values:
 
 | Setting | Value |
 | --- | --- |

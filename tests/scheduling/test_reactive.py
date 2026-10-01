@@ -333,18 +333,17 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(snapshot.offered_inputs, ())
         self.assertEqual(snapshot.offered_outputs, ())
         candidates = dict(snapshot.profile_options)[2]
-        for bounds in (
-            {"decode_max_kv_tokens": 50},
-            {"decode_min_kv_tokens": 200},
-            {"prefill_max_tokens": 50},
-            {"decode_max_output_tokens": 5},
+        for bounds, covered in (
+            ({"decode_max_kv_tokens": 50}, False),
+            ({"prefill_max_tokens": 50}, False),
+            ({"decode_min_kv_tokens": 200, "prefill_min_tokens": 200}, True),
         ):
             with self.subTest(bounds=bounds):
                 narrowed = replace(
                     snapshot,
                     profile_options=((2, tuple(replace(p, **bounds) for p in candidates)),),
                 )
-                self.assertFalse(narrowed.score(2).decode_profile_covered)
+                self.assertEqual(narrowed.score(2).decode_profile_covered, covered)
         self.assertIsNotNone(fleet.confirm())
 
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
@@ -381,6 +380,126 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(
             fleet.scheduler._last_decision["decision_basis"], "prefill_pressure_recovery"
         )
+
+    def test_demand_prices_outputs_past_the_profiled_decode_length(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(
+            replace(p, decode_max_output_tokens=4) for p in fleet.profiles.all_profiles()
+        )
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+        priced = demand.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+        self.assertTrue(priced.complete)
+        self.assertGreater(priced.decode_engines, 0.0)
+
+    def test_demand_prices_prompts_below_the_profiled_prefill_sweep_at_its_shortest(self) -> None:
+        fleet = self.fleet
+        profiles = tuple(replace(p, prefill_min_tokens=100) for p in fleet.profiles.all_profiles())
+
+        def offered(length: int):
+            model = type(fleet.controller.demand)(
+                fleet.monitor, fleet.scheduler, lambda: fleet.now, window_s=60.0, bucket_s=1.0
+            )
+            model.saw_arrival(length, wanted_len=4, at=fleet.now)
+            return model.price_profiles(fleet.now, window_s=60.0, step_s=1.0, profiles=profiles)
+
+        short, shortest = offered(10), offered(100)
+        self.assertTrue(short.complete)
+        self.assertGreater(short.prefill_engines, 0.0)
+        self.assertAlmostEqual(short.prefill_engines, shortest.prefill_engines)
+
+    def test_decode_capacity_prices_length_buckets_at_or_above_exact_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        shapes = [(400 + i, 200 + (7 * i) % 100) for i in range(200)]
+        for input_len, wanted_len in shapes:
+            demand.saw_arrival(input_len, wanted_len=wanted_len, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        original = Profile.decode_rps
+        with patch.object(Profile, "decode_rps", autospec=True, side_effect=original) as rps:
+            bucketed = price()
+        self.assertLess(rps.call_count, len(shapes) * len(profiles) / 2)
+        with patch.object(type(demand), "_capacity_bucket", staticmethod(lambda tokens: tokens)):
+            exact = price()
+        self.assertGreater(exact, 0.0)
+        self.assertGreaterEqual(bucketed, exact)
+        self.assertLess(bucketed, exact * 1.2)
+
+    def test_state_snapshots_reuse_the_controller_output_estimates(self) -> None:
+        fleet = self.fleet
+        demand = fleet.controller.demand
+        demand.refresh_output_estimates()
+        with patch.object(demand, "_output_estimates", wraps=demand._output_estimates) as rebuild:
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_not_called()
+            fleet.now += demand.window_s
+            fleet.controller.safety.consolidation_evidence_snapshot()
+            rebuild.assert_called_once()
+
+    def test_a_decode_concurrency_cap_raises_priced_decode_demand(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        demand.saw_arrival(100, wanted_len=64, at=fleet.now)
+
+        def price() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).decode_engines
+
+        uncapped = price()
+        fleet.scheduler.decode_concurrency = 1
+        self.assertGreater(price(), uncapped)
+
+    def test_full_capped_decode_slots_move_an_engine_to_decode(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.scheduler.decode_concurrency = 2
+        fleet.controller.demand.unsized_pending = 1
+        fleet.pressure = {Role.PREFILL: 0.1, Role.DECODE: 0.1}
+        for iid in ("e3", "e4", "e5"):
+            for index in range(2):
+                request = Request(f"{iid}-{index}", 100, wanted_len=10)
+                request.phase = Phase.DECODE
+                fleet.monitor.dispatched(iid, request)
+        for index in range(4):
+            waiting = Request(f"waiting{index}", 100, wanted_len=10)
+            waiting.phase = Phase.DECODE
+            fleet.monitor.waiting[waiting.rid] = waiting
+        fleet.controller.demand.sample()
+        self.assertGreaterEqual(fleet.controller.demand.resident_demand(fleet.now, 60.0), 3.0)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.1, 0.1)
+        )
+        self.assertAlmostEqual(snapshot.decode_recovery_ratio, (6 + 4) / (3 * 2))
+        self.assertIsNotNone(fleet.confirm())
+        self.assertEqual(sum(i.role is Role.PREFILL for i in fleet.monitor.instances.values()), 2)
+
+    def test_streams_draining_on_a_former_decode_engine_leave_decode_slots(self) -> None:
+        """Only decode-role residents and waiting decode work fill the capped slots."""
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.scheduler.decode_concurrency = 2
+        for iid in ("e2", "e3"):
+            for index in range(2):
+                request = Request(f"{iid}-{index}", 100, wanted_len=10)
+                request.phase = Phase.DECODE
+                fleet.monitor.dispatched(iid, request)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.1, 0.1)
+        )
+        self.assertEqual(snapshot.current_decode, 3)
+        self.assertAlmostEqual(snapshot.decode_recovery_ratio, 2 / (3 * 2))
+        self.assertAlmostEqual(snapshot._decode_slots(2), 2 / (3 * 2))
 
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
@@ -480,8 +599,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_pending_output_exceeding_kv_blocks_move(self) -> None:
         fleet = self.fleet
-        # Pending output is priced before decode dispatch, even when all GPUs
-        # would currently appear idle. Physical capacity also bounds the domain.
+        # Pending output is priced before decode dispatch, against physical KV capacity.
         fleet.monitor.waiting["pending"] = Request("pending", 1, wanted_len=1_000_000)
         self.assertIsNone(fleet.confirm())
         decision = fleet.scheduler._last_decision
@@ -555,8 +673,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_rising_decode_demand_blocks_move(self) -> None:
         fleet = self.fleet
-        # Fill the long window before the burst so its denominator differs
-        # from the short horizon by enough to exercise the trend threshold.
+        # The trend gate compares the burst's short-horizon rate with a filled long window.
         fleet.advance(60)
         for index in range(200):
             fleet.controller.saw_arrival(100, wanted_len=100, at=fleet.now - 5 + index / 100)
@@ -607,7 +724,8 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(fleet.step())
         self.assertEqual(fleet.scheduler.flips[-1].to, Role.DECODE)
 
-    def test_advisory_and_unavailable_fleet_cannot_mutate(self) -> None:
+    def test_advisory_holds_and_unavailable_engines_leave_the_scored_split(self) -> None:
+        """An unavailable engine drops out of scoring; a role with no live engine holds control."""
         fleet = self.fleet
         fleet.scheduler.advisory = True
         self.assertIsNone(fleet.confirm())
@@ -615,6 +733,15 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(fleet.scheduler.flips, [])
         fleet.scheduler.advisory = False
         fleet.scheduler.drain("e5")
+        moved = fleet.confirm()
+        self.assertIsNotNone(moved)
+        self.assertNotEqual(moved.iid, "e5")
+        decision = fleet.scheduler._last_decision
+        self.assertEqual(decision["current_prefill"] + decision["current_decode"], 5)
+        live = fleet.scheduler.live_instances()
+        fleet.scheduler.pinned = frozenset(inst.iid for inst in live)
+        for inst in fleet.scheduler.live_instances(Role.DECODE):
+            fleet.scheduler.drain(inst.iid)
         self.assertIsNone(fleet.confirm())
         self.assertEqual(fleet.scheduler._last_decision["reason"], "fleet health is changing")
 
@@ -788,13 +915,16 @@ class ProjectedTTFTRecoveryTests(unittest.TestCase):
         self.assertIsNone(fleet.controller.step(urgent=True))
         self.assertIn("flip_resident_guard", fleet.scheduler._last_decision["reason"])
 
-    def test_urgent_move_holds_while_fleet_health_changes(self) -> None:
+    def test_urgent_move_uses_a_live_donor_while_an_engine_is_unavailable(self) -> None:
+        """Projected-TTFT recovery keeps moving and never flips the unavailable engine."""
         fleet = self.fleet
         requests = self.queue(11)
         fleet.scheduler.drain("e5")
         self.assertTrue(fleet.controller.note_prefill_risk(requests[-1]))
-        self.assertIsNone(fleet.controller.step(urgent=True))
-        self.assertEqual(fleet.scheduler._last_decision["reason"], "fleet health is changing")
+        moved = fleet.controller.step(urgent=True)
+        self.assertIsNotNone(moved)
+        self.assertNotEqual(moved.iid, "e5")
+        self.assertEqual(fleet.scheduler.flips[-1].to, Role.PREFILL)
 
 
 class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
@@ -851,8 +981,7 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
             streams.append(response)
             return response
 
-        # Placement prefers e1's measured costs. Pins constrain role changes
-        # only, leaving e1 as the occupied source candidate for the policy.
+        # Pins constrain role changes only; e1's cheaper decode makes it the occupied source.
         fleet.scheduler.pinned = frozenset(f"e{i}" for i in range(2, 6))
         fleet.profiles.put(replace(fleet.profiles.get("e1"), tpot_intercept=0.0001))
         for index in range(5):
@@ -875,7 +1004,7 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(
             fleet.monitor.instances["e1"].decode[first.lifecycle.rid], first.lifecycle.request
         )
-        # Hold e0's prefill slot so a fresh original selects e1 in its new role.
+        # With e0's prefill slot held, a fresh original selects e1 in its new role.
         fleet.monitor.dispatched("e0", Request("busy", 100))
         fresh = await request("fresh")
         self.assertEqual(fresh.lifecycle.prefill_iid, "e1")

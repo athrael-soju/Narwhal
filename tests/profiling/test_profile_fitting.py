@@ -8,6 +8,7 @@ from narwhal.profiling.fitting import (
     fit_decode_plane,
     fit_prefill_samples,
     fit_quadratic,
+    splits_prefill,
 )
 
 
@@ -29,6 +30,19 @@ class ProfileFittingTests(unittest.TestCase):
         bad = [(length, 3.0 if length == 1024 else elapsed) for length, elapsed in expected]
         with self.assertRaisesRegex(ValueError, "prefill median fit error"):
             fit_prefill_samples(bad)
+
+    def test_the_block_step_needs_two_spare_lengths_beyond_its_four_terms(self):
+        """The block step stays unfitted until six lengths leave two residuals."""
+
+        def curve(length):
+            return 0.25 + 0.0001 * length + (0.05 if splits_prefill(length, 16) else 0.0)
+
+        five = (256, 700, 1024, 1300, 2300)
+        (_, _, _, split), _, _ = fit_prefill_samples([(n, curve(n)) for n in five], 16)
+        self.assertIsNone(split)
+        six = (*five, 4096)
+        (_, _, _, split), _, _ = fit_prefill_samples([(n, curve(n)) for n in six], 16)
+        self.assertAlmostEqual(split, 0.05, places=6)
 
     def test_quadratic_recovers_coefficients_at_token_scale(self):
         """Input scaling preserves the coefficients in original token units."""
@@ -121,8 +135,7 @@ class ProfileFittingTests(unittest.TestCase):
     def test_cross_validation_scores_each_held_out_corner(self):
         """The four corner fits each miss the held-out observation by four."""
         samples = [(1, 10, 10), (1, 20, 20), (2, 10, 30), (2, 20, 44)]
-        # The nonnegative constraint binds on some three-point fits, so use
-        # a positive intercept to keep every held-out fit in the interior.
+        # The offset keeps every held-out fit off the nonnegative constraint.
         samples = [(r, k, y + 100) for r, k, y in samples]
         expected = sum(4 / y for _, _, y in samples) / 4
         self.assertAlmostEqual(decode_cross_validation_mape(samples), expected, places=10)

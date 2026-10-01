@@ -23,10 +23,22 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL:-http://127.0.0.1:9090}"
+      GF_RENDERING_SERVER_URL: "http://${NARWHAL_RENDERER_ADDRESS:-127.0.0.1:8081}/render"
+      GF_RENDERING_CALLBACK_URL: "${NARWHAL_GRAFANA_URL:-http://127.0.0.1:3000}/"
+      GF_RENDERING_RENDERER_TOKEN: "${NARWHAL_RENDERER_TOKEN:?make observe supplies the renderer token}"
     volumes:
       - ../../runs/observability/mounts/grafana-provisioning:/etc/grafana/provisioning:ro
       - ../../runs/observability/mounts/grafana-dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+
+  # Renders panels and dashboards to PNG for Grafana on its listener host.
+  renderer:
+    image: grafana/grafana-image-renderer:v5.12.5
+    network_mode: host
+    restart: always
+    environment:
+      SERVER_ADDR: "${NARWHAL_RENDERER_ADDRESS:-127.0.0.1:8081}"
+      AUTH_TOKEN: "${NARWHAL_RENDERER_TOKEN:?make observe supplies the renderer token}"
 
 volumes:
   prom-data:

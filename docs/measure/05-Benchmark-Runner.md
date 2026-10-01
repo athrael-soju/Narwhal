@@ -20,14 +20,11 @@ Prerequisites:
 - A router reserved for this run.
 - A router and engines that stay running through the benchmark.
 
-| Plan | Runner host |
-| --- | --- |
-| With an `evidence` object | A host that reads the router's append-only JSONL journal as a local file and reaches the router and every engine metrics endpoint |
-| Other plans | The workstation repository root, through the private router tunnel |
+For a plan with an `evidence` object, run the runner on a host that reads the router's append-only JSONL journal as a local file and reaches the router and every engine metrics endpoint. Run other plans from the workstation repository root, through the private router tunnel.
 
-## Run a plan
+## Running a plan
 
-1. Prepare the workload with the [load trial helper](03-Load-Trial.md#create-the-trial-directory-and-workload).
+1. Prepare the workload with the [load trial helper](03-Load-Trial.md#creating-the-trial-directory-and-workload).
 2. Write a private plan at `runs/benchmark-plan.json` with `workload.file` and `--workload` set to the prepared file:
 
     ```json
@@ -79,6 +76,8 @@ Prerequisites:
 
 ## Plan fields
 
+A plan is a JSON object with these fields:
+
 | Field | Value |
 | --- | --- |
 | `schema` | `1` |
@@ -115,10 +114,7 @@ The new private `--out` directory holds:
 | `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, and evidence diagnostic count |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 
-| Runner exit | Condition |
-| :---: | --- |
-| `0` | Every point reaches `completed` |
-| `1` | The plan fails validation, or a point ends with another `condition` |
+The runner exits `0` when every point reaches `completed`. It exits `1` when the plan fails validation or a point ends with another `condition`.
 
 The runner stops at the first point that ends with one of these `result.json` conditions:
 
@@ -130,5 +126,5 @@ The runner stops at the first point that ends with one of these `result.json` co
 | `probe_error` | A readiness or model probe failed |
 | `initial_drain_timeout`, `initial_drain_state_error` | The drain wait before the client timed out or failed to read `/narwhal/state` |
 | `drain_timeout`, `drain_state_error` | The drain wait after the client timed out or failed to read `/narwhal/state` |
-| `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#8-measure-05-requests) |
+| `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#8-measuring-05-requests) |
 | `evidence_error` | The evidence collector failed |

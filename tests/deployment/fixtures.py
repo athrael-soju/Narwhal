@@ -156,6 +156,20 @@ def launch_document():
     }
 
 
+def cuda_engine(entry, gpu="0", visible=None):
+    """Make `entry` a single-GPU CUDA engine; `visible` adds its CUDA transfer environment."""
+    entry.update(
+        gpu_ids=[gpu],
+        tensor_parallel_size=1,
+        gpu_visibility_env="CUDA_VISIBLE_DEVICES",
+        accelerator_devices=["/dev/nvidiactl", f"/dev/nvidia{gpu}"],
+    )
+    if visible is not None:
+        entry["transfer"]["gpu_tls"] = "cuda"
+        entry["environment"] = {"CUDA_VISIBLE_DEVICES": visible, "UCX_NET_DEVICES": "fabric0"}
+    return entry
+
+
 def runtime():
     return {
         "expected_packages": {"vllm": "0.29.0", "nixl": "1.0.0"},

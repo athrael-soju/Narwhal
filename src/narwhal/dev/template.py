@@ -96,7 +96,7 @@ def _check_runtime(packages: dict[str, str]) -> None:
             raise ValueError(f"native runtime requires installed {name}=={expected}") from exc
         if found != expected:
             raise ValueError(f"native runtime requires {name}=={expected}; found {found}")
-    # Use the same vLLM connector API checked by narwhal-engine, before writing an instance.
+    # The same vLLM connector API check as narwhal-engine.
     script = """from vllm.config import KVTransferConfig
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
 config = KVTransferConfig(
@@ -282,7 +282,7 @@ def materialize(
     )
     fabric_interface = fabric_interface if fabric_interface is not None else "eth0"
     model_dir = model_dir.expanduser().resolve(strict=True)
-    # Keep the snapshot filename: Hugging Face cache files are often symlinks to blobs.
+    # Hugging Face snapshot files are often symlinks to blobs.
     model_path = model_path.expanduser().absolute()
     if not model_path.is_file():
         raise ValueError("GGUF model path must name a file")

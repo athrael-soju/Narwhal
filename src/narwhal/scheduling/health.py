@@ -1,11 +1,6 @@
 """Detect sustained per-engine decode-latency drift.
 
-Windows are time-delimited. The first observation of an engine opens its
-window, and the first tick that finds the window at least `window_s` old
-closes it. Each monitoring pass contributes at most one residual per engine.
-The config bounds `min_samples` by the nominal monitoring cadence. Slow
-passes or missing observations can leave a window below that bound; such
-windows close without a health verdict.
+A window closes on the first tick at least `window_s` after it opened.
 """
 
 from __future__ import annotations
@@ -32,7 +27,7 @@ class _EngineDrift:
     on_probation: bool = False
     # Per-engine baselines absorb stable hardware and batch-shape offsets.
     baseline: float | None = None
-    # Count closed windows that contained too few observations to score.
+    # Closed windows with too few residuals to score.
     undersampled_windows: int = 0
     scored_windows: int = 0
     last_scored_at: float | None = None
@@ -40,16 +35,12 @@ class _EngineDrift:
     prefill_pauses: int = 0
 
 
-# Baseline adaptation stays slower than the drift window.
+# Weight of each healthy window score in the baseline moving average.
 _BASELINE_ALPHA = 0.25
 
 
 class DriftTracker:
-    """Convert latency residual windows into health verdicts.
-
-    The scheduler applies returned verdicts because it owns ejection guards and
-    readmission probes. `clock` supports deterministic replay.
-    """
+    """Convert latency residual windows into health verdicts for the scheduler to apply."""
 
     def __init__(
         self,
@@ -71,7 +62,7 @@ class DriftTracker:
         self.probation_windows = probation_windows
         self.evict_windows = evict_windows
         self.recovery_windows = recovery_windows
-        # Placement converts this seconds penalty for decode cost comparisons.
+        # Probation placement penalty in seconds.
         self.penalty_s = penalty_s
         self.relative_band = relative_band
         self._engines: dict[str, _EngineDrift] = {}
@@ -113,9 +104,7 @@ class DriftTracker:
     def window_stats(self) -> dict[str, dict[str, float | int | None]]:
         """Return per-engine window counts and the age of the last scored window.
 
-        The undersampled count is the record of evidence dropped without a
-        verdict. Both counts grow for the record's lifetime; a confirmed
-        ejection drops the record, so a readmitted engine restarts at zero.
+        Counts reset only when a confirmed ejection drops the engine's record.
         """
         now = self._clock()
         return {
@@ -132,12 +121,9 @@ class DriftTracker:
         }
 
     def tick(self) -> list[tuple[str, str]]:
-        """Close due windows and return `(verdict, iid)` pairs.
+        """Close due windows and return `(verdict, iid)` pairs: `probation`, `evict` or `recover`.
 
-        Supported verdicts are `probation`, `evict`, and `recover`. Sparse
-        windows produce no verdict; a due window holding evidence closes with
-        that evidence dropped and the engine's undersampled count raised,
-        while an empty window closes without counting.
+        A window with fewer than `min_samples` residuals closes without a verdict.
         """
         now = self._clock()
         scored: dict[str, float] = {}
@@ -146,9 +132,7 @@ class DriftTracker:
                 continue
             e.window_since = now
             if len(e.residuals) < self.min_samples:
-                # The window is time-delimited: holding the residuals would
-                # merge unlike latencies into the next verdict. Only a window
-                # that held evidence on close drops any.
+                # Only a window that held residuals counts as undersampled.
                 if e.residuals:
                     e.undersampled_windows += 1
                     e.residuals.clear()
@@ -164,7 +148,7 @@ class DriftTracker:
         verdicts: list[tuple[str, str]] = []
         for iid, score in scored.items():
             e = self._engines[iid]
-            # Scale the threshold from the engine's own healthy history.
+            # The band scales with the engine's baseline.
             personal_band = self.band * max(e.baseline or 1.0, 1.0)
             past_band = score > personal_band
             # Suppress verdicts when a majority of peers cross their own bands.

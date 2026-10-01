@@ -6,70 +6,40 @@ description: How the Narwhal role controller moves engines between prefill and d
 
 ## Role control
 
-The role controller runs at most one regular evaluation per `controller.reactive.step_s`.
+The role controller runs at most one regular evaluation per `controller.reactive.step_s`. Each evaluation considers every adjacent prefill/decode split, one engine move away from the current split. It prices each split by the worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
 
-| Evaluation property | Value |
-| --- | --- |
-| Candidates | Every adjacent prefill/decode split, one engine move away from the current split |
-| Price | The worst projected service-level objective (SLO) ratio across TTFT, TPOT, and decode queueing |
-| Demand input | Measured window demand, with the larger of the short- and long-horizon decode estimates for decode-to-prefill candidates |
-| Available moves | Limited by role floors and engine eligibility |
-| Floor restoration | One engine per monitor pass while a phase sits below its configured floor |
+The evaluation prices splits from measured window demand. Decode-to-prefill candidates use the larger of the short- and long-horizon decode estimates. Role floors and engine eligibility limit the available moves, and floor restoration moves one engine per monitor pass while a phase sits below its configured floor.
 
 ### Prefill queue projections
 
-FIFO prefill completion projection inputs:
+Narwhal projects FIFO prefill completion from:
 
 - measured engine profiles
 - the live prefill pool
 - resident prefill requests
 - requests waiting for prefill
 
-Projected time to first token (TTFT) above `slo.ttft_s` triggers one coalesced projected-TTFT recovery evaluation between regular passes.
+Projected TTFT above `slo.ttft_s` triggers one coalesced projected-TTFT recovery evaluation between regular passes. The evaluation applies one adjacent move when the adjacent decode-to-prefill split strictly improves projected service for the triggering request. Otherwise the split stays.
 
-| Condition | Result |
-| --- | --- |
-| The adjacent decode-to-prefill split strictly improves projected service for the triggering request | The evaluation applies one adjacent move. |
-| Otherwise | The split stays. |
-| The queue drains before the evaluation | The trigger clears. |
-| TTFT stays high after a move | The new state can trigger another evaluation. |
-| Any recovery evaluation | `/narwhal/state` reports the decision under the [Projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields). |
+When the queue drains before the evaluation, the trigger clears. When TTFT stays high after a move, the new state can trigger another evaluation. `/narwhal/state` reports each recovery decision under the [Projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields).
 
 ### Expansion and consolidation
 
-| Threshold | Condition | Effect |
-| --- | --- | --- |
-| `shrink` | Source load at or below the threshold | Drives consolidation |
-| `expand` | Sustained prefill load at or above the threshold | Can move decode capacity into prefill |
+Source load at or below `controller.thresholds.shrink` drives consolidation. Sustained prefill load at or above `controller.thresholds.expand` can move decode capacity into prefill. Both paths require passing the profile, safety, and confirmation checks.
 
-Both paths require passing the profile, safety, and confirmation checks.
+A decode-to-prefill move by the role controller requires a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) and stable decode demand. Prefill-to-decode moves and floor restorations in either direction proceed with the window open.
 
-[Arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) requirements by move:
-
-| Move | Requirement |
-| --- | --- |
-| Decode to prefill, by the role controller | A closed window and stable decode demand |
-| Prefill to decode | Proceeds with the window open |
-| Floor restoration, in either direction | Proceeds with the window open |
-
-| Window event | Condition |
-| --- | --- |
-| Closes | `controller.reactive.evidence_span_s` has elapsed and at least `controller.reactive.evidence_min_arrivals` arrivals exist. |
-| Closes under sparse traffic | `controller.reactive.evidence_max_span_s` has elapsed. |
-| Restarts | A first-token timeout, an applied move toward decode, or a decode-floor restoration. |
+The window closes when `controller.reactive.evidence_span_s` has elapsed with at least `controller.reactive.evidence_min_arrivals` arrivals, or when `controller.reactive.evidence_max_span_s` has elapsed under sparse traffic. A first-token timeout, an applied move toward decode, or a decode-floor restoration restarts the window.
 
 The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fields in `/narwhal/state` report the demand, overflow, and inputs behind each role-controller decision.
 
 ### Guards on role changes
 
-| Guard | Effect |
-| --- | --- |
-| Pinned engine | Keeps its configured role. |
-| `controller.min_prefill`, `controller.min_decode` | Moves preserve these floors when enough healthy capacity remains. |
-| `controller.thresholds.cooldown_s` | Minimum time between prefill-to-decode moves. |
-| `controller.thresholds.dwell_s` | Keeps a recently moved engine in its new role for the configured interval. |
-| `controller.thresholds.flip_resident_guard` | Ceiling on the lightest eligible decode donor's resident stream count before a decode-to-prefill move. |
-| Lifecycle hold | Takes draining and recovering engines out of placement. |
+A pinned engine keeps its configured role. Moves preserve the `controller.min_prefill` and `controller.min_decode` floors when enough healthy capacity remains. A lifecycle hold takes draining and recovering engines out of placement.
+
+`controller.thresholds.cooldown_s` sets the minimum time between prefill-to-decode moves. `controller.thresholds.dwell_s` keeps a recently moved engine in its new role for the configured interval. `controller.thresholds.flip_resident_guard` caps the lightest eligible decode donor's resident stream count before a decode-to-prefill move.
+
+While an engine is ejected, quarantined, draining, or recovering, the role controller scores splits over the other live engines. When that leaves a role with assigned engines at zero live engines, the role controller records a held decision.
 
 Existing requests finish on their assigned engines after a role change.
 
@@ -95,18 +65,14 @@ Each advisory decision records:
 
 ### Floor repair
 
-| Floor breach | Repair on each monitor pass |
-| --- | --- |
-| Live decode engines below `controller.min_decode` | Moves one eligible prefill engine to decode, within `controller.min_prefill` |
-| Live prefill engines below `controller.min_prefill` | Moves one eligible decode engine to prefill, within `controller.min_decode` |
+Engine monitoring repairs a floor breach one engine per monitor pass. With live decode engines below `controller.min_decode`, it moves one eligible prefill engine to decode, within `controller.min_prefill`. With live prefill engines below `controller.min_prefill`, it moves one eligible decode engine to prefill, within `controller.min_decode`.
 
 A readmitted engine rejoins placement in its last assigned role.
 
-### Aggregate fallback from an idle decode engine
+### Aggregate fallback
 
-If failures or drains empty the prefill pool, the scheduler selects a live decode-labelled engine as the aggregate fallback.
+If failures or drains empty a phase's pool, the scheduler places that phase on a live unpinned engine of the other role.
 
-| Fallback engine state | Predictive admission |
-| --- | --- |
-| Resident decode work present | Rejects new work on the engine |
-| Resident decode work drained | Prices the engine for aggregate prefill placement |
+With only pinned engines of the other role live, the router answers HTTP 503 before prefill.
+
+On a decode engine that takes prefill, predictive admission rejects new work while resident decode work is present. With the resident decode work drained, predictive admission prices the engine for aggregate prefill placement.

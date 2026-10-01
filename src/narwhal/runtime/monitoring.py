@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import (
@@ -17,6 +19,7 @@ from .lifecycle import (
     check_process_identities,
     validate_readmission,
 )
+from .release import release_peers
 from .standby import controls_fleet
 
 if TYPE_CHECKING:
@@ -33,8 +36,7 @@ MONITOR_STAGES = (
     "liveness",
     "residency",
     "handoff",
-    # Floor-state refresh and loop logging can fail independently of the
-    # controller. Account for those failures without stopping the monitor loop.
+    # Floor-state refresh and loop logging.
     "telemetry",
 )
 
@@ -43,9 +45,7 @@ MONITOR_STAGES = (
 class MonitoringStage:
     """Failure ledger for one monitoring stage.
 
-    The exception class is retained without its message: log lines are local,
-    but state, metrics, and the journal travel and messages can embed
-    endpoint or request data.
+    State, metrics and the journal carry the exception class without its message.
     """
 
     failures: int = 0
@@ -57,11 +57,8 @@ class MonitoringStage:
 class MonitoringLedger:
     """Per-stage failure accounting for the monitoring loop.
 
-    Every guarded stage records its own outcome. The core streak increments
-    once per pass in which any stage failed and resets only after a pass with
-    zero stage failures; at `monitor_failure_limit` consecutive failed passes
-    the router stops admitting new requests until a fully clean pass. The
-    counters are process-local: standby takeover starts them at zero.
+    After `monitor_failure_limit` consecutive failed passes, the router admits no
+    new request until a pass with zero stage failures.
     """
 
     def __init__(
@@ -95,7 +92,6 @@ class MonitoringLedger:
         try:
             self._on_event(row)
         except Exception:
-            # Keep monitoring active after a journal write fails.
             log.exception("monitoring journal event write failed")
 
     def ok(self, stage: str) -> None:
@@ -174,9 +170,8 @@ class MonitoringLedger:
 async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     """Validate and readmit due ejected engines whose health probe succeeds.
 
-    Ejected engines receive no traffic, so probes provide their recovery path.
-    A declared engine contract requires the same attestation, generation, and
-    fabric gates used by planned restarts.
+    A declared engine contract adds the attestation, generation and fabric gates
+    of planned restarts.
     """
     if router.cfg.engine_restart_policy == "whole_wave" and router.scheduler.ejected:
         async with router.lifecycle.lock:
@@ -194,8 +189,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     due = router.scheduler.probe_due(after_s)
     if not due:
         return []
-    # A total outage needs peers for contract validation. Probe the cohort
-    # together even when individual ejection times have different cadences.
+    # After a total outage, contract validation probes the whole cohort together.
     recovery_wave = router.cfg.engine_contract is not None and not router.scheduler.live_instances()
     if recovery_wave:
         due = router.scheduler.probe_due(0.0)
@@ -205,12 +199,12 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
         *(router.engines.healthy(router.monitor.instances[iid].url) for iid in due),
         return_exceptions=True,
     )
-    # None answers are inconclusive (the local control pool waited out) and
-    # fall out of the `is True` filter beside False.
+    # None is an inconclusive probe.
     healthy = [iid for iid, ok in zip(due, answers, strict=True) if ok is True]
+    if router.cfg.engine_contract is not None:
+        healthy = await attested(router, healthy)
     back: list[str] = []
-    # KV transfer validation needs live peers. After a total outage, wait
-    # for the complete fleet and validate it atomically.
+    # A recovery wave validates only the complete fleet, atomically.
     if recovery_wave and set(healthy) != set(router.monitor.instances):
         return []
     groups = [healthy] if recovery_wave else [[iid] for iid in healthy]
@@ -256,11 +250,28 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     return back
 
 
-async def sweep_liveness(router: NarwhalRouter) -> list[str]:
-    """Eject live engines after consecutive failed health sweeps.
+async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
+    """Return the engines whose attestation sidecar responds, or that configure none."""
+    urls = {spec.iid: spec.attestation_url for spec in router.cfg.engines}
+    async with httpx.AsyncClient(
+        timeout=router.cfg.health_timeout_s, transport=router.lifecycle_transport
+    ) as client:
 
-    Sweeps cover idle periods when request failures provide no breaker evidence.
-    """
+        async def answers(iid: str) -> bool:
+            if not urls.get(iid):
+                return True
+            try:
+                await client.get(urls[iid])
+            except httpx.HTTPError:
+                return False
+            return True
+
+        results = await asyncio.gather(*(answers(iid) for iid in engines))
+    return [iid for iid, ok in zip(engines, results, strict=True) if ok]
+
+
+async def sweep_liveness(router: NarwhalRouter) -> list[str]:
+    """Eject live engines after consecutive failed health sweeps."""
     misses = router.scheduler.liveness_misses
     live = [
         iid
@@ -278,8 +289,7 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
         if iid in router.scheduler.ejected or iid in router.scheduler.draining:
             continue
         if ok is True:
-            # A health 200 is recovery evidence: it clears the
-            # health-evidence classes and lifts the quarantine.
+            # A health 200 clears the health-evidence classes and lifts the quarantine.
             if iid in router.scheduler.quarantined and not await allow_profile_recovery(
                 router, iid
             ):
@@ -366,8 +376,7 @@ async def urgent_control_once(router: NarwhalRouter) -> Instance | None:
 async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instance | None:
     """Run one controller, health, readmission and telemetry pass.
 
-    Each stage records its failures and the pass continues. A pass with
-    zero stage failures resets the core failure streak.
+    Each stage records its failures and the pass continues.
     """
     interval = router.cfg.monitor_interval_s
     flipped: Instance | None = None
@@ -378,7 +387,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.monitoring.fail("controller", exc)
     else:
         router.monitoring.ok("controller")
-    # Health and cleanup must run even when the controller fails.
     for stage, body in (
         ("health", router.scheduler.health_pass),
         ("drains", router.scheduler.settle_drains),
@@ -392,6 +400,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             router.monitoring.ok(stage)
     try:
         await readmit(router, interval * router.cfg.readmit_every)
+        release_peers(router)
     except Exception as exc:
         router.monitoring.fail("readmission", exc)
     else:
@@ -405,12 +414,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             router.monitoring.fail("liveness", exc)
         else:
             router.monitoring.ok("liveness")
-    try:
-        await router.residency.refresh(router.residency_client)
-    except Exception as exc:
-        router.monitoring.fail("residency", exc)
-    else:
-        router.monitoring.ok("residency")
     try:
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
@@ -429,8 +432,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.monitoring.fail("telemetry", exc)
     else:
         router.monitoring.ok("telemetry")
-    # Limit handoff staleness to one monitoring interval: standby takeover
-    # needs fresh handoffs, so a degraded primary still publishes.
+    # A degraded primary still publishes a handoff every pass.
     try:
         handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
     except Exception as exc:
@@ -443,6 +445,21 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     router.dispatcher.notify()
     router.admission_queue.notify()
     return flipped
+
+
+async def residency_loop(router: NarwhalRouter) -> None:
+    """Refresh residency views every monitor interval, apart from monitoring passes."""
+    interval = router.cfg.monitor_interval_s
+    while True:
+        await asyncio.sleep(interval)
+        if router.standby:
+            continue
+        try:
+            await router.residency.refresh(router.residency_client)
+        except Exception as exc:
+            router.monitoring.fail("residency", exc)
+        else:
+            router.monitoring.ok("residency")
 
 
 async def monitor_loop(router: NarwhalRouter) -> None:

@@ -32,7 +32,7 @@ from ..runtime.lifecycle import (
     check_process_identities,
     validate_readmission,
 )
-from ..runtime.monitoring import monitor_loop
+from ..runtime.monitoring import monitor_loop, residency_loop
 from ..runtime.standby import (
     MAX_HANDOFF_AGE_S,
     PROBE_INTERVAL_S,
@@ -46,6 +46,7 @@ from ..runtime.standby import (
 from .completion import completion_body_error
 from .ingress import BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .router import NarwhalRouter
+from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
 
 log = logging.getLogger("narwhal.app")
@@ -208,6 +209,8 @@ def create_app(
         if controls_fleet(router):
             await check_process_identities(router)
         loop = asyncio.create_task(monitor_loop(router))
+        lag = asyncio.create_task(measure_loop_lag(router))
+        follow = asyncio.create_task(residency_loop(router))
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
@@ -224,8 +227,14 @@ def create_app(
             persist_final_state = controls_fleet(router)
             router.standby = True
             loop.cancel()
+            lag.cancel()
+            follow.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
+            with contextlib.suppress(asyncio.CancelledError):
+                await lag
+            with contextlib.suppress(asyncio.CancelledError):
+                await follow
             if watch is not None:
                 watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -234,14 +243,13 @@ def create_app(
                 lease_watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await lease_watch
-            probes = list(router._verification_tasks)
+            probes = [*router._verification_tasks, *router.peer_release.tasks]
             for probe in probes:
                 probe.cancel()
             await asyncio.gather(*probes, return_exceptions=True)
             await router.engines.aclose()
             await router.residency_client.aclose()
-            # A standby must retain its polled primary handoff. Recheck the
-            # lease after cleanup, which can outlast the ownership window.
+            # Only a router still holding the lease after cleanup writes the final handoff.
             if persist_final_state and (lease is None or lease.valid()):
                 with contextlib.suppress(OSError):
                     handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
@@ -346,8 +354,7 @@ def create_app(
                 capture,
                 transport=lifecycle_transport,
             )
-            for iid in capture:
-                router.lifecycle.record_old_identity(iid, starts.get(iid), failures.get(iid, ""))
+            failures = router.lifecycle.bind_drain_identities(capture, starts, failures)
             _persist_handoff(router)
             if not controls_fleet(router):
                 return _lifecycle_error(router, 503, "router control was fenced during drain")

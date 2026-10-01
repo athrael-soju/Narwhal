@@ -36,8 +36,7 @@ def load(path: str | Path) -> FleetConfig:
             problems.append(f"missing required key {key!r}")
     if problems:
         raise ValueError(f"{path}: " + "; ".join(problems))
-    # Check exact JSON types before conversion. Invalid values use placeholders
-    # while validation collects errors, then the combined errors abort loading.
+    # Invalid values read as placeholders until every problem is collected.
     engines = []
     if not isinstance(raw["engines"], list):
         problems.append("engines must be a list")
@@ -643,8 +642,7 @@ _HARDWARE_KEYS = {"accelerator", "accelerators_per_engine", "tensor_parallel"}
 
 
 def _reject_constant(name: str) -> NoReturn:
-    # json's default accepts NaN/Infinity tokens; no fleet value may be
-    # non-finite because NaN comparisons pass every range check.
+    # Fleet values must be finite; NaN passes every range comparison.
     raise ValueError(f"non-finite JSON constant {name}")
 
 
@@ -688,7 +686,7 @@ def _read_float(problems: list[str], name: str, value: object) -> float:
 
 
 def _read_section(problems: list[str], raw: dict, name: str) -> dict:
-    """Descend into one nested object after a single dict check."""
+    """Return one top-level section object, or `{}` when absent or invalid."""
     value = raw.get(name)
     if value is None:
         return {}
@@ -699,7 +697,7 @@ def _read_section(problems: list[str], raw: dict, name: str) -> dict:
 
 
 def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) -> dict:
-    """Read a nested object while reporting its complete public path."""
+    """Return one nested section object, reporting problems under path `name`."""
     value = raw.get(key)
     if value is None:
         return {}
@@ -710,7 +708,7 @@ def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) ->
 
 
 def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -> None:
-    """Reject unknown keys in one section while accepting annotated comments."""
+    """Report unknown keys in one section; underscore-prefixed keys are annotations."""
     unknown = sorted(key for key in raw if key not in known and not key.startswith("_"))
     problems.extend(
         f"unknown {name} key {key!r} (a typo falls back to the default silently)" for key in unknown
@@ -718,6 +716,6 @@ def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -
 
 
 def _unknown_keys(raw: dict) -> list[str]:
-    """Reject unknown fields while allowing underscore-prefixed annotations."""
+    """Report unknown top-level keys; underscore-prefixed keys are annotations."""
     unknown = sorted(k for k in raw if k not in _KNOWN_KEYS and not k.startswith("_"))
     return [f"unknown key {k!r} (a typo falls back to the default silently)" for k in unknown]

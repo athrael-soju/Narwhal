@@ -4,13 +4,13 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 # Metrics and role controller state
 
-## Read live state from Prometheus
+## Reading live state from Prometheus
 
-Starting values in a new router process:
+A new router process starts each series at these values:
 
 | Series | Starting value |
 | --- | --- |
-| `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
+| `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
 | `narwhal_retry_credits` | `serving.retry_budget`. |
 | Histograms and every other counter | `0`. |
 
@@ -18,26 +18,40 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 
 ### Metric families
 
+The router exports these series on `/metrics`, grouped by area:
+
 | Area | Series |
 | --- | --- |
 | Contract identity | `narwhal_contract_info` |
 | Router lease | `narwhal_router_ready`, `narwhal_router_lease_epoch` |
 | Engine monitoring | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds` |
-| Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
+| Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
 | Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total` |
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | HTTP retention | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water` |
 | Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests` |
-| Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
+| Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_engine_quarantined`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
 | Floors | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total` |
 | Role controller | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
 | Demand history | `narwhal_demand_history_cells`, `narwhal_demand_history_cell_limit`, `narwhal_demand_history_observations`, `narwhal_demand_history_overflow_observations` |
 | Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total` |
 | Consolidation | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total` |
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
-| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop` |
+| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
-## Inspect scheduling and role control
+## Reading engine lifecycle gauges
+
+The lifecycle gauges mirror fields of each engine's record in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle).
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_engine_draining` | gauge | `iid` | `1` when `draining` is `true`, otherwise `0`. |
+| `narwhal_engine_ready_to_stop` | gauge | `iid` | `1` when `ready_to_stop` is `true`, otherwise `0`. |
+| `narwhal_engine_lifecycle_state` | gauge | `iid`, `state` | `1` on the series whose `state` label matches the engine's `state`. |
+
+## Inspecting scheduling and role control
+
+These metrics track role changes and pool load:
 
 | Metric | Meaning |
 | --- | --- |
@@ -45,9 +59,9 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | `narwhal_flips_refused_total` | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
 | `narwhal_pool_load` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), with `1.0` at the phase target. |
 
-## Read latency histograms
+## Reading latency histograms
 
-`narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
+`narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label. Its `slo` label, and the `slo` label on each latency histogram, carry the target that scaled the histogram's bucket edges.
 
 | Histogram | Measures | Bucket scale |
 | --- | --- | --- |
@@ -64,14 +78,14 @@ Bucket boundaries, as multiples of the bucket scale:
 
 Histogram aggregation:
 
-- Compute quantiles from bucket rates grouped by `instance` and `le`.
-- Sum buckets only across routers with identical bucket edges.
+- Compute quantiles from bucket rates grouped by `instance`, `slo` and `le`.
+- Divide a `narwhal_ttft_seconds` or `narwhal_tpot_seconds` quantile by the `narwhal_slo_seconds` series with the matching `metric`, `instance` and `slo`.
 
-## Inspect retained attainment evidence
+## Inspecting retained attainment evidence
 
 `narwhal_attainment_evidence_pruned_total` appears with a `kind` label of `buckets` or `outcomes` after the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment).
 
-## Inspect demand history and decode floor
+## Inspecting demand history and decode floor
 
 Demand histories clear on router restart.
 
@@ -83,7 +97,9 @@ Demand histories clear on router restart.
 | `narwhal_demand_history_observations` | gauge | same `window` values | Original observations represented by the window. |
 | `narwhal_demand_history_overflow_observations` | gauge | same `window` values | Observations merged past the cohort limit. |
 
-## Inspect consolidation gates
+## Inspecting consolidation gates
+
+These metrics expose the consolidation evidence that gates decode-to-prefill moves:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |

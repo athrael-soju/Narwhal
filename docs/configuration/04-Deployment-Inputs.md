@@ -6,7 +6,7 @@ description: The deployment environment, generated artifacts, host inventory and
 
 ## 12. Deployment inputs and generated artifacts
 
-The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirm-the-launch-policy).
+The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirming-the-launch-policy).
 
 Discovery writes one private set of files per fleet at mode 0600:
 
@@ -76,11 +76,7 @@ With `engine.engine_api_key_env` set, engine export requires the variable it nam
 
 Each `.env.engine-<n>` sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json`.
 
-Per-node overrides insert `NODE_<n>_` after `NARWHAL_`:
-
-| Shared variable       | Override for `.env.engine-2` |
-| --------------------- | ---------------------------- |
-| `NARWHAL_ENGINE_PORT` | `NARWHAL_NODE_2_ENGINE_PORT` |
+Per-node overrides insert `NODE_<n>_` after `NARWHAL_`. For example, `NARWHAL_NODE_2_ENGINE_PORT` overrides `NARWHAL_ENGINE_PORT` in `.env.engine-2`.
 
 Export fails when:
 
@@ -132,15 +128,9 @@ Role names:
 
 The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.
 
-| Value                              | Location           |
-| ---------------------------------- | ------------------ |
-| Destination values and credentials | Workstation `.env` |
-| Variable names                     | Inventory          |
+The workstation `.env` holds destination values and credentials, and the inventory holds the variable names.
 
-| `password_env` | Authentication                                            |
-| -------------- | --------------------------------------------------------- |
-| Omitted        | OpenSSH key or agent authentication                       |
-| Set            | Password authentication from the populated named variable |
+With `password_env` omitted, SSH connections use OpenSSH key or agent authentication. With `password_env` set, they use password authentication from the populated named variable.
 
 ### 13.1 Inventory validation
 
@@ -150,6 +140,8 @@ Validate the inventory:
 python3 tools/deployment/deploy_hosts.py plan
 ```
 
+These `deploy_hosts.py` commands read the inventory:
+
 | Command               | Action                                                                                                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `plan`                | Checks for unique host IDs, one host per role, a `router` role, at least one engine role, distinct destination entries, and set access variables |
@@ -158,12 +150,7 @@ python3 tools/deployment/deploy_hosts.py plan
 
 ### 13.2 Known-hosts handling
 
-`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file.
-
-| Command             | `NARWHAL_SSH_KNOWN_HOSTS`                     | Host-key checking                          |
-| ------------------- | --------------------------------------------- | ------------------------------------------ |
-| Discovery           | Optional, default `config/ssh.known_hosts`    | OpenSSH `accept-new`                       |
-| Deployment commands | Required, loaded from `config/deployment.env` | Strict host-key checking against this file |
+`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file. For discovery, it is optional, defaults to `config/ssh.known_hosts`, and host keys follow OpenSSH `accept-new`. Deployment commands require it, load it from `config/deployment.env`, and apply strict host-key checking against this file.
 
 Under `accept-new`:
 
@@ -202,7 +189,7 @@ To replace the key of a changed server:
 | ---------------- | --------------------------------------------------- |
 | `--role <role>`  | The host that runs `<role>` and its colocated roles |
 | `--host <id>`    | One physical host by inventory ID                   |
-| Neither          | Every inventory host                                |
+| Default          | Every inventory host                                |
 
 Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 
@@ -214,14 +201,7 @@ Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 
 `<run-id>` is a random 32-hex ID that `prepare` records in the manifest.
 
-Re-running `install` on a host:
-
-| Existing remote content                                 | Result                     |
-| ------------------------------------------------------- | -------------------------- |
-| File with the manifest SHA-256                          | Reused                     |
-| `checkout/` at the approved revision                    | Reused                     |
-| `installed` marker at the approved revision             | Virtual environment reused |
-| Changed file, or checkout or marker at another revision | Install stops at that host |
+A repeated `install` on a host reuses each file with the manifest SHA-256 and a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
 
 The run's private `logs/` directory holds one log per host with executed scripts, exit status, and host output.
 

@@ -62,6 +62,15 @@ class ProfileStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "zero tpot_slope requires measured decode bounds"):
             profile(tpot_slope=0, decode_max_requests=None)
 
+    def test_a_capped_batch_below_the_measured_domain_prices_at_its_smallest_batch(self):
+        """A decode cap under the smallest measured batch keeps a conservative capacity."""
+        row = replace(profile(), decode_min_kv_tokens=600)
+        capped = row.decode_rps(1.0, 80, 64, request_cap=4)
+        self.assertAlmostEqual(capped, 4 / (64 * row.token_interval(600, 4)))
+        self.assertLess(capped, 4 / (64 * row.token_interval(320, 4)))
+        uncapped = row.decode_rps(1.0, 80, 64)
+        self.assertAlmostEqual(uncapped, 16 / (64 * row.token_interval(16 * 80, 16)))
+
     def test_store_rejects_duplicate_unknown_and_incomplete_rows(self):
         """A current profile store names malformed rows before exposing any profile."""
         base = asdict(profile())
@@ -105,9 +114,14 @@ class ProfileStoreTests(unittest.TestCase):
         restored = ProfileStore(self.path)
         restored.bind_role_mix({row.iid: "gpu-0"}, lambda group: (2, 1), lambda iid: Role.PREFILL)
         self.assertEqual(restored.get(row.iid), row)
-        self.assertIsNone(restored.mean_prefill_time(64))
-        self.assertIsNotNone(restored.mean_prefill_time(256))
-        self.assertEqual(row.decode_rps(1, 256, 32), 0)
+        self.assertEqual(restored.mean_prefill_time(64), restored.mean_prefill_time(128))
+        self.assertLess(restored.mean_prefill_time(128), restored.mean_prefill_time(256))
+        self.assertIsNone(restored.mean_prefill_time(2048))
+        self.assertGreater(row.decode_rps(1, 256, 32), 0)
+        self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
+        self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)
+        self.assertEqual(row.decode_request_limit(256, request_cap=1), 1)
+        self.assertLess(row.decode_rps(1, 256, 32, request_cap=1), row.decode_rps(1, 256, 32))
         with self.assertRaisesRegex(ValueError, "colocated role mix"):
             replace(row, colocated_decode_rps=None)
 

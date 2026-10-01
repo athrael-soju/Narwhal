@@ -4,6 +4,8 @@ description: Sources and schemas of every artifact and telemetry stream a Narwha
 
 # Narwhal telemetry and artifacts
 
+Narwhal writes these artifacts and telemetry streams:
+
 | Artifact | Source | Schema |
 | --- | --- | --- |
 | Request journal | `narwhal-serve --journal`, `journal.jsonl` beside `profiles.path` by default | `narwhal.journal` |

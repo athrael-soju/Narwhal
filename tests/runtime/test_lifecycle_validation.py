@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -22,6 +23,8 @@ from tests.fixtures import fleet
 class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
     """Real lifecycle and scheduler state use local identity and engine responses."""
 
+    launch: ClassVar[dict | None] = None
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -38,7 +41,9 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.engines.prefill = AsyncMock(return_value="descriptor")
         self.router.engines.decode = self.decode
         self.document = AttestationDocument(
-            self.cfg.engine_contract, dict.fromkeys(self.cfg.engine_contract.fields(), "fixture")
+            self.cfg.engine_contract,
+            dict.fromkeys(self.cfg.engine_contract.fields(), "fixture"),
+            launch=self.launch,
         )
         self.bind_profiles()
         self.transport = httpx.MockTransport(self.http)
@@ -47,15 +52,14 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.drain("e0")
 
     def bind_profiles(self):
-        """Measure the fixture's current process-bound attestation for each engine."""
+        """Bind each engine's profile to its current generation, as the profiler does."""
         for iid, start in self.starts.items():
             payload = make_attestation(
                 self.document, EngineIdentity(self.cfg.engine_contract.vllm_version, start)
             )
+            digest = payload.get("launch_digest") or payload["attestation_digest"]
             self.router.profiles.put(
-                replace(
-                    self.router.profiles.get(iid), generation_digest=payload["attestation_digest"]
-                )
+                replace(self.router.profiles.get(iid), generation_digest=digest)
             )
 
     async def identity(self, url, **kwargs):
@@ -185,6 +189,28 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.records["e0"].state, "validating")
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
 
+    def test_failed_automatic_recovery_holds_only_its_own_engine(self):
+        """A blocked recovery leaves other engines recoverable; drains and waves still hold."""
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.router.scheduler.eject("e0")
+        self.assertTrue(self.manager.start_recovery_validation(["e0"]))
+        self.manager.validation_failed(ValidationOutcome(failures={"e0": ["sidecar down"]}))
+        self.assertEqual(self.manager.records["e0"].state, "blocked")
+        self.assertFalse(self.manager.start_recovery_validation(["e0"]))
+        self.router.scheduler.eject("e3")
+        self.assertTrue(self.manager.start_recovery_validation(["e3"]))
+        self.assertEqual(self.manager.records["e3"].state, "validating")
+        for held in ("draining", "wave"):
+            with self.subTest(held=held):
+                self.manager.records["e3"].state = "active"
+                self.router.scheduler.finish_drain("e3")
+                self.router.scheduler.eject("e3")
+                record = self.manager.records["e0"]
+                record.restart_required = held == "draining"
+                record.wave_id = "wave-held" if held == "wave" else ""
+                self.assertFalse(self.manager.start_recovery_validation(["e3"]))
+
     def test_wave_recovery_and_validation_failure_preserve_all_holds(self):
         """One engine's validation failure keeps the entire restart wave blocked."""
         self.manager.records.clear()
@@ -275,7 +301,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.validate()).passed)
 
     async def test_inactive_profile_variant_must_match_the_verified_generation(self):
-        """Checking the selected row alone would admit a stale colocated variant."""
+        """Readmission rejects a stale colocated variant beside a current selected row."""
         original = self.router.profiles.get("e0")
         variant = replace(
             original,
@@ -331,6 +357,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.document = AttestationDocument(
                     self.cfg.engine_contract,
                     dict.fromkeys(self.cfg.engine_contract.fields(), "changed source evidence"),
+                    launch=None if self.launch is None else {"args": ["--changed"]},
                 )
             return True
 
@@ -535,3 +562,9 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             self.identities.reset_mock()
             self.assertEqual(await lifecycle.check_process_identities(self.router), [])
             self.identities.assert_not_awaited()
+
+
+class LaunchBoundLifecycleValidationTests(LifecycleValidationTests):
+    """The same gates with attestations that carry launch evidence, as deployed engines do."""
+
+    launch: ClassVar[dict | None] = {"args": ["--max-num-seqs", "64"]}

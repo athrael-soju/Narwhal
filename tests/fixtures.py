@@ -7,6 +7,7 @@ import httpx
 
 from narwhal.config import FleetConfig
 from narwhal.engines.attestation import EngineIdentity
+from narwhal.engines.prefix import block_identities
 from narwhal.profiling.generation import identity_generation
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
@@ -35,10 +36,45 @@ def profile(iid="e0", **changes):
     return replace(row, **changes)
 
 
-def fleet(root):
-    """Create a two-engine fleet and write profiles under the supplied directory."""
+def warm(iid, **changes):
+    """Return a profile with a warm fit that makes cached prefill cheap."""
+    fit = {
+        "cached_ttft_a": 1e-8,
+        "cached_ttft_b": 0.0001,
+        "cached_ttft_c": 0.01,
+        "cached_ttft_d": 0.0,
+        "cached_cv_mape": 0.05,
+        "cached_min_prefix_tokens": 4,
+        "cached_max_prefix_tokens": 64,
+        "cached_min_suffix_tokens": 1,
+        "cached_max_suffix_tokens": 64,
+    }
+    return replace(profile(iid, ttft_a=1e-6, ttft_b=0.002, ttft_c=0.01), **{**fit, **changes})
+
+
+def put_warm(store, iid, **changes):
+    """Store a warm profile for `iid` that keeps the stored generation digest."""
+    digest = store.get(iid).generation_digest
+    store.put(warm(iid, generation_digest=digest, **changes))
+
+
+def hold_prefix(view, namespace, tokens, block, *, sequence=None):
+    """Make a residency view hold every full block of `tokens`; return their identities."""
+    identities = block_identities(namespace, tokens, block)
+    view.known, view.block_size = True, block
+    if sequence is not None:
+        view.sequence = sequence
+    view.groups = {"0": ("full_attention", None, set(identities))}
+    return identities
+
+
+def fleet(root, engines=("e0", "e3"), pinned=()):
+    """Create a fleet of the named engines and write profiles under the supplied directory."""
     cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
-    cfg.engines = [cfg.engines[0], cfg.engines[3]]
+    specs = {spec.iid: spec for spec in cfg.engines}
+    cfg.engines = [
+        replace(specs[iid], pin=True) if iid in pinned else specs[iid] for iid in engines
+    ]
     cfg.profiles_path = root / "profiles.json"
     store = ProfileStore(cfg.profiles_path)
     for spec in cfg.engines:

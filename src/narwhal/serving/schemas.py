@@ -69,9 +69,7 @@ class ServingOut(BaseModel):
 class HttpPoolsOut(BaseModel):
     """Engine HTTP pool policy: bounded data legs, reserved control probes.
 
-    `data_connections` is the request-leg pool behind the admission limit,
-    `control_connections` the reserved health and recovery probe pool, and
-    `pool_timeout_s` the maximum wait for a connection slot on either.
+    `pool_timeout_s` is the maximum wait for a connection slot on either pool.
     """
 
     data_connections: int
@@ -177,9 +175,7 @@ class DemandEvidenceOut(BaseModel):
 class MonitoringStageOut(BaseModel):
     """Failure ledger for one monitoring stage.
 
-    `failures` and `consecutive` are per-stage failure totals and current
-    streaks. `last_class` names the most recent exception class with no
-    message; `last_at` stamps it on the router's monotonic clock.
+    `last_class` carries no exception message; `last_at` is on the router's monotonic clock.
     """
 
     failures: int = 0
@@ -191,11 +187,8 @@ class MonitoringStageOut(BaseModel):
 class MonitoringOut(BaseModel):
     """Monitoring-loop failure accounting and the degraded admission gate.
 
-    `core_consecutive` counts consecutive monitoring passes in which any
-    stage failed; only a pass with zero stage failures resets it.
-    `core_failures` is the lifetime total of failed passes. While the
-    streak holds at `monitor_failure_limit` or above, `degraded` is true
-    and `reason` carries the streak's first failure as `<class>:<stage>`.
+    While `core_consecutive` is at or above `monitor_failure_limit`, `degraded` is true
+    and `reason` is the streak's first failure as `<class>:<stage>`.
     """
 
     degraded: bool = False
@@ -252,6 +245,7 @@ class ControllerDecisionOut(BaseModel):
     observed_prefill_ratio: float | None = None
     recovery_prefill_ratio: float | None = None
     observed_decode_ratio: float | None = None
+    recovery_decode_ratio: float | None = None
     eligibility_rule: str | None = None
     confirmations: int | None = None
     required_confirmations: int | None = None
@@ -389,19 +383,6 @@ class HealthEngineOut(BaseModel):
     prefill_pauses: int = 0
 
 
-class ResidencyOut(BaseModel):
-    """One engine's prefix-residency synchronisation state, without block identities."""
-
-    known: bool
-    reason: str
-    epoch: str | None = None
-    sequence: int | None = None
-    block_size: int | None = None
-    # Resident block count per KV cache group.
-    resident_blocks: dict[str, int] = {}
-    resyncs: int = 0
-
-
 class EngineStreaksOut(BaseModel):
     """One engine's consecutive breaker failure streaks, keyed by class."""
 
@@ -424,14 +405,30 @@ class VerifyingOut(BaseModel):
 class BreakerOut(BaseModel):
     """Breaker failure accounting: per-class streaks and pending probes.
 
-    `failures` holds each engine's consecutive failure streaks keyed by
-    class (`connection`, `timeout`, `overload`, `inference_status`,
-    `kv_handoff`, `stream`, and `liveness` for sweep misses). `verifying`
-    lists the engines with a health or inference verification in flight.
+    `liveness` streaks count health-sweep misses.
     """
 
     failures: dict[str, EngineStreaksOut] = Field(default_factory=dict)
     verifying: list[VerifyingOut] = Field(default_factory=list)
+
+
+class ResidencyOut(BaseModel):
+    """One engine's prefix-residency synchronisation with its attestation sidecar."""
+
+    known: bool
+    reason: str
+    epoch: str | None = None
+    sequence: int | None = None
+    block_size: int | None = None
+    resident_blocks: dict[str, int] = Field(default_factory=dict)
+    resyncs: int = 0
+
+
+class PeerReleaseOut(BaseModel):
+    """Release rounds for one ejected engine."""
+
+    rounds: int
+    next_round_s: float | None
 
 
 class StateOut(BaseModel):
@@ -443,27 +440,24 @@ class StateOut(BaseModel):
     schema_version: Literal[1]
     journal_run: str = ""
     served: int
+    slo_met: int = 0
     offered: int = 0
     unsized_offered: int = 0
     expired: int = 0
     failed: int
-    # Clients that disconnected before the work finished, separately from
-    # engine and controller failures.
+    # Clients that disconnected before the work finished; excluded from `failed`.
     cancelled: int = 0
-    # Malformed client bodies rejected before admission, separately from
-    # engine and controller failures.
+    # Malformed client bodies rejected before admission; excluded from `failed`.
     invalid_requests: int
     controller: str
     # How decode output is accounted: per-token identity or unmeasurable.
     token_accounting: str
     control: ControlOut = Field(default_factory=lambda: ControlOut())
-    # Monitoring-stage failures and the degraded admission gate.
     monitoring: MonitoringOut = Field(default_factory=lambda: MonitoringOut())
     ha: HAOut
     lifecycle: LifecycleViewOut
     admission: AdmissionOut
     serving: ServingOut = Field(default_factory=ServingOut)
-    # The engine HTTP pool policy: bounded data legs and reserved probes.
     http_pools: HttpPoolsOut
     pools: PoolsOut
     load: LoadOut
@@ -476,25 +470,21 @@ class StateOut(BaseModel):
     min_decode: int = 1
     below_floor: BelowFloorOut
     ejected: list[str]
+    # Release rounds sent through live consumers for each ejected engine.
+    peer_release: dict[str, PeerReleaseOut] = Field(default_factory=dict)
     draining: list[str] = []
     # Probation adds the configured penalty to placement cost.
     probation: list[str] = []
     health: dict[str, HealthEngineOut] = {}
-    # Prefix residency each attestation sidecar reports; unknown engines are priced cold.
-    residency: dict[str, ResidencyOut] = {}
     unserved: int
     panic_bypasses: int
-    # Observed SLO outcome evidence retained in fixed-width time buckets.
     attainment: AttainmentOut = Field(default_factory=lambda: AttainmentOut())
-    # Consolidation evidence behind every D-to-P gate: span, samples, trend,
-    # envelope, armed risk events, and the refusing gate.
     demand_history: dict[str, dict[str, int | float]] = Field(default_factory=dict)
     demand_evidence: DemandEvidenceOut = Field(default_factory=lambda: DemandEvidenceOut())
     flips_refused: list[FlipRefusedOut]
     flips: list[FlipOut]
     # Engines temporarily held out of placement after failure.
     quarantined: list[str] = []
-    # Breaker failure accounting: per-engine per-class streaks and the
-    # engines with a verification probe in flight.
     breaker: BreakerOut = Field(default_factory=BreakerOut)
+    residency: dict[str, ResidencyOut] = Field(default_factory=dict)
     decode_floor: DecodeFloorOut

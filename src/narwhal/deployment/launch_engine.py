@@ -43,13 +43,18 @@ FLAG_OPTIONS = {
     "--enable-prefix-caching",
     "--no-enable-prefix-caching",
 }
-# vLLM binds these per-plan sockets; a host subscriber connects to the same files.
-# Launch directories can exceed the socket path limit, so the sockets use a short root.
+# Short root for the per-plan sockets vLLM binds and host subscribers connect to;
+# launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
 KV_EVENTS_MOUNT = "/narwhal-kv-events"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
 MAX_SOCKET_PATH_BYTES = 107
+# vLLM's NIXL engine_ttl for CUDA IPC peers with the UCX IPC cache off; the router's first
+# peer release round follows it.
+ENGINE_TTL_S = 60
+# First UCX release that unmaps CUDA IPC rkeys when NIXL removes a remote agent.
+UCX_PEER_RELEASE = (1, 22)
 MANAGED_ENV = {
     "ROCR_VISIBLE_DEVICES",
     "CUDA_VISIBLE_DEVICES",
@@ -118,11 +123,24 @@ def validate_runtime(runtime: dict) -> None:
             raise ValueError(f"unsupported runtime environment field: {name}")
 
 
+def ipc_cache_off(ipc_cache: str | None) -> bool:
+    """Return whether UCX reads this UCX_CUDA_IPC_CACHE value as false."""
+    return ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
+
+
+def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
+    """Return whether UCX unmaps a removed peer's CUDA IPC memory with this cache setting."""
+    try:
+        version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
+    except ValueError:
+        return False
+    return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
+
+
 def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:
     """Select cache-event publication from the backend's own launch settings.
 
-    Publication follows prefix caching unless the operator disables it with vLLM's
-    own `--kv-events-config`. Narwhal selects the local IPC endpoints.
+    Publication follows prefix caching unless `--kv-events-config` disables it.
     """
     if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
         raise ValueError("runtime.extra_args must select prefix caching at most once")
@@ -165,6 +183,12 @@ def kv_events_directory(plan: dict) -> None:
         info = path.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise ValueError(f"{path} must be a directory private to the launching user")
+
+
+def container_options(plan: dict) -> list[str]:
+    """Create the plan's socket directory and return its shared Docker options."""
+    kv_events_directory(plan)
+    return list(plan["common"])
 
 
 def remove_kv_events_directory(plan: dict) -> None:
@@ -231,10 +255,29 @@ def write_private(path: Path, data: str) -> None:
         stream.write(data)
 
 
+def write_once(path: Path, text: str, mismatch: str) -> None:
+    """Create a private file, or accept an existing one with the same text."""
+    try:
+        write_private(path, text)
+    except FileExistsError:
+        if path.read_text() != text:
+            raise ValueError(mismatch) from None
+
+
 def append_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as stream:
         stream.write(data)
+
+
+def env_file_name(plan: dict) -> str:
+    """Return the launch directory's environment file for the plan's backend."""
+    return "engine.env" if plan.get("backend") == "native" else "container.env"
+
+
+def read_env(path: Path) -> dict[str, str]:
+    """Read a KEY=VALUE environment file."""
+    return dict(line.split("=", 1) for line in path.read_text().splitlines())
 
 
 def build(
@@ -340,15 +383,30 @@ def build(
             common.extend(["--device", device])
         if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
             common.extend(["--gpus", "all"])
+            # UCX CUDA IPC tells peers apart by PID; colocated engines need distinct host PIDs.
+            visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
+            if len(visible) > len(record["gpu_ids"]):
+                common.extend(["--pid", "host"])
         else:
             common.extend(["--security-opt", "seccomp=unconfined"])
     else:
         common = []
+    # CUDA IPC peers keep this engine's KV memory mapped until vLLM evicts it.
+    ipc_peers = gpu_transport == "cuda" and (
+        record.get("shared_device") is not None
+        or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
+    )
+    # With the UCX IPC cache off, vLLM's eviction releases a stopped peer's memory.
+    evict_peers = ipc_peers and ipc_cache_off(values.get("UCX_CUDA_IPC_CACHE"))
     connector = {
         "kv_connector": "NixlConnector",
         "kv_role": "kv_both",
         "kv_load_failure_policy": "fail",
-        "kv_connector_extra_config": {"backends": ["UCX"], "enforce_handshake_compat": True},
+        "kv_connector_extra_config": {
+            "backends": ["UCX"],
+            "enforce_handshake_compat": True,
+            **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
+        },
     }
     args = [
         "-m",
@@ -421,6 +479,7 @@ def build(
         "attestation_port": attest_port,
         "side_channel_port": side_port,
         "ucx_tls": values["UCX_TLS"],
+        "cuda_ipc_peers": ipc_peers,
         **({"shared_device": shared} if shared is not None else {}),
         "revision": env["NARWHAL_DEPLOYMENT_REVISION"],
     }
@@ -640,7 +699,7 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             [
                 "run",
                 "--rm",
-                *plan["common"],
+                *container_options(plan),
                 "--entrypoint",
                 "python3",
                 plan["image"],
@@ -651,7 +710,7 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             run,
             log,
         )
-    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    values = read_env(run / "engine.env")
     if (run / log).exists():
         raise FileExistsError(17, "inspection log already exists", str(run / log))
     result = stages.run(
@@ -673,8 +732,7 @@ def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
     if not isinstance(plan, dict):
         raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
-    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    if digest(run / env_file) != plan.get("env_sha256"):
+    if digest(run / env_file_name(plan)) != plan.get("env_sha256"):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan
 
@@ -684,7 +742,6 @@ def check(run: Path, plan: dict) -> None:
     from narwhal.deployment import stages
 
     native = plan.get("backend") == "native"
-    env_file = "engine.env" if native else "container.env"
     log = "runtime-check.log" if native else "image-check.log"
     if (run / "checked.json").exists():
         require_checked(run, plan)
@@ -710,11 +767,9 @@ def check(run: Path, plan: dict) -> None:
         and not trust_remote_code
     ):
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
+    environment = read_env(run / env_file_name(plan))
     ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
-    if (
-        ds_required
-        and "VLLM_SSM_CONV_STATE_LAYOUT=DS" not in (run / env_file).read_text().splitlines()
-    ):
+    if ds_required and environment.get("VLLM_SSM_CONV_STATE_LAYOUT") != "DS":
         raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
     if native:
         model_path = Path(plan["model_path"])
@@ -734,7 +789,7 @@ def check(run: Path, plan: dict) -> None:
             matches = expected in inspection.get("RepoDigests", [])
         if not matches:
             raise ValueError("local image identity differs from the launch plan")
-    # Resolve tokenizer metadata in the serving namespace, including image-local paths.
+    # Tokenizer metadata resolves in the serving namespace, including image-local paths.
     script = (
         "from pathlib import Path\n"
         + inspect.getsource(requires_remote_code)
@@ -776,7 +831,28 @@ print('NARWHAL_CACHE_SETTINGS=' + json.dumps({
     'kv_events': {'endpoint': events.endpoint, 'replay_endpoint': events.replay_endpoint}
     if published else None,
 }))
-print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
+def ucx_version():
+    import ctypes, ctypes.util, glob, os
+    try:
+        import nixl._api as api
+    except ImportError:
+        return None
+    package = api.__name__.split('.')[0]
+    root = os.path.dirname(os.path.dirname(api.__file__))
+    paths = sorted(glob.glob(os.path.join(root, package + '.libs', 'libucp*.so*')))
+    paths += [ctypes.util.find_library('ucp') or 'libucp.so.0']
+    for path in paths:
+        try:
+            library = ctypes.CDLL(path)
+        except OSError:
+            continue
+        library.ucp_get_version_string.restype = ctypes.c_char_p
+        return library.ucp_get_version_string().decode()
+    return None
+print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
+    'vllm_api_version': api_version,
+    'ucx_version': ucx_version(),
+}))
 """
     )
     arguments = [
@@ -790,10 +866,9 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         json.dumps(engine_arguments(plan)),
     ]
     if native:
-        values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
         result = stages.run(
             [plan["python_executable"], *arguments],
-            env={**os.environ, **values},
+            env={**os.environ, **environment},
             stage="native-runtime-check",
             log=run / log,
         )
@@ -809,7 +884,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
             [
                 "run",
                 "--rm",
-                *plan["common"],
+                *container_options(plan),
                 "--entrypoint",
                 "python3",
                 plan["image"],
@@ -829,6 +904,9 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     api_version = records[0].get("vllm_api_version")
     if not isinstance(api_version, str) or not api_version.strip():
         raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
+    ucx = records[0].get("ucx_version")
+    if ucx is not None and not isinstance(ucx, str):
+        raise ValueError(f"runtime check returned an invalid UCX version; inspect {run / log}")
     prefix = "NARWHAL_CACHE_SETTINGS="
     settings = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -843,12 +921,17 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
         raise ValueError(
             f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
         )
-    marker = run / "checked.json"
+    ipc_cache = environment.get("UCX_CUDA_IPC_CACHE")
+    ipc_peers = plan.get(
+        "cuda_ipc_peers", "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
+    )
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
         "vllm_api_version": api_version,
         "prefix_caching": settings[0]["prefix_caching"],
         "kv_events": settings[0]["kv_events"],
+        "ucx_version": ucx,
+        "peer_release": not ipc_peers or releases_peers(ucx, ipc_cache),
     }
     if native:
         evidence.update(
@@ -859,13 +942,23 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({'vllm_api_version': api_version}))
     else:
         assert inspection is not None
         evidence["image_id"] = inspection["Id"]
-    value = json.dumps(evidence)
-    if marker.exists():
-        if marker.read_text() != value:
-            raise ValueError("runtime identity changed; prepare a fresh launch directory")
-    else:
-        write_private(marker, value)
+    write_once(
+        run / "checked.json",
+        json.dumps(evidence),
+        "runtime identity changed; prepare a fresh launch directory",
+    )
     print("Runtime identity, package pins, connector import and tokenizer passed.")
+    if ipc_peers and evidence["peer_release"]:
+        print(
+            "UCX_CUDA_IPC_CACHE is off: peers release a stopped engine's GPU memory, and "
+            "transfers from a restarted or idle-evicted producer map its KV memory per transfer."
+        )
+    if not evidence["peer_release"]:
+        print(
+            f"UCX {ucx or 'version unknown'} with UCX_CUDA_IPC_CACHE={ipc_cache or 'y'} keeps "
+            "a stopped CUDA IPC peer's GPU memory mapped; recover a crashed engine with a "
+            "whole-wave restart."
+        )
     if not evidence["prefix_caching"]:
         print("Prefix caching is off; the engine publishes no cache events.")
     elif planned is None or evidence["kv_events"] is None:
@@ -978,7 +1071,7 @@ def model_dimensions(run: Path, plan: dict) -> None:
         [
             "run",
             "--rm",
-            *plan["common"],
+            *container_options(plan),
             "--mount",
             f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-inspect.py,readonly",
             "--mount",
@@ -1211,7 +1304,7 @@ def measure_cache(run: Path, plan: dict) -> None:
             "create",
             "--name",
             plan["name"] + "-cache-probe",
-            *plan["common"],
+            *container_options(plan),
             "--mount",
             f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-probe.py,readonly",
             "--mount",
@@ -1254,13 +1347,12 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError("cache capture plan changed; prepare a fresh launch plan")
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
-    kv_events_directory(plan)
     cid = docker(
         [
             "create",
             "--name",
             plan["name"],
-            *plan["common"],
+            *container_options(plan),
             "--env",
             "NARWHAL_CAPTURE_CACHE=1",
             "--env",
@@ -1314,8 +1406,7 @@ def gpu_memory(gpu_uuid: str) -> dict[str, int]:
 
 def validate_shared_gpu(run: Path, plan: dict) -> None:
     """Bind the serving CUDA selection to the UUID used for shared memory accounting."""
-    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
+    values = read_env(run / env_file_name(plan))
     selected = values.get("CUDA_VISIBLE_DEVICES", "")
     expected = plan["shared_device"]["gpu_uuid"]
     if selected == expected:
@@ -1327,7 +1418,7 @@ def validate_shared_gpu(run: Path, plan: dict) -> None:
         raise ValueError(
             f"{plan['role']}: CUDA_VISIBLE_DEVICES={selected!r} differs from shared GPU {expected}"
         )
-    # Resolve CUDA ordinals in the serving runtime; NVML indices can use another order.
+    # CUDA ordinals resolve in the serving runtime; NVML indices can use another order.
     script = """import torch
 from uuid import UUID
 if torch.cuda.device_count() != 1:
@@ -1487,7 +1578,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                         f"{role}: free GPU memory is below its {budget_mib} MiB allocation"
                     )
                 cid = _create_container(run, plan)
-                # Retain ownership before filesystem or Docker start failures can intervene.
+                # Ownership is recorded before any filesystem or Docker start failure.
                 started.append((run, cid, record))
                 record["container_id"] = cid
                 write_private(run / "container.id", cid + "\n")

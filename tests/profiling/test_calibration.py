@@ -14,6 +14,7 @@ from narwhal.config import FleetConfig
 from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
+from narwhal.profiling.generation import GenerationEvidence
 from tests.fixtures import ROOT
 
 
@@ -127,7 +128,9 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(problems), len(self.cfg.engines))
         self.assertTrue(all("process differs" in problem for problem in problems))
 
-    async def _run_with_decode(self, decode, *, sizing_error=None, observation_timeout_s=1.0):
+    async def _run_with_decode(
+        self, decode, *, sizing_error=None, observation_timeout_s=1.0, generations=None
+    ):
         class FakeClient:
             def __init__(self, **kwargs):
                 self.decode = decode
@@ -144,7 +147,10 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 calibration,
                 "read_generation",
-                new=AsyncMock(return_value=SimpleNamespace(digest="g")),
+                new=AsyncMock(
+                    return_value=GenerationEvidence("g", {}),
+                    side_effect=generations,
+                ),
             ),
             patch.object(calibration, "engine_context_limit", new=AsyncMock(return_value=1000)),
             patch.object(
@@ -181,8 +187,20 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertGreater(document["candidate_deadline_s"], 0.5)
-        # Calibration forces its requested output so an immediate end of text cannot fail it.
+        # An immediate end of text cannot fail calibration.
         self.assertTrue(all(body["ignore_eos"] and body["min_tokens"] >= 1 for body in bodies))
+
+    async def test_a_relaunch_during_calibration_marks_the_generation_changed(self):
+        async def decode(*args, **kwargs):
+            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+            yield "data: [DONE]"
+
+        before = [GenerationEvidence("launch", {}, f"{spec.iid}-1") for spec in self.cfg.engines]
+        after = [GenerationEvidence("launch", {}, f"{spec.iid}-2") for spec in self.cfg.engines]
+        code, document = await self._run_with_decode(decode, generations=before + after)
+        self.assertEqual(code, 1)
+        self.assertEqual(document["generations"], {spec.iid: "launch" for spec in self.cfg.engines})
+        self.assertEqual(document["changed_generations"], [spec.iid for spec in self.cfg.engines])
 
     async def test_stalled_handoff_is_kept_out_of_timing_samples(self):
         async def decode(*args, **kwargs):
@@ -260,7 +278,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 calibration,
                 "read_generation",
-                new=AsyncMock(return_value=SimpleNamespace(digest="g")),
+                new=AsyncMock(return_value=GenerationEvidence("g", {})),
             ),
             patch.object(
                 calibration,

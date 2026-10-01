@@ -48,12 +48,10 @@ class VllmDialect(EngineDialect):
     name = "vllm"
     # vLLM exposes this route only with VLLM_SERVER_DEV_MODE=1.
     cache_reset_path = "/reset_prefix_cache"
-    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of")
-    # vLLM answers return_token_ids with per-chunk token ids and honors
-    # stream_interval=1, so streamed output is exactly countable.
+    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
+    # vLLM streams per-chunk token ids for return_token_ids and honors stream_interval=1.
     token_ids = True
-    # Chat fields that steer the server-side template render, forwarded to
-    # the tokenize route so the count covers the render the engine makes.
+    # Chat template fields the tokenize route needs to count the engine's render.
     tokenize_passthrough: ClassVar[tuple[str, ...]] = (
         "tools",
         "chat_template",
@@ -106,7 +104,7 @@ class VllmDialect(EngineDialect):
         return {"cache_salt": secrets.token_urlsafe(32)}
 
 
-# Register a dialect only after the fleet checks pass against that build.
+# Each registered dialect has passed the fleet checks against its build.
 _REGISTRY: dict[str, EngineDialect] = {d.name: d for d in (VllmDialect(),)}
 
 

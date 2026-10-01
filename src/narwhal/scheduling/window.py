@@ -25,10 +25,7 @@ class Cohort(Generic[T]):
 class DemandWindow(Generic[T]):
     """Retain at most `max_shapes + 1` cohorts per fixed time bucket.
 
-    Overflow preserves every count and merges values through a caller-supplied
-    upper envelope. A boundary cohort contributes its whole count to demand;
-    safety evidence uses only observations guaranteed to follow the cutoff.
-    Recording prunes history even when the control loop is unavailable.
+    Extra shapes merge into one overflow cohort through `merge`, keeping every count.
     """
 
     def __init__(
@@ -56,7 +53,7 @@ class DemandWindow(Generic[T]):
         self._head = math.floor(clock() / bucket_s)
 
     def prune(self, now: float | None = None) -> None:
-        """Advance retention without relying on a successful planning pass."""
+        """Drop buckets older than `retained_s` before `now`."""
         index = math.floor((self._clock() if now is None else now) / self.bucket_s)
         if index <= self._head:
             return
@@ -67,7 +64,7 @@ class DemandWindow(Generic[T]):
             self._overflow.pop(old, None)
 
     def add(self, value: T, *, at: float | None = None) -> Cohort[T] | None:
-        """Count an observation using bounded storage, including excess shapes."""
+        """Count an observation; return its cohort, or None when older than retention."""
         now = self._clock()
         seen = now if at is None else at
         self.prune(max(now, seen))
@@ -92,21 +89,21 @@ class DemandWindow(Generic[T]):
         row.last = max(row.last, seen)
         return row
 
-    def replace(self, row: Cohort[T] | None, value: T, *, at: float) -> None:
-        """Reprice one retained observation without adding demand or refreshing age.
+    def replace(self, row: Cohort[T] | None, value: T, *, at: float) -> Cohort[T] | None:
+        """Move one retained observation to `value`; return the cohort now holding it.
 
-        Only active request owners retain cohort references. A removed boundary
-        observation invalidates the cohort's last-timestamp evidence; its old
-        upper envelope still conservatively bounds remaining work.
+        Removing an observation at a cohort's last timestamp makes that timestamp uncertain.
         """
         self.prune()
         index = math.floor(at / self.bucket_s)
         bucket = self._buckets.get(index)
         if row is None or bucket is None:
-            return
+            return None
         present = self._overflow.get(index) is row if row.overflow else bucket.get(row.value) is row
-        if not present or (not row.overflow and row.value == value):
-            return
+        if not present:
+            return None
+        if not row.overflow and row.value == value:
+            return row
         row.count -= 1
         if at == row.last:
             row.last_certain = False
@@ -115,10 +112,10 @@ class DemandWindow(Generic[T]):
                 del self._overflow[index]
             else:
                 del bucket[row.value]
-        self.add(value, at=at)
+        return self.add(value, at=at)
 
     def rows(self, since: float | None = None) -> Iterator[Cohort[T]]:
-        """Read bounded cohorts, including a whole cohort across a cutoff."""
+        """Yield cohorts whose last observation is at or after `since`."""
         self.prune()
         cutoff = self._clock() - self.retained_s if since is None else since
         for index, bucket in self._buckets.items():
@@ -156,7 +153,7 @@ class DemandWindow(Generic[T]):
         self._overflow.clear()
 
     def summary(self) -> dict[str, int | float]:
-        """Expose the storage bound and approximation currently in the window."""
+        """Return storage bounds, cell use and overflow counts."""
         rows = list(self.rows())
         return {
             "bucket_s": self.bucket_s,

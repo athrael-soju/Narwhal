@@ -10,16 +10,57 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 - Relative paths resolve from the process working directory.
 - `python -m narwhal.cli` starts a router.
 
-| Command                                        | Purpose                                                                   |
-| ---------------------------------------------- | ------------------------------------------------------------------------- |
-| [`narwhal config`](Config-Inspection.md)       | Validate fleet files and inspect resolved defaults and paths offline      |
-| [`narwhal diagnostics`](Diagnostic-Bundles.md) | Collect private router snapshots and incident artifacts                   |
-| [`narwhal dev`](cli/Dev.md)                    | Initialize, launch, verify, and stop a local shared-GPU development fleet |
-| [`narwhal-engine`](cli/Engine.md)              | Prepare and launch checked engine processes                               |
-| [`narwhal-attest`](cli/Attest.md)              | Serve engine identity and attestation data for one vLLM engine            |
-| [`narwhal-serve`](cli/Serve.md)                | Run a Narwhal router                                                      |
-| [`narwhal-profile`](cli/Profile.md)            | Measure engine behaviour and write the profile store                      |
-| [`narwhal-check`](cli/Check.md)                | Run deployment preflight gates                                            |
+<div class="grid cards" markdown>
+
+-   [`narwhal config`](Config-Inspection.md)
+
+    ---
+
+    Validate fleet files and inspect resolved defaults and paths offline.
+
+-   [`narwhal diagnostics`](Diagnostic-Bundles.md)
+
+    ---
+
+    Collect private router snapshots and incident artifacts.
+
+-   [`narwhal dev`](cli/Dev.md)
+
+    ---
+
+    Initialize, launch, verify, and stop a local shared-GPU development fleet.
+
+-   [`narwhal-engine`](cli/Engine.md)
+
+    ---
+
+    Prepare and launch checked engine processes.
+
+-   [`narwhal-attest`](cli/Attest.md)
+
+    ---
+
+    Serve engine identity and attestation data for one vLLM engine.
+
+-   [`narwhal-serve`](cli/Serve.md)
+
+    ---
+
+    Run a Narwhal router.
+
+-   [`narwhal-profile`](cli/Profile.md)
+
+    ---
+
+    Measure engine behaviour and write the profile store.
+
+-   [`narwhal-check`](cli/Check.md)
+
+    ---
+
+    Run deployment preflight gates.
+
+</div>
 
 ## Text-mode exit codes
 
@@ -31,17 +72,17 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 |       `1` | Operation failure: engine HTTP request, runtime inspection, listener bind, verification, or teardown. |
 |       `2` | Invalid arguments or configuration inputs.                                                            |
 
-Command-specific exit codes:
+These commands add exit codes for specific cases:
 
-| Command | Exit code | Case |
-| --- | :--: | --- |
-| [`narwhal dev`](cli/Dev.md#output-and-exit-codes) | `1` | The instance reports `degraded`. |
-| [`narwhal dev init`](cli/Dev.md#output-and-exit-codes) | `2` | An initialization check fails. |
-| [`narwhal-engine prepare`](cli/Engine.md#actions) | `2` | Preparation fails. |
-| [`narwhal-engine`](cli/Engine.md#actions) | `1` | An output artifact already exists. |
-| [`narwhal-check`](cli/Check.md#exit-codes) | `1` | A gate is skipped with `--evidence-out`. |
-| [`narwhal diagnostics collect`](Diagnostic-Bundles.md#manifest-and-exit-status) | `3` | Partial bundle. |
-| [`narwhal diagnostics collect`](Diagnostic-Bundles.md#manifest-and-exit-status) | `4` | I/O failure. |
+| Command | Exit code | Case | Reference |
+| --- | :--: | --- | --- |
+| `narwhal dev` | `1` | The instance reports `degraded`. | [![narwhal dev output and exit codes](https://img.shields.io/badge/docs-Output%20and%20exit%20codes-0f766e)](cli/Dev.md#output-and-exit-codes) |
+| `narwhal dev init` | `2` | An initialization check fails. | [![narwhal dev output and exit codes](https://img.shields.io/badge/docs-Output%20and%20exit%20codes-0f766e)](cli/Dev.md#output-and-exit-codes) |
+| `narwhal-engine prepare` | `2` | Preparation fails. | [![narwhal-engine actions](https://img.shields.io/badge/docs-Actions-0f766e)](cli/Engine.md#actions) |
+| `narwhal-engine` | `1` | An output artifact already exists. | [![narwhal-engine actions](https://img.shields.io/badge/docs-Actions-0f766e)](cli/Engine.md#actions) |
+| `narwhal-check` | `1` | A gate is skipped with `--evidence-out`. | [![narwhal-check exit codes](https://img.shields.io/badge/docs-Exit%20codes-0f766e)](cli/Check.md#exit-codes) |
+| `narwhal diagnostics collect` | `3` | Partial bundle. | [![narwhal diagnostics manifest and exit status](https://img.shields.io/badge/docs-Manifest%20and%20exit%20status-0f766e)](Diagnostic-Bundles.md#manifest-and-exit-status) |
+| `narwhal diagnostics collect` | `4` | I/O failure. | [![narwhal diagnostics manifest and exit status](https://img.shields.io/badge/docs-Manifest%20and%20exit%20status-0f766e)](Diagnostic-Bundles.md#manifest-and-exit-status) |
 
 ## Failure diagnostics
 
@@ -51,9 +92,4 @@ Command-specific exit codes:
 
 ## JSON command results
 
-| Property  | Value                                                                                                    |
-| --------- | -------------------------------------------------------------------------------------------------------- |
-| Commands  | `narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, `narwhal-check` |
-| Flag      | `--format json`                                                                                          |
-| Output    | A [versioned command result](Command-Results.md)                                                          |
-| Exit code | Derived from the result `status`                                                                         |
+`narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check` accept `--format json`. With it, the command prints a [versioned command result](Command-Results.md) and derives its exit code from the result `status`.

@@ -7,13 +7,18 @@ from dataclasses import dataclass, field
 
 from ..contracts import METRICS, current
 
-# Concentrate histogram resolution around the SLO boundary.
+# Histogram bucket edges as fractions of the SLO.
 _SLO_FRACTIONS = (0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0)
 
 
 def buckets_for(slo_s: float) -> tuple[float, ...]:
     """Scale histogram edges to an SLO in seconds."""
     return tuple(round(f * slo_s, 6) for f in _SLO_FRACTIONS)
+
+
+def slo_label(slo_s: float) -> str:
+    """Label value naming the target that scaled a histogram's edges."""
+    return f"{slo_s:g}"
 
 
 @dataclass
@@ -24,13 +29,14 @@ class Histogram:
     counts: list[int] = field(default_factory=list)
     total: float = 0.0
     n: int = 0
+    labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.counts:
             self.counts = [0] * len(self.buckets)
 
     def observe(self, value: float) -> None:
-        """Record one observation."""
+        """Add `value` to the bucket counts, sum and count."""
         self.total += value
         self.n += 1
         for i, edge in enumerate(self.buckets):
@@ -40,12 +46,19 @@ class Histogram:
     def render(self, name: str, help_text: str) -> list[str]:
         """Render the histogram's Prometheus exposition lines."""
         out = [f"# HELP {name} {help_text}", f"# TYPE {name} histogram"]
+        prefix = "".join(f'{k}="{v}",' for k, v in self.labels.items())
+        series = "{" + prefix[:-1] + "}" if prefix else ""
         for edge, count in zip(self.buckets, self.counts, strict=True):
-            out.append(f'{name}_bucket{{le="{edge}"}} {count}')
-        out.append(f'{name}_bucket{{le="+Inf"}} {self.n}')
-        out.append(f"{name}_sum {self.total}")
-        out.append(f"{name}_count {self.n}")
+            out.append(f'{name}_bucket{{{prefix}le="{edge}"}} {count}')
+        out.append(f'{name}_bucket{{{prefix}le="+Inf"}} {self.n}')
+        out.append(f"{name}_sum{series} {self.total}")
+        out.append(f"{name}_count{series} {self.n}")
         return out
+
+
+def slo_histogram(slo_s: float) -> Histogram:
+    """Histogram whose edges scale with `slo_s`, labelled with that target."""
+    return Histogram(buckets_for(slo_s), labels={"slo": slo_label(slo_s)})
 
 
 def _lines(
@@ -75,6 +88,12 @@ def _render_admission(state: dict) -> list[str]:
         "Requests completed without error",
         "counter",
         [({}, state.get("served", 0))],
+    )
+    out += _lines(
+        "narwhal_slo_met_total",
+        "Requests completed within the TTFT and TPOT SLOs",
+        "counter",
+        [({}, state.get("slo_met", 0))],
     )
     for field_name, help_text in (
         ("offered", "Original completion requests received, including early refusals"),
@@ -218,6 +237,15 @@ def _render_runtime(state: dict) -> list[str]:
             for iid, entry in lifecycle_engines.items()
         ],
     )
+    out += _lines(
+        "narwhal_engine_lifecycle_state",
+        "1 for the engine's current lifecycle state",
+        "gauge",
+        [
+            ({"iid": iid, "state": entry.get("state", "active")}, 1)
+            for iid, entry in lifecycle_engines.items()
+        ],
+    )
     return out
 
 
@@ -251,13 +279,13 @@ def _render_refusals(state: dict) -> list[str]:
     out: list[str] = []
     out += _lines(
         "narwhal_refused_total",
-        "Requests predictive admission refused above the TTFT budget",
+        "Requests predictive admission refused for a projected TTFT or decode SLO miss",
         "counter",
         [({}, state.get("admission", {}).get("refused", 0))],
     )
     out += _lines(
         "narwhal_rejected_total",
-        "Requests rejected by authentication or a concurrency limit",
+        "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness",
         "counter",
         [({}, state.get("admission", {}).get("rejected", 0))],
     )
@@ -328,7 +356,7 @@ def _render_outcomes(state: dict) -> list[str]:
         "counter",
         [({}, state.get("unserved", 0))],
     )
-    # Pruning expired outcome buckets can lower these totals, so use gauges.
+    # Pruning expired outcome buckets can lower these totals.
     attainment = state.get("attainment") or {}
     out += _lines(
         "narwhal_attainment_evidence_covered_seconds",
@@ -348,7 +376,7 @@ def _render_outcomes(state: dict) -> list[str]:
         "gauge",
         [({}, attainment.get("buckets", 0))],
     )
-    # Emitted only once beyond-span evidence has actually been dropped.
+    # Present after beyond-span evidence has been dropped.
     if attainment.get("pruned_buckets", 0) or attainment.get("pruned_outcomes", 0):
         out += _lines(
             "narwhal_attainment_evidence_pruned_total",
@@ -444,7 +472,7 @@ def _render_demand(state: dict) -> list[str]:
 
 
 def _render_availability(state: dict) -> list[str]:
-    """Render engine ejections, breaker state and prefill-floor breaches."""
+    """Render engine ejections, quarantines, breaker state and prefill-floor breaches."""
     out: list[str] = []
     out += _lines(
         "narwhal_ejected_instances",
@@ -457,6 +485,12 @@ def _render_availability(state: dict) -> list[str]:
         "1 while this instance is ejected",
         "gauge",
         [({"iid": iid}, 1) for iid in state.get("ejected", [])],
+    )
+    out += _lines(
+        "narwhal_engine_quarantined",
+        "1 while a failure quarantine or inference-probe hold excludes the engine from placement",
+        "gauge",
+        [({"iid": iid}, 1) for iid in state.get("quarantined", [])],
     )
     breaker = state.get("breaker") or {}
     streak_samples: list[tuple[Mapping[str, str], float | int]] = [
@@ -501,11 +535,16 @@ def _render_availability(state: dict) -> list[str]:
     return out
 
 
+# Each caller and target pair renders at 0 from startup; increase() skips a series' first sample.
+FLIP_KEYS = ("decode_floor:decode", "floor_recovery:prefill", "reactive:decode", "reactive:prefill")
+
+
 def _render_controller(state: dict) -> list[str]:
     """Render role changes and controller diagnostics."""
     control = state.get("control") or {}
+    flips = dict.fromkeys(FLIP_KEYS, 0) | (control.get("flips") or {})
     flip_samples: list[tuple[Mapping[str, str], float | int]] = []
-    for key, count in sorted((control.get("flips") or {}).items()):
+    for key, count in sorted(flips.items()):
         by, to = key.rsplit(":", 1)
         flip_samples.append(({"to": to, "by": by}, count))
 
@@ -703,7 +742,7 @@ def _render_slo(state: dict) -> list[str]:
         "Configured service-level latency budget in seconds",
         "gauge",
         [
-            ({"metric": metric}, float(slo[field]))
+            ({"metric": metric, "slo": slo_label(float(slo[field]))}, float(slo[field]))
             for metric, field in (("ttft", "ttft_s"), ("tpot", "tpot_s"))
             if slo.get(field) is not None
         ],

@@ -10,10 +10,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 
 ### Top-level fields
 
-| Counters                                                                               | New router process                                     |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `served`, `failed`, `cancelled`, `unserved`, `admission.rejected`, `admission.refused` | Restored from the state handoff on resume and takeover |
-| Other counters                                                                         | Start at zero                                          |
+The state document carries these top-level fields:
 
 | Field                   | Meaning                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -21,6 +18,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `schema_version`        | State schema version, `1`                                                             |
 | `journal_run`           | Request-journal run ID of the current router process                                  |
 | `served`                | Completed requests                                                                    |
+| `slo_met`               | Completed requests within `slo.ttft_s` and `slo.tpot_s`                               |
 | `failed`                | Requests ending in error                                                              |
 | `offered`               | Completion arrivals                                                                   |
 | `unsized_offered`       | Arrivals that terminated before workload sizing                                       |
@@ -47,6 +45,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `min_decode`            | Configured minimum live decode count                                                  |
 | `below_floor`           | Current and cumulative prefill-floor breach state                                     |
 | `ejected`               | Engines removed by the breaker                                                        |
+| `peer_release`          | Peer release rounds for each engine out of placement                                  |
 | `draining`              | Engines excluded by lifecycle action                                                  |
 | `probation`             | Engines carrying a predictive-health placement penalty                                |
 | `health`                | Per-engine drift-window accounting                                                    |
@@ -62,13 +61,39 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `flips_refused`         | The 20 most recent rejected role changes                                              |
 | `flips`                 | Role changes retained up to `flip_history`                                            |
 
-| Topic                                             | Reference                                                                         |
-| ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `lifecycle`                                       | [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)      |
-| `attainment`, `demand_history`, `demand_evidence` | [SLO attainment and demand accounting](06-SLO-and-Demand.md)                      |
-| Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) |
+On resume and takeover, a new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, and `admission.refused` from the state handoff. Other counters start at zero.
+
+<div class="grid cards" markdown>
+
+-   [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)
+
+    ---
+
+    The drain state, resident work, and lifecycle events in `lifecycle`.
+
+-   [SLO attainment and demand accounting](06-SLO-and-Demand.md)
+
+    ---
+
+    The `attainment`, `demand_history`, and `demand_evidence` objects.
+
+-   [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)
+
+    ---
+
+    The release rounds that `peer_release` reports.
+
+-   [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal)
+
+    ---
+
+    Per-request evidence for one client request.
+
+</div>
 
 ### `health`
+
+Each engine's `health` entry holds its drift-window accounting:
 
 | Field               | Meaning                                                              |
 | ------------------- | -------------------------------------------------------------------- |
@@ -82,12 +107,19 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 ### `breaker`
 
-| Field       | Meaning                                                                                                                                                                   |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `failures`  | Consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed sweeps |
-| `verifying` | Engines with a health or inference probe in flight, each as `iid` and probe `kind`                                                                                        |
+`breaker.failures` holds the consecutive failure streaks per engine, keyed by class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed sweeps.
+
+`breaker.verifying` lists the engines with a health or inference probe in flight, each as `iid` and probe `kind`.
+
+### `peer_release`
+
+Under `recovery.engine_restart_policy: individual`, `peer_release` holds one entry per ejected engine and per engine in lifecycle state `drained`, `deadline_exceeded`, `validating`, or `blocked`.
+
+Each entry's `rounds` counts the release rounds sent since the ejection or the last state change. Its `next_round_s` gives the seconds until the next round, or `null` after the last round.
 
 ### `residency`
+
+Each engine's `residency` entry tracks its prefix-residency synchronization with its attestation sidecar:
 
 | Field             | Meaning                                                      |
 | ----------------- | ------------------------------------------------------------ |
@@ -101,15 +133,22 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 `known: false` cases:
 
-| Case                                                       | `reason`                            |
-| ---------------------------------------------------------- | ----------------------------------- |
-| Engine has an empty `attestation_url`                      | `engine has no attestation sidecar` |
-| Sidecar answers the residency snapshot route with HTTP 404 | `engine publishes no cache events`  |
-| Residency refresh fails                                    | `residency refresh failed: <error>` |
-| Sidecar snapshot reports `known: false`                    | Sidecar's reason                    |
+| Case                                                          | `reason`                                     |
+| ------------------------------------------------------------- | -------------------------------------------- |
+| Router awaits its first residency refresh of the engine       | `not yet synchronised`                       |
+| Engine has an empty `attestation_url`                         | `engine has no attestation sidecar`          |
+| Sidecar answers the residency snapshot route with HTTP 404    | `engine publishes no cache events`           |
+| Sidecar answers a residency refresh with an HTTP error status | `residency refresh failed: HTTP <status>`    |
+| Residency refresh fails with another error                    | `residency refresh failed: <ExceptionClass>` |
+| Sidecar snapshot reports `known: false`                       | Sidecar's reason                             |
+
+For an engine with `known: false`, the router prices each request's prefill on the cold curve of its full input.
+
+The router refreshes each engine's residency view every `controller.monitor_interval_s` seconds.
 
 The router takes a new snapshot when:
 
+- the router starts
 - the sidecar reports the requested changes are gone
 - the sidecar epoch changes
 - the change sequence skips a number
@@ -152,6 +191,8 @@ The router takes a new snapshot when:
 
 ### Pool and SLO fields
 
+These objects carry the pool, load, SLO, and floor state:
+
 | Object           | Fields                                                                            |
 | ---------------- | --------------------------------------------------------------------------------- |
 | `pools`          | `prefill`, `decode` engine-ID arrays                                              |
@@ -162,6 +203,8 @@ The router takes a new snapshot when:
 | `resident.<iid>` | `prefill`, `decode` in-flight counts                                              |
 | `below_floor`    | `active`, `live_prefill`, `since`, `breaches`, `cumulative_s`                     |
 | `decode_floor`   | `min_decode`, `live_decode`, `below_floor`, `restoration_moves`                   |
+
+The `below_floor` and `decode_floor` fields hold these values:
 
 | Field                      | Meaning                                                                     |
 | -------------------------- | --------------------------------------------------------------------------- |
@@ -202,7 +245,7 @@ Optional fields, by evaluation stage:
 
 | Field                                             | Meaning                                                                                                    |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `current_prefill`, `current_decode`               | Current split                                                                                              |
+| `current_prefill`, `current_decode`               | Current prefill and decode split                                                                           |
 | `prefill_work`, `decode_work`                     | Estimated prefill and decode demand, in engines                                                            |
 | `arrivals`                                        | Arrivals in the demand window                                                                              |
 | `output_observations`                             | Completed-output observations in demand history                                                            |
@@ -217,6 +260,7 @@ Optional fields, by evaluation stage:
 | `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery` |
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                    |
 | `recovery_prefill_ratio`, `queued_prefill_s`      | Inputs to the [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio)                        |
+| `recovery_decode_ratio`                           | Value of the [decode recovery ratio](06-SLO-and-Demand.md#decode-recovery-ratio)                           |
 | `eligibility_rule`                                | Rule that made a scored proposal eligible                                                                  |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                   |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |
@@ -227,6 +271,8 @@ Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode
 
 Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix.
 
+`eligibility_rule` takes one of these values:
+
 | `eligibility_rule`        | Proposal                                                             |
 | ------------------------- | -------------------------------------------------------------------- |
 | `source_shrink`           | Ordinary consolidation                                               |
@@ -234,6 +280,8 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request |
 
 #### Projected-TTFT recovery fields
+
+A projected-TTFT recovery evaluation adds these fields to `control.last_decision`:
 
 | Field                          | Meaning                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------- |
@@ -266,7 +314,7 @@ Blocked and held decisions keep the proposed split and objective change.
 - profile coverage
 - KV capacity
 - role floors
-- live availability while fleet health is changing
+- a role with zero live engines while fleet health is changing
 - pins
 - cooldown
 - dwell

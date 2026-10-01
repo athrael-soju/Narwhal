@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 
 from ..config import FleetConfig
-from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from ..engines.client import EngineClient, EngineError, first_output_timeout
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
@@ -48,7 +48,7 @@ def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
 
 
 def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
-    """Check a completed calibration against this fleet's current configuration."""
+    """Return mismatches between a calibration document and this fleet's configuration."""
     problems: list[str] = []
     if document.get("schema") != SCHEMA or document.get("schema_version") != 1:
         return ["first-token calibration has an unknown schema or version"]
@@ -249,17 +249,16 @@ async def calibrate(
     dialect = lookup_dialect(cfg.dialect)
     if dialect.tokenize_path is None:
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
-    generations = {
-        spec.iid: (
-            await read_generation(
-                spec,
-                cfg.engine_contract,
-                timeout_s=observation_timeout_s,
-                headers=cfg.engine_headers(),
-            )
-        ).digest
+    started = {
+        spec.iid: await read_generation(
+            spec,
+            cfg.engine_contract,
+            timeout_s=observation_timeout_s,
+            headers=cfg.engine_headers(),
+        )
         for spec in cfg.engines
     }
+    generations = {iid: generation.digest for iid, generation in started.items()}
     client = EngineClient(
         timeout_s=cfg.request_timeout_s,
         prefill_timeout_s=cfg.prefill_timeout_s,
@@ -377,11 +376,7 @@ async def calibrate(
                                 RuntimeError,
                             ) as exc:
                                 failures += 1
-                                expired = (
-                                    isinstance(exc, EngineError)
-                                    and exc.status == 504
-                                    and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
-                                )
+                                expired = first_output_timeout(exc) and exc.status == 504
                                 row.update(
                                     status=(
                                         "request_expired"
@@ -437,7 +432,7 @@ async def calibrate(
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             generation_errors.append(f"{spec.iid}: {type(exc).__name__}: {exc}")
         else:
-            if current.digest != generations[spec.iid]:
+            if current.process_digest != started[spec.iid].process_digest:
                 changed.append(spec.iid)
     complete = (
         samples_per_group >= 100

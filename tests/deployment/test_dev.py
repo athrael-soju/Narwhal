@@ -120,6 +120,8 @@ class DevTests(unittest.TestCase):
             decode_input_lens=tuple(profile["decode_input_lens"]),
             decode_concurrency=tuple(profile["decode_concurrency"]),
             decode_tokens=profile["decode_tokens"],
+            cached_prefix_lens=tuple(profile["cached_prefix_lens"]),
+            cached_suffix_lens=tuple(profile["cached_suffix_lens"]),
         )
         runtime = self.spec["runtime"]
         self.assertEqual(
@@ -290,6 +292,8 @@ class DevTests(unittest.TestCase):
             decode_input_lens=tuple(profile["decode_input_lens"]),
             decode_concurrency=tuple(profile["decode_concurrency"]),
             decode_tokens=profile["decode_tokens"],
+            cached_prefix_lens=tuple(profile["cached_prefix_lens"]),
+            cached_suffix_lens=tuple(profile["cached_suffix_lens"]),
         )
         runtime = self.spec["runtime"]
         self.assertEqual(

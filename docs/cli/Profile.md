@@ -9,19 +9,20 @@ description: Measure the prefill and decode cost model of each engine with narwh
 | Mode | Operation | Output |
 | --- | --- | --- |
 | Live sweep | Measures live engines. | The fleet's `profiles.path` |
-| Refit | Recomputes time to first token (TTFT) fits from retained samples with the decode fits kept. | `--out` |
+| Refit | Recomputes cold and warm time to first token (TTFT) fits from retained samples, with the decode fits kept. | `--out` |
 | Merge | Combines separately measured role mixes. | `--out` |
 
 Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.
 
-| Fleet configuration | A live sweep binds each fit to |
-| --- | --- |
-| Sets `engine_contract` | The [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) |
-| Omits `engine_contract` | The live process identity |
+When the fleet configuration sets `engine_contract`, a live sweep binds each fit to the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#33-attestation) when the attestation carries launch evidence, otherwise to its `attestation_digest`. When the configuration omits `engine_contract`, a live sweep binds each fit to the live process identity.
+
+A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
 
 Every mode rejects symlink destinations.
 
 ## Selection, refitting, and output
+
+These options select engines, choose the mode, and set the output files.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -29,7 +30,7 @@ Every mode rejects symlink destinations.
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). |
 | `--fleet PATH` | required | Fleet configuration file that defines engine membership for every mode. |
 | `--only IID` | every engine | Repeatable engine `iid` to include in a live sweep. |
-| `--refit-samples PATH` | optional | Sample sidecar for a refit. |
+| `--refit-samples PATH` | optional | Sample sidecar for a refit of cold and warm prefill. |
 | `--merge PATH` | optional | Measured profile store to combine with its matching sample sidecar, repeated at least twice. |
 | `--out PATH` | optional | Fresh profile destination for `--refit-samples` and `--merge`, with a matching `.samples.json` sample sidecar. |
 | `--limits PATH` | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
@@ -56,6 +57,8 @@ Refit and merge outputs:
 - The merged sample sidecar records each source file's path and SHA-256 hash.
 - Keep the source files.
 
+Commands for each mode:
+
 ```bash
 narwhal-profile --fleet fleet.json
 narwhal-profile --fleet fleet.json --refit-samples profiles.samples.json --out refitted.json
@@ -64,16 +67,20 @@ narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --o
 
 ## Prefill and decode sweeps
 
-All modes validate these options.
+All modes validate these options:
 
 | Option | Default | Description | Valid values |
 | --- | :---: | --- | --- |
-| `--prefill-lens LIST` | `256,512,1024,2048,4096,8192,12288,16384` | Comma-separated candidate prefill lengths, filtered to each engine's live `max_model_len`. | At least three distinct usable values |
+| `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths, filtered to each engine's live `max_model_len`. | At least three distinct usable values |
 | `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. | At least two distinct values |
 | `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts, with candidates above an engine's `--limits` value replaced by that value. | At least two distinct usable values |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
+| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | At least two distinct values and five cases with `--cached-suffix-lens` |
+| `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | At least two distinct values |
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input-length and concurrency point. | At least 1 |
+
+A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
 
 ## Shared-GPU neighbour traffic
 
@@ -108,6 +115,10 @@ A profiling run aborts when any of these conditions occurs:
 - the `/tokenize` response fails `max_model_len` validation
 - engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
 - the representative prefill fit exceeds 20% mean error or 50% worst-point error
+- the decode fit error exceeds `profiles.max_decode_fit_mape`, or its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`
+- an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control in the warm prefill sweep
+
+On success, each mode prints:
 
 | Mode | Success output |
 | --- | --- |

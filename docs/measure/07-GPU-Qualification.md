@@ -10,6 +10,8 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 
 ## Pinned inputs
 
+The qualification run pinned these inputs:
+
 | Input | Value |
 | --- | --- |
 | Narwhal router source | `6c6c7da4c879101d4f353da1590aa32ce2bf7c10` |
@@ -32,16 +34,11 @@ The private run bundle in `runs/<qualification-run>/` holds the deployment input
 | Workload SHA-256 | `55885dd1d9b42a4debf7b01230bbb5c917334689e867d5ca08a66edfb73b80e3` |
 | Launch check | Checkpoint manifests and the live launch check agree on every shard and the model config hash on every selected host |
 
-| Profile measurement | Value |
-| --- | --- |
-| Median live prefill, 8,192 tokens | About 0.92 s |
-| Decode intercepts | 0.2416 to 0.2426 s/token |
+The profile measured a median live prefill of about 0.92 s at 8,192 tokens and decode intercepts of 0.2416 to 0.2426 s/token.
 
-| Timeout measurement | Value | Result |
-| --- | :---: | --- |
-| Packaged first-token deadline | 2.5 s | Rejected valid KV handoffs between engines |
-| Wider-window direct probe first-token latency | 0.348 to 5.274 s | Completed on every permitted path |
-| Qualified fleet copy `engine.first_token_timeout_s`, the only changed field | 8.5 s | About 0.6 s of the 10 s TTFT budget remains after prefill |
+The packaged first-token deadline of 2.5 s rejected valid KV handoffs between engines. A wider-window direct probe measured first-token latency of 0.348 to 5.274 s and completed on every permitted path.
+
+The qualified fleet copy changes one field and sets `engine.first_token_timeout_s` to 8.5 s. At that deadline, about 0.6 s of the 10 s TTFT budget remains after prefill.
 
 Full preflight against the same engine containers and profiled process generations that served the benchmark passed all nine gates.
 
@@ -124,17 +121,13 @@ The private `benchmark-plan-qualified.json` sets:
 - The client and journal each logged 201 terminal requests per point: 200 measured requests and one unscored warmup.
 
 | Offered rate | Completed rate including drain | Output throughput including drain | TTFT p50 / p95 / p99 | TPOT p50 / p95 / p99 | Result |
-| --- | --- | --- | --- | --- | --- |
+| :---: | :---: | :---: | :---: | :---: | --- |
 | 0.5 request/s | 0.460 request/s | 58.9 tokens/s | 5.258 / 7.298 / 7.407 s | 257.5 / 258.4 / 259.3 ms | 200/200 within limits |
 | 1 request/s | 0.840 request/s | 107.5 tokens/s | 5.572 / 7.314 / 7.367 s | 258.7 / 259.9 / 260.5 ms | 200/200 within limits |
 
-| Observation | 0.5 request/s | 1 request/s |
-| --- | --- | --- |
-| Role allocation | Router shifted capacity toward decode | Router held the allocation from the 0.5 request/s point |
-| Collector scrape coverage | Whole run | Whole run |
-| Collector client and journal counts | Matched | Matched |
-| Collector role timeline | Every role change | Every role change |
-| Collector diagnostics | One `counter_missing` for `narwhal_flips_total`, a series first exported at the first role change | Zero |
+At 0.5 request/s, the router shifted capacity toward decode. At 1 request/s, it held the allocation from the 0.5 request/s point.
+
+At both points, the collector's scrapes covered the whole run, its client and journal counts matched, and its role timeline recorded every role change. It raised one `counter_missing` diagnostic for `narwhal_flips_total` before the first role change at 0.5 request/s, and zero diagnostics at 1 request/s.
 
 Grafana dashboard coverage begins partway through the 0.5 request/s point.
 

@@ -17,17 +17,20 @@ from unittest.mock import Mock, patch
 import tools.deployment.launch_engine as launcher
 from tests.deployment.fixtures import (
     cache_settings_line,
+    cuda_engine,
     engine_config_modules,
     launcher_inputs,
     runtime,
 )
 from tools.deployment.launch_engine import (
+    ENGINE_TTL_S,
     build,
     check,
     digest,
     handshake_policy,
     load,
     prepare,
+    releases_peers,
     start,
     start_shared,
     validate_runtime,
@@ -161,6 +164,43 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertNotIn("management-only-secret", json.dumps([plan, values]))
             self.assertNotIn("engine-only-secret", json.dumps(plan))
 
+    def test_colocated_cuda_engines_share_the_host_pid_namespace(self):
+        for visible, shared, gpu_tls, cache in (
+            ("0,1,2", True, "cuda", None),
+            ("0,1,2", True, "cuda", "n"),
+            ("0", False, "cuda", "n"),
+            ("0,1,2", True, "cuda_copy", "n"),
+        ):
+            with (
+                self.subTest(visible=visible, gpu_tls=gpu_tls, cache=cache),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                record, env = launcher_inputs(Path(folder))
+                cuda_engine(record, visible=visible)
+                record["vllm_args"] = ["--tensor-parallel-size", "1"]
+                record["transfer"]["gpu_tls"] = gpu_tls
+                if cache is not None:
+                    record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
+                plan, values = build(record, env, Path(folder) / "launch")
+                pid = (
+                    plan["common"][plan["common"].index("--pid") + 1]
+                    if "--pid" in plan["common"]
+                    else None
+                )
+                self.assertEqual(pid, "host" if shared else None)
+                # CUDA IPC peers with the IPC cache off evict a stopped engine after the TTL.
+                extra = plan["connector"]["kv_connector_extra_config"]
+                ipc = shared and gpu_tls == "cuda"
+                self.assertIs(plan["cuda_ipc_peers"], ipc)
+                self.assertEqual(
+                    extra.get("engine_ttl"), ENGINE_TTL_S if ipc and cache == "n" else None
+                )
+                self.assertEqual(values.get("UCX_CUDA_IPC_CACHE"), cache)
+                transfer_config = json.loads(
+                    plan["args"][plan["args"].index("--kv-transfer-config") + 1]
+                )
+                self.assertEqual(transfer_config, plan["connector"])
+
     def test_extra_options_cannot_override_ports_credentials_or_connector(self):
         for options in (["--port", "99"], ["--api-key", "secret"], ["--kv-transfer-config", "{}"]):
             spec = runtime()
@@ -211,6 +251,13 @@ class EngineLauncherTests(unittest.TestCase):
                 socket_dir.rmdir()
                 launcher.kv_events_directory(plan)
                 self.assertTrue(socket_dir.is_dir())
+                if backend == "container":
+                    # Runtime scripts mount the directory before the engine starts.
+                    socket_dir.rmdir()
+                    with patch.object(launcher, "docker", return_value="") as docker:
+                        launcher.run_runtime_script(run, plan, "pass", [], "script.log")
+                    docker.assert_called_once()
+                    self.assertTrue(socket_dir.is_dir())
                 socket_dir.chmod(0o755)
                 with self.assertRaisesRegex(ValueError, "private to the launching user"):
                     launcher.kv_events_directory(plan)
@@ -309,6 +356,61 @@ class EngineLauncherTests(unittest.TestCase):
                     "publishes no cache events" if case == "caching_off" else "cache events",
                     printed.getvalue(),
                 )
+
+    def test_image_check_records_peer_release_for_cuda_ipc_peers(self):
+        for ipc, ucx, cache, released in (
+            (True, "1.22.0", None, False),
+            (True, "1.22.0", "n", True),
+            (True, "1.21.0", "n", False),
+            (True, "1.22.0", "y", False),
+            (True, None, "n", False),
+            (False, None, None, True),
+        ):
+            with (
+                self.subTest(ipc=ipc, ucx=ucx, cache=cache),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                root = Path(folder)
+                record, env = launcher_inputs(root)
+                if ipc:
+                    cuda_engine(record, visible="0,1")
+                    record["vllm_args"] = ["--tensor-parallel-size", "1"]
+                if cache is not None:
+                    record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
+                Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env)
+                plan = load(run)
+                values = (run / "container.env").read_text().splitlines()
+                self.assertEqual(
+                    [line for line in values if line.startswith("UCX_CUDA_IPC_CACHE=")],
+                    [f"UCX_CUDA_IPC_CACHE={cache}"] if cache else [],
+                )
+                output = (
+                    "NARWHAL_TOKENIZER_READY=1\n"
+                    + cache_settings_line(plan)
+                    + "\nNARWHAL_IMAGE_RUNTIME="
+                    + json.dumps({"vllm_api_version": "0.29.0", "ucx_version": ucx})
+                )
+                image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+                with (
+                    patch("tools.deployment.launch_engine.docker", side_effect=[image, output]),
+                    contextlib.redirect_stdout(io.StringIO()) as printed,
+                ):
+                    check(run, plan)
+                checked = json.loads((run / "checked.json").read_text())
+                self.assertEqual(checked["ucx_version"], ucx)
+                self.assertIs(checked["peer_release"], released)
+                self.assertEqual("whole-wave restart" not in printed.getvalue(), released)
+                self.assertEqual("per transfer" in printed.getvalue(), ipc and released)
+        self.assertFalse(releases_peers("1.21.9", "n"))
+        self.assertTrue(releases_peers("1.22.0", "n"))
+        self.assertTrue(releases_peers("2.0", "n"))
+        self.assertFalse(releases_peers("1.22.0", None))
+        self.assertFalse(releases_peers("unknown", "n"))
+        for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
+            self.assertIs(releases_peers("1.22.0", value), disabled)
 
     def test_launch_ports_and_shared_budget_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:

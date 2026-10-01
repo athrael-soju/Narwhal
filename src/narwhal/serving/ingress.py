@@ -12,6 +12,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
+from .records import overloaded_response
 from .response import RequestStreamResponse
 
 if TYPE_CHECKING:
@@ -23,6 +24,17 @@ COMPLETION_PATHS = frozenset(("/v1/completions", "/v1/chat/completions"))
 
 class BodyTooLarge(Exception):
     """The streamed request body exceeded the configured byte limit."""
+
+
+async def _overloaded(
+    state: RequestLifecycle, message: str, scope: Scope, receive: Receive, send: Send
+) -> None:
+    """Reject one request before its body is read."""
+    response = overloaded_response(state, message)
+    response.headers["x-request-id"] = state.rid
+    # No admission seat is available to retain a blocked error writer.
+    async with asyncio.timeout(0):
+        await response(scope, receive, send)
 
 
 class ServingIngress:
@@ -45,20 +57,14 @@ class ServingIngress:
         scope[LIFECYCLE] = state
         limit = router.max_concurrent + router.cfg.serving.queue_capacity
         if router.ingress_inflight >= limit:
-            state.finish("rejected", error="HTTP retention limit reached", status=429)
-            response = JSONResponse(
-                {
-                    "error": {
-                        "type": "server_overloaded_error",
-                        "message": "HTTP retention limit reached",
-                    }
-                },
-                status_code=429,
-                headers={"retry-after": "1", "x-request-id": state.rid},
+            await _overloaded(state, "HTTP retention limit reached", scope, receive, send)
+            return
+        if router.saturated():
+            message = (
+                f"router saturated: loop lag {router.loop_lag_s:.2f}s, "
+                f"request sizing {router.sizing_delays.median():.2f}s"
             )
-            # No admission seat is available to retain a blocked error writer.
-            async with asyncio.timeout(0):
-                await response(scope, receive, send)
+            await _overloaded(state, message, scope, receive, send)
             return
         router.ingress_inflight += 1
         router.ingress_high_water = max(router.ingress_high_water, router.ingress_inflight)
@@ -83,8 +89,7 @@ class ServingIngress:
             state.finish("expired", error="original request deadline expired", status=504)
             if started:
                 raise
-            # Send the timeout response immediately if the transport is writable;
-            # cancel the write as soon as it blocks.
+            # A zero timeout cancels the write as soon as it blocks.
             async with asyncio.timeout(0):
                 await JSONResponse(
                     {

@@ -143,8 +143,8 @@ class Redactor:
                 try:
                     rows.append(json.dumps(self.value(json.loads(line)), ensure_ascii=False))
                 except ValueError:
-                    # A truncated or multiline value has no reliable closing delimiter.
-                    # Once its field begins, omit the remaining text, including continuations.
+                    # A truncated or multiline value has no reliable closing delimiter;
+                    # all text after a sensitive field start is omitted.
                     matches = [_SENSITIVE_TEXT.search(line)]
                     if not self.include_request_content:
                         matches.append(_REQUEST_TEXT.search(line))
@@ -189,8 +189,7 @@ class _Read:
 
 
 def _read(path: Path, maximum: int, deadline: float) -> _Read:
-    # Resolve each directory through its open descriptor so selected run symlinks
-    # cannot redirect artifact reads outside the selected filesystem tree.
+    # Descriptor-relative resolution keeps symlinks from redirecting reads outside the tree.
     with contextlib.ExitStack() as stack:
         parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
         stack.callback(os.close, parent)

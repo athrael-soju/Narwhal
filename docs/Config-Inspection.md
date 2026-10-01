@@ -11,23 +11,16 @@ description: Validate a Narwhal fleet file and inspect its effective values with
 - Endpoint references
 - Cross-field rules
 
-| Input | Requirement |
-| --- | --- |
-| Fleet file | Required |
-| Endpoint environment variables | Required |
-| Credential variable named by `engine.engine_api_key_env` | Optional |
-| Profiles | Optional |
-| Reachable engines | Optional |
+Validation requires the fleet file and its endpoint environment variables. The credential variable named by `engine.engine_api_key_env`, profiles and reachable engines are optional.
+
+Both subcommands take the fleet file through the required `--fleet PATH` option. `--format` selects `text`, the default, or `json` output:
 
 ```bash
 narwhal config validate --fleet config/fleet.json
 narwhal config inspect --fleet config/fleet.json --format json
 ```
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--fleet PATH` | required | Fleet file to validate or inspect. |
-| `--format text\|json` | `text` | Output format. |
+Each invocation prints this output:
 
 | Invocation | Output |
 | --- | --- |
@@ -38,6 +31,8 @@ narwhal config inspect --fleet config/fleet.json --format json
 
 ## Fleet-file values and serving defaults
 
+The `narwhal.effective-config` document reports the fleet file in these fields:
+
 | Field | Content |
 | --- | --- |
 | `scope: "fleet_file"` | Values from the fleet file and the loader's defaults |
@@ -46,13 +41,12 @@ narwhal config inspect --fleet config/fleet.json --format json
 | Endpoint fields | Resolved `${VARIABLE}` values |
 | `engine.engine_api_key_env` | The credential variable's name |
 
-`derived` fields:
+The `derived` fields hold values Narwhal computes from the settings:
 
 | Field | Value |
 | --- | --- |
 | `engine_count` | Number of engines |
-| `control_connections` | `engine.control_connections` when positive |
-| `control_connections` | `max(4, 2 * engine_count)` when `engine.control_connections` is `0` |
+| `control_connections` | `engine.control_connections` when positive, or `max(4, 2 * engine_count)` when it is `0` |
 | `data_keepalive_connections` | `max(1, serving.max_connections // 2)` |
 | `control_keepalive_connections` | `max(1, control_connections // 2)` |
 | `max_concurrent` | Default admission concurrency, `serving.max_connections` |

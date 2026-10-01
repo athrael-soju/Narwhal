@@ -59,7 +59,7 @@ class ConsolidationEvidence:
         return self.blocked_gate == "none"
 
     def snapshot(self) -> dict[str, object]:
-        """Serialize evidence for state and metrics without changing policy inputs."""
+        """Return rounded evidence for state and metrics."""
         return {
             "span_s": rounded(self.span_s),
             "arrivals": self.arrivals,
@@ -81,7 +81,7 @@ class ConsolidationEvidence:
         }
 
     def details(self) -> dict[str, object]:
-        """Flatten evidence into the existing controller-decision fields."""
+        """Return the snapshot keyed as controller-decision fields."""
         return {
             key if key in ("risk_kind", "risk_age_s") else f"evidence_{key}": value
             for key, value in self.snapshot().items()
@@ -186,7 +186,7 @@ class ConsolidationSafety:
     def consolidation_evidence_snapshot(self) -> dict[str, object]:
         """Consolidation evidence and risk state for `/narwhal/state` and `/metrics`."""
         now = self._clock()
-        evidence = self.capture(now)
+        evidence = self.capture(now, estimates=self.demand.current_estimates())
         out = empty_demand_evidence()
         out.update(evidence.snapshot())
         out["risk_events"] = dict(self._risk_events)
@@ -211,7 +211,6 @@ class ConsolidationSafety:
             self._risk_since = None
             self._risk_kind = None
             return False
-        # Anchor the elapsed age to this process's clock.
         self._risk_since = self._clock() - max(0.0, age_s)
         self._risk_kind = kind
         for name, count in events.items():

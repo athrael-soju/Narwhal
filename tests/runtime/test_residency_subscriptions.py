@@ -6,11 +6,11 @@ import httpx
 
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, build_app
-from narwhal.engines.kv_events import CacheCleared, StoredBlocks
+from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex
 from narwhal.runtime.residency import ResidencySubscriptions
-from tests.fixtures import ROOT
+from tests.fixtures import ROOT, hold_prefix
 
 SIDECAR = "http://sidecar:8010"
 
@@ -59,6 +59,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         await self.subscriptions.refresh(self.client)
         view = self.subscriptions.view("e1")
         self.assertEqual((view.known, view.sequence, view.resyncs), (True, -1, 1))
+        self.assertEqual(view.reason, "no cache events published")
         # Hybrid layout: the Mamba group names only the block its attention peer named.
         self.index.apply(
             0,
@@ -66,13 +67,50 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.subscriptions.refresh(self.client)
         names = self.names(prompt)
-        self.assertEqual((view.sequence, view.resyncs), (0, 1))
+        self.assertEqual(
+            (view.sequence, view.resyncs, view.reason), (0, 1, "complete event history")
+        )
         self.assertEqual(view.cached_prefix_blocks(names), 3)
         self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
         self.index.apply(1, [CacheCleared()])
         await self.subscriptions.refresh(self.client)
         self.assertEqual(view.cached_prefix_blocks(names), 0)
         self.assertEqual(view.resyncs, 1)
+
+    async def test_a_router_following_an_empty_engine_matches_its_sidecar(self):
+        """Net batch changes and the block size reach a router that started with no blocks."""
+        self.index.mark_empty()
+        await self.subscriptions.refresh(self.client)
+        view = self.subscriptions.view("e1")
+        prompt = tuple(range(12))
+        self.index.apply(
+            0,
+            [
+                stored([1, 2, 3], prompt),
+                StoredBlocks(
+                    (1, 2, 3), None, prompt, 4, group=1, kind="sliding_window", sliding_window=5
+                ),
+            ],
+        )
+        # A second copy of block 3 arrives and one copy leaves; block 4 arrives and leaves.
+        self.index.apply(
+            1,
+            [
+                stored([3], prompt[8:], parent=2),
+                RemovedBlocks((3,), 0),
+                stored([4], (12, 13, 14, 15), parent=3),
+                RemovedBlocks((4,), 0),
+            ],
+        )
+        await self.subscriptions.refresh(self.client)
+        names = self.names(range(16))
+        self.assertEqual((view.sequence, view.resyncs, view.block_size), (1, 1, 4))
+        self.assertEqual(view.cached_prefix_blocks(names), 3)
+        self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
+        self.index.apply(2, [RemovedBlocks((3,), 0)])
+        await self.subscriptions.refresh(self.client)
+        self.assertEqual(view.cached_prefix_blocks(names), 2)
+        self.assertEqual(view.cached_prefix_blocks(names), self.index.cached_prefix_blocks(names))
 
     async def test_gaps_restarts_and_process_changes_resynchronise_or_go_cold(self):
         prompt = range(8)
@@ -100,7 +138,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.start = 101.0
         await self.subscriptions.refresh(self.client)
         self.assertFalse(view.known)
-        self.assertIn("residency refresh failed", view.reason)
+        self.assertEqual(view.reason, "residency refresh failed: HTTP 503")
 
     async def test_an_unreachable_sidecar_leaves_only_its_engine_cold(self):
         self.index.mark_empty()
@@ -131,3 +169,35 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         bare = ResidencySubscriptions([EngineSpec("e2", "http://engine")])
         await bare.refresh(cold)
         self.assertEqual(bare.view("e2").reason, "engine has no attestation sidecar")
+
+
+class ResidencyMatchTests(unittest.TestCase):
+    """Prompt identities match known views that report a block size."""
+
+    def test_match_covers_every_view_or_the_named_engines(self):
+        contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
+        namespace = CacheNamespace("model", contract.fingerprint())
+        prompt = tuple(range(16))
+        engines = ("full", "half", "unknown", "unsized", "coarse")
+        subscriptions = ResidencySubscriptions(
+            [EngineSpec(iid, "http://engine") for iid in engines]
+        )
+        views = subscriptions.views
+        names = hold_prefix(views["full"], namespace, prompt, 4, sequence=7)
+        hold_prefix(views["half"], namespace, prompt[:8], 4)
+        hold_prefix(views["unknown"], namespace, prompt, 4, sequence=2)
+        views["unknown"].known = False
+        hold_prefix(views["unsized"], namespace, prompt, 4)
+        views["unsized"].block_size = None
+        hold_prefix(views["coarse"], namespace, prompt, 8)
+        self.assertEqual(subscriptions.block_sizes(), {4, 8})
+        by_size = {4: names}
+        self.assertEqual(
+            subscriptions.match(by_size), ({"full": 16, "half": 8}, {"full": 7}, {4: names})
+        )
+        self.assertEqual(
+            subscriptions.match(by_size, engines=["half", "unknown", "unsized", "missing"]),
+            ({"half": 8}, {}, {4: names[:2]}),
+        )
+        self.assertEqual(subscriptions.match(by_size, engines=[]), ({}, {}, {}))
+        self.assertEqual(subscriptions.match({}), ({}, {}, {}))

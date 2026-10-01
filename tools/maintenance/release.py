@@ -227,7 +227,6 @@ def publish(root: Path, dist: Path) -> None:
     if set(files) != expected:
         raise ValueError("Expected exactly the versioned wheel and source archive")
     body = notes(root, value)
-    # Verify an existing tag points to this commit before publishing.
     refs = command("git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
     if refs:
         resolved = dict(line.split()[::-1] for line in refs.splitlines())

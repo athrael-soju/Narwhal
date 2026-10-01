@@ -4,26 +4,36 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Sequence
 
 MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
+# Warm prefill held-out error above this rejects the fit.
+MAX_CACHED_CV_MAPE = 0.20
+# Lengths each side of the block rule needs for a split fit.
+SPLIT_REGIME_LENGTHS = 2
+# Lengths a split fit needs: its four terms and two residual degrees of freedom.
+SPLIT_MIN_LENGTHS = 6
+# Share of the plain curve's error a split fit must stay below.
+SPLIT_ERROR_RATIO = 0.5
 
 
-def _solve3(a: list[list[float]], b: list[float]) -> list[float]:
-    """Gaussian elimination with partial pivoting on a 3x3 system."""
+def _solve(a: list[list[float]], b: list[float]) -> list[float]:
+    """Gaussian elimination with partial pivoting on a square system."""
+    n = len(b)
     m = [[*row, rhs] for row, rhs in zip(a, b, strict=True)]
-    for col in range(3):
-        pivot = max(range(col, 3), key=lambda r: abs(m[r][col]))
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
         if abs(m[pivot][col]) < 1e-12:
             raise ValueError("singular system: profiling samples are degenerate")
         m[col], m[pivot] = m[pivot], m[col]
-        for r in range(3):
+        for r in range(n):
             if r == col:
                 continue
             f = m[r][col] / m[col][col]
-            for c in range(col, 4):
+            for c in range(col, n + 1):
                 m[r][c] -= f * m[col][c]
-    return [m[i][3] / m[i][i] for i in range(3)]
+    return [m[i][n] / m[i][i] for i in range(n)]
 
 
 def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, float]:
@@ -46,8 +56,7 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
     rhs = [sy[2], sy[1], sy[0]]
     best = [0.0, 0.0, 0.0]
     best_error = sum(y * y for _, y in scaled)
-    # The constrained optimum lies on one of eight faces. Refit each face;
-    # clipping an unconstrained coefficient would leave the others misfitted.
+    # The constrained optimum lies on one of the eight faces.
     for mask in range(1, 8):
         active = [bool(mask & (1 << i)) for i in range(3)]
         matrix = [
@@ -55,7 +64,7 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
             for i in range(3)
         ]
         try:
-            coefficients = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
+            coefficients = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
         except ValueError:
             continue
         if any(value < 0 for value in coefficients):
@@ -68,10 +77,30 @@ def fit_quadratic(samples: list[tuple[float, float]]) -> tuple[float, float, flo
     return a / scale / scale, b / scale, c
 
 
+def splits_prefill(length: float, block_tokens: int | None) -> bool:
+    """Return whether a prompt of `length` tokens ends inside a cache block past the first."""
+    return block_tokens is not None and length > block_tokens and length % block_tokens != 0
+
+
+def split_step(tokens: float, split: float | None, block_tokens: int | None) -> float:
+    """Return `split` when `tokens` computed tokens end inside a block past the first."""
+    return split if split is not None and splits_prefill(tokens, block_tokens) else 0.0
+
+
+def relative_error(predicted: float, observed: float) -> float:
+    """Return the absolute error of `predicted` as a share of `observed`."""
+    return abs(predicted - observed) / max(observed, 1e-9)
+
+
 def fit_prefill_samples(
     samples: list[tuple[float, float]],
-) -> tuple[tuple[float, float, float], list[tuple[float, float]], float]:
-    """Fit one median per exact input length and reject poor representative fits."""
+    block_tokens: int | None = None,
+) -> tuple[tuple[float, float, float, float | None], list[tuple[float, float]], float]:
+    """Fit `a*n*n + b*n + c + split*s` to each input length's median; raise on a poor fit.
+
+    `s` is 1 for a prompt ending inside a cache block past the first; `split` is None
+    unless the sweep meets the `SPLIT_*` thresholds.
+    """
     if any(not math.isfinite(value) or value < 0 for sample in samples for value in sample):
         raise ValueError("prefill samples must be finite and nonnegative")
     groups: dict[float, list[float]] = {}
@@ -80,19 +109,37 @@ def fit_prefill_samples(
     representatives = [
         (length, statistics.median(times)) for length, times in sorted(groups.items())
     ]
-    coefficients = fit_quadratic(representatives)
-    a, b, c = coefficients
-    errors = [
-        abs(a * length * length + b * length + c - elapsed) / max(elapsed, 1e-9)
-        for length, elapsed in representatives
-    ]
+    flags = [splits_prefill(length, block_tokens) for length, _ in representatives]
+
+    def point_errors(a: float, b: float, c: float, step: float) -> list[float]:
+        return [
+            relative_error(a * length * length + b * length + c + step * flag, elapsed)
+            for (length, elapsed), flag in zip(representatives, flags, strict=True)
+        ]
+
+    a, b, c = fit_quadratic(representatives)
+    split: float | None = None
+    errors = point_errors(a, b, c, 0.0)
+    if (
+        len(representatives) >= SPLIT_MIN_LENGTHS
+        and flags.count(True) >= SPLIT_REGIME_LENGTHS
+        and flags.count(False) >= SPLIT_REGIME_LENGTHS
+    ):
+        split_rows = [
+            (x * x, x, 1.0, float(flag))
+            for (x, _), flag in zip(representatives, flags, strict=True)
+        ]
+        sa, sb, sc, step = _nonnegative_fit(split_rows, [y for _, y in representatives])
+        stepped = point_errors(sa, sb, sc, step)
+        if statistics.mean(stepped) < SPLIT_ERROR_RATIO * statistics.mean(errors):
+            a, b, c, split, errors = sa, sb, sc, step, stepped
     mape = statistics.mean(errors)
     if mape > MAX_PREFILL_FIT_MAPE or max(errors) > MAX_PREFILL_POINT_ERROR:
         raise ValueError(
             f"prefill median fit error {mape:.1%}, worst point {max(errors):.1%}; "
             "inspect the retained per-length measurements before using this profile"
         )
-    return coefficients, representatives, mape
+    return (a, b, c, split), representatives, mape
 
 
 def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, float, float]:
@@ -107,26 +154,9 @@ def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, 
     ys = [y for _, _, y in samples]
     gram = [[sum(row[i] * row[j] for row in rows) for j in range(3)] for i in range(3)]
     rhs = [sum(row[i] * y for row, y in zip(rows, ys, strict=True)) for i in range(3)]
-    # Reject unidentifiable axes even if a boundary fit could hide them.
-    _solve3(gram, rhs)
-    best = [0.0, 0.0, 0.0]
-    best_error = sum(y * y for y in ys)
-    for mask in range(1, 8):
-        active = [bool(mask & (1 << i)) for i in range(3)]
-        matrix = [
-            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(3)]
-            for i in range(3)
-        ]
-        coefficients = _solve3(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
-        if any(value < 0 for value in coefficients):
-            continue
-        error = sum(
-            (sum(a * x for a, x in zip(coefficients, row, strict=True)) - y) ** 2
-            for row, y in zip(rows, ys, strict=True)
-        )
-        if error < best_error:
-            best, best_error = coefficients, error
-    request_slope, kv_slope, intercept = best
+    # Raises on unidentifiable axes, which a boundary fit can mask.
+    _solve(gram, rhs)
+    request_slope, kv_slope, intercept = _nonnegative_fit(rows, ys)
     return kv_slope / k_scale, request_slope / r_scale, intercept
 
 
@@ -139,12 +169,12 @@ def decode_mape(
     errors = []
     for requests, kv_tokens, observed in samples:
         predicted = request_slope * requests + kv_slope * kv_tokens + intercept
-        errors.append(abs(predicted - observed) / max(observed, 1e-9))
+        errors.append(relative_error(predicted, observed))
     return sum(errors) / len(errors) if errors else 0.0
 
 
 def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> float | None:
-    """Fit around each decode point and score the point left out."""
+    """Return leave-one-point-out MAPE for a decode plane, or None when unfittable."""
     if len(samples) < 4:
         return None
     errors = []
@@ -156,3 +186,100 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
             return None
         errors.append(decode_mape([sample], coefficients))
     return sum(errors) / len(errors)
+
+
+def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> list[float]:
+    """Fit `y = sum(w_i f_i)` with nonnegative weights by checking every face."""
+    n = len(rows[0])
+    scales = [max(abs(row[i]) for row in rows) or 1.0 for i in range(n)]
+    scaled = [[row[i] / scales[i] for i in range(n)] for row in rows]
+    gram = [[sum(r[i] * r[j] for r in scaled) for j in range(n)] for i in range(n)]
+    rhs = [sum(r[i] * y for r, y in zip(scaled, ys, strict=True)) for i in range(n)]
+    best = [0.0] * n
+    best_error = sum(y * y for y in ys)
+    for mask in range(1, 1 << n):
+        active = [bool(mask & (1 << i)) for i in range(n)]
+        matrix = [
+            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(n)]
+            for i in range(n)
+        ]
+        try:
+            weights = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(n)])
+        except ValueError:
+            continue
+        if any(value < 0 for value in weights):
+            continue
+        error = sum(
+            (sum(w * v for w, v in zip(weights, r, strict=True)) - y) ** 2
+            for r, y in zip(scaled, ys, strict=True)
+        )
+        if error < best_error:
+            best, best_error = weights, error
+    return [w / s for w, s in zip(best, scales, strict=True)]
+
+
+def cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
+    """Return the warm prefill terms for a, b, c, d: suffix attention, suffix, 1, prefix."""
+    return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
+
+
+# A warm fit needs more cases than it has terms.
+CACHED_FIT_MIN_CASES = len(cached_features(1.0, 1.0)) + 1
+
+
+def cached_fit_possible(cases: Sequence[tuple[float, float]]) -> bool:
+    """Return whether (prefix, suffix) cases can form a warm prefill fit."""
+    distinct = set(cases)
+    return (
+        len({p for p, _ in distinct}) >= 2
+        and len({s for _, s in distinct}) >= 2
+        and len(distinct) >= CACHED_FIT_MIN_CASES
+    )
+
+
+def _fit_cached_groups(
+    groups: list[tuple[float, float, float]],
+) -> tuple[float, float, float, float]:
+    a, b, c, d = _nonnegative_fit(
+        [cached_features(p, s) for p, s, _ in groups], [y for _, _, y in groups]
+    )
+    return a, b, c, d
+
+
+def fit_cached_prefill(
+    samples: list[tuple[float, float, float]],
+    split: float | None = None,
+    block_tokens: int | None = None,
+) -> tuple[tuple[float, float, float, float], list[tuple[float, float, float]], float]:
+    """Fit warm prefill `c + b*S + d*P + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
+
+    Return the coefficients, per-case medians and leave-one-case-out error; raise when that
+    error exceeds `MAX_CACHED_CV_MAPE`.
+    """
+    if any(not math.isfinite(v) or v < 0 for sample in samples for v in sample):
+        raise ValueError("cached prefill samples must be finite and nonnegative")
+    grouped: dict[tuple[float, float], list[float]] = {}
+    for prefix, suffix, elapsed in samples:
+        if prefix <= 0 or suffix <= 0:
+            raise ValueError("cached prefill samples need a cached prefix and an uncached suffix")
+        grouped.setdefault((prefix, suffix), []).append(elapsed)
+    groups = [(p, s, statistics.median(times)) for (p, s), times in sorted(grouped.items())]
+    if not cached_fit_possible([(p, s) for p, s, _ in groups]):
+        raise ValueError(
+            "a cached prefill fit needs two prefix lengths, two suffix lengths and five cases"
+        )
+    stepless = [(p, s, y - split_step(s, split, block_tokens)) for p, s, y in groups]
+    coefficients = _fit_cached_groups(stepless)
+    errors = []
+    for index, (prefix, suffix, observed) in enumerate(groups):
+        weights = _fit_cached_groups(stepless[:index] + stepless[index + 1 :])
+        predicted = split_step(suffix, split, block_tokens) + sum(
+            w * f for w, f in zip(weights, cached_features(prefix, suffix), strict=True)
+        )
+        errors.append(relative_error(predicted, observed))
+    cv_mape = sum(errors) / len(errors)
+    if cv_mape > MAX_CACHED_CV_MAPE:
+        raise ValueError(
+            f"warm prefill held-out error {cv_mape:.1%} exceeds {MAX_CACHED_CV_MAPE:.0%}"
+        )
+    return coefficients, groups, cv_mape

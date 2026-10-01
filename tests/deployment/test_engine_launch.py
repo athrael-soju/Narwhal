@@ -3,8 +3,8 @@
 import copy
 import unittest
 
-from tests.deployment.fixtures import launch_document
-from tools.deployment.engine_launch import selected_launch
+from tests.deployment.fixtures import cuda_engine, launch_document, runtime
+from tools.deployment.engine_launch import expose_colocated_gpus, selected_launch
 
 
 class EngineLaunchTests(unittest.TestCase):
@@ -69,3 +69,59 @@ class EngineLaunchTests(unittest.TestCase):
             document["engines"]["engine-1"]["transfer"]["net_devices"],
             "${NARWHAL_FABRIC_INTERFACE}",
         )
+
+    def cuda_engines(self, count, **changes):
+        document = launch_document()
+        base = cuda_engine(document["engines"]["engine-1"])
+        base.update(changes)
+        env = {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
+        launches = {}
+        for n in range(1, count + 1):
+            entry = copy.deepcopy(base)
+            entry["gpu_ids"] = [str(n - 1)]
+            document["engines"][f"engine-{n}"] = entry
+            launches[f"engine-{n}"] = selected_launch(document, f"engine-{n}", env)
+        return launches
+
+    def test_colocated_cuda_engines_see_peer_gpus_after_their_own(self):
+        launches = self.cuda_engines(3)
+        expose_colocated_gpus(launches, [["engine-1", "engine-2", "engine-3"]])
+        visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
+        self.assertEqual(visible, {"engine-1": "0,1,2", "engine-2": "1,0,2", "engine-3": "2,0,1"})
+        self.assertEqual(launches["engine-2"]["vllm_args"], ["--tensor-parallel-size", "1"])
+
+    def test_shared_device_engine_keeps_its_gpu_out_of_peer_lists(self):
+        document = launch_document()
+        base = document["engines"]["engine-1"]
+        for n in range(1, 4):
+            document["engines"][f"engine-{n}"] = cuda_engine(copy.deepcopy(base), gpu=str(n - 1))
+        shared = document["engines"]["engine-2"]
+        shared["runtime"] = runtime()
+        shared["runtime"]["extra_args"] += ["--gpu-memory-utilization", "0.4"]
+        shared["shared_device"] = {
+            "group": "node-1:GPU-test",
+            "gpu_uuid": "GPU-test",
+            "device_allowance": 0.5,
+            "gpu_memory_utilization": 0.4,
+        }
+        env = {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
+        launches = {role: selected_launch(document, role, env) for role in document["engines"]}
+        expose_colocated_gpus(launches, [["engine-1", "engine-2", "engine-3"]])
+        visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
+        self.assertEqual(visible, {"engine-1": "0,2", "engine-2": "1", "engine-3": "2,0"})
+
+    def test_engines_on_separate_hosts_keep_their_own_gpus(self):
+        launches = self.cuda_engines(2)
+        expose_colocated_gpus(launches, [["engine-1"], ["engine-2"]])
+        self.assertEqual(launches["engine-1"]["environment"]["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertEqual(launches["engine-2"]["environment"]["CUDA_VISIBLE_DEVICES"], "1")
+
+    def test_rocm_engines_keep_their_own_gpus(self):
+        document = launch_document()
+        document["engines"]["engine-2"] = copy.deepcopy(document["engines"]["engine-1"])
+        document["engines"]["engine-2"]["gpu_ids"] = ["2", "3"]
+        env = {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
+        launches = {role: selected_launch(document, role, env) for role in ("engine-1", "engine-2")}
+        expose_colocated_gpus(launches, [["engine-1", "engine-2"]])
+        self.assertEqual(launches["engine-1"]["environment"]["ROCR_VISIBLE_DEVICES"], "0,1")
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", launches["engine-1"]["environment"])

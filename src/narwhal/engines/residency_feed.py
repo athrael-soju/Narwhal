@@ -1,11 +1,7 @@
 """Keep a residency index current from one vLLM engine's cache-event sockets.
 
-vLLM publishes numbered event batches on a PUB socket and keeps a bounded
-buffer of recent batches behind a ROUTER replay socket. It keeps no full
-snapshot. The feed subscribes, then replays from sequence 0 so the index
-sees the engine's complete history when that history is still buffered.
-Later gaps replay from the missing sequence. History the buffer no longer
-holds leaves the index unknown until the engine resets its cache.
+History past vLLM's bounded replay buffer leaves the index unknown until the
+engine resets its cache.
 """
 
 from __future__ import annotations
@@ -72,8 +68,7 @@ class ResidencyFeed:
     def _replay(self, start: int) -> tuple[list[tuple[int, bytes]], bool] | None:
         """Return batches replayed from `start` and whether the end marker arrived.
 
-        None means no replay answered. vLLM's ROUTER socket drops messages past
-        its high-water mark, so a long replay can lose batches or its end marker.
+        None means no replay answered. A long replay can lose batches or its end marker.
         """
         if self.replay_endpoint is None:
             return None
@@ -101,9 +96,8 @@ class ResidencyFeed:
     def _catch_up(self, start: int, until: int | None = None) -> bool | None:
         """Apply buffered batches from `start` in replay rounds.
 
-        Each round applies the contiguous run it received and asks again from
-        the first missing batch. Returns False when the buffer was empty, None
-        when no replay answered, and True otherwise.
+        Return False when the buffer was empty, None when no replay answered, and
+        True otherwise.
         """
         expected = start
         applied = False
@@ -133,33 +127,51 @@ class ResidencyFeed:
                 return True
         return True
 
+    def _drain(self, subscriber: zmq.Socket) -> None:
+        """Apply batches that queued on the live socket during replay."""
+        while subscriber.poll(0):
+            _, raw, payload = _frames(subscriber.recv_multipart())
+            self._receive(int.from_bytes(raw, "big"), payload)
+
+    def _receive(self, sequence: int, payload: bytes) -> None:
+        last = self.index.sequence
+        start = 0 if last is None else last + 1
+        if sequence > start:
+            # The pre-gap state is stale until the missed batches are applied.
+            current = self.index.current
+            self.index.set_current(False)
+            try:
+                self._catch_up(start, until=sequence)
+            finally:
+                self.index.set_current(current)
+        self.index.apply(sequence, _decoded(payload))
+
     def _run(self) -> None:
         subscriber = self._context.socket(zmq.SUB)
         subscriber.setsockopt(zmq.LINGER, 0)
         subscriber.setsockopt(zmq.RCVHWM, 0)
         subscriber.setsockopt(zmq.SUBSCRIBE, b"")
-        subscriber.connect(self.endpoint)
         try:
+            subscriber.connect(self.endpoint)
             # Live batches can arrive during replay; the index ignores repeats.
+            self.index.set_current(False)
             history = self._catch_up(0)
             if history is False and not subscriber.poll(0):
-                # vLLM's replay buffer only drops old batches, so an empty buffer means none.
+                # An empty replay buffer means vLLM has published no batch.
                 self.index.mark_empty()
             elif history is None:
                 self.index.lose("cache-event replay is unavailable")
+            self._drain(subscriber)
+            self.index.set_current(True)
             while not self._stop.is_set():
                 if not subscriber.poll(int(self.poll_s * 1000)):
                     continue
                 _, raw, payload = _frames(subscriber.recv_multipart())
-                sequence = int.from_bytes(raw, "big")
-                last = self.index.sequence
-                if last is not None and sequence > last + 1:
-                    self._catch_up(last + 1, until=sequence)
-                self.index.apply(sequence, _decoded(payload))
+                self._receive(int.from_bytes(raw, "big"), payload)
         except Exception as exc:
             # A dead feed must not leave a stale known state behind it.
             if not self._stop.is_set():
                 log.exception("cache-event subscription failed")
-                self.index.lose(f"cache-event subscription failed: {type(exc).__name__}: {exc}")
+                self.index.lose(f"cache-event subscription failed: {type(exc).__name__}")
         finally:
             subscriber.close()

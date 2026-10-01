@@ -12,17 +12,53 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
 
 ## What Narwhal provides
 
-| Capability | Behavior | Guide |
-| --- | --- | --- |
-| Role hot-swap | Reassigns prefill and decode roles across a fixed GPU fleet, with NIXL key-value (KV) transfer between them. | [![Core concepts documentation](https://img.shields.io/badge/docs-Core%20concepts-0f766e)](Core-Concepts.md) |
-| Serving | Serves streaming and buffered completion and chat requests with latency-aware admission. | [![HTTP API reference documentation](https://img.shields.io/badge/docs-HTTP%20API%20reference-0f766e)](HTTP-API.md) |
-| Fault tolerance | Fails over to a warm-standby router and readmits engines against their live process generation. | [![Operate Narwhal documentation](https://img.shields.io/badge/docs-Operate%20Narwhal-0f766e)](Operate.md) |
-| Measurement | Profiles engines and runs ordered benchmark points with retained evidence. | [![Measure a fleet documentation](https://img.shields.io/badge/docs-Measure%20a%20fleet-0f766e)](Measure.md) |
-| Observability | Exports router and engine metrics to Prometheus and a provisioned Grafana dashboard. | [![Set up observability documentation](https://img.shields.io/badge/docs-Set%20up%20observability-0f766e)](Observability.md) |
-| Operator tooling | Validates fleet files offline and collects private diagnostic bundles. | [![CLI reference documentation](https://img.shields.io/badge/docs-CLI%20reference-0f766e)](CLI-Reference.md) |
-| Development mode | Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2. | [![Narwhal dev documentation](https://img.shields.io/badge/docs-Narwhal%20dev-0f766e)](Dev-Runtime.md) |
+<div class="grid cards" markdown>
 
-## Get started
+-   [Role hot-swap](Core-Concepts.md)
+
+    ---
+
+    Reassigns prefill and decode roles across a fixed GPU fleet, with NIXL key-value (KV) transfer between them.
+
+-   [Serving](HTTP-API.md)
+
+    ---
+
+    Serves streaming and buffered completion and chat requests with latency-aware admission.
+
+-   [Fault tolerance](Operate.md)
+
+    ---
+
+    Fails over to a warm-standby router and readmits engines against their live process generation.
+
+-   [Measurement](Measure.md)
+
+    ---
+
+    Profiles engines and runs ordered benchmark points with retained evidence.
+
+-   [Observability](Observability.md)
+
+    ---
+
+    Exports router and engine metrics to Prometheus and a provisioned Grafana dashboard.
+
+-   [Operator tooling](CLI-Reference.md)
+
+    ---
+
+    Validates fleet files offline and collects private diagnostic bundles.
+
+-   [Development mode](Dev-Runtime.md)
+
+    ---
+
+    Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2.
+
+</div>
+
+## Getting started
 
 Install the commands in a virtual environment on Linux with Python 3.11 or newer:
 
@@ -37,7 +73,7 @@ narwhal --help
 
 <div class="grid cards" markdown>
 
--   [Install from PyPI](Install-from-PyPI.md)
+-   [Installing from PyPI](Install-from-PyPI.md)
 
     ---
 
@@ -49,31 +85,31 @@ narwhal --help
 
     Run a local NVIDIA GPU fleet on Ubuntu or WSL2.
 
--   [Deploy a fleet](Deploy.md)
+-   [Deploying a fleet](Deploy.md)
 
     ---
 
     Bring up a new fleet and verify request routing.
 
--   [Measure a fleet](Measure.md)
+-   [Measuring a fleet](Measure.md)
 
     ---
 
     Profile the fleet, select measurement ranges, calibrate SLOs, and measure a target workload.
 
--   [Set up observability](Observability.md)
+-   [Setting up observability](Observability.md)
 
     ---
 
     Export metrics to Prometheus and inspect the fleet in Grafana.
 
--   [Operate Narwhal](Operate.md)
+-   [Operating Narwhal](Operate.md)
 
     ---
 
     Manage ingress, routers, engines, and software upgrades.
 
--   [Troubleshoot a fleet](Troubleshoot.md)
+-   [Troubleshooting a fleet](Troubleshoot.md)
 
     ---
 

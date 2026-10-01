@@ -284,3 +284,34 @@
     flex-direction: column;
   }
 }
+
+/* Table width: 0.8rem wrapper overhang minus 0.15rem table padding. */
+.md-typeset .narwhal-panel-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1em -0.65rem;
+}
+
+/* overrides/hooks/panel_rows.py sets each item's flex-grow (plain rows) or
+   flex-basis (stats rows) from image pixel widths. */
+.md-typeset .narwhal-panel-row > p {
+  flex: 1 1 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.md-typeset .narwhal-panel-row img {
+  display: block;
+  width: 100%;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .narwhal-panel-row {
+    flex-direction: column;
+  }
+
+  .md-typeset .narwhal-panel-row.stats img {
+    width: auto;
+    max-width: 100%;
+  }
+}

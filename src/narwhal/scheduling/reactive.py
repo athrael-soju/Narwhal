@@ -46,9 +46,11 @@ class ReactivePolicy:
             controller._last_step = now
 
         # Resident requests keep their serving engine after reassignment.
-        # Price them in each subsequent proposal; only unavailable engines,
-        # including actual relaunch downtime, block control fleet-wide.
-        if len(controller.scheduler.live_instances()) != len(controller.monitor.instances):
+        # Splits cover the live engines; a role left without one holds control.
+        if any(
+            controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
+            for role in (Role.PREFILL, Role.DECODE)
+        ):
             self.proposal, self.confirmations = None, 0
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
@@ -72,7 +74,8 @@ class ReactivePolicy:
             )
             return None
 
-        estimates = controller.demand._output_estimates()
+        controller.scorer.recheck(controller.monitor.waiting.values())
+        estimates = controller.demand.refresh_output_estimates()
         correction = controller.demand._decode_correction()
         prefill, decode = controller._demand(now, estimates=estimates, correction=correction)
         demand = Demand(
@@ -96,16 +99,13 @@ class ReactivePolicy:
         n = snapshot.current_prefill + snapshot.current_decode
         current_p = snapshot.current_prefill
         current = snapshot.score(current_p)
-        # With incomplete demand, use sustained destination pressure for recovery
-        # and known demand plus resident/queued work to price the source pool.
+        # Incomplete demand selects recovery, which acts on sustained destination pressure.
         recovery = not demand.complete
         observed_prefill, observed_decode = observed_load
-        # Dispatch caps active work even when admitted requests keep waiting.
-        # Preserve recovery evidence across active-price dips while known
-        # prefill backlog still exceeds the current pool's latency budget.
+        # Recovery evidence holds while known prefill backlog exceeds the pool's latency budget.
         recovery_prefill = snapshot.prefill_recovery_ratio
         recovery_ready = (
-            max(recovery_prefill, observed_decode) >= controller.scheduler.th.expand
+            max(recovery_prefill, snapshot.decode_recovery_ratio) >= controller.scheduler.th.expand
             and snapshot.profiles_complete
         )
         recovery_projection = prefill_recovery.projection if prefill_recovery is not None else None
@@ -129,6 +129,7 @@ class ReactivePolicy:
                 "recovery_prefill_ratio": rounded(recovery_prefill),
                 "queued_prefill_s": rounded(snapshot.queued_prefill_s),
                 "observed_decode_ratio": rounded(observed_decode),
+                "recovery_decode_ratio": rounded(snapshot.decode_recovery_ratio),
             }
             if prefill_recovery is not None:
                 details.update(prefill_recovery.details(now))
@@ -155,10 +156,7 @@ class ReactivePolicy:
             )
             return None
 
-        # The D-to-P direction prices the adjacent decode split against the
-        # conservative envelope: the short-horizon estimate when it exceeds
-        # the window estimate. the snapshot also includes pending in-prefill
-        # output work to the candidate's resident decode figures.
+        # D-to-P candidates price decode at the larger of the short-horizon and window estimates.
         evidence = controller.safety.capture(now, estimates=estimates, correction=correction)
         envelope_demand = Demand(
             demand.prefill_engines,
@@ -178,7 +176,7 @@ class ReactivePolicy:
             and (
                 urgent_ready
                 or not recovery
-                or (recovery_prefill if candidate_p > current_p else observed_decode)
+                or (recovery_prefill if candidate_p > current_p else snapshot.decode_recovery_ratio)
                 >= controller.scheduler.th.expand
             )
         ]
@@ -198,8 +196,7 @@ class ReactivePolicy:
                 is not None
             ]
             if projections:
-                # Any source engine may be removed by the scheduler's guards.
-                # Require every possible donor profile to improve this request.
+                # The worst donor projection applies; the scheduler's guards choose the donor.
                 urgent_candidate = max(
                     projections,
                     key=lambda projection: projection.projected_ttft_s,
@@ -429,8 +426,7 @@ class ReactivePolicy:
             if direction > 0
             else max(current.tpot_ratio, current.decode_queue_ratio)
         )
-        # Relaxing decode shrink requires repeated pressure, even with complete
-        # demand. Objective margin, evidence and dwell still constrain reversals.
+        # Relaxing decode shrink requires repeated pressure, even with complete demand.
         confirmations = (
             1
             if urgent_ready
@@ -467,7 +463,6 @@ class ReactivePolicy:
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.flip(target, "reactive", decision_details=details)
         if moved is not None and target is Role.DECODE:
-            # An applied decode-need move re-arms the evidence window like
-            # every other re-split toward decode.
+            # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)
         return moved

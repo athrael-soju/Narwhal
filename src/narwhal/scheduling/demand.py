@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from statistics import median
 
 from ..profiling.model import Profile
-from ..types import Role
+from ..types import Request, Role
 from .monitor import InstanceMonitor
+from .prefill import warm_prefill_time
 from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
-ArrivalObservation = tuple[Cohort[int] | None, Cohort[tuple[int, int]] | None]
 OutputEstimates = tuple[dict[tuple[int, int], float], dict[int, float]]
+CAPACITY_STEPS_PER_OCTAVE = 16
 
 
 @dataclass(frozen=True)
@@ -29,8 +30,29 @@ class Demand:
     complete: bool = True
 
 
+@dataclass(frozen=True)
+class Arrival:
+    """One offered prompt: its input tokens and the tokens each engine holds cached."""
+
+    input_len: int
+    cached: tuple[tuple[str, int], ...] = ()
+
+    @classmethod
+    def of(cls, input_len: int, cached_tokens: Mapping[str, int] | None = None) -> Arrival:
+        """Build an arrival from cached tokens per engine."""
+        return cls(input_len, tuple(sorted((cached_tokens or {}).items())))
+
+
+ArrivalObservation = tuple[Cohort[Arrival] | None, Cohort[tuple[int, int]] | None]
+
+
+def _merge_arrivals(a: Arrival, b: Arrival) -> Arrival:
+    # A merged overflow cohort prices cold.
+    return Arrival(max(a.input_len, b.input_len))
+
+
 class DemandModel:
-    """Own offered work, observed outputs, residency samples."""
+    """Offered work, observed outputs and decode-residency samples."""
 
     def __init__(
         self,
@@ -44,12 +66,18 @@ class DemandModel:
         self.monitor = monitor
         self.scheduler = scheduler
         self._clock = clock
+        self.window_s = window_s
+        self._estimates: tuple[float, OutputEstimates, int] | None = None
+        # Output estimates from the last history without shape overflow.
+        self._learned: OutputEstimates = ({}, {})
         self.started_at = clock()
         self.unsized_pending = 0
         self.unsized = DemandWindow[bool](
             clock, retained_s=window_s, bucket_s=bucket_s, merge=lambda a, b: a, max_shapes=1
         )
-        self.arrivals = DemandWindow[int](clock, retained_s=window_s, bucket_s=bucket_s, merge=max)
+        self.arrivals = DemandWindow[Arrival](
+            clock, retained_s=window_s, bucket_s=bucket_s, merge=_merge_arrivals
+        )
         self.expected_decode = DemandWindow[tuple[int, int]](
             clock,
             retained_s=window_s,
@@ -69,13 +97,13 @@ class DemandModel:
         self.last_demand = Demand(0.0, 0.0, 0, 0)
 
     def resolve_unsized(self, *, at: float, retain: bool) -> None:
-        """Resolve one body owner; retain unpriced offers without inventing a shape."""
+        """Resolve one pending unsized offer, recording it when `retain` is set."""
         self.unsized_pending -= 1
         if retain:
             self.unsized.add(True, at=at)
 
     def arrival_count(self, since: float | None = None) -> int:
-        """Include offers whose bodies are pending or unavailable after rejection."""
+        """Return arrivals since `since`, including unsized and pending offers."""
         return self.arrivals.count(since) + self.unsized.count(since) + self.unsized_pending
 
     def saw_arrival(
@@ -87,19 +115,39 @@ class DemandModel:
     ) -> ArrivalObservation:
         """Record offered prefill work and requested decode work."""
         seen = self._clock() if at is None else at
-        arrival = self.arrivals.add(input_len, at=seen)
+        arrival = self.arrivals.add(Arrival(input_len), at=seen)
         expected = None
         if wanted_len is not None:
             expected = self.expected_decode.add((input_len, max(0, wanted_len)), at=seen)
         return arrival, expected
 
     def resize_arrival(
-        self, observation: ArrivalObservation, input_len: int, wanted_len: int, *, at: float
-    ) -> None:
-        """Replace one local estimate with the admitted request's tokenizer count."""
+        self,
+        observation: ArrivalObservation,
+        input_len: int,
+        wanted_len: int,
+        *,
+        at: float,
+        cached_tokens: dict[str, int] | None = None,
+    ) -> Cohort[Arrival] | None:
+        """Replace one local estimate with the admitted request's count and cache evidence.
+
+        Return the arrival's cohort.
+        """
         arrival, expected = observation
-        self.arrivals.replace(arrival, input_len, at=at)
+        repriced = self.arrivals.replace(arrival, Arrival.of(input_len, cached_tokens), at=at)
         self.expected_decode.replace(expected, (input_len, max(0, wanted_len)), at=at)
+        return repriced
+
+    def reprice_arrival(self, request: Request) -> None:
+        """Price the request's offered prefill with its rechecked cache evidence."""
+        if request.demand_arrival is None or request.arrived_at is None:
+            return
+        request.demand_arrival = self.arrivals.replace(
+            request.demand_arrival,
+            Arrival.of(request.input_len, request.cached_tokens),
+            at=request.arrived_at,
+        )
 
     def saw_completion(
         self,
@@ -116,10 +164,7 @@ class DemandModel:
         self.observed_decode.add((input_len, max(0, wanted_len), max(0, observed_len)), at=at)
 
     def sample(self) -> None:
-        """Sample decode residency for the demand window.
-
-        Window averaging removes the batch-sized sawtooth in decode residency.
-        """
+        """Add current decode residency, in engine equivalents, to the demand window."""
         resident = 0.0
         for inst in self.monitor.instances.values():
             profile = self.scheduler.profiles.get(inst.iid)
@@ -131,7 +176,9 @@ class DemandModel:
                 len(inst.decode),
             )
             if ceiling > 0:
-                resident += inst.decode_tokens() / ceiling
+                share = inst.decode_tokens() / ceiling
+                cap = self.scheduler.decode_concurrency
+                resident += max(share, len(inst.decode) / cap) if cap > 0 else share
         self.residency.add(resident)
 
     def _decode_correction(self) -> float:
@@ -155,10 +202,7 @@ class DemandModel:
     ) -> tuple[float, float]:
         """Return prefill and decode demand in engine equivalents.
 
-        `horizon_s` restricts the offered/expected inputs to the trailing
-        span for the short-horizon trend estimate; resident decode is
-        whole-window state and stays. Callers without a horizon keep the
-        window semantics, including the `last_demand` update.
+        `horizon_s` limits offered inputs to a trailing span and skips the `last_demand` update.
         """
         window = horizon_s if horizon_s is not None else window_s
         profiles = tuple(
@@ -174,6 +218,7 @@ class DemandModel:
             horizon_s=window,
             estimates=estimates,
             correction=correction,
+            prefill_iids={inst.iid for inst in self.scheduler.live_instances(Role.PREFILL)},
         )
         if horizon_s is None:
             self.last_demand = priced
@@ -195,49 +240,66 @@ class DemandModel:
         horizon_s: float | None = None,
         estimates: OutputEstimates | None = None,
         correction: float | None = None,
+        prefill_iids: Collection[str] | None = None,
     ) -> Demand:
-        """Price one window against a particular measured role-mix profile set."""
+        """Price one window against a particular measured role-mix profile set.
+
+        Cached arrivals take warm prices from engines in `prefill_iids`, or every engine.
+        """
         window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
         h0 = now - window
         prefill = 0.0
         demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
+        # Price per arrival shape; None marks a length outside a profile's domain.
+        prices: dict[tuple[int, tuple[tuple[str, int], ...]], float | None] = {}
         for row in self.arrivals.rows(h0):
-            if profiles and all(p.covers_prefill(row.value) for p in profiles):
-                cost = sum(p.prefill_time(row.value) for p in profiles) / len(profiles)
-                prefill += cost * row.count / span
-            else:
+            shape = (row.value.input_len, row.value.cached)
+            if shape not in prices:
+                prices[shape] = self._arrival_price(profiles, *shape, prefill_iids)
+            cost = prices[shape]
+            if cost is None:
                 demand_complete = False
+            else:
+                prefill += cost * row.count / span
         expected_decode = 0.0
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
         capacities: dict[tuple[int, int], float | None] = {}
+        exact_capacities: dict[tuple[int, int], float | None] = {}
+        # Capacity bucket and exact shape per expected shape; None marks an unknown output.
+        buckets: dict[tuple[int, int, bool], tuple[tuple[int, int], tuple[int, int]] | None] = {}
         for expected_row in self.expected_decode.rows(h0):
             input_len, wanted_len = expected_row.value
-            # A merged shape may contain several output buckets. Price its full
-            # cap; no learned ratio can safely stand for all of those requests.
-            output_len = (
-                wanted_len
-                if expected_row.overflow
-                else self._expected_output(input_len, wanted_len, estimates)
-            )
-            if output_len == 0:
+            expected_shape = (input_len, wanted_len, expected_row.overflow)
+            if expected_shape not in buckets:
+                # An overflow row may span several output buckets and prices its full cap.
+                output_len = (
+                    wanted_len
+                    if expected_row.overflow
+                    else self._expected_output(input_len, wanted_len, estimates)
+                )
+                buckets[expected_shape] = (
+                    (
+                        (self._capacity_bucket(input_len), self._capacity_bucket(output_len)),
+                        (input_len, output_len),
+                    )
+                    if output_len
+                    else None
+                )
+            shapes = buckets[expected_shape]
+            if shapes is None:
                 demand_complete = False
                 continue
-            key = (input_len, output_len)
+            key, exact = shapes
             if key not in capacities:
-                context = input_len + output_len / 2.0
-                values = [
-                    p.decode_rps(
-                        self.scheduler.slo.tpot_s,
-                        context,
-                        output_len,
-                        correction=correction,
-                    )
-                    for p in profiles
-                ]
-                capacities[key] = sum(values) / len(values) if values else None
+                capacities[key] = self._shape_capacity(profiles, key, correction)
             capacity = capacities[key]
+            if not capacity:
+                # A bucket without capacity prices the exact shape.
+                if exact not in exact_capacities:
+                    exact_capacities[exact] = self._shape_capacity(profiles, exact, correction)
+                capacity = exact_capacities[exact]
             if not capacity:
                 demand_complete = False
                 continue
@@ -250,19 +312,63 @@ class DemandModel:
             complete=demand_complete,
         )
 
+    def _shape_capacity(
+        self, profiles: tuple[Profile, ...], key: tuple[int, int], correction: float
+    ) -> float | None:
+        """Return the mean decode request rate for one input and output length."""
+        input_len, output_len = key
+        context = input_len + output_len / 2.0
+        values = [
+            p.decode_rps(
+                self.scheduler.slo.tpot_s,
+                context,
+                output_len,
+                correction=correction,
+                request_cap=self.scheduler.decode_concurrency,
+            )
+            for p in profiles
+        ]
+        return sum(values) / len(values) if values else None
+
+    @staticmethod
+    def _arrival_price(
+        profiles: tuple[Profile, ...],
+        length: int,
+        cached: tuple[tuple[str, int], ...],
+        prefill_iids: Collection[str] | None,
+    ) -> float | None:
+        """Return the mean cold prefill price, or the cheapest warm price, for one arrival."""
+        if not profiles or not all(p.covers_prefill(length) for p in profiles):
+            return None
+        cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+        tokens = dict(cached)
+        warm = (
+            warm_prefill_time(p, length, tokens.get(p.iid, 0))
+            for p in profiles
+            if prefill_iids is None or p.iid in prefill_iids
+        )
+        return min((cold, *(price for price in warm if price is not None)))
+
     @staticmethod
     def _shape_bucket(tokens: int) -> int:
         """Place a token length in a power-of-two bucket."""
         return 1 if tokens <= 1 else 1 << (tokens - 1).bit_length()
 
+    @staticmethod
+    def _capacity_bucket(tokens: int) -> int:
+        """Round a token length up onto a sixteenth-octave grid."""
+        if tokens <= 1:
+            return 1
+        step = math.ceil(math.log2(tokens) * CAPACITY_STEPS_PER_OCTAVE)
+        return max(tokens, math.ceil(2 ** (step / CAPACITY_STEPS_PER_OCTAVE)))
+
     def _output_estimates(
         self,
     ) -> OutputEstimates:
         rows = list(self.observed_decode.rows())
-        # Keeping only the unsaturated subset would bias learned output lengths.
-        # Fall back to requested caps until all overflow leaves the history.
+        # Any overflow row keeps the last estimates learned without overflow.
         if any(row.overflow for row in rows):
-            return {}, {}
+            return self._learned
         ratios: defaultdict[tuple[int, int], list[tuple[float, int]]] = defaultdict(list)
         outputs: defaultdict[int, list[tuple[float, int]]] = defaultdict(list)
         for row in rows:
@@ -273,7 +379,7 @@ class DemandModel:
                 ratios[key].append((observed_len / wanted_len, row.count))
             if observed_len > 0:
                 outputs[input_bucket].append((observed_len, row.count))
-        return (
+        self._learned = (
             {
                 key: weighted_median(values)
                 for key, values in ratios.items()
@@ -281,9 +387,10 @@ class DemandModel:
             },
             {key: weighted_median(values) for key, values in outputs.items()},
         )
+        return self._learned
 
     def history_summary(self) -> dict[str, dict[str, int | float]]:
-        """Expose bounded storage and shape overflow to operators."""
+        """Return storage and shape-overflow counts for each demand window."""
         return {
             "unsized": {**self.unsized.summary(), "pending": self.unsized_pending},
             "arrivals": self.arrivals.summary(),
@@ -291,6 +398,40 @@ class DemandModel:
             "observed_decode": self.observed_decode.summary(),
             "residency": self.residency.summary(),
         }
+
+    def refresh_output_estimates(self) -> OutputEstimates:
+        """Rebuild the output estimates and the fleet-wide delivered-output median."""
+        return self._estimate_snapshot()[1]
+
+    def _estimate_snapshot(self) -> tuple[float, OutputEstimates, int]:
+        estimates = self._output_estimates()
+        rows = list(self.observed_decode.rows())
+        delivered = [(float(row.value[2]), row.count) for row in rows if row.value[2] > 0]
+        fleet = (
+            round(weighted_median(delivered))
+            if delivered and not any(row.overflow for row in rows)
+            else 0
+        )
+        self._estimates = (self._clock(), estimates, fleet)
+        return self._estimates
+
+    def output_estimator(self) -> Callable[[Request], int]:
+        """Return a function giving expected output tokens per request, 0 when unknown.
+
+        A request without a shape estimate takes the fleet-wide delivered-output median.
+        """
+        _, estimates, fleet = self._current_snapshot()
+        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
+
+    def current_estimates(self) -> OutputEstimates:
+        """Return the controller's output estimates, rebuilt when older than the demand window."""
+        return self._current_snapshot()[1]
+
+    def _current_snapshot(self) -> tuple[float, OutputEstimates, int]:
+        snapshot = self._estimates
+        if snapshot is None or self._clock() - snapshot[0] >= self.window_s:
+            snapshot = self._estimate_snapshot()
+        return snapshot
 
     def _expected_output(
         self,
@@ -300,8 +441,8 @@ class DemandModel:
     ) -> int:
         """Estimate output length for one input and output bucket.
 
-        Use the requested cap until three matching requests finish, then apply
-        the median fraction delivered.
+        The requested cap applies until three matching requests finish; then the
+        median delivered fraction applies.
         """
         input_bucket = self._shape_bucket(input_len)
         ratios, outputs = self._output_estimates() if estimates is None else estimates

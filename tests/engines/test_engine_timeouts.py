@@ -222,7 +222,9 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                     transport=transport,
                 )
                 try:
-                    async with client._data.stream("POST", self.url + "/occupied", json={}) as held:
+                    async with client._data(self.url).stream(
+                        "POST", self.url + "/occupied", json={}
+                    ) as held:
                         with self.assertRaises(httpx.PoolTimeout) as caught:
                             await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
                         self.assertIsNone(leg_failure_class(caught.exception))
@@ -233,6 +235,24 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result.parameters()["remote_engine_id"], "e0")
                 finally:
                     await client.aclose()
+
+    async def test_a_held_connection_to_one_engine_leaves_other_engines_free(self):
+        self.release.clear()
+        self.requests.clear()
+        client = EngineClient(max_connections=1, prefill_timeout_s=0.5, pool_timeout_s=0.2)
+        other = self.url.replace("127.0.0.1", "localhost")
+        try:
+            async with client._data(self.url).stream(
+                "POST", self.url + "/occupied", json={}
+            ) as held:
+                result = await client.prefill(other, "/v1/completions", {"prompt": "x"}, {})
+                self.assertEqual(result.parameters()["remote_engine_id"], "e0")
+                self.release.set()
+                await held.aread()
+            self.assertIsNot(client._data(self.url), client._data(other))
+            self.assertIs(client._data(other), client._data(other))
+        finally:
+            await client.aclose()
 
     async def test_elapsed_deadline_after_dispatch_remains_engine_timeout(self):
         for reused_connection in (False, True):
@@ -248,3 +268,25 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.requests[-1], "/slow")
                 finally:
                     await client.aclose()
+
+
+class HealthProbeLatenessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_silent_engine_fails_a_probe_that_queued_for_the_control_pool(self):
+        """Lateness counts from the request reaching a connection, not from pool entry."""
+
+        async def silent(reader, writer):
+            await reader.read()
+            writer.close()
+
+        server = await asyncio.start_server(silent, "127.0.0.1", 0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        client = EngineClient(control_connections=1, health_timeout_s=0.3, pool_timeout_s=5.0)
+        self.addAsyncCleanup(client.aclose)
+
+        async def probe(delay):
+            await asyncio.sleep(delay)
+            return await client.healthy(url)
+
+        self.assertEqual(await asyncio.gather(probe(0.0), probe(0.1)), [False, False])

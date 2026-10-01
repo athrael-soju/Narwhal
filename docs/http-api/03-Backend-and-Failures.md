@@ -26,7 +26,7 @@ Same-engine decode:
 
 ### Descriptor validation
 
-Run [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) to validate the pinned engine contract and role-permitted KV transfers.
+Run [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) to validate the pinned engine contract and role-permitted KV transfers.
 
 Decode rejects a KV handoff descriptor with:
 
@@ -69,27 +69,19 @@ from narwhal.engines.connector import PrefillResult
 
 ## Engine failure handling
 
-| Engine fault   | HTTP  |
-| -------------- | :---: |
-| Timeout-shaped | `504` |
-| Other          | `502` |
+A timeout-shaped engine fault maps to HTTP `504`, and every other engine fault maps to HTTP `502`.
 
-| Failure                                             | Client response                                     |
-| --------------------------------------------------- | --------------------------------------------------- |
-| Prefill, streaming or non-streaming                 | HTTP error status                                   |
-| Decode, non-streaming                               | HTTP error status                                   |
-| Decode, streaming, on the final [attempt](#retries) | A terminal server-sent event (SSE) after HTTP `200` |
+Prefill failures, non-streaming decode failures, and streaming decode failures before the first output return that HTTP error status. A streaming decode failure after the first output ends the HTTP `200` stream with a terminal server-sent event (SSE):
 
 ```text
 data: {"error": ...}
 ```
 
-| Destination                                                                                         | Content                                            |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Client error body                                                                                   | Generic message, such as `Upstream request failed` |
-| `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records) | Engine failure detail                              |
+The client error body carries a generic message, such as `Upstream request failed`. The engine failure detail goes to the `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records).
 
 ### Input sizing
+
+The router sizes each request's input before placement:
 
 | Input                                                                              | Sizing before placement    |
 | ---------------------------------------------------------------------------------- | -------------------------- |
@@ -97,24 +89,17 @@ data: {"error": ...}
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
+A failed exact count puts that engine into count backoff for 1 second. Each further consecutive failure doubles the backoff, up to 30 seconds, and a successful count resets it.
+
+The exact count goes to the live engine outside count backoff that holds the fewest requests. When every live engine is in count backoff, the exact count goes to the live engine that holds the fewest requests.
+
 Tokenization failures return the [engine-fault mapping](#engine-failure-handling) status before placement.
 
 ### Breaker ejection and readmission
 
-| Event                                              | Breaker action                                           |
-| -------------------------------------------------- | -------------------------------------------------------- |
-| `recovery.eject_after` consecutive stream failures | Holds the engine out of placement for an inference probe |
-| Failed inference probe                             | Ejects the engine                                        |
-| Successful inference probe                         | Readmits the engine                                      |
+[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) gives each decode-leg failure's breaker class and the probe that decides ejection or readmission.
 
-Stream failures:
-
-- first-token timeout
-- mid-stream silence
-- stream closed before `[DONE]`
-- `[DONE]` before the first token
-
-Inference probes apply `engine.first_token_timeout_s` to each leg.
+[Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) keeps an uncovered suspect in placement during its inference probe.
 
 ### Successful stream termination
 
@@ -129,16 +114,9 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 
 ### Decode timeouts
 
-| Timeout                           | Window                                                                                          |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `engine.first_token_timeout_s`    | From decode request start, across connection and response headers, to the first generated token |
-| `engine.decode_read_timeout_s`    | Silence between any two transport chunks after the first token                                  |
-| `engine.decode_read_timeout_s: 0` | Original request deadline as the stream bound                                                   |
+`engine.first_token_timeout_s` bounds the time from decode request start, across connection and response headers, to the first generated token. On expiry, the router returns HTTP `504` and the journal `error` contains `no first token within`.
 
-| Expiry                         | HTTP  | Journal `error` contains            |
-| ------------------------------ | :---: | ----------------------------------- |
-| `engine.first_token_timeout_s` | `504` | `no first token within`             |
-| `engine.decode_read_timeout_s` | `504` | `engine went silent between tokens` |
+`engine.decode_read_timeout_s` bounds the silence between any two transport chunks after the first token. On expiry, the router returns HTTP `504` and the journal `error` contains `engine went silent between tokens`. With `engine.decode_read_timeout_s: 0`, the original request deadline bounds the stream.
 
 ### Retries
 
@@ -154,4 +132,4 @@ Each retry receives:
 - fresh backend request IDs
 - a new KV handoff
 
-With `recovery.failure_quarantine_s > 0`, the failed engine is excluded from new placement for that many seconds.
+With `recovery.failure_quarantine_s` above `0`, placement of the engine whose leg failed follows [failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine).

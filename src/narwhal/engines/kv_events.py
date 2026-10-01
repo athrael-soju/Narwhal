@@ -1,10 +1,7 @@
 """vLLM KV cache events expressed as Narwhal block identities.
 
-vLLM reports each newly cached run of full blocks for one KV cache group as
-a stored-block event. The event carries the run's token IDs, the backend's
-hash for each block it cached, the parent block's backend hash and the extra
-hash keys vLLM mixed into each block. Groups that keep only some blocks,
-such as Mamba state in `align` mode, omit hashes for the blocks they skip.
+Groups that keep only some blocks, such as Mamba state in `align` mode, omit
+hashes for the blocks they skip.
 """
 
 from __future__ import annotations
@@ -63,7 +60,7 @@ class RemovedBlocks:
 
 @dataclass(frozen=True)
 class CacheCleared:
-    """The engine reset its prefix cache, so no block remains resident."""
+    """The engine reset its prefix cache; no block remains resident."""
 
 
 CacheEvent = StoredBlocks | RemovedBlocks | CacheCleared
@@ -159,10 +156,8 @@ def stored_identities(
 ) -> list[bytes] | None:
     """Return Narwhal identities aligned with a complete event's block hashes.
 
-    `parent` is the identity of the block named by the event's parent hash.
-    An event that starts a prompt has no parent. The result is None when the
-    event skips blocks, carries unsupported extra keys, or continues from a
-    parent whose identity is unknown.
+    Return None when the event skips blocks, carries unsupported extra keys, or
+    continues from a parent whose identity `parent` does not supply.
     """
     if not event.complete or (event.parent_hash is not None and parent is None):
         return None
@@ -181,7 +176,6 @@ def stored_identities(
 def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> list[bytes | None]:
     """Return identities for an event's hashes from blocks another group reported.
 
-    vLLM gives every group the same hash for a block when their block sizes
-    match. Hashes seen only in this event stay unknown.
+    vLLM gives groups with equal block sizes the same hash for a block.
     """
     return [known.get(block_hash) for block_hash in event.block_hashes]

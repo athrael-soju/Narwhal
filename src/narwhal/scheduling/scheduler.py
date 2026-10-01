@@ -6,6 +6,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from ..profiling.store import ProfileStore
@@ -17,6 +18,7 @@ from .costs import Cost
 from .health import DriftTracker
 from .monitor import InstanceMonitor
 from .outcomes import OutcomeWindow
+from .prefill import prefill_seconds, resident_prefill_seconds
 
 log = logging.getLogger("narwhal.scheduler")
 
@@ -42,21 +44,24 @@ class GlobalScheduler:
         on_control_event: Callable[[dict], None] | None = None,
         outcome_bucket_s: float = 1.0,
         outcome_retained_s: float = 480.0,
+        decode_concurrency: int = 0,
     ) -> None:
         self.monitor = monitor
+        self.decode_concurrency = decode_concurrency
         self.profiles = profiles
         self.slo = slo
         self.th = thresholds or Thresholds()
         self._clock = clock
         self.health = health
-        self.pinned = pinned
         self.min_prefill = max(1, min_prefill)
         self.min_decode = max(1, min_decode)
         self.advisory = advisory
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
-        # Apply cooldown to the opening P-to-D change as well.
+        # Refreshes a request's cache evidence older than the given seconds from current residency.
+        self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
+        # The opening P-to-D change also waits out the cooldown.
         self._last_p2d_flip = clock()
         self.panic_bypasses = 0
         self._panic_sustained = 0
@@ -64,10 +69,10 @@ class GlobalScheduler:
         # Bound telemetry retained for `/narwhal/state`.
         self._flip_history = flip_history
         self.flips: list[Flip] = []
-        # Distinguish unavailable SLO placements from refused role changes.
+        # Placements with no SLO-eligible candidate; refused role changes count separately.
         self.unserved = 0
         self.flips_refused: list[tuple[float, str, str]] = []
-        # Process-lifetime counters must outlive the bounded diagnostic histories.
+        # Process-lifetime counters, independent of the bounded histories.
         self._flip_counts: Counter[tuple[str, str]] = Counter()
         self._flip_reversals = 0
         self._flip_refusals = 0
@@ -83,6 +88,7 @@ class GlobalScheduler:
             eject_after=eject_after,
             on_change=self.refresh_floor_state,
             on_eject=self._notify_eject,
+            pinned=pinned,
         )
         self.prefill_floor = PrefillFloor(
             clock,
@@ -96,6 +102,15 @@ class GlobalScheduler:
     def _notify_eject(self, iid: str) -> None:
         if self.on_eject is not None:
             self.on_eject(iid)
+
+    @property
+    def pinned(self) -> frozenset[str]:
+        """Engines that take only their configured role's legs."""
+        return self.availability.pinned
+
+    @pinned.setter
+    def pinned(self, pinned: frozenset[str]) -> None:
+        self.availability.pinned = pinned
 
     @property
     def ejected(self) -> dict[str, float]:
@@ -173,7 +188,15 @@ class GlobalScheduler:
         """Return endpoints eligible for new work and role changes."""
         return self.availability.live_instances(role, exclude=exclude)
 
-    def cost(self, request: Request, inst: Instance) -> Cost:
+    def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
+        """Return the engines in `instances` that place `role`'s legs."""
+        return self.availability.role_pool(role, instances)
+
+    def role_covered_without(self, iid: str) -> bool:
+        """Return whether another live engine places every role that `iid` places."""
+        return self.availability.role_covered_without(iid)
+
+    def cost(self, request: Request, inst: Instance, *, warm: bool = True) -> Cost:
         """Price a request with the current health and prefix-reuse evidence."""
         return costs.cost(
             request,
@@ -182,6 +205,7 @@ class GlobalScheduler:
             profiles=self.profiles,
             slo=self.slo,
             health=self.health,
+            warm=warm,
         )
 
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
@@ -324,21 +348,125 @@ class GlobalScheduler:
     def prefill_admission_price(self, request: Request, inst: Instance) -> float:
         """Return the prefill price for predictive admission.
 
-        Aggregate fallback requires an idle decode engine because the profile
-        covers isolated prefill and decode. Open admission uses normal placement.
+        Without live prefill engines, a busy decode engine prices at infinity.
         """
         if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
             return float("inf")
         return self.cost(request, inst)[1]
 
+    def role_placeable(self, role: Role) -> bool:
+        """Return whether a live engine of `role`, or a live unpinned engine, can take a leg."""
+        return bool(self.role_pool(role, self.live_instances()))
+
+    def prefill_ready_s(self, request: Request, inst: Instance) -> float:
+        """Return seconds until `request` finishes prefill behind `inst`'s resident queue."""
+        profile = self.profiles.get(inst.iid)
+        if profile is None:
+            return 0.0
+        return resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
+
+    def decode_admits(
+        self,
+        request: Request,
+        *,
+        ready_s: float = 0.0,
+        concurrency: int = 0,
+        expected_output: Callable[[Request], int] | None = None,
+    ) -> bool:
+        """Return whether live decode engines hold `request`'s decode window.
+
+        Peak slots and KV tokens over the window must fit the fleet, and some engine must
+        meet the TPOT budget unless every idle engine misses it.
+        """
+        engines = self.live_instances(Role.DECODE)
+        if not engines:
+            return True
+        estimate = expected_output or (lambda r: r.wanted_len)
+        slots, tokens, steps = 0, 0.0, {}
+        for inst in engines:
+            profile = self.profiles.get(inst.iid)
+            if profile is None or profile.decode_max_requests is None:
+                return True
+            limit = profile.decode_max_requests
+            limit = min(limit, concurrency) if concurrency > 0 else limit
+            token_limit = profile.decode_token_limit
+            slots += limit
+            tokens += float("inf") if token_limit is None else token_limit
+            context = (inst.decode_tokens() + request.input_len) / (len(inst.decode) + 1)
+            batch = limit * context if token_limit is None else min(limit * context, token_limit)
+            steps[inst.iid] = profile.token_interval(batch, limit) * self.monitor.decode_correction(
+                inst.iid
+            )
+        step = sum(steps.values()) / len(steps)
+
+        def remaining(r: Request) -> int | None:
+            expected = estimate(r)
+            if expected > r.output_len:
+                return expected - r.output_len
+            if r.wanted_len > 0:
+                return max(0, r.wanted_len - r.output_len)
+            return None
+
+        def span(r: Request, start: float, token_s: float) -> tuple[float, float, int]:
+            left = remaining(r)
+            if left is None:
+                return start, float("inf"), r.input_len + r.output_len
+            return start, start + left * token_s, r.input_len + r.output_len + left
+
+        _, end, request_kv = span(request, ready_s, step)
+        end = ready_s if end == float("inf") else end
+        spans = [
+            (0.0, float("inf"), span(r, 0.0, step)[2])
+            for r in self.monitor.waiting.values()
+            if r.phase is Phase.DECODE
+        ]
+        generating: dict[str, dict[str, Request]] = {}
+        for inst in engines:
+            generating[inst.iid] = {}
+            for rid, r in inst.decode.items():
+                resident = span(r, 0.0, steps[inst.iid])
+                spans.append(resident)
+                if resident[1] >= ready_s:
+                    generating[inst.iid][rid] = r
+        for inst in self.monitor.instances.values():
+            prefill_profile = self.profiles.get(inst.iid)
+            done = 0.0
+            for r in inst.prefill.values():
+                if prefill_profile is not None:
+                    done += prefill_seconds(prefill_profile, r)
+                spans.append(span(r, done, step))
+        events = sorted(
+            (t, order, kv)
+            for first, last, kv in spans
+            if first <= end and last >= ready_s
+            for t, order in ((max(first, ready_s), 0), (min(last, end), 1))
+        )
+        held, held_kv, peak, peak_kv = 1, float(request_kv), 1, 0.0
+        for _, order, kv in events:
+            held += 1 if order == 0 else -1
+            held_kv += kv if order == 0 else -kv
+            if order == 0:
+                peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
+        if peak > 1 and (peak > slots or peak_kv > tokens):
+            return False
+        decode = replace(request, phase=Phase.DECODE)
+        if any(
+            self.meets_slo(decode, self.cost(decode, replace(inst, decode=generating[inst.iid])))
+            for inst in engines
+        ):
+            return True
+        return not any(
+            self.meets_slo(decode, self.cost(decode, replace(inst, prefill={}, decode={})))
+            for inst in engines
+        )
+
     def cheapest_own_prefill(self, request: Request) -> float | None:
         """Return the request's cheapest isolated prefill cost.
 
-        This excludes resident queues and probation penalties, which can drain
-        while a request waits.
+        Resident queues and probation penalties are excluded.
         """
         floors = [
-            profile.prefill_time(request.input_len)
+            prefill_seconds(profile, request)
             for inst in self._prefill_candidates()
             if (profile := self.profiles.get(inst.iid)) is not None
         ]
@@ -359,21 +487,15 @@ class GlobalScheduler:
         return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
 
     def flip_cost(self, inst: Instance) -> Cost:
-        """Return the resident-work cost of changing an engine's role.
+        """Return `(indicator, resident work)` for changing an engine's role.
 
-        Prefill instance: `(I[D = empty], sum T(rp, i))`.
-        Decode instance:  `(I[P = empty], sum L(rd))`.
-
-        The indicator is 0 when the other type is still resident, so an
-        incompletely flipped instance sorts first under argmin.
+        The indicator is 0 while the other phase's work is still resident.
         """
         profile = self.profiles.get(inst.iid)
         if inst.role is Role.PREFILL:
             indicator = 0.0 if inst.decode else 1.0
             resident = (
-                sum(profile.prefill_time(r.input_len) for r in inst.prefill.values())
-                if profile
-                else float(inst.prefill_tokens())
+                resident_prefill_seconds(profile, inst) if profile else float(inst.prefill_tokens())
             )
             return (indicator, resident)
         indicator = 0.0 if inst.prefill else 1.0
@@ -386,7 +508,7 @@ class GlobalScheduler:
         candidate: Instance | None = None,
         bypass_dwell: bool = False,
     ) -> tuple[Instance | None, str]:
-        """Resolve the donor used by a score and the subsequent role change."""
+        """Return the donor for a change toward `target`, or None and the blocking reason."""
         source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         pool = [
             inst
@@ -429,10 +551,9 @@ class GlobalScheduler:
         bypass_dwell: bool = False,
         decision_details: dict[str, object] | None = None,
     ) -> Instance | None:
-        """Apply a live role change and record its timing, residents and events.
+        """Apply a live role change toward `target`; return the moved engine or None.
 
-        Recovery may nominate a candidate and bypass timing guards. Pins,
-        availability, role floors and transition bookkeeping still apply.
+        Pins, availability and role floors apply even with the bypass flags.
         """
         take_from = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         now = self._clock()
@@ -592,7 +713,7 @@ class GlobalScheduler:
         if not instances:
             raise RuntimeError("no schedulable instances")
 
-        # 1. Prefill instance already flipped to decode: no KV transfer needed.
+        # A prefill engine since flipped to decode keeps the request without a KV transfer.
         if (
             request.phase is Phase.DECODE
             and request.prefill_instance
@@ -605,22 +726,59 @@ class GlobalScheduler:
             if prior is not None and prior.role is Role.DECODE:
                 return prior
 
-        # Profiles assume sequential prefill and batched decode, so prefer the
-        # matching role whenever that pool has a live engine.
+        # Profiles model sequential prefill and batched decode.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
-        candidates = [i for i in instances if i.role is want] or instances
-        costs = {i.iid: self.cost(request, i) for i in candidates}
+        candidates = self.role_pool(want, instances)
+        if not candidates:
+            raise RuntimeError("no schedulable instances for the pinned roles")
+        if request.phase is Phase.PREFILL:
+            request.cache_placement = None
+            self.recheck_evidence(request, 0.0)
+        prices = {i.iid: self.cost(request, i) for i in candidates}
 
-        # 2. Lowest-cost instance that also meets the SLO.
-        eligible = [i for i in candidates if self.meets_slo(request, costs[i.iid])]
-        if eligible:
-            chosen = min(eligible, key=lambda i: (costs[i.iid], i.iid))
-            return chosen
+        chosen, served = self._cheapest(request, candidates, prices)
+        if not served:
+            # Admission decides over-budget placements.
+            self.unserved += 1
+        if request.phase is Phase.PREFILL and request.cached_tokens:
+            request.cache_placement = self._cache_placement(request, chosen, candidates)
+        return chosen
 
-        # Admission decides whether to accept an over-budget placement.
-        # Role changes belong to the monitoring controller.
-        self.unserved += 1
-        return min(candidates, key=lambda i: (costs[i.iid], i.iid))
+    def recheck_evidence(self, request: Request, fresh_s: float) -> None:
+        """Refresh a prefill request's cache evidence older than `fresh_s` seconds."""
+        if (
+            request.phase is Phase.PREFILL
+            and request.cached_tokens
+            and self.recheck_cache_evidence is not None
+        ):
+            self.recheck_cache_evidence(request, fresh_s)
+
+    def _cheapest(
+        self, request: Request, candidates: list[Instance], prices: dict[str, Cost]
+    ) -> tuple[Instance, bool]:
+        """Return the cheapest candidate within the SLO, else the cheapest, and whether it fits."""
+        eligible = [i for i in candidates if self.meets_slo(request, prices[i.iid])]
+        return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
+
+    def _cache_placement(
+        self, request: Request, chosen: Instance, candidates: list[Instance]
+    ) -> dict[str, Any] | None:
+        """Return cache-evidence pricing details for the chosen prefill engine."""
+        profile = self.profiles.get(chosen.iid)
+        if profile is None:
+            return None
+        return {
+            "placed_iid": chosen.iid,
+            "placed_cached_tokens": request.cached_tokens.get(chosen.iid, 0),
+            "evidence_sequence": request.cache_sequences.get(chosen.iid),
+            "predicted_prefill_s": prefill_seconds(profile, request),
+            "cold_prefill_s": profile.prefill_time(request.input_len),
+            "cold_choice_iid": self._cold_choice(request, candidates),
+        }
+
+    def _cold_choice(self, request: Request, candidates: list[Instance]) -> str:
+        cold = {i.iid: self.cost(request, i, warm=False) for i in candidates}
+        return self._cheapest(request, candidates, cold)[0].iid
 
     def health_pass(self) -> None:
         """Sample live engines and apply drift verdicts."""
@@ -644,7 +802,7 @@ class GlobalScheduler:
             if observed > 0.0 and expected > 0.0:
                 self.health.note(inst.iid, observed / expected)
         for verdict, iid in self.health.tick():
-            if verdict == "evict" and self.availability._can_hold_out(iid) and self.eject(iid):
+            if verdict == "evict" and self.role_covered_without(iid) and self.eject(iid):
                 self.health.evicted(iid)
                 log.warning(
                     "ejected %s after sustained drift",
@@ -652,17 +810,13 @@ class GlobalScheduler:
                 )
             elif verdict == "evict":
                 log.warning(
-                    "health: %s drifts past the band but is the last instance; "
+                    "health: %s drifts past the band but alone serves its role; "
                     "probation stands, eviction refused",
                     iid,
                 )
 
     def observe_control_load(self, prefill: float, decode: float) -> None:
-        """Update the sustained cooldown-bypass condition.
-
-        Decode must exceed the panic threshold while prefill remains below
-        `shrink`. This excludes fleet-wide spikes.
-        """
+        """Count consecutive passes with decode at panic load and prefill at most `shrink`."""
         armed = (
             self.th.panic_ratio > 0.0
             and decode >= self.th.panic_ratio * self.th.expand

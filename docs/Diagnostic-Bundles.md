@@ -19,12 +19,11 @@ narwhal diagnostics collect \
   --format json
 ```
 
-| Path | Mode |
-| --- | :---: |
-| Bundle directory | `0700` |
-| Bundle files | `0600` |
+The collector creates the bundle directory with mode `0700` and the bundle files with mode `0600`.
 
 ## Source selection
+
+The options name the router, the local sources to include, and the collection limits.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -40,6 +39,8 @@ narwhal diagnostics collect \
 | `--include-request-content` | `false` | Include journal and completion artifacts and request fields. |
 | `--format text\|json` | `text` | Output format: `text` summary or `json` per the [command result contract](Command-Results.md). |
 
+Each source adds these files to the bundle:
+
 | Source | Selected by | Included files |
 | --- | --- | --- |
 | Dev instance | `--instance` | The instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run named in its lifecycle state, inside the instance directory |
@@ -47,37 +48,21 @@ narwhal diagnostics collect \
 | Request content | `--include-request-content` | `journal.jsonl` and the completion artifacts |
 | Files kept elsewhere | `--artifact` | Regular files on symlink-free paths, such as supervisor status, ingress logs, or deployment evidence |
 
-| Case | Result |
-| --- | --- |
-| A source exceeds `--max-source-bytes` | The source is marked `truncated`. |
-| Content of a truncated source | The first `--max-source-bytes` bytes. |
-| An endpoint stalls after its headers or first bytes | The row records the HTTP status and the body received before the deadline. |
-| A local file read | The source deadline applies between reads. |
+A source that exceeds `--max-source-bytes` is marked `truncated` and keeps its first `--max-source-bytes` bytes.
+
+When an endpoint stalls after its headers or first bytes, its row records the HTTP status and the body received before the deadline. For a local file, the source deadline applies between reads.
 
 ## Manifest and exit status
 
-`manifest.json` uses `narwhal.diagnostic-bundle` version 1.
+`manifest.json` uses `narwhal.diagnostic-bundle` version 1. It records the collection start and finish timestamps, elapsed time, package version, package source digest, inclusion policy, and one row per source.
 
-| Scope | Recorded fields |
-| --- | --- |
-| Manifest | Collection start and finish timestamps, elapsed time, package version, package source digest, inclusion policy, and one row per source |
-| Every source row | Source path or URL, collection timestamp, outcome, and error |
-| HTTP rows | Status and content type |
-| Exported files | Byte count and SHA-256 hash |
-| Complete local reads | Original file hash and modification timestamp |
+Each source row records the source path or URL, collection timestamp, outcome, and error. HTTP rows add the status and content type. Exported files add the byte count and SHA-256 hash, and complete local reads add the original file hash and modification timestamp.
 
 Generated filenames are a four-digit source index plus a fixed label, such as `0003-artifact.json` or `0007-metrics.txt`.
 
-| Manifest `status` | Condition |
-| --- | --- |
-| `success` | Every selected source was collected. |
-| `partial` | A source failed, timed out, exceeded its byte limit, or was excluded by policy. |
+The manifest `status` is `success` when the collector collects every selected source. It is `partial` when a source fails, times out, exceeds its byte limit, or is excluded by policy.
 
-| Write failure | Result |
-| --- | --- |
-| Artifact file | The source row records `write_error`. |
-| Artifact file | Collection continues with the remaining sources and the manifest. |
-| Manifest file | Exit status `4`. |
+When an artifact file write fails, its source row records `write_error`, and collection continues with the remaining sources and the manifest. A manifest file write failure exits with status `4`.
 
 | Exit status | Operator action |
 | :---: | --- |
@@ -86,20 +71,13 @@ Generated filenames are a four-digit source index plus a fixed label, such as `0
 | `3` | Inspect individual source outcomes in the partial bundle. |
 | `4` | Inspect the reported I/O failure and the retained output directory. |
 
-JSON command results:
-
-- `data` holds `bundle`, `manifest`, `collection_status`, and the `sources` count.
-- Exit `3` maps to command status `degraded` and error code `collection_partial`.
+The [command result contract](Command-Results.md#result-fields) defines the JSON `data` and the status for each exit code.
 
 ## Content policy
 
-| Content | Default | With `--include-request-content` |
-| --- | --- | --- |
-| `journal.jsonl` and `completion.json` | Excluded | Included |
-| Structured fields named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output` | `[REDACTED]` | Included |
-| Credentials | Redacted | Redacted |
+By default, the bundle excludes `journal.jsonl` and `completion.json`. It replaces structured fields named `messages`, `prompt`, `content`, `completion`, `request_body`, `response_body`, `text`, `input`, or `output` with `[REDACTED]`. `--include-request-content` includes both the files and the fields.
 
-Credential redaction covers the values in:
+In either mode, credential redaction covers the values in:
 
 - recognised credential fields, authorization headers, URL credentials, credential query parameters, and launch arguments
 - `*_env` references in selected JSON sources
@@ -107,16 +85,13 @@ Credential redaction covers the values in:
 
 Selected credential files get an `excluded` outcome: `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `authorized_keys`, `credentials`, and `credentials.json`.
 
-| Export | Redaction |
-| --- | --- |
-| JSON and JSONL | Field-level redaction that keeps the document structure and `*_env` reference names. |
-| Incomplete JSON and free-text logs | Retained text ends at the first labelled credential or request field, including multiline and truncated values. |
+JSON and JSONL exports get field-level redaction that keeps the document structure and `*_env` reference names. In incomplete JSON and free-text logs, retained text ends at the first labelled credential or request field, including multiline and truncated values.
 
 Filter free-text logs with site tooling when they hold credentials or request content in a custom encoding.
 
 ## Manual collection
 
-When the installed collector is unavailable, use the [incident capture commands](Troubleshoot.md#capture-router-and-engine-state):
+When the installed collector is unavailable, use the [incident capture commands](Troubleshoot.md#capturing-router-and-engine-state):
 
 - Keep each HTTP status with its response.
 - Use a separate private directory per router.

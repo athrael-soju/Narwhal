@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -19,12 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from tools.observability.artifacts import stage_artifacts
+from tools.observability.artifacts import MOUNTS, stage_artifacts
 from tools.observability.make_targets import TargetContract, load_contract
 
 BASE = Path(__file__).resolve().parent
 COMPOSE_FILE = BASE / "compose.yml"
 GRAFANA_PORT = 3000
+RENDERER_PORT = 8081
+RENDERER_TOKEN = MOUNTS.parent / "renderer-token"
+DASHBOARD_PATH = "/apis/dashboard.grafana.app/v2beta1/namespaces/default/dashboards/narwhal-router"
 DEFAULT_READY_TIMEOUT_S = 60.0
 COMMAND_TIMEOUT_S = 10.0
 COMPOSE_UP_TIMEOUT_S = 300.0
@@ -32,6 +36,7 @@ PROMETHEUS_IMAGE = "prom/prometheus:v3.14.0"
 PROMETHEUS_VERSION = "3.14.0"
 GRAFANA_IMAGE = "grafana/grafana:13.2.1"
 GRAFANA_VERSION = "13.2.1"
+RENDERER_IMAGE = "grafana/grafana-image-renderer:v5.12.5"
 
 
 class StartupError(RuntimeError):
@@ -62,6 +67,11 @@ class Listener:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"{host}:{self.port}"
+
+    @property
+    def url(self) -> str:
+        """Return an HTTP URL reachable from the host."""
+        return f"http://{self.authority}"
 
 
 @dataclass(frozen=True)
@@ -104,14 +114,20 @@ class ComposeStack:
     """Run Docker Compose against the repository's pinned project file."""
 
     def __init__(
-        self, runner: Runner = subprocess.run, env: Mapping[str, str] | None = None
+        self,
+        runner: Runner = subprocess.run,
+        env: Mapping[str, str] | None = None,
+        token_path: Path = RENDERER_TOKEN,
     ) -> None:
         self._runner = runner
         self._compose_env = dict(os.environ if env is None else env)
-        listener = parse_prometheus_listener(
-            self._compose_env.get("NARWHAL_PROMETHEUS_LISTEN_ADDRESS", "127.0.0.1:9090")
-        )
-        self._compose_env["NARWHAL_PROMETHEUS_URL"] = f"http://{listener.authority}"
+        prometheus, grafana = configured_services(self._compose_env)
+        self._compose_env["NARWHAL_PROMETHEUS_URL"] = prometheus.listener.url
+        self._compose_env["NARWHAL_GRAFANA_URL"] = grafana.listener.url
+        self._compose_env["NARWHAL_RENDERER_ADDRESS"] = Listener(
+            grafana.listener.host, RENDERER_PORT
+        ).authority
+        self._compose_env["NARWHAL_RENDERER_TOKEN"] = renderer_token(token_path)
         self._prefix = [
             "docker",
             "compose",
@@ -136,7 +152,7 @@ class ComposeStack:
         )
 
     def up(self) -> None:
-        """Create or update Prometheus and Grafana."""
+        """Create or update Prometheus, Grafana and the image renderer."""
         result = self._run("up", "-d", timeout_s=COMPOSE_UP_TIMEOUT_S)
         if result.stdout:
             print(result.stdout, end="")
@@ -174,8 +190,18 @@ class ComposeStack:
         )
 
 
+def renderer_token(path: Path) -> str:
+    """Return the Grafana-to-renderer token, creating a private one on first use."""
+    if not path.exists():
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as output:
+            output.write(secrets.token_hex(32))
+    return path.read_text().strip()
+
+
 def parse_prometheus_listener(value: str) -> Listener:
-    """Parse Prometheus' configured address and port."""
+    """Return the listener for an address:port or [address]:port value."""
     raw = value.strip()
     if raw.startswith("["):
         end = raw.find("]")
@@ -347,7 +373,7 @@ def _ss_line_matches_listener(line: str, listener: Listener) -> bool:
 
 
 def _address_matches_listener(value: str, listener: Listener) -> bool:
-    """Match one socket address to a configured listener."""
+    """Return whether a socket address matches the listener; wildcard hosts match any host."""
     if value.startswith("["):
         end = value.find("]")
         if end < 0 or value[end + 1 : end + 2] != ":":
@@ -478,18 +504,23 @@ def _expressions(value: object) -> list[str]:
 
 def verify_dashboard_contract(document: dict[str, object]) -> None:
     """Require a default router selection that produces populated panel queries."""
-    dashboard = document.get("dashboard")
-    if not isinstance(dashboard, dict) or dashboard.get("uid") != "narwhal-router":
+    metadata = document.get("metadata")
+    spec = document.get("spec")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("name") != "narwhal-router"
+        or not isinstance(spec, dict)
+    ):
         raise StartupError("Grafana dashboard UID narwhal-router is unavailable")
-    templating = dashboard.get("templating")
-    variables = templating.get("list") if isinstance(templating, dict) else None
+    variables = spec.get("variables")
     variable_list = variables if isinstance(variables, list) else []
     router = next(
         (
-            variable
+            variable["spec"]
             for variable in variable_list
             if isinstance(variable, dict)
-            if variable.get("name") == "router"
+            if isinstance(variable.get("spec"), dict)
+            if variable["spec"].get("name") == "router"
         ),
         None,
     )
@@ -503,7 +534,7 @@ def verify_dashboard_contract(document: dict[str, object]) -> None:
         or current.get("value") != "$__all"
     ):
         raise StartupError("Grafana router variable must default to every configured target")
-    expressions = _expressions(dashboard)
+    expressions = _expressions(spec.get("elements"))
     if any('instance="$router"' in expression for expression in expressions):
         raise StartupError("Grafana router panels require regex instance matching")
     if not any('instance=~"$router"' in expression for expression in expressions):
@@ -511,7 +542,7 @@ def verify_dashboard_contract(document: dict[str, object]) -> None:
 
 
 def _verify_http(service: Service, get: HttpGet, prometheus_url: str) -> None:
-    base = f"http://{service.listener.authority}"
+    base = service.listener.url
     if service.name == "prometheus":
         status, ready = get(f"{base}/-/ready", 2.0)
         if status != 200 or "Prometheus Server is Ready" not in ready:
@@ -540,7 +571,7 @@ def _verify_http(service: Service, get: HttpGet, prometheus_url: str) -> None:
             raise StartupError(
                 f"Grafana datasource uses {datasource.get('url')!r}; expected {prometheus_url}"
             )
-        status, body = get(f"{base}/api/dashboards/uid/narwhal-router", 2.0)
+        status, body = get(f"{base}{DASHBOARD_PATH}", 2.0)
         dashboard = json.loads(body)
         if status != 200:
             raise StartupError(f"Grafana dashboard returned HTTP {status}")
@@ -553,7 +584,7 @@ def _verify_targets(
     get: HttpGet,
 ) -> None:
     """Require the deployed target identities, scrape health and router readiness."""
-    base = f"http://{prometheus.listener.authority}"
+    base = prometheus.listener.url
     status, body = get(f"{base}/api/v1/targets", 2.0)
     if status != 200:
         raise StartupError(f"Prometheus targets returned HTTP {status}")
@@ -665,7 +696,7 @@ def wait_ready(
 ) -> dict[str, Container]:
     """Wait for the launched containers and their versioned HTTP contracts."""
     prometheus = next(service for service in services if service.name == "prometheus")
-    prometheus_url = f"http://{prometheus.listener.authority}"
+    prometheus_url = prometheus.listener.url
     launched: dict[str, Container] = {}
     for service in services:
         container = stack.container(service.name)
@@ -730,7 +761,7 @@ def start(
     for service in services:
         container = launched[service.name]
         print(
-            f"{service.label} ready at http://{service.listener.authority} "
+            f"{service.label} ready at {service.listener.url} "
             f"({container.cid[:12]}, {container.image})"
         )
     return launched

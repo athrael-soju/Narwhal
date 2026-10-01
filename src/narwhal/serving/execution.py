@@ -11,14 +11,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..engines.client import (
-    FIRST_OUTPUT_DETAIL,
-    EngineError,
-)
+from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
-from ..types import Instance, Phase, Request
+from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
@@ -90,15 +87,21 @@ def _status_of(exc: BaseException) -> int:
     return 502
 
 
-def _failed_leg(state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool) -> None:
+def _failed_leg(
+    state: RequestLifecycle, inst: Instance, exc: Exception, *, decode: bool, started: float
+) -> None:
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
     router._leg_failed(
-        inst.iid, exc, prefill_iid=state.prefill_iid if decode else None, decode_leg=decode
+        inst.iid,
+        exc,
+        prefill_iid=state.prefill_iid if decode else None,
+        decode_leg=decode,
+        progressed=router.monitor.output_since(inst.iid, started),
     )
     reason = leg_failure_reason(exc)
-    if decode and isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
+    if decode and first_output_timeout(exc):
         router.controller.safety.note_risk_event("first_token_timeout")
     if reason is not None and reason != "local_pool":
         router.scheduler.quarantine(inst.iid, router.cfg.failure_quarantine_s)
@@ -151,15 +154,24 @@ async def _prepare_once(
 ) -> PreparedAttempt:
     router, req = state.router, state.request
     req.prefill_instance = None
+    for role in (Role.PREFILL, Role.DECODE):
+        if not router.scheduler.role_placeable(role):
+            raise NoEngine(f"no schedulable engines for the {role.value} role")
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
-        cost = router.scheduler.cost(req, prefill)
         priced = router.scheduler.prefill_admission_price(req, prefill)
         priced += max(0.0, router._clock() - state.arrived)
         if not router.scheduler.meets_slo(
-            req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
+            req, (0.0, priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
+        if not router.scheduler.decode_admits(
+            req,
+            ready_s=router.scheduler.prefill_ready_s(req, prefill),
+            concurrency=router.cfg.serving.decode_concurrency,
+            expected_output=router.controller.demand.output_estimator(),
+        ):
+            raise PlacementRefused(priced, decode=True)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
@@ -172,7 +184,7 @@ async def _prepare_once(
             )
         )
     except Exception as exc:
-        _failed_leg(state, prefill, exc, decode=False)
+        _failed_leg(state, prefill, exc, decode=False, started=began)
         raise
     finally:
         state.record_upstream_time("prefill", began)
@@ -180,8 +192,7 @@ async def _prepare_once(
     router.scheduler.record_answer(prefill.iid, "prefill")
     router.monitor.first_token(prefill.iid, req.rid)
     handoff_s = router.cfg.serving.handoff_timeout_s
-    # The remote lease starts during the prefill HTTP call. Starting the age
-    # at local dispatch includes that delay and uses one monotonic clock.
+    # The handoff age counts from local prefill dispatch, before the remote lease starts.
     expires_at = began + handoff_s if handoff_s else None
     if expires_at is not None and router._clock() >= expires_at:
         raise HandoffExpired("prefill consumed the configured KV handoff age allowance")
@@ -209,8 +220,17 @@ async def prepare_attempt(
 
 
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
-    if isinstance(exc, PlacementRefused):
-        return refuse_request(state, exc.predicted_s)
+    """Settle the request and keep its error response for streamed and buffered replies."""
+    response = (
+        refuse_request(state, exc.predicted_s, decode=exc.decode)
+        if isinstance(exc, PlacementRefused)
+        else _failure(state, exc)
+    )
+    state.outcome["response"] = response
+    return response
+
+
+def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
@@ -236,42 +256,42 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     )
 
 
+def _failure_response(state: RequestLifecycle) -> JSONResponse:
+    response: JSONResponse = state.outcome["response"]
+    return response
+
+
 async def serve_request(
-    router: NarwhalRouter,
-    rid: str,
+    state: RequestLifecycle,
     endpoint: str,
     body: dict[str, Any],
     headers: dict[str, str],
-    *,
-    arrived: float | None = None,
-    offered: bool = False,
-    lifecycle: RequestLifecycle | None = None,
 ) -> StreamingResponse | JSONResponse:
-    """Size an original request, prepare its first attempt and own its response."""
-    invalid = request_error(router, body)
-    if invalid is not None:
-        return invalid
-    arrived = router._clock() if arrived is None else arrived
-    req = Request(
-        rid=rid,
-        input_len=router.estimate_length(body),
-        wanted_len=int(body.get("max_tokens") or 0),
-    )
-    state = lifecycle or RequestLifecycle(
-        router, req, arrived, client_rid=headers.get("x-request-id")
-    )
-    req = state.request
+    """Size an admitted request, prepare its first attempt and own its response."""
+    router, req = state.router, state.request
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
-        req.input_len = await state.wait(lambda: router.input_length(body))
+        sizing = router._clock()
+        try:
+            (
+                req.input_len,
+                req.cached_tokens,
+                req.cache_sequences,
+                req.cache_identities,
+            ) = await state.wait(lambda: router.size(body))
+            req.cache_checked_at = router._clock()
+        finally:
+            router.sizing_delays.add(router._clock() - sizing)
         if state.demand_observation is not None:
-            router.controller.demand.resize_arrival(
-                state.demand_observation, req.input_len, req.wanted_len, at=arrived
+            req.demand_arrival = router.controller.demand.resize_arrival(
+                state.demand_observation,
+                req.input_len,
+                req.wanted_len,
+                at=state.arrived,
+                cached_tokens=req.cached_tokens,
             )
             state.demand_observation = None
-        if not offered:
-            router.controller.saw_arrival(req.input_len, wanted_len=req.wanted_len, at=arrived)
         prepared = await prepare_attempt(state, endpoint, body, engine_headers)
     except asyncio.CancelledError:
         state.finish("cancelled")
@@ -281,18 +301,18 @@ async def serve_request(
     streaming = bool(body.get("stream"))
     stream = run_decode(state, prepared, endpoint, body, engine_headers, streaming=streaming)
     if streaming:
-        return RequestStreamResponse(stream, state)
+        try:
+            first = await anext(stream, None)
+        except BaseException:
+            await stream.aclose()
+            raise
+        if not state.output_started and state.outcome["error"] is not None:
+            await stream.aclose()
+            return _failure_response(state)
+        return RequestStreamResponse(stream, state, first=first)
     chunks = [line async for line in stream]
     if state.outcome["error"] is not None:
-        return JSONResponse(
-            status_code=state.outcome["status"],
-            content={
-                "error": {
-                    "message": state.outcome["public_error"],
-                    "type": state.phase,
-                }
-            },
-        )
+        return _failure_response(state)
     try:
         out = reassemble(chunks, endpoint=endpoint)
     except ValueError as exc:
@@ -319,8 +339,7 @@ async def _decode_attempt(
     headers: dict[str, str],
 ) -> AsyncGenerator[str, None]:
     router = state.router
-    # A lost router lease fences new prefills. An already dispatched original
-    # may drain its decode leg, preserving the warm-standby serving contract.
+    # A lost router lease fences new prefills; a dispatched original may still decode.
     if router.cfg.engine_restart_policy == "whole_wave" and router.lifecycle_blocked:
         raise NoEngine("whole-wave restart hold")
     if prepared.expires_at is not None and router._clock() >= prepared.expires_at:
@@ -368,13 +387,11 @@ async def _decode_attempt(
             router.decode_tokens_observed += n
             frame = rewrite_sse(line, expose_token_ids=bool(body.get("return_token_ids"))) + "\n\n"
             if state.first_at is None:
-                # Buffer role/usage metadata until output commits the attempt.
-                # Discard keepalives while the attempt is uncommitted.
+                # Before output commits the attempt, metadata buffers and keepalives drop.
                 if line.startswith("data:"):
                     metadata_bytes += len(frame.encode())
-                    # Prompt identity can exceed 64 KiB for ordinary long
-                    # documents. Charge it to the explicit retained-response
-                    # budget, including streams that must buffer before output.
+                    # Prompt token IDs can exceed 64 KiB; buffered metadata counts
+                    # against max_response_bytes.
                     if (
                         len(metadata) >= 64
                         or metadata_bytes > router.cfg.serving.max_response_bytes
@@ -391,7 +408,7 @@ async def _decode_attempt(
             yield frame
         router.scheduler.record_answer(prepared.decode.iid, "decode")
     except Exception as exc:
-        _failed_leg(state, prepared.decode, exc, decode=True)
+        _failed_leg(state, prepared.decode, exc, decode=True, started=began)
         raise
     finally:
         try:
@@ -419,6 +436,7 @@ async def run_decode(
                 async for frame in attempt:
                     if streaming:
                         state.output_started = True
+                        state.request.cache_identities = {}
                         yield frame
                     else:
                         size += len(frame.encode())

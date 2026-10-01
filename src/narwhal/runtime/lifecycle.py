@@ -17,7 +17,7 @@ from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_
 from ..engines.client import EngineError
 from ..engines.stream import sse_token_count
 from ..engines.validation import recovery_pairs, validation_pairs
-from ..profiling.generation import profile_generation_problems, read_generation
+from ..profiling.generation import binding_digest, profile_generation_problems, read_generation
 
 if TYPE_CHECKING:
     from ..serving.router import NarwhalRouter
@@ -112,8 +112,8 @@ class LifecycleManager:
         now = time.time()
         wave_id = f"wave-{uuid.uuid4().hex[:12]}" if wave else ""
         for iid in ids:
-            # A managed engine may already have restarted while its peers
-            # failed. Keep the identity captured before that restart.
+            # A managed engine may have restarted while its peers failed; its
+            # pre-restart identity stays.
             old_start = (
                 self.records[iid].old_process_start
                 if iid in held and self.records[iid].restart_required
@@ -157,12 +157,38 @@ class LifecycleManager:
         )
         self.refresh()
 
+    def bind_drain_identities(
+        self, capture: list[str], starts: dict[str, float], failures: dict[str, str]
+    ) -> dict[str, str]:
+        """Bind each captured drain identity and return the unresolved capture failures."""
+        remaining = dict(failures)
+        for iid in capture:
+            start = starts.get(iid)
+            # A stopped, ejected engine keeps the last process identity the router verified.
+            if start is None and iid in self.router.scheduler.ejected:
+                start = self.process_starts.get(iid)
+                if start is not None:
+                    remaining.pop(iid, None)
+            self.record_old_identity(iid, start, remaining.get(iid, ""))
+        return remaining
+
     def start_recovery_validation(self, engines: list[str], *, wave: bool = False) -> bool:
         """Hold ejected engines while the full recovery gate runs."""
         if self.router.cfg.engine_restart_policy == "whole_wave":
             self.require_restart_wave("engine recovery requires a managed whole-wave restart")
             return False
-        held = {name for name, rec in self.records.items() if rec.state != "active"}
+        # A failed automatic recovery waits for an operator without holding other engines.
+        held = {
+            name
+            for name, rec in self.records.items()
+            if rec.state != "active"
+            and not (
+                rec.state == "blocked"
+                and not rec.restart_required
+                and not rec.wave_id
+                and name not in engines
+            )
+        }
         configured = set(self.router.monitor.instances)
         if wave and set(engines) != configured:
             raise LifecycleError("whole-wave recovery must name every configured engine")
@@ -484,8 +510,7 @@ async def check_process_identities(
     manager: LifecycleManager = router.lifecycle
     contract = cfg.engine_contract
     if contract is None:
-        # Startup and takeover own readiness for contract-free fleets. A
-        # concurrent liveness sweep must not release a takeover's profile gate.
+        # For contract-free fleets, only startup and takeover release the profile gate.
         return []
     async with manager.lock:
         if not controls_fleet(router):
@@ -525,7 +550,7 @@ async def check_process_identities(
                 if failures:
                     return None, "attestation: " + "; ".join(failures)
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 if problems:
                     return None, "; ".join(problems)
@@ -733,7 +758,7 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
@@ -812,7 +837,7 @@ async def validate_readmission(
                 if verify_attestation(payload, contract, live):
                     raise ValueError("attestation changed during validation")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, payload["attestation_digest"]
+                    router.profiles, spec.iid, binding_digest(payload)
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)

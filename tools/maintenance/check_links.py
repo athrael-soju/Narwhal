@@ -1,8 +1,4 @@
-"""Check source Markdown links locally.
-
-Canonical Narwhal URLs resolve against the checkout. Checks cover Markdown and HTML targets and
-skip fenced code and third-party URLs.
-"""
+"""Check source Markdown links locally."""
 
 from __future__ import annotations
 
@@ -16,6 +12,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# A link whose text is an image, such as a badge.
+IMAGE_LINK = re.compile(r"\[!\[[^\]]*\]\([^)\s]+\)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HTML_LINK = re.compile(r"<(?:a|img)\b[^>]*?\b(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.I)
 ROOT = Path(__file__).resolve().parents[2]
 CANONICAL = "/athrael-soju/Narwhal/"
@@ -32,7 +30,7 @@ def tracked_markdown() -> list[Path]:
 
 
 def prose(text: str) -> str:
-    """Remove fenced code before interpreting Markdown structure."""
+    """Return the text without fenced code blocks."""
     lines = []
     fence = ""
     for line in text.splitlines():
@@ -99,7 +97,8 @@ def dangling(files: list[Path], root: Path = ROOT) -> list[str]:
     cache: dict[Path, set[str]] = {}
     for md in files:
         text = prose(md.read_text())
-        targets = [target for _, target in LINK.findall(text)] + HTML_LINK.findall(text)
+        targets = [target for _, target in LINK.findall(text)]
+        targets += IMAGE_LINK.findall(text) + HTML_LINK.findall(text)
         for target in targets:
             resolved = local_target(md, target, root)
             if resolved is None:
