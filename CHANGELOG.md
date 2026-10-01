@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.2](https://github.com/athrael-soju/Narwhal/compare/v0.3.1...v0.3.2) (2026-09-30)
+
+
+### Documentation
+
+* add Google Search Console verification file ([#225](https://github.com/athrael-soju/Narwhal/issues/225)) ([ded08a8](https://github.com/athrael-soju/Narwhal/commit/ded08a869919c198614f45a0fd8e556ad0ee6455))
+* define milestone delivery and deployment privacy rules ([#202](https://github.com/athrael-soju/Narwhal/issues/202)) ([6255337](https://github.com/athrael-soju/Narwhal/commit/6255337074aaab68fe9fa2c34da12810e3696c4f))
+* Refresh ([#223](https://github.com/athrael-soju/Narwhal/issues/223)) ([f71a178](https://github.com/athrael-soju/Narwhal/commit/f71a178c2d3f303de198e33bd0ec4de2384881b5))
+* refresh README introduction and link benchmark write-up ([#217](https://github.com/athrael-soju/Narwhal/issues/217)) ([c10c3ae](https://github.com/athrael-soju/Narwhal/commit/c10c3ae1cb9e781dcbafd11cbb3af9210d843e9b))
+* split Narwhal dev guide into numbered pages ([#222](https://github.com/athrael-soju/Narwhal/issues/222)) ([5f2d3fa](https://github.com/athrael-soju/Narwhal/commit/5f2d3fa4a1d98db1bd541e12e756981032a51e02))
+* tighten contributor and issue-form prose ([#210](https://github.com/athrael-soju/Narwhal/issues/210)) ([8d85ed8](https://github.com/athrael-soju/Narwhal/commit/8d85ed83f6c8559d8e5f46e25111bcfafdbd7f73))
+
 ## [0.3.1](https://github.com/athrael-soju/Narwhal/compare/v0.3.0...v0.3.1) (2026-09-27)
 
 
