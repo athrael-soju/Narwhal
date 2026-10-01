@@ -319,3 +319,14 @@
     flex-direction: column;
   }
 }
+
+/* Headline stat blocks: three per row above phone width */
+@media screen and (min-width: 45em) {
+  .md-typeset .narwhal-panel-row.stats {
+    flex-wrap: wrap;
+  }
+
+  .md-typeset .narwhal-panel-row.stats > p {
+    flex: 1 1 30%;
+  }
+}

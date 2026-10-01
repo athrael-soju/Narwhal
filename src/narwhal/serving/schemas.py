@@ -285,6 +285,9 @@ class ControllerDecisionOut(BaseModel):
     evidence_trend_ratio: float | None = None
     evidence_envelope_decode_engines: float | None = None
     evidence_blocked_gate: str | None = None
+    recent_window_s: float | None = None
+    recent_prefill_work: float | None = None
+    recent_decode_work: float | None = None
 
 
 class ControlOut(BaseModel):

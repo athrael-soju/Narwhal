@@ -309,7 +309,7 @@
                 "spec": {
                     "id": 2,
                     "title": "Engines",
-                    "description": "Engines taking no new work (Draining, Ejected, Validating, Blocked, Unreachable or Restarting), and role flips within the displayed interval.",
+                    "description": "Engines out of service (Draining, Ejected, Validating, Blocked, Unreachable or Restarting), and role flips within the displayed interval.",
                     "links": [],
                     "data": {
                         "kind": "QueryGroup",

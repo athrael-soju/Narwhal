@@ -41,6 +41,7 @@ Projected time to first token (TTFT) above `slo.ttft_s` triggers one coalesced p
 | --- | --- | --- |
 | `shrink` | Source load at or below the threshold | Drives consolidation |
 | `expand` | Sustained prefill load at or above the threshold | Can move decode capacity into prefill |
+| `expand` | Receiving-phase demand at or above the threshold over the full demand window and its last quarter | Prices the donor phase on recent demand |
 
 Both paths require passing the profile, safety, and confirmation checks.
 

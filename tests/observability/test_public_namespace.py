@@ -161,6 +161,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "evidence_trend_ratio": 1.25,
             "evidence_envelope_decode_engines": 1.25,
             "evidence_blocked_gate": "none",
+            "recent_window_s": 30.0,
+            "recent_prefill_work": 2.5,
+            "recent_decode_work": 4.0,
         }
         self.router.scheduler.record_decision(
             prefill=1,
