@@ -41,9 +41,9 @@ Record the [journal contract](../telemetry/01-Journal.md#diagnosing-a-request-fr
 
 ## 2. Reusing or creating an idle-fleet latency profile
 
-A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profile idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while the engine processes and runtime stay the same.
+A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while each engine's process generation stays the same.
 
-Profile every new engine process or runtime before you select deployment SLOs:
+Profile each engine whose process generation changed before you select deployment SLOs:
 
 1. Retain a passing preflight for the fleet configuration under test.
 2. Reserve the production engine shape.
@@ -202,7 +202,7 @@ The profiler rejects a TTFT curve over the per-length medians at these errors:
 | Mean error | 20% |
 | Worst-point error | 50% |
 
-### Repairing profiles produced by the earlier raw-repeat fitter
+### Refitting saved profile samples
 
 | Sample sidecar | Repair |
 | --- | --- |

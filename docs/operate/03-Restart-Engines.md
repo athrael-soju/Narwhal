@@ -80,7 +80,7 @@ Stop the engine when the check passes.
 3. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
-6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
+6. If the engine's [process generation](../Core-Concepts.md#terms) changed, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
 
 ### 7.3 Requesting readmission
 
@@ -99,7 +99,7 @@ Readmission checks, in order:
 | :---: | --- | --- | --- |
 | 1 | Engine and each required peer | `/health` returns HTTP 200 | `health` |
 | 1 | Engine and each required peer | Attestation matches the live process and the `engine_contract` | `attestation <fingerprint>` |
-| 1 | Engine and each required peer | Every loaded profile variant is bound to the engine's live attested launch | `profile generation` |
+| 1 | Engine and each required peer | Every loaded profile variant is bound to the engine's live process generation | `profile generation` |
 | 1 | Engine and each required peer | `/v1/models` lists the configured model | `model` |
 | 2 | Replacement engine | Its process start is newer than its recorded drain identity | `new process identity` |
 | 2 | Replacement engine | A direct completion probe returns a choice | `generation` |
@@ -156,9 +156,9 @@ Recovery procedures:
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
 | A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | 1. Wait up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release).<br>2. Read the engine's release rounds in [`peer_release.<id>`](../http-api/05-Live-State.md#peer_release) from `GET /narwhal/state`. |
-| That engine fails at startup with free GPU memory below its budget | [Restart the engine wave](#8-restarting-an-engine-wave). |
+| A restarted engine on a host shared with other KV-transfer engines fails at startup with free GPU memory below its budget | [Restart the engine wave](#8-restarting-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
-| The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activating-replacement-profiles).<br>3. Request readmission. |
+| The engine's process generation changed | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activating-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
 
 ### 7.5 Recovering loss of every placement peer
@@ -228,8 +228,8 @@ Issue the first supervisor stop command when the check passes.
 
 1. Restart every engine and attestation sidecar from one immutable build with the recorded process manager commands.
 2. Retain old and new identities.
-3. Repeat the [Replacing the process](#72-replacing-the-process) checks for every member.
-4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activating-replacement-profiles) for each engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
+3. Repeat the [process replacement](#72-replacing-the-process) checks for every member.
+4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activating-replacement-profiles) for each engine whose process generation changed.
 
 Request whole-wave readmission:
 
@@ -320,15 +320,15 @@ PY
 | Drain result | Response | Member `old_process_start` | Next step |
 | --- | :---: | --- | --- |
 | Every identity recorded | HTTP 200 | Recorded | Verify `wave.ready_to_stop` and follow [Restarting the fleet](#82-restarting-the-fleet). |
-| An identity read fails | HTTP 503 | `null` for that member | Repair the identity read and retry [Draining the wave](#81-draining-the-wave). |
+| An identity read fails | HTTP 503 | `null` for that member | Repair the identity read and retry the [wave drain](#81-draining-the-wave). |
 
 If an engine stopped during identity collection:
 
 1. Start that engine through its process manager during the whole-wave hold.
 2. Wait for its process identity endpoints to answer.
-3. Retry [Draining the wave](#81-draining-the-wave).
+3. Retry the [wave drain](#81-draining-the-wave).
 4. Repeat the drain check until `wave.ready_to_stop = true`.
-5. [Restarting the fleet](#82-restarting-the-fleet), including every process started for identity collection.
+5. [Restart the fleet](#82-restarting-the-fleet), including every process started for identity collection.
 6. Request whole-wave readmission.
 
 ## Activating replacement profiles

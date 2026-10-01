@@ -108,15 +108,9 @@ Tunnel settings:
 
 ## Running the initial capacity trial
 
-The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#prepare-check-and-start-each-engine) on every engine.
+The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#preparing-checking-and-starting-each-engine) on every engine.
 
-Candidate thresholds:
-
-| Candidate threshold          | Value   |
-| ---------------------------- | :-----: |
-| Time to first token (TTFT)   | 2 s     |
-| Time per output token (TPOT) | 33.3 ms |
-| Attainment                   | 95%     |
+The [synthetic load trial](../measure/03-Load-Trial.md#7-running-the-synthetic-deployment-trial) sets the TTFT, TPOT, and attainment thresholds.
 
 Run the trial:
 

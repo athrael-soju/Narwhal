@@ -202,7 +202,7 @@ To replace the key of a changed server:
 | ---------------- | --------------------------------------------------- |
 | `--role <role>`  | The host that runs `<role>` and its colocated roles |
 | `--host <id>`    | One physical host by inventory ID                   |
-| Neither          | Every inventory host                                |
+| Default          | Every inventory host                                |
 
 Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 

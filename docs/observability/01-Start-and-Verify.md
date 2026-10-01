@@ -108,7 +108,7 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 
 Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only.
 
-Grafana and the image renderer share the token in `runs/observability/renderer-token`.
+`make observe` writes the Grafana-to-renderer token to `runs/observability/renderer-token` on its first run and reuses that file on later runs.
 
 Each `make observe` run regenerates the staged files and resets their permissions.
 

@@ -13,9 +13,7 @@ Run these steps from the router shell.
 3. Load the private engine URLs and credentials from the router environment.
 4. Warm the model.
 5. Pick input lengths and concurrency points that match production traffic.
-6. Include at least six lengths in `--prefill-lens`:
-    - at least two that end within the first cache block or on a block boundary
-    - at least two that end between later block boundaries
+6. Choose `--prefill-lens` values that meet the [`ttft_split` length rules](../measure/01-Profile.md#prefill-sweep).
 7. Run the profiler:
 
     ```bash
@@ -50,7 +48,7 @@ Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 | Condition                                                                       | Result                                              |
 | ------------------------------------------------------------------------------- | --------------------------------------------------- |
 | Profile engine IDs differ from the configured fleet                             | Preflight fails and router startup stops.           |
-| The live engine's attested process identity differs from its saved profile      | Preflight and router startup require a new profile. |
+| The live engine's process generation differs from its saved profile      | Preflight and router startup require a new profile. |
 | A role change's projected decode point falls outside the measured profile range | The role controller holds the change.               |
 
 Set the service-level objective (SLO) targets before preflight:
@@ -144,6 +142,8 @@ The calibration path sets the first-token evidence check:
 | Empty                                 | Warning.                                                                                                                                   |
 | Set                                   | Preflight fails and router startup stops when evidence for the running engines is incomplete or the deadline is at or below the candidate. |
 
+Under `recovery.engine_restart_policy: individual`, preflight warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).
+
 ### Pace gate
 
 | Pace gate property | Value                          |
@@ -152,6 +152,7 @@ The calibration path sets the first-token evidence check:
 | Score              | The faster probe time          |
 | Slowdown limit     | 1.5x                           |
 | Failed probe       | Fails the gate                 |
+| Unprofiled engine with fewer than three successful probes | Skips the gate |
 
 | Successful probes | Each engine is compared against                                                                                        |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |

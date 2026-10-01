@@ -22,15 +22,7 @@ Admission modes:
 | `predictive` | Returns HTTP 429 when a request fails a time to first token (TTFT) or decode admission check. |
 | `open`       | Disables predictive refusals.                                                                 |
 
-Predictive refusals:
-
-| Refusal                                                                                  | Response                                                                            |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Backlog-driven                                                                           | `Retry-After` header with the projected wait beyond the budget                      |
-| Prefill of the prompt alone exceeds the TTFT budget                                      | Error envelope that tells the caller to shorten the prompt or raise the TTFT budget |
-| Aggregate prefill while every live engine carries decode work                            | `Retry-After: 1`                                                                    |
-| Peak projected decode work over the request's decode window exceeds live decode capacity | `Retry-After: 1`                                                                    |
-| Decode load pushes the request past `slo.tpot_s` on every live decode engine             | `Retry-After: 1`                                                                    |
+[Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists each predictive refusal with its HTTP 429 error and `Retry-After` value.
 
 Measure sustained healthy inflight load before increasing `serving.max_connections`.
 
@@ -60,19 +52,11 @@ Remaining output:
 | At or past the expected output, with an output cap | Output cap minus delivered output      |
 | At or past the expected output, uncapped           | Unknown                                |
 
-Unknown remaining output:
+When the checked request's remaining output is unknown, its window is the instant of its predicted prefill completion.
 
-| Unknown remaining output on | Effect                                                        |
-| --------------------------- | ------------------------------------------------------------- |
-| Another request             | The request holds decode indefinitely                         |
-| The checked request         | The window is the instant of its predicted prefill completion |
+Every other request with unknown remaining output holds decode indefinitely.
 
-Token interval by request:
-
-| Request             | Token interval                     |
-| ------------------- | ---------------------------------- |
-| Resident in decode  | Its decode engine's interval       |
-| Every other request | Fleet mean of the engine intervals |
+A request resident in decode generates at its decode engine's token interval. Every other request generates at the fleet mean of the engine intervals.
 
 An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode key-value (KV) token bound, times the [decode correction](#71-load-definitions).
 
@@ -122,10 +106,12 @@ Expected output by request:
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                     | At least 1                                                                 |
 | `serving.max_response_bytes`  | `16777216` | Maximum retained bytes for each non-streaming attempt and the streaming pre-output metadata buffer. | At least 1                                                                 |
 
-With a positive `serving.decode_concurrency`, role control:
+With a positive `serving.decode_concurrency`, role control prices each engine's decode capacity at that limit and floors each candidate split's decode load at:
 
-- prices each engine's decode capacity at that limit
-- floors decode load at decode residents on decode-role engines plus requests waiting for a decode slot, divided by `serving.decode_concurrency` times the larger of the current and candidate decode engine counts
+```text
+(decode residents on decode-role engines + requests waiting for a decode slot)
+  / (serving.decode_concurrency * max(current decode engines, candidate decode engines))
+```
 
 Retained completion requests:
 
@@ -163,17 +149,15 @@ Tune queueing and retries:
 
 A streaming response holds its HTTP status and headers until the first output frame.
 
-Failure results:
+[Engine failure handling](../http-api/03-Backend-and-Failures.md#engine-failure-handling) gives the client response for each prefill and decode failure.
 
-| Failure                                                  | Client receives                                  |
-| -------------------------------------------------------- | ------------------------------------------------ |
-| Prefill failure                                          | HTTP error                                       |
-| Non-streaming decode failure                             | HTTP error                                       |
-| Streaming decode failure before the first output frame   | HTTP error                                       |
-| Streaming decode failure after the first output frame    | Terminal stream error event                      |
-| Request deadline expiry before the first output frame    | HTTP 504                                         |
-| Request deadline expiry after the first output frame     | Terminal stream error event with `code: expired` |
-| Request deadline expiry while client writes are blocked  | Immediate connection drop                        |
+Request deadline results:
+
+| Request deadline expiry         | Client receives                                  |
+| ------------------------------- | ------------------------------------------------ |
+| Before the first output frame   | HTTP 504                                         |
+| After the first output frame    | Terminal stream error event with `code: expired` |
+| While client writes are blocked | Immediate connection drop                        |
 
 Treat an error event, or a stream that ends before the success terminator, as a failed response.
 
@@ -274,13 +258,7 @@ Configure the first-token deadline:
 2. Set `engine.first_token_timeout_s` above the candidate it prints.
 3. Set `engine.first_token_calibration_path` to its artifact.
 
-The calibration artifact binds each engine to a generation digest:
-
-| Engine evidence                             | Generation digest                                        |
-| ------------------------------------------- | -------------------------------------------------------- |
-| Attestation response with launch evidence   | Its [`launch_digest`](01-Fleet-Schema.md#33-attestation) |
-| Other attestation response                  | Its `attestation_digest`                                 |
-| Fleet config leaves `engine_contract` unset | Digest of the engine's process identity                  |
+The calibration artifact binds each engine to the same generation digest as its [saved profiles](../telemetry/02-Profiles.md#validating-the-engine-cost-model).
 
 A change to an engine's generation digest makes the calibration artifact stale.
 
@@ -330,10 +308,11 @@ Set these timeouts from latency measured under the intended load:
 
 Probe timeouts:
 
-| Timeout                                                                                      | Result             |
-| -------------------------------------------------------------------------------------------- | ------------------ |
-| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection | Inconclusive probe |
-| Health probe exceeds `engine.health_timeout_s`                                               | Failed probe       |
+| Timeout                                                                                                    | Result             |
+| ---------------------------------------------------------------------------------------------------------- | ------------------ |
+| Health or inference probe waits longer than `engine.pool_timeout_s` for a control connection               | Inconclusive probe |
+| Health probe times out within 1.5 times `engine.health_timeout_s` of getting its control connection        | Failed probe       |
+| Health probe times out later than 1.5 times `engine.health_timeout_s` after getting its control connection | Inconclusive probe |
 
 Inconclusive probe result by caller:
 

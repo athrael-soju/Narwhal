@@ -68,13 +68,13 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 
 #### Draining and restarting
 
-1. [Draining the wave](03-Restart-Engines.md#81-draining-the-wave).
+1. [Drain the wave](03-Restart-Engines.md#81-draining-the-wave).
 2. Save the HTTP 503 readiness reading.
 3. Save the drain identities.
 4. Confirm zero resident work and `wave.ready_to_stop = true`.
 5. Restart every engine from the recorded build through its supervisor.
 6. Restart every attestation sidecar from the recorded build through its supervisor.
-7. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activating-replacement-profiles) for each member whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
+7. While the wave remains held, [activate replacement profiles](03-Restart-Engines.md#activating-replacement-profiles) for each member whose [process generation](../Core-Concepts.md#terms) changed.
 8. If step 7 activated profiles, verify that resume preserves every drain identity and the whole-wave hold.
 
 #### Failing one member
@@ -206,5 +206,5 @@ Drain responses for the stopped engine:
 
 | Later change | Procedure | Evidence to keep |
 | --- | --- | --- |
-| Another process replacement with a changed attested `launch_digest` or a sidecar that reports an attestation digest only | Fresh measurements, another activation | |
+| Another process replacement that changes an engine's process generation | Fresh measurements, another activation | |
 | Router replacement with an outstanding hold on the same fleet | [Profile activation with resume](03-Restart-Engines.md#activating-replacement-profiles) | Both journals and the state snapshots |

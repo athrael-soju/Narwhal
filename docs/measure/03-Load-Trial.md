@@ -25,7 +25,7 @@ HTTP refusals, stream errors, timeouts, and scheduling misses count in the 200-o
 - The workload fits the accepted profile domain.
 - The workload fits the engine context limit.
 - All router traffic is trial traffic.
-- Each engine is [launched](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
+- Each engine is [launched](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
 - `checked.json` shows `"prefix_caching": false`.
 
 ### Creating the trial directory and workload

@@ -27,7 +27,7 @@ The profiler fails the run when an engine's process digest changes between the s
 | Other fleets with `engine_contract` | Per-process attestation digest. | The full attestation response. |
 | Otherwise | Digest of the process identity from `/version` and `/metrics`. | The process identity. |
 
-The attested launch digest covers:
+The [attested launch digest](../configuration/01-Fleet-Schema.md#33-attestation) covers:
 
 - the contract fields
 - engine arguments with the values of `--host`, `--port`, `--served-model-name`, and `--kv-events-config` removed
@@ -36,8 +36,6 @@ The attested launch digest covers:
 - model configuration and revision
 - launcher, launch-record, and cache-capture hook hashes
 - the image check's `ucx_version` and `peer_release` values
-
-An engine restarted from an identical launch keeps its launch digest.
 
 For a stored profile with missing generation evidence or a digest that differs from the engine's live generation:
 
@@ -95,19 +93,14 @@ Before preflight or router startup:
 | A field outside this table | Profile loading aborts. |
 | A partial set of `cached_` fields | Profile loading aborts. |
 
-Prefill price for a request with a cached prefix:
-
-| Condition | Prefill price |
-| --- | --- |
-| The profile sets the `cached_` fields, and the cached prefix and uncached suffix lie within their measured ranges | Warm prefill fit. |
-| Otherwise | Cold prefill curve over the full input. |
+The router prices a request with a cached prefix from the `cached_` fields under the [prefix-cache pricing rules](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing).
 
 For the `profile has no generation evidence` error from preflight, router startup, or recovery on a row missing `generation_digest`:
 
 1. Write a fresh store with `narwhal-profile` against the current engine processes.
 2. Keep the `.samples.json` sidecar.
 
-The [refit procedure](../measure/01-Profile.md#repairing-profiles-produced-by-the-earlier-raw-repeat-fitter) requires:
+The [refit procedure](../measure/01-Profile.md#refitting-saved-profile-samples) requires:
 
 - a `generation_digest` in each saved profile
 - a `generation_evidence` object in its sample row

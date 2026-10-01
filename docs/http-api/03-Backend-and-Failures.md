@@ -117,32 +117,9 @@ Tokenization failures return the [engine-fault mapping](#engine-failure-handling
 
 ### Breaker ejection and readmission
 
-| Event                                                                                                | Breaker action                             |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `recovery.eject_after` consecutive stream failures                                                   | Starts an inference probe                  |
-| Failed inference probe while every role the engine places stays placeable through other live engines | Ejects the engine                          |
-| Other failed inference probe                                                                         | Keeps the engine in placement              |
-| Successful inference probe                                                                           | Readmits the engine                        |
+[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) gives each decode-leg failure's breaker class and the probe that decides ejection or readmission.
 
-Decode-leg failures by breaker class:
-
-| Failure                                                 | Class      | Probe at `recovery.eject_after` consecutive failures |
-| ------------------------------------------------------- | ---------- | ---------------------------------------------------- |
-| First-token timeout while the engine emits other output | `overload` | Health probe                                         |
-| First-token timeout from a silent engine                | `stream`   | Inference probe                                      |
-| Mid-stream silence                                      | `stream`   | Inference probe                                      |
-| Stream closed before `[DONE]`                           | `stream`   | Inference probe                                      |
-| `[DONE]` before the first token                         | `stream`   | Inference probe                                      |
-
-Inference-probe suspect placement:
-
-| Condition                                                                                                | Placement during the probe |
-| -------------------------------------------------------------------------------------------------------- | -------------------------- |
-| Every role the suspect places stays placeable through other live engines                                 | Held out                   |
-| Another engine's ejection or drain leaves zero other live engines for a role the held-out suspect places | Returned to placement      |
-| Any other case                                                                                           | Kept in placement          |
-
-Inference probes apply the larger of `engine.first_token_timeout_s` and `engine.health_timeout_s` to each leg.
+[Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) keeps an uncovered suspect in placement during its inference probe.
 
 ### Successful stream termination
 
@@ -182,10 +159,4 @@ Each retry receives:
 - fresh backend request IDs
 - a new KV handoff
 
-Failed-engine placement with `recovery.failure_quarantine_s > 0`:
-
-| Condition                                                                                               | Placement after the failure                          |
-| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Every role the failed engine places stays placeable through other live engines                          | Held out for `recovery.failure_quarantine_s` seconds |
-| Another engine's ejection or drain leaves zero other live engines for a role the held-out engine places | Returned to placement                                |
-| Any other case                                                                                          | Kept in placement                                    |
+With `recovery.failure_quarantine_s` above `0`, placement of the engine whose leg failed follows [failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine).

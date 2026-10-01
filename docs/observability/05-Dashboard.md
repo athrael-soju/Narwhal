@@ -66,7 +66,7 @@ The engine table shows each engine's current role, state and load. **Engine role
 
 </div>
 
-**Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine, and a short bar marks a lightly loaded engine.
+**Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
 
 | Column | Shows |
 | --- | --- |
@@ -144,7 +144,7 @@ Both panels draw the selected router's SLO as a line. When p95 crosses it, more 
 
 ## Pool pressure, request waiting time and retries
 
-These panels show pressure building before clients feel it.
+These panels show pool load, request waiting time and retries.
 
 <div class="narwhal-panel-row" markdown>
 

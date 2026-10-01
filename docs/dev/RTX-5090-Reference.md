@@ -66,12 +66,7 @@ Default ports:
 | Attestation | 18201 and up |
 | NIXL side channel | 5701 and up |
 
-Options for another layout or instance:
-
-| Option | Effect |
-| --- | --- |
-| `narwhal dev init --port-base` | Selects a different port layout |
-| `--instance` on each command | Addresses another instance |
+[`narwhal dev init --port-base` and `--instance`](../Dev-Runtime.md#initializing-and-verifying-an-instance) select another port layout or instance.
 
 Send a routed chat completion:
 

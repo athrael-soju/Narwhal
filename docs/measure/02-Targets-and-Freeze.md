@@ -28,14 +28,7 @@ The `narwhal-check` `slo` gate passes each engine when:
 | `slo.tpot_s` | At or above the profile's token interval at the smallest measured decode cohort |
 | `slo.ttft_s` | Above the profile's single-token prefill time |
 
-### Pace gate
-
-| Check | Applies to | Passes with |
-| --- | --- | --- |
-| Fleet median | Every engine, when three or more probes succeed | Pace within `1.5x` of the fleet median |
-| Saved profile | Every engine with a saved prefill profile | Exact `usage.prompt_tokens` and pace within `1.5x` of the profile prediction |
-
-With one or two successful probes, the pace gate requires a saved prefill profile for each engine.
+The `narwhal-check` [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate) compares each engine's prefill pace with the fleet median, its saved profile, or both.
 
 ## 6. Freezing the deployment under test
 

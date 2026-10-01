@@ -152,7 +152,7 @@ PY_CACHE_GROUPS
 
 Each output line names a signature group, its representative role, and its member roles.
 
-## Prepare, check, and start each engine
+## Preparing, checking, and starting each engine
 
 Launch plan properties:
 
@@ -181,7 +181,7 @@ To add the flag after launch:
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.
 3. Restart each engine.
-4. Repeat the engine-restart work in the [repeat-work table](../Deploy.md#deployment-sequence).
+4. Repeat the work for an engine restart with a changed attested `launch_digest` in the [repeat-work table](../Deploy.md#deployment-sequence).
 
 For a separate tokenizer at `PATH`, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before preparing the launch plan.
 
@@ -233,17 +233,7 @@ A passing check confirms:
 - the plan hash
 - the resolved prefix-caching setting and cache-event endpoints, matched against the plan
 
-The check writes `checked.json`:
-
-| Field              | Value                                         |
-| ------------------ | --------------------------------------------- |
-| `plan_sha256`      | SHA-256 of `launch.json`                      |
-| `vllm_api_version` | `vllm.version.__version__` from the image     |
-| `prefix_caching`   | The resolved prefix-caching setting           |
-| `kv_events`        | The resolved cache-event endpoints, or `null` |
-| `ucx_version`      | The UCX version that NIXL loads in the image, or `null` |
-| `peer_release`     | `true` when the engine releases a stopped peer's KV memory |
-| `image_id`         | The local image ID                            |
+The check writes [`checked.json`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification).
 
 A failed check names the failing package, tokenizer, or identity check.
 

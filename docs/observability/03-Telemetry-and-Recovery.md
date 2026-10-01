@@ -1,12 +1,12 @@
 ---
-description: Export AMD or NVIDIA GPU telemetry to the Narwhal hardware dashboard and evaluate its alerts.
+description: Feed AMD or NVIDIA GPU telemetry to the exporter's hardware dashboard, inspect Narwhal alerts, troubleshoot monitoring, and retain captures.
 ---
 
 # GPU telemetry, alerts, and recovery
 
 ## GPU telemetry
 
-Run the deployment's AMD or NVIDIA exporter to feed GPU sensor metrics to the hardware dashboard.
+Run the deployment's AMD or NVIDIA exporter to feed GPU sensor metrics to its hardware dashboard.
 
 ## Alert evaluation
 

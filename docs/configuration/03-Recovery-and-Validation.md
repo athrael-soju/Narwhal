@@ -14,7 +14,7 @@ description: Narwhal fleet settings for engine recovery, warm standby, engine au
 | `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines                                                 | At least 1                                                                  |
 | `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks | `0` disables idle sweeps                                                    |
 | `recovery.liveness_misses`            | `2`     | Consecutive failed liveness probes before ejection                                                  | At least 1                                                                  |
-| `recovery.failure_quarantine_s`       | `0.0`   | Time a failed engine stays excluded from placement                                                  | At least 0, where `0` disables quarantine                                   |
+| `recovery.failure_quarantine_s`       | `0.0`   | Time a failed engine stays excluded from placement while other live engines place its roles         | At least 0, where `0` disables quarantine                                   |
 | `recovery.health.window_s`            | `30.0`  | Residual-scoring window length                                                                      | At least 1 second                                                           |
 | `recovery.health.drift_band`          | `2.0`   | Multiple of an engine's trailing healthy residual used as the drift threshold                       | Greater than 1.0                                                            |
 | `recovery.health.relative_band`       | `1.5`   | Multiple of the median peer score that bounds the fleet-wide surge veto                             | At least 0, where `0` disables the veto                                     |
@@ -33,13 +33,7 @@ Probation penalty by placement cost:
 
 Compare the penalty with the time to first token (TTFT) target and the measured healthy placement cost.
 
-Breaker action at `recovery.eject_after` consecutive failures of one [failure class](../concepts/03-Failure-and-State.md#failure-evidence):
-
-| Failure class                                 | Breaker action                                                  |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| `connection`                                  | Ejects the engine                                               |
-| `timeout` or `overload`                       | Runs a health probe                                             |
-| `stream`, `inference_status`, or `kv_handoff` | Runs an inference probe of the engine's prefill and decode legs |
+At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class.
 
 An inconclusive inference probe:
 
@@ -48,10 +42,7 @@ An inconclusive inference probe:
 
 The state handoff carries the producer IDs of failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
 
-For each [covered](../concepts/03-Failure-and-State.md#failure-evidence) suspect in `inference_sources`, restoring the state handoff:
-
-- ejects the suspect
-- makes its readmission probe due immediately
+A new router process restores each `inference_sources` suspect by the rules in [restored and process-local state](../http-api/07-Handoff-and-Lifecycle.md#restored-and-process-local-state).
 
 ### 8.2 Decode drift evidence
 

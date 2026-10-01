@@ -136,7 +136,7 @@ recovery_decode_ratio = max(
 
 Otherwise, `recovery_decode_ratio` equals the observed decode pressure.
 
-Decisions held for demand history or fleet profiles before candidate scoring add `recovery_decode_ratio`.
+Decisions held for demand history or fleet profiles before candidate scoring report `recovery_decode_ratio`.
 
 ### Consolidation evidence
 

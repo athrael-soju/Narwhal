@@ -18,7 +18,7 @@ Both arms run with the backend's prefix caching on.
 Record these in the private execution record before the first measured run:
 
 - the benefit and regression thresholds
-- the fleet, model, engine image, launch policy, SLOs, and controller settings
+- the fleet, model, engine image, launch policy, SLOs, attainment target, and controller settings
 - the workload shape, family count, and profile lengths
 - the rate pilot rule, the seeds, and the run order
 
@@ -69,7 +69,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 
 For each arm:
 
-1. Launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine).
+1. Launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine).
 2. Attest the engines as in [Gate E](../deploy/05-Attest.md).
 3. Profile the engines with the lengths from [Choosing the workload shape](#choosing-the-workload-shape).
 4. Calibrate the first-token deadline over every directed engine pair as in [Gate F](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
@@ -118,7 +118,7 @@ Prompts by workload:
 ## Setting the offered rates
 
 1. In the baseline arm, run a 60-second point at each pilot rate, each with a fresh repeated-prefix workload.
-2. Take `R_b` as the highest pilot rate with attainment at or above the recorded attainment.
+2. Take `R_b` as the highest pilot rate with attainment at or above the recorded attainment target.
 3. Set the low rate to `1.1 * R_b` and the high rate to `1.3 * R_b`, each rounded to 0.5 request/s.
 
 ## Checking cache-aware pricing
@@ -161,7 +161,7 @@ Point flags:
 | `--requests` | 60 seconds of offers at the point's rate |
 | `--run-seed` | A distinct seed for each point, shared by both arms |
 
-A run that exits with status `0` or `2` writes `summary.json` with:
+A run that exits with [status `0` or `2`](03-Load-Trial.md#8-measuring-05-requests) writes `summary.json` with:
 
 | Field | Meaning |
 | --- | --- |
@@ -169,11 +169,6 @@ A run that exits with status `0` or `2` writes `summary.json` with:
 | `qualified_rps_including_drain` | Completed requests within the limits per second of the measurement window |
 | `ttft_s`, `tpot_s` | p50, p95, and p99 over completed requests |
 | `outcomes` | Offers by client outcome, with router refusals in `http_error` |
-
-`run` exits with status `2` when either holds:
-
-- attainment falls below `--attainment`
-- the client misses its schedule (`client_schedule_valid: false`)
 
 Between runs:
 

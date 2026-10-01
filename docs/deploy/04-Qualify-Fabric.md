@@ -345,4 +345,4 @@ When `record-edge` or `reuse-edge` exits 1:
 2. Fix the cause.
 3. Resample the directed edge until `record-edge` exits 0.
 
-[![Next: Gate E: Attest the live engine processes](https://img.shields.io/badge/next-Gate%20E%3A%20Attest%20the%20live%20engine%20processes-0f766e)](05-Attest.md)
+[![Next: Gate E: Attesting the live engines](https://img.shields.io/badge/next-Gate%20E%3A%20Attesting%20the%20live%20engines-0f766e)](05-Attest.md)

@@ -26,16 +26,7 @@ Install on both router hosts, with the same release identifier:
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
 - the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freezing-the-deployment-under-test)
 
-First-token calibration after an engine relaunch:
-
-| Relaunched engine | First-token calibration |
-| --- | --- |
-| Identical attested launch | Stays valid |
-| Changed attested `launch_digest` | Recalibrate |
-| Sidecar reports an attestation digest only | Recalibrate |
-| Fleet with `engine_contract` unset | Recalibrate |
-
-Recalibration sequence:
+The first-token calibration artifact binds to each engine's [process generation](../Core-Concepts.md#terms). When an engine relaunch changes its process generation:
 
 1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 2. Distribute the new artifact and fleet configuration.

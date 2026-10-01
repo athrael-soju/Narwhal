@@ -16,50 +16,22 @@ The dashboard expects these label contracts:
 
 - Router series carry `job="narwhal-router"` and the Prometheus target's `instance`.
 - Engine series carry `job="engines"` and the fleet generator's stable `iid`.
-- vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting` and
-  `vllm:kv_cache_usage_perc` on each engine metrics endpoint.
+- vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting`,
+  `vllm:kv_cache_usage_perc`, `vllm:prefix_cache_hits_total`,
+  `vllm:prefix_cache_queries_total`, `vllm:generation_tokens_total` and
+  `vllm:prompt_tokens_by_source_total` or `vllm:prompt_tokens_total` on each
+  engine metrics endpoint.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
-Run the deployment's selected AMD or NVIDIA exporter to discover GPUs and collect sensor telemetry, then present those metrics through its hardware dashboard.
+Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
 
 ### Metric boundaries
 
-<table width="100%" align="center">
-  <thead>
-    <tr>
-      <th align="left" width="25%">Value or series</th>
-      <th align="left" width="75%">Measures</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><b>Goodput</b></td>
-      <td><code>narwhal_slo_met_total</code> over completed, failed, refused, rejected, expired and cancelled requests</td>
-    </tr>
-    <tr>
-      <td><b>Load</b></td>
-      <td>Refused, rejected, failed and expired requests over the <b>Goodput</b> denominator</td>
-    </tr>
-    <tr>
-      <td><b>Request outcomes</b></td>
-      <td>Offered requests and each terminal outcome per second</td>
-    </tr>
-    <tr>
-      <td><b>Prefill/s</b></td>
-      <td>Engine prompt tokens per second from vLLM's <code>local_compute</code> and <code>local_cache_hit</code> sources, otherwise <code>vllm:prompt_tokens_total</code></td>
-    </tr>
-    <tr>
-      <td><b>Decode/s</b></td>
-      <td>Router-observed output tokens per second</td>
-    </tr>
-  </tbody>
-</table>
-
 Goodput, Load, the headline p95 values and the flip count sum `increase()` over the displayed interval.
 
-**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** uses the same `instance` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. The dashboard selects one router before calculating quantiles, while `narwhal_slo_seconds` supplies that process's configured TTFT and TPOT lines. Aggregating latency buckets across routers requires identical SLO-derived bucket edges.
+**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** uses the same `instance` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
 
-Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
+Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 
 [Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) defines the metric groups and lifecycle.
 

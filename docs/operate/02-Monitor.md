@@ -38,7 +38,7 @@ Active router responses until whole-wave readmission succeeds:
 
 ### Temporary holds
 
-Hold behavior for an engine that alone places one of its roles follows [last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection).
+[Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) sets hold behavior for an engine that alone serves one of its roles.
 
 ### Router control and replacement
 
@@ -74,12 +74,12 @@ Prometheus and Grafana setup: [Setting up observability](../Observability.md).
 `tools/observability/prometheus-alerts.yml` defines these alert rules:
 
 | Alert | Condition | Duration | Severity |
-| --- | --- | --- | --- |
+| --- | --- | :---: | --- |
 | `NarwhalRouterDown` | Router scrape fails | 2m | `page` |
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
 | `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
-| `NarwhalUnservedRising` | Unserved requests above 0.2/s over 10m | 10m | `warn` |
+| `NarwhalUnservedRising` | Phase placements where every eligible candidate exceeds the configured SLO, above 0.2/s over 10m | 10m | `warn` |
 | `NarwhalPoolStarved` | A pool with zero engines | 2m | `warn` |
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |

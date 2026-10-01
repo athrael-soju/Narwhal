@@ -67,7 +67,7 @@ The capture requires the live container's plan and launcher hashes to match `lau
 
 | Source                         | Requirement                                                                  |
 | ------------------------------ | ---------------------------------------------------------------------------- |
-| Startup log (the usual choice) | Names exactly one layout across its `Using <layout> KV cache layout.` lines. |
+| Startup log                    | Names exactly one layout across its `Using <layout> KV cache layout.` lines. |
 | `cache-layout.json`            | Holds one resolved layout across every TP rank.                              |
 
 From the startup log:

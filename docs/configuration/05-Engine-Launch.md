@@ -130,13 +130,11 @@ Derived GPU visibility:
 | Shared-device engine                                                           | Its single GPU                                       |
 | Every other engine                                                             | Its `gpu_ids`                                        |
 
-Colocated CUDA engines with dedicated GPUs:
+Colocated CUDA engines with dedicated GPUs run on their allocated GPUs.
 
-| Behavior                                            | Condition                     |
-| --------------------------------------------------- | ----------------------------- |
-| Run on their allocated GPUs                         | Container and native backends |
-| Transfer KV to each other through CUDA IPC          | `transfer.gpu_tls` is `cuda`  |
-| Run in containers that share the host PID namespace | Container backend             |
+With `transfer.gpu_tls` set to `cuda`, they transfer KV to each other through CUDA IPC.
+
+Under the container backend, their containers share the host PID namespace.
 
 [CUDA IPC engines](../concepts/03-Failure-and-State.md#peer-memory-release), colocated with dedicated GPUs or sharing a device, with `transfer.gpu_tls` set to `cuda`:
 
@@ -221,15 +219,20 @@ Checks that `narwhal-engine check` runs before model startup:
 - convolutional-state layout of the pinned image, for SSM models
 - resolution of the serving arguments into vLLM's engine configuration
 
-`checked.json` records the launch-plan hash, the container image ID, and these values:
+`checked.json` records these values:
 
-| Field              | Value                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------- |
-| `vllm_api_version` | Value of `vllm.version.__version__`                                                   |
-| `prefix_caching`   | `true` when the resolved engine configuration keeps prefix caching on                 |
-| `kv_events`        | The resolved event and replay endpoints, or `null` when cache-event publishing is off |
-| `ucx_version`      | Version of the UCX library bundled with the image's NIXL build, or `null`             |
-| `peer_release`     | `true` when this engine releases a stopped peer's KV memory                           |
+| Field               | Value                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `plan_sha256`       | SHA-256 of `launch.json`                                                                           |
+| `vllm_api_version`  | Value of `vllm.version.__version__`                                                                |
+| `prefix_caching`    | `true` when the resolved engine configuration keeps prefix caching on                              |
+| `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off              |
+| `ucx_version`       | Version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
+| `peer_release`      | `true` when this engine releases a stopped peer's KV memory                                        |
+| `image_id`          | Local image ID, for the container backend                                                          |
+| `backend`           | `native`, for the native backend                                                                   |
+| `python_executable` | The launch plan's Python interpreter, for the native backend                                       |
+| `expected_packages` | The launch plan's pinned package versions, for the native backend                                  |
 
 The check fails when the resolved endpoints differ from `launch.json`.
 

@@ -37,6 +37,16 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
+## Reading engine lifecycle gauges
+
+The lifecycle gauges mirror fields of each engine's record in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle).
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_engine_draining` | gauge | `iid` | `1` when `draining` is `true`, otherwise `0`. |
+| `narwhal_engine_ready_to_stop` | gauge | `iid` | `1` when `ready_to_stop` is `true`, otherwise `0`. |
+| `narwhal_engine_lifecycle_state` | gauge | `iid`, `state` | `1` on the series whose `state` label matches the engine's `state`. |
+
 ## Inspecting scheduling and role control
 
 | Metric | Meaning |

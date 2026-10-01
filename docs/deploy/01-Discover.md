@@ -226,4 +226,4 @@ A failed deployment command prints `<host-id>: blocked at <operation>; inspect i
 
 Record the first failing host and gate in the private record.
 
-Continue with [Gate B: Packaging and installing the approved revision](02-Install.md).
+[![Next: Gate B: Packaging and installing the approved revision](https://img.shields.io/badge/next-Gate%20B%3A%20Packaging%20and%20installing%20the%20approved%20revision-0f766e)](02-Install.md)

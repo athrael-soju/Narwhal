@@ -27,7 +27,7 @@ The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_ma
 | Zero prefill engines are live and the decode target holds resident decode work                                               | `429` | `server_overloaded_error`                            | `1`                                                |
 | Peak projected decode work over the request's decode window exceeds live decode capacity                                     | `429` | `server_overloaded_error`                            | `1`                                                |
 | Decode load pushes the request past `slo.tpot_s` on every live decode engine                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
-| Zero engines are eligible for placement                                                                                      | `503` | `backend_unavailable` or `no_schedulable_engines`    | `1`                                                |
+| Zero live engines can take the request's prefill or decode leg                                                                                      | `503` | `backend_unavailable` or `no_schedulable_engines`    | `1`                                                |
 | Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring       | `503` | `standby`                                            | `1`                                                |
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
