@@ -10,7 +10,7 @@ prices an engine cold when it has no sidecar or its sidecar serves no residency.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,6 +68,43 @@ class ResidencySubscriptions:
     def view(self, iid: str) -> EngineResidency:
         """Return the router's residency view of `iid`."""
         return self.views[iid]
+
+    def block_sizes(self) -> set[int]:
+        """Return the block sizes of known views that report one."""
+        return {view.block_size for view in self.views.values() if view.known and view.block_size}
+
+    def match(
+        self,
+        identities_by_size: dict[int, list[bytes]],
+        engines: Iterable[str] | None = None,
+    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
+        """Return cached tokens and residency sequence per engine, and the matched identities.
+
+        `engines` limits the match to those engines' views.
+        """
+        views = (
+            self.views.items()
+            if engines is None
+            else [(iid, self.views[iid]) for iid in engines if iid in self.views]
+        )
+        matched: dict[int, int] = {}
+        cached: dict[str, int] = {}
+        sequences: dict[str, int] = {}
+        for iid, view in views:
+            size = view.block_size
+            if not view.known or not size or size not in identities_by_size:
+                continue
+            blocks = view.cached_prefix_blocks(identities_by_size[size])
+            if blocks > 0:
+                cached[iid] = blocks * size
+                matched[size] = max(matched.get(size, 0), blocks)
+                if view.sequence is not None:
+                    sequences[iid] = view.sequence
+        return (
+            cached,
+            sequences,
+            {size: identities_by_size[size][:n] for size, n in matched.items()},
+        )
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         """Return each engine's synchronisation state without block identities."""

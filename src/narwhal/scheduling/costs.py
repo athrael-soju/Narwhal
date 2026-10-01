@@ -8,7 +8,7 @@ from ..profiling.store import ProfileStore
 from ..types import Instance, Phase, Request
 from .health import DriftTracker
 from .monitor import InstanceMonitor
-from .prefill import prefill_seconds
+from .prefill import prefill_seconds, resident_prefill_seconds
 
 if TYPE_CHECKING:
     from .control import SLO
@@ -51,7 +51,11 @@ def cost(
         def price(r: Request) -> float:
             return prefill_seconds(profile, r) if warm else profile.prefill_time(r.input_len)
 
-        resident = sum(price(r) for r in inst.prefill.values())
+        resident = (
+            resident_prefill_seconds(profile, inst)
+            if warm
+            else sum(price(r) for r in inst.prefill.values())
+        )
         return (float(inst.decode_tokens()), resident + price(request) + penalty)
 
     correction = monitor.decode_correction(inst.iid)
@@ -88,7 +92,7 @@ def prefill_load(
     profile = profiles.get(inst.iid)
     if profile is None:
         return 0.0
-    resident = sum(prefill_seconds(profile, r) for r in inst.prefill.values())
+    resident = resident_prefill_seconds(profile, inst)
     return max(resident, monitor.mean_prefill_price(inst.iid)) / slo.ttft_s
 
 

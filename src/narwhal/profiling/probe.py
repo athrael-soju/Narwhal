@@ -37,6 +37,7 @@ from .fitting import (
     fit_cached_prefill,
     fit_decode_plane,
     fit_prefill_samples,
+    relative_error,
 )
 from .generation import read_generation
 from .model import CACHED_PROFILE_FIELDS, Profile, decode_evidence_problems
@@ -57,12 +58,20 @@ CACHED_REPEATS = 3
 PRIMER_PAD_WORDS = 8
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
 _BLOCK_TOKENS = re.compile(r'^vllm:cache_config_info\{[^}]*\bblock_size="([0-9]+)"', re.MULTILINE)
-# Held-out error above this keeps an engine cold.
-MAX_CACHED_CV_MAPE = 0.20
 # vLLM counts prompt tokens served from its prefix cache for new requests only.
 _PREFIX_CACHE_HITS = re.compile(
     r"^vllm:prefix_cache_hits_total(?:\{[^}]*\})?\s+([0-9.eE+-]+)", re.MULTILINE
 )
+
+
+async def _engine_metrics(client: httpx.AsyncClient, url: str, timeout_s: float) -> str | None:
+    """Return the engine's metrics text, or None when the scrape fails."""
+    try:
+        response = await client.get(f"{url}/metrics", timeout=timeout_s)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return response.text
 
 
 def parse_kv_capacity(metrics: str) -> int | None:
@@ -73,12 +82,8 @@ def parse_kv_capacity(metrics: str) -> int | None:
 
 async def kv_capacity(client: httpx.AsyncClient, url: str, timeout_s: float = 30.0) -> int | None:
     """Read physical KV capacity when the engine exports it."""
-    try:
-        response = await client.get(f"{url}/metrics", timeout=timeout_s)
-        response.raise_for_status()
-    except httpx.HTTPError:
-        return None
-    return parse_kv_capacity(response.text)
+    metrics = await _engine_metrics(client, url, timeout_s)
+    return None if metrics is None else parse_kv_capacity(metrics)
 
 
 def parse_cache_block_tokens(metrics: str) -> int | None:
@@ -91,12 +96,8 @@ async def cache_block_tokens(
     client: httpx.AsyncClient, url: str, timeout_s: float = 30.0
 ) -> int | None:
     """Read the engine's cache block size when it exports one."""
-    try:
-        response = await client.get(f"{url}/metrics", timeout=timeout_s)
-        response.raise_for_status()
-    except httpx.HTTPError:
-        return None
-    return parse_cache_block_tokens(response.text)
+    metrics = await _engine_metrics(client, url, timeout_s)
+    return None if metrics is None else parse_cache_block_tokens(metrics)
 
 
 def parse_prefix_cache_hits(metrics: str) -> int | None:
@@ -109,12 +110,8 @@ async def prefix_cache_hits(
     client: httpx.AsyncClient, url: str, timeout_s: float = 30.0
 ) -> int | None:
     """Read cumulative prefix-cache hit tokens when the engine exports them."""
-    try:
-        response = await client.get(f"{url}/metrics", timeout=timeout_s)
-        response.raise_for_status()
-    except httpx.HTTPError:
-        return None
-    return parse_prefix_cache_hits(response.text)
+    metrics = await _engine_metrics(client, url, timeout_s)
+    return None if metrics is None else parse_prefix_cache_hits(metrics)
 
 
 async def _tokenize_response(
@@ -236,6 +233,25 @@ async def make_prompt(
     return text, got
 
 
+def _completion_body(
+    model: str,
+    prompt: str,
+    tokens: int,
+    dialect: EngineDialect,
+    extras: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a greedy, non-streaming completion body that forces `tokens` output tokens."""
+    return {
+        "model": model,
+        "prompt": prompt,
+        "max_tokens": tokens,
+        "temperature": 0.0,
+        "stream": False,
+        **dialect.decode_probe_extras(tokens),
+        **(extras or {}),
+    }
+
+
 async def probe_prefill(
     client: httpx.AsyncClient,
     url: str,
@@ -267,15 +283,7 @@ async def probe_prefill(
             )
         first = len(samples)
         for _ in range(repeats):
-            body = {
-                "model": model,
-                "prompt": prompt,
-                "max_tokens": 1,
-                "temperature": 0.0,
-                "stream": False,
-                **dialect.decode_probe_extras(1),
-                **dialect.cold_probe_extras(),
-            }
+            body = _completion_body(model, prompt, 1, dialect, dialect.cold_probe_extras())
             start = time.monotonic()
             r = await client.post(
                 f"{url}/v1/completions", json=body, timeout=observation_timeout_s or 300.0
@@ -419,6 +427,13 @@ async def _one_decode_stream(
             state["epoch"] += 1
 
 
+async def _cancel(tasks: list[asyncio.Task[None]]) -> None:
+    """Cancel `tasks` and wait for each to finish."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _decode_cohort(
     client: httpx.AsyncClient,
     url: str,
@@ -443,9 +458,7 @@ async def _decode_cohort(
     try:
         await asyncio.gather(*tasks)
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await _cancel(tasks)
     return observed, state
 
 
@@ -599,18 +612,6 @@ async def probe_cached_prefill(
     Returns the samples and the reason the sweep stopped early, or None.
     """
     timeout = observation_timeout_s or 30.0
-
-    def body(prompt: str, extras: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "model": model,
-            "prompt": prompt,
-            "max_tokens": 1,
-            "temperature": 0.0,
-            "stream": False,
-            **dialect.decode_probe_extras(1),
-            **extras,
-        }
-
     exact = dialect.tokenize_path is not None
     samples: list[dict[str, Any]] = []
     for prefix_target in sweep.cached_prefix_lens:
@@ -641,17 +642,28 @@ async def probe_cached_prefill(
                     continue
             for repeat in range(sweep.cached_repeats):
                 salt = dialect.cold_probe_extras()
-                await _complete(client, url, body(primer, salt), observation_timeout_s)
+                await _complete(
+                    client,
+                    url,
+                    _completion_body(model, primer, 1, dialect, salt),
+                    observation_timeout_s,
+                )
                 before = await prefix_cache_hits(client, url, timeout)
                 tokens, elapsed = await _complete(
-                    client, url, body(full, salt), observation_timeout_s
+                    client,
+                    url,
+                    _completion_body(model, full, 1, dialect, salt),
+                    observation_timeout_s,
                 )
                 after = await prefix_cache_hits(client, url, timeout)
                 if before is None or after is None:
                     return samples, "the prefix-cache hit counter became unreadable"
                 cold_before = after
                 cold_tokens, cold_elapsed = await _complete(
-                    client, url, body(full, dialect.cold_probe_extras()), observation_timeout_s
+                    client,
+                    url,
+                    _completion_body(model, full, 1, dialect, dialect.cold_probe_extras()),
+                    observation_timeout_s,
                 )
                 cold_after = await prefix_cache_hits(client, url, timeout)
                 cached = after - before
@@ -712,7 +724,7 @@ def _valid_cached_samples(samples: Any) -> bool:
 def apply_cached_fit(
     profile: Profile, samples: list[dict[str, Any]]
 ) -> tuple[Profile, dict[str, Any]]:
-    """Fit warm prefill from retained samples; raise ValueError above `MAX_CACHED_CV_MAPE`."""
+    """Fit warm prefill from retained samples; raise ValueError on a rejected fit."""
     cases: dict[tuple[Any, Any], dict[str, list[float]]] = {}
     for sample in samples:
         case = cases.setdefault(
@@ -740,10 +752,6 @@ def apply_cached_fit(
     (a, b, c, d), groups, cv_mape = fit_cached_prefill(
         warm, profile.ttft_split, profile.ttft_block_tokens
     )
-    if cv_mape > MAX_CACHED_CV_MAPE:
-        raise ValueError(
-            f"warm prefill held-out error {cv_mape:.1%} exceeds {MAX_CACHED_CV_MAPE:.0%}"
-        )
     fitted = replace(
         profile,
         cached_ttft_a=a,
@@ -758,7 +766,7 @@ def apply_cached_fit(
     )
 
     def error(predict: Callable[[float, float], float]) -> float:
-        return statistics.mean(abs(predict(p, s) - y) / max(y, 1e-9) for p, s, y in groups)
+        return statistics.mean(relative_error(predict(p, s), y) for p, s, y in groups)
 
     controls = [
         (statistics.median(c["cold_tokens"]), statistics.median(c["cold"]))
@@ -771,10 +779,24 @@ def apply_cached_fit(
         "suffix_on_cold_curve_mape": error(lambda p, s: profile.prefill_time(int(s))),
         "full_prompt_cold_mape": error(lambda p, s: profile.prefill_time(int(p + s))),
         "cold_control_curve_mape": statistics.mean(
-            abs(profile.prefill_time(int(n)) - y) / max(y, 1e-9) for n, y in controls
+            relative_error(profile.prefill_time(int(n)), y) for n, y in controls
         )
         if controls
         else None,
+    }
+
+
+def _prefill_fields(
+    coefficients: tuple[float, float, float, float | None], block_tokens: int | None
+) -> dict[str, Any]:
+    """Return the Profile fields for a cold prefill fit and the engine's cache block size."""
+    a, b, c, split = coefficients
+    return {
+        "ttft_a": a,
+        "ttft_b": b,
+        "ttft_c": c,
+        "ttft_block_tokens": None if split is None else block_tokens,
+        "ttft_split": split,
     }
 
 
@@ -836,7 +858,8 @@ async def profile_instance(
         evidence["prefill"] = prefill
     # Check before the decode sweep so cached prefill fails early.
     await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
-    (a, b, c, split), representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
+    prefill_fit, representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
+    split = prefill_fit[3]
     print(
         f"    prefill median fit MAPE {prefill_fit_mape:.1%}"
         + (f"; split step {split * 1000:.1f} ms past {block_tokens}" if split is not None else "")
@@ -894,11 +917,7 @@ async def profile_instance(
     capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)
     profile = Profile(
         iid=iid,
-        ttft_a=a,
-        ttft_b=b,
-        ttft_c=c,
-        ttft_block_tokens=None if split is None else block_tokens,
-        ttft_split=split,
+        **_prefill_fields(prefill_fit, block_tokens),
         tpot_slope=slope,
         tpot_intercept=intercept,
         kv_capacity_tokens=capacity,
@@ -1021,9 +1040,7 @@ class NeighbourLoad:
         await asyncio.sleep(max(1.0 / job[3] for job in jobs))
         self._collect_task_errors()
         if self.errors:
-            for task in self.tasks:
-                task.cancel()
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+            await _cancel(self.tasks)
             raise RuntimeError("neighbour load failed during warmup: " + self._error_detail())
         self.counts = dict.fromkeys(self.counts, 0)
         self.started = time.monotonic()
@@ -1033,19 +1050,14 @@ class NeighbourLoad:
     ) -> None:
         interval = 1.0 / rate
         next_at = self.started + phase_s
-        body = {
-            "model": self.model,
-            "prompt": prompt,
-            "max_tokens": output,
-            "temperature": 0.0,
-            "stream": False,
-            **self.dialect.decode_probe_extras(output),
-        }
         while True:
             await asyncio.sleep(max(0.0, next_at - time.monotonic()))
             try:
                 response = await self.client.post(
-                    f"{url}/v1/completions", json={**body, **self.dialect.cold_probe_extras()}
+                    f"{url}/v1/completions",
+                    json=_completion_body(
+                        self.model, prompt, output, self.dialect, self.dialect.cold_probe_extras()
+                    ),
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -1097,9 +1109,7 @@ class NeighbourLoad:
     async def stop(self) -> dict[str, Any]:
         """Require completed traffic from each peer before retaining its role mix."""
         self.elapsed = max(time.monotonic() - self.started, 1e-9)
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await _cancel(self.tasks)
         self._collect_task_errors()
         for iid, count in self.counts.items():
             if count == 0:
@@ -1209,15 +1219,11 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
         block_tokens = row.get("prefill_block_tokens")
         if block_tokens is not None and (type(block_tokens) is not int or block_tokens < 1):
             raise ValueError(f"{iid}: saved prefill block size is invalid")
-        (a, b, c, split), representatives, error = fit_prefill_samples(samples, block_tokens)
+        prefill_fit, representatives, error = fit_prefill_samples(samples, block_tokens)
         updated = Profile(
             **{
                 **asdict(old),
-                "ttft_a": a,
-                "ttft_b": b,
-                "ttft_c": c,
-                "ttft_block_tokens": None if split is None else block_tokens,
-                "ttft_split": split,
+                **_prefill_fields(prefill_fit, block_tokens),
                 **dict.fromkeys(CACHED_PROFILE_FIELDS),
             }
         )
@@ -1342,12 +1348,6 @@ def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[E
         key = spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
         lanes.setdefault(key, []).append(spec)
     return list(lanes.values())
-
-
-async def _cancel(tasks: list[asyncio.Task[None]]) -> None:
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def run(
@@ -1530,9 +1530,7 @@ async def run(
                     raise RuntimeError("profile rejected: " + "; ".join(problems))
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 if neighbour_load is not None and neighbour_load.tasks:
-                    for task in neighbour_load.tasks:
-                        task.cancel()
-                    await asyncio.gather(*neighbour_load.tasks, return_exceptions=True)
+                    await _cancel(neighbour_load.tasks)
                     engine_evidence["colocated_load"] = neighbour_load.evidence()
                 engine_evidence["error"] = str(exc)
                 evidence_rows[spec.iid] = engine_evidence
@@ -1588,6 +1586,11 @@ async def run(
             raise
     print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
     return 0
+
+
+def _int_list(text: str) -> tuple[int, ...]:
+    """Parse comma-separated integers, skipping blank items."""
+    return tuple(int(item) for item in text.split(",") if item.strip())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1768,28 +1771,21 @@ def _main(argv: list[str]) -> int:
         ap.error("profile outputs must not replace the fleet config")
     try:
         sweep = Sweep(
-            prefill_lens=tuple(int(x) for x in args.prefill_lens.split(",") if x.strip()),
-            decode_concurrency=tuple(
-                int(x) for x in args.decode_concurrency.split(",") if x.strip()
-            ),
-            decode_input_lens=tuple(int(x) for x in args.decode_input_lens.split(",") if x.strip()),
+            prefill_lens=_int_list(args.prefill_lens),
+            decode_concurrency=_int_list(args.decode_concurrency),
+            decode_input_lens=_int_list(args.decode_input_lens),
             decode_tokens=args.decode_tokens,
             decode_repeats=args.decode_repeats,
             prefill_repeats=args.prefill_repeats,
-            cached_prefix_lens=tuple(
-                int(x) for x in args.cached_prefix_lens.split(",") if x.strip()
-            ),
-            cached_suffix_lens=tuple(
-                int(x) for x in args.cached_suffix_lens.split(",") if x.strip()
-            ),
+            cached_prefix_lens=_int_list(args.cached_prefix_lens),
+            cached_suffix_lens=_int_list(args.cached_suffix_lens),
         )
     except ValueError:
         ap.error(
             "--prefill-lens, --decode-input-lens, --decode-concurrency, --cached-prefix-lens "
             "and --cached-suffix-lens take comma-separated integers"
         )
-    prefixes, suffixes = set(sweep.cached_prefix_lens), set(sweep.cached_suffix_lens)
-    if len(prefixes) < 2 or len(suffixes) < 2 or len(prefixes) * len(suffixes) < 5:
+    if not cached_fit_possible(warm_cases(sweep)):
         ap.error(
             "the warm prefill fit needs two distinct prefix lengths, two distinct suffix "
             "lengths and at least five prefix and suffix cases"

@@ -11,16 +11,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..engines.client import (
-    FIRST_OUTPUT_DETAIL,
-    EngineError,
-)
+from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
-from ..types import Instance, Phase, Request, Role
+from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
-from .completion import output_cap, reassemble
+from .completion import reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
 from .response import RequestStreamResponse
@@ -104,7 +101,7 @@ def _failed_leg(
         progressed=router.monitor.output_since(inst.iid, started),
     )
     reason = leg_failure_reason(exc)
-    if decode and isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL):
+    if decode and first_output_timeout(exc):
         router.controller.safety.note_risk_event("first_token_timeout")
     if reason is not None and reason != "local_pool":
         router.scheduler.quarantine(inst.iid, router.cfg.failure_quarantine_s)
@@ -162,11 +159,10 @@ async def _prepare_once(
             raise NoEngine(f"no schedulable engines for the {role.value} role")
     prefill = await _place(state, prefill=True)
     if router.cfg.admission == "predictive":
-        cost = router.scheduler.cost(req, prefill)
         priced = router.scheduler.prefill_admission_price(req, prefill)
         priced += max(0.0, router._clock() - state.arrived)
         if not router.scheduler.meets_slo(
-            req, (cost[0], priced), ttft_margin=router.cfg.admission_margin
+            req, (0.0, priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
         if not router.scheduler.decode_admits(
@@ -253,6 +249,7 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     else:
         public_detail = "Upstream request failed"
     state.finish("expired" if expired else "failed", error=detail, status=status)
+    state.outcome["public_error"] = public_detail
     return JSONResponse(
         status_code=status,
         headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
@@ -265,54 +262,14 @@ def _failure_response(state: RequestLifecycle) -> JSONResponse:
     return response
 
 
-def _public_error(state: RequestLifecycle) -> str:
-    message: str = json.loads(bytes(state.outcome["response"].body))["error"]["message"]
-    return message
-
-
-async def _resume(first: str | None, rest: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
-    """Yield the frame that committed the response, then the rest of the stream."""
-    try:
-        if first is not None:
-            yield first
-        async for frame in rest:
-            yield frame
-    finally:
-        await rest.aclose()
-
-
-def held_stream(
-    first: str | None, stream: AsyncGenerator[str, None], state: RequestLifecycle
-) -> RequestStreamResponse:
-    """Stream the committed first frame and the rest of the decode stream."""
-    return RequestStreamResponse(_resume(first, stream), state, owned=stream)
-
-
 async def serve_request(
-    router: NarwhalRouter,
-    rid: str,
+    state: RequestLifecycle,
     endpoint: str,
     body: dict[str, Any],
     headers: dict[str, str],
-    *,
-    arrived: float | None = None,
-    offered: bool = False,
-    lifecycle: RequestLifecycle | None = None,
 ) -> StreamingResponse | JSONResponse:
-    """Size an original request, prepare its first attempt and own its response."""
-    invalid = request_error(router, body)
-    if invalid is not None:
-        return invalid
-    arrived = router._clock() if arrived is None else arrived
-    req = Request(
-        rid=rid,
-        input_len=router.estimate_length(body),
-        wanted_len=output_cap(body),
-    )
-    state = lifecycle or RequestLifecycle(
-        router, req, arrived, client_rid=headers.get("x-request-id")
-    )
-    req = state.request
+    """Size an admitted request, prepare its first attempt and own its response."""
+    router, req = state.router, state.request
     body = {**body, "model": router.cfg.model}
     engine_headers = forward_headers(headers)
     try:
@@ -332,13 +289,10 @@ async def serve_request(
                 state.demand_observation,
                 req.input_len,
                 req.wanted_len,
-                at=arrived,
+                at=state.arrived,
                 cached_tokens=req.cached_tokens,
             )
-            req.demand_arrived_at = arrived
             state.demand_observation = None
-        if not offered:
-            router.controller.saw_arrival(req.input_len, wanted_len=req.wanted_len, at=arrived)
         prepared = await prepare_attempt(state, endpoint, body, engine_headers)
     except asyncio.CancelledError:
         state.finish("cancelled")
@@ -356,7 +310,7 @@ async def serve_request(
         if not state.output_started and state.outcome["error"] is not None:
             await stream.aclose()
             return _failure_response(state)
-        return held_stream(first, stream, state)
+        return RequestStreamResponse(stream, state, first=first)
     chunks = [line async for line in stream]
     if state.outcome["error"] is not None:
         return _failure_response(state)
@@ -521,7 +475,7 @@ async def run_decode(
                 + json.dumps(
                     {
                         "error": {
-                            "message": _public_error(state),
+                            "message": state.outcome["public_error"],
                             "type": state.phase,
                             "code": state.terminal,
                         }

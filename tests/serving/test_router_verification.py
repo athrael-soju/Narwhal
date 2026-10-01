@@ -21,6 +21,7 @@ from narwhal.engines.client import (
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.execution import _failed_leg
+from narwhal.serving.router import TOKENIZE_BACKOFF_MAX_S
 from narwhal.types import Phase, Request
 from tests.fixtures import bind_identity_profiles, fleet
 
@@ -48,8 +49,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=EngineError("tokenize", "http://engine", 400, "string required")
             ),
         ) as count:
-            self.assertEqual(await self.router.input_length({"prompt": list(range(512))}), 512)
-            self.assertEqual(await self.router.input_length({"prompt": [0]}), 1)
+            self.assertEqual((await self.router.size({"prompt": list(range(512))}))[0], 512)
+            self.assertEqual((await self.router.size({"prompt": [0]}))[0], 1)
             count.assert_not_awaited()
 
     async def test_text_chat_and_non_token_arrays_keep_strict_tokenization(self):
@@ -73,10 +74,10 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 ) as count,
                 self.assertRaisesRegex(EngineError, "late"),
             ):
-                await self.router.input_length(body)
+                await self.router.size(body)
             self.assertTrue(count.await_args.kwargs["strict"])
 
-    async def test_input_length_skips_a_failed_tokenizer_until_a_count_succeeds(self):
+    async def test_sizing_skips_a_failed_tokenizer_until_a_count_succeeds(self):
         """Failed exact counting fails this request; the next counts avoid that engine."""
         self.cfg.tokenize = True
         with patch.object(
@@ -91,9 +92,9 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             ),
         ) as count:
             with self.assertRaisesRegex(EngineError, "late"):
-                await self.router.input_length({"prompt": "hello"})
-            self.assertEqual(await self.router.input_length({"prompt": "hello"}), 9)
-            self.assertEqual(await self.router.input_length({"prompt": "hello"}), 10)
+                await self.router.size({"prompt": "hello"})
+            self.assertEqual((await self.router.size({"prompt": "hello"}))[0], 9)
+            self.assertEqual((await self.router.size({"prompt": "hello"}))[0], 10)
         urls = [call.args[0] for call in count.call_args_list]
         self.assertNotEqual(urls[0], urls[1])
         self.assertEqual(urls[1], urls[2])
@@ -104,7 +105,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         for iid in ("e0", "e3"):
             self.router.scheduler.eject(iid)
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
-            self.assertEqual(await self.router.input_length({"prompt": ""}), 1)
+            self.assertEqual((await self.router.size({"prompt": ""}))[0], 1)
             count.assert_not_awaited()
 
     async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
@@ -125,23 +126,74 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             for step in range(24):
                 now[0] += 0.1
                 try:
-                    await self.router.input_length({"prompt": f"hello {step}"})
+                    await self.router.size({"prompt": f"hello {step}"})
                 except EngineError:
                     failures += 1
             self.assertEqual(failures, 2)
             now[0] += 60.0
             healed = True
             for _ in range(4):
-                await self.router.input_length({"prompt": "hello"})
+                await self.router.size({"prompt": "hello"})
             now[0] += 0.1
             urls = []
             with patch.object(
                 self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)
             ) as count:
                 for _ in range(4):
-                    await self.router.input_length({"prompt": "hello"})
+                    await self.router.size({"prompt": "hello"})
                 urls = [call.args[0] for call in count.call_args_list]
         self.assertIn(bad, urls)
+
+    async def test_backoff_doubles_caps_and_clears_on_own_success(self):
+        """A failed engine's backoff doubles to its cap; its next successful count clears it."""
+        self.cfg.tokenize = True
+        now = [100.0]
+        self.router._clock = lambda: now[0]
+        bad = self.router.scheduler.live_instances()[0]
+        for other in self.router.scheduler.live_instances()[1:]:
+            self.router.scheduler.eject(other.iid)
+        healed = False
+
+        async def tokenize(url, *args, **kwargs):
+            if not healed:
+                raise EngineError("tokenize", url, 500, "broken tokenizer")
+            return Tokenization(9, None)
+
+        with patch.object(self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)):
+            for n in range(1, 8):
+                with self.assertRaises(EngineError):
+                    await self.router.size({"prompt": "hello"})
+                self.assertEqual(
+                    self.router._tokenize_backoff[bad.iid],
+                    (n, now[0] + min(2 ** (n - 1), TOKENIZE_BACKOFF_MAX_S)),
+                )
+            self.assertEqual(self.router._tokenize_backoff[bad.iid][1], now[0] + 30.0)
+            healed = True
+            await self.router.size({"prompt": "hello"})
+            self.assertNotIn(bad.iid, self.router._tokenize_backoff)
+            healed = False
+            with self.assertRaises(EngineError):
+                await self.router.size({"prompt": "hello"})
+            self.assertEqual(self.router._tokenize_backoff[bad.iid], (1, now[0] + 1.0))
+
+    async def test_sustained_tokenizer_failures_keep_the_engine_error_and_the_capped_backoff(self):
+        """Every consecutive failed count raises the engine error and holds the capped backoff."""
+        self.cfg.tokenize = True
+        now = [100.0]
+        self.router._clock = lambda: now[0]
+        live = self.router.scheduler.live_instances()
+        calls = 1025 * len(live)
+        with patch.object(
+            self.router.engines,
+            "tokenize",
+            new=AsyncMock(side_effect=EngineError("tokenize", "http://engine", 504, "late")),
+        ):
+            for _ in range(calls):
+                with self.assertRaisesRegex(EngineError, "late"):
+                    await self.router.size({"prompt": "hello"})
+        backoff = [self.router._tokenize_backoff[inst.iid] for inst in live]
+        self.assertEqual(sum(failures for failures, _ in backoff), calls)
+        self.assertEqual({until for _, until in backoff}, {now[0] + TOKENIZE_BACKOFF_MAX_S})
 
     async def test_exact_counts_spread_across_the_least_occupied_engines(self):
         """Idle engines share the counts in turn; an occupied engine is left out."""
@@ -153,7 +205,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.router.engines, "tokenize", new=AsyncMock(return_value=Tokenization(5, None))
         ) as count:
             for _ in range(2 * (len(live) - 1)):
-                await self.router.input_length({"prompt": "hello"})
+                await self.router.size({"prompt": "hello"})
         urls = [call.args[0] for call in count.call_args_list]
         self.assertNotIn(busy.url, urls)
         self.assertEqual(set(urls), {i.url for i in live[1:]})

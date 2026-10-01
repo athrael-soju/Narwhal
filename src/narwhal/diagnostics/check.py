@@ -25,7 +25,7 @@ from ..cli_support import add_version_argument
 from ..config import EngineSpec, FleetConfig
 from ..contracts import manifest
 from ..engines.attestation import fetch_engine_identity, verify_attestation
-from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from ..engines.client import EngineClient, EngineError, first_output_timeout
 from ..engines.connector import PrefillResult
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
@@ -623,7 +623,7 @@ async def gate_consume(
                     output_tokens=tokens,
                 )
         except EngineError as exc:
-            deadline_exceeded = exc.status == 504 and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
+            deadline_exceeded = exc.status == 504 and first_output_timeout(exc)
             if deadline_exceeded:
                 rep.fail(
                     f"{src} -> {dst}: first-token deadline {cfg.first_token_timeout_s:g}s "

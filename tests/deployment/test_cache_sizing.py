@@ -23,6 +23,7 @@ from tools.deployment.launch_engine import (
     model_dimensions,
     runtime_cache_probe,
     runtime_model_dimensions,
+    write_once,
 )
 
 
@@ -378,6 +379,7 @@ class CacheSizingTests(unittest.TestCase):
             core_module.EngineCore = Core
             launcher_module = ModuleType("launch_engine")
             launcher_module.cache_groups = cache_groups
+            launcher_module.write_once = write_once
             launcher_module.digest = lambda path: (
                 plan["model_config_sha256"]
                 if str(path) == "/model/config.json"
@@ -450,6 +452,7 @@ class CacheSizingTests(unittest.TestCase):
                 launcher_module = ModuleType("launch_engine")
                 launcher_module.cache_groups = cache_groups
                 launcher_module.digest = digest
+                launcher_module.write_once = write_once
                 torch_module = ModuleType("torch")
                 memory = iter(readings)
                 torch_module.cuda = SimpleNamespace(

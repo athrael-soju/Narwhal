@@ -12,6 +12,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
+from .records import overloaded_response
 from .response import RequestStreamResponse
 
 if TYPE_CHECKING:
@@ -29,12 +30,8 @@ async def _overloaded(
     state: RequestLifecycle, message: str, scope: Scope, receive: Receive, send: Send
 ) -> None:
     """Reject one request before its body is read."""
-    state.finish("rejected", error=message, status=429)
-    response = JSONResponse(
-        {"error": {"type": "server_overloaded_error", "message": message}},
-        status_code=429,
-        headers={"retry-after": "1", "x-request-id": state.rid},
-    )
+    response = overloaded_response(state, message)
+    response.headers["x-request-id"] = state.rid
     # No admission seat is available to retain a blocked error writer.
     async with asyncio.timeout(0):
         await response(scope, receive, send)

@@ -74,6 +74,7 @@ class ReactivePolicy:
             )
             return None
 
+        controller.scorer.recheck(controller.monitor.waiting.values())
         estimates = controller.demand.refresh_output_estimates()
         correction = controller.demand._decode_correction()
         prefill, decode = controller._demand(now, estimates=estimates, correction=correction)

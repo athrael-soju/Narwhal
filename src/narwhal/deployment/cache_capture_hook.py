@@ -20,7 +20,11 @@ PEER_RELEASE_WAIT_S = 180.0
 PEER_RELEASE_POLL_S = 5.0
 
 if os.environ.get("NARWHAL_CAPTURE_CACHE") == "1":
-    from launch_engine import cache_groups, digest  # type: ignore[import-not-found]
+    from launch_engine import (  # type: ignore[import-not-found]
+        cache_groups,
+        digest,
+        write_once,
+    )
     from vllm.v1.engine.core import EngineCore  # type: ignore[import-not-found]
     from vllm.v1.worker.gpu_worker import Worker  # type: ignore[import-not-found]
 
@@ -85,18 +89,11 @@ if os.environ.get("NARWHAL_CAPTURE_CACHE") == "1":
                 "cache_capture_sha256": plan["cache_capture_sha256"],
                 "ranks": ranks,
             }
-            output = Path(os.environ["NARWHAL_CACHE_OUTPUT"])
-            text = json.dumps(value, indent=2) + "\n"
-            try:
-                fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                # A restarted container or native run keeps its first capture.
-                if output.read_text() != text:
-                    message = "cache layout differs from this launch's earlier start"
-                    raise ValueError(message) from None
-                return result
-            with os.fdopen(fd, "w") as stream:
-                stream.write(text)
+            write_once(
+                Path(os.environ["NARWHAL_CACHE_OUTPUT"]),
+                json.dumps(value, indent=2) + "\n",
+                "cache layout differs from this launch's earlier start",
+            )
             return result
 
         executor.initialize_from_config = capture_allocation

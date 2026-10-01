@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("narwhal.state")
 
+HANDOFF_COUNTERS = (
+    "offered",
+    "unsized_offered",
+    "served",
+    "slo_met",
+    "expired",
+    "invalid_requests",
+    "failed",
+    "refused",
+    "rejected",
+    "cancelled",
+)
+
 
 @dataclass
 class HandoffReport:
@@ -57,17 +70,8 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
             for iid in sorted(router.scheduler.inference_suspects)
         },
         "counters": {
-            "offered": router.offered,
-            "unsized_offered": router.unsized_offered,
-            "served": router.served,
-            "slo_met": router.slo_met,
-            "expired": router.expired,
-            "invalid_requests": router.invalid_requests,
-            "failed": router.failed,
+            **{name: getattr(router, name) for name in HANDOFF_COUNTERS},
             "unserved": router.scheduler.unserved,
-            "refused": router.refused,
-            "rejected": router.rejected,
-            "cancelled": router.cancelled,
         },
         "lifecycle": router.lifecycle.handoff(),
         # Save the newest risk event's age and counts. The receiver collects
@@ -217,28 +221,16 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
         router.scheduler.inference_suspects.add(iid)
         router._inference_sources[iid] = set(peers)
         # A suspect resolves through a readmission probe while another engine covers its role.
-        if (
-            iid not in router.scheduler.ejected
-            and router.scheduler.availability.role_covered_without(iid)
-        ):
+        if iid not in router.scheduler.ejected and router.scheduler.role_covered_without(iid):
             router.scheduler.ejected[iid] = now - 1e9
             ejected.append(iid)
     # apply() bypasses the scheduler paths that normally update floor state.
     router.scheduler.refresh_floor_state()
 
     counters = doc.get("counters") or {}
-    router.offered = int(counters.get("offered", 0))
-    router.unsized_offered = int(counters.get("unsized_offered", 0))
-    router.served = int(counters.get("served", 0))
-    router.slo_met = int(counters.get("slo_met", 0))
-    router.expired = int(counters.get("expired", 0))
-    router.invalid_requests = int(counters.get("invalid_requests", 0))
-    router.failed = int(counters.get("failed", 0))
+    for name in HANDOFF_COUNTERS:
+        setattr(router, name, int(counters.get(name, 0)))
     router.scheduler.unserved = int(counters.get("unserved", 0))
-    # Admission counters are cumulative across router restarts.
-    router.refused = int(counters.get("refused", 0))
-    router.rejected = int(counters.get("rejected", 0))
-    router.cancelled = int(counters.get("cancelled", 0))
     router.lifecycle.restore(doc.get("lifecycle"))
     controller = router.controller
     risk = doc.get("demand_risk")

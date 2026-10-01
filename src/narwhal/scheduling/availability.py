@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
@@ -110,7 +111,10 @@ class EngineAvailability:
         if not self.role_covered_without(iid):
             return False
         self.quarantined[iid] = max(self.quarantined.get(iid, 0.0), now + seconds)
-        log.info("quarantined %s for %.1fs after an engine fault", iid, seconds)
+        if math.isinf(seconds):
+            log.info("quarantined %s until inference verification", iid)
+        else:
+            log.info("quarantined %s for %.1fs after an engine fault", iid, seconds)
         self.refresh_floor_state()
         return True
 
@@ -180,9 +184,11 @@ class EngineAvailability:
         # evidence clears the inference classes and lifts hold-outs.
         self.record_answer(iid, "verification")
 
-    def _can_hold_out(self, iid: str) -> bool:
-        """Return whether another engine can receive aggregate work."""
-        return bool(self.live_instances(exclude={iid}))
+    def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
+        """Return the engines in `instances` that hold `role`, else the unpinned ones."""
+        return [i for i in instances if i.role is role] or [
+            i for i in instances if i.iid not in self.pinned
+        ]
 
     def role_covered_without(self, iid: str) -> bool:
         """Return whether another live engine places every role that `iid` places.
@@ -194,7 +200,7 @@ class EngineAvailability:
             return True
         others = self.live_instances(exclude={iid})
         return all(
-            any(other.role is role or other.iid not in self.pinned for other in others)
+            self.role_pool(role, others)
             for role in Role
             if inst.role is role or iid not in self.pinned
         )

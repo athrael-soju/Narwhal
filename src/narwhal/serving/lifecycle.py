@@ -249,19 +249,15 @@ class RequestLifecycle:
             router.retry_budget.succeeded()
             if measured is not None:
                 router.controller.saw_completion(req.input_len, req.wanted_len, measured)
+        ttft_ok = completed and prefill_s is not None and prefill_s <= router.cfg.slo.ttft_s
+        tpot_ok = (
+            (completed and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s))
+            if self.prefilled_at is not None
+            else True
+        )
         if terminal not in ("cancelled", "rejected", "invalid"):
-            router.scheduler.note_outcome(
-                completed and prefill_s is not None and prefill_s <= router.cfg.slo.ttft_s,
-                (completed and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s))
-                if self.prefilled_at is not None
-                else True,
-            )
-        if (
-            completed
-            and prefill_s is not None
-            and prefill_s <= router.cfg.slo.ttft_s
-            and (tpot_s is None or tpot_s <= router.cfg.slo.tpot_s)
-        ):
+            router.scheduler.note_outcome(ttft_ok, tpot_ok)
+        if ttft_ok and tpot_ok:
             router.slo_met += 1
         if prefill_s is not None:
             router.ttft.observe(prefill_s)

@@ -65,7 +65,10 @@ MIN_SHARED_POOL = 16
 
 
 def load_workload(path: Path) -> dict:
-    value = json.loads(path.read_text())
+    return validate_workload(json.loads(path.read_text()))
+
+
+def validate_workload(value: dict) -> dict:
     if value.get("schema") != 1 or value.get("kind") not in (
         "synthetic-token-length",
         SHARED_PREFIX,
@@ -96,7 +99,7 @@ def load_workload(path: Path) -> dict:
     return value
 
 
-def _tokens(seed: str, pool: list[int], count: int) -> list[int]:
+def _tokens(seed: int | str, pool: list[int], count: int) -> list[int]:
     rng = random.Random(seed)
     return [rng.choice(pool) for _ in range(count)]
 
@@ -108,8 +111,7 @@ def prompt_for(workload: dict, sequence: int, run_seed: int = 0) -> list[int]:
     """
     pool, seed, length = workload["token_pool"], workload["seed"], workload["input_tokens"]
     if workload["kind"] != SHARED_PREFIX:
-        rng = random.Random(seed + sequence)
-        return [rng.choice(pool) for _ in range(length)]
+        return _tokens(seed + sequence, pool, length)
     prefix_len = workload["prefix_tokens"]
     if workload["families"]:
         family = random.Random(f"{seed}:{run_seed}:family:{sequence}").randrange(
@@ -369,13 +371,7 @@ async def prepare(client, base, args):
         pool = list(generated_ids)
     if len(set(pool)) < 2:
         raise ValueError("Seed response has no diverse token IDs for the workload")
-    if args.prefix_tokens is not None and len(set(pool)) < MIN_SHARED_POOL:
-        raise ValueError(
-            f"A shared-prefix workload requires at least {MIN_SHARED_POOL} distinct pool token IDs"
-        )
-    private_json(args.out / "seed-response.json", seed)
-    private_json(
-        args.out / "workload.json",
+    workload = validate_workload(
         {
             "schema": 1,
             "model": model,
@@ -400,8 +396,10 @@ async def prepare(client, base, args):
                     "per input token",
                 }
             ),
-        },
+        }
     )
+    private_json(args.out / "seed-response.json", seed)
+    private_json(args.out / "workload.json", workload)
 
 
 async def run_trial(client, base, args):

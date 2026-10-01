@@ -23,6 +23,7 @@ from .launch_engine import (
     digest,
     gpu_memory,
     kv_events_directory,
+    read_env,
     remove_kv_events_directory,
     validate_shared_runs,
     write_private,
@@ -118,11 +119,10 @@ def _checked_plan(run: Path, plan: dict) -> dict:
 
 
 def _environment(run: Path) -> dict[str, str]:
-    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
     return {
         **os.environ,
         "VLLM_API_KEY": "",
-        **values,
+        **read_env(run / "engine.env"),
         "NARWHAL_CAPTURE_CACHE": "1",
         "NARWHAL_CACHE_PLAN": str(run / "hook/launch.json"),
         "NARWHAL_CACHE_OUTPUT": str(run / "cache-layout.json"),

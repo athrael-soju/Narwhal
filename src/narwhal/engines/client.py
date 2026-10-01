@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 from uuid import uuid4
 
 import httpx
@@ -79,6 +79,11 @@ LATE_TIMEOUT_FACTOR = 1.5
 # The probe runs the plain completion route every dialect serves.
 _PROBE_ENDPOINT = "/v1/completions"
 _PROBE_PROMPT = "breaker verification"
+
+
+def first_output_timeout(exc: BaseException) -> TypeGuard[EngineError]:
+    """Return whether `exc` reports an expired first-token deadline."""
+    return isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
 
 
 def leg_failure_class(exc: BaseException) -> str | None:
@@ -186,9 +191,7 @@ class EngineClient:
         self._transport = transport
         self._data_pools: dict[str, httpx.AsyncClient] = {}
         self._control = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                timeout_s, connect=connect_timeout_s, read=self._read_timeout, pool=pool_timeout_s
-            ),
+            timeout=self._data_timeout,
             limits=httpx.Limits(
                 max_connections=control_connections,
                 max_keepalive_connections=max(1, control_connections // 2),

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..config.model import EngineContract, EngineSpec
+from ..contracts import canonical_digest
 from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
 
 if TYPE_CHECKING:
@@ -41,8 +40,7 @@ def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
             "process_start_time_seconds": identity.process_start_time_seconds,
         }
     }
-    raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-    return GenerationEvidence("sha256:" + sha256(raw).hexdigest(), document)
+    return GenerationEvidence(canonical_digest(document), document)
 
 
 async def read_generation(

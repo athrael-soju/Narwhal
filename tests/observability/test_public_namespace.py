@@ -1,6 +1,7 @@
 """Check the release's HTTP and telemetry names against shipped consumers."""
 
 import json
+import math
 import re
 import tempfile
 import unittest
@@ -11,12 +12,26 @@ import httpx
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.runtime.lifecycle import DrainRecord
+from narwhal.runtime.release import PeerRelease
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router import NarwhalRouter
 from narwhal.types import Instance, Request, Role
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def dashboard():
+    """Return the shipped Grafana dashboard."""
+    return json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+
+
+def panel_queries(element):
+    """Return the query expressions of a dashboard element."""
+    return [
+        query["spec"]["query"]["spec"]["expr"]
+        for query in element["spec"]["data"]["spec"]["queries"]
+    ]
 
 
 class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
@@ -79,8 +94,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('narwhal_contract_info{contract="metrics",version="1"} 1', response.text)
         self.assertIn("narwhal_served_total 7", response.text)
         self.assertIn('narwhal_instance_role{iid="p",role="prefill"} 1', response.text)
-        self.assertIn('narwhal_slo_seconds{metric="ttft"} 1.0', response.text)
-        self.assertIn('narwhal_slo_seconds{metric="tpot"} 0.02', response.text)
+        self.assertIn('narwhal_slo_seconds{metric="ttft",slo="1"} 1.0', response.text)
+        self.assertIn('narwhal_slo_seconds{metric="tpot",slo="0.02"} 0.02', response.text)
+        # Latency histograms carry the target that scaled their bucket edges.
+        self.assertIn('narwhal_ttft_seconds_bucket{slo="1",le="0.025"}', response.text)
+        self.assertIn('narwhal_tpot_seconds_count{slo="0.02"}', response.text)
         self.assertIn("narwhal_event_loop_lag_seconds 0.0", response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.0", response.text)
         names = re.findall(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", response.text, re.M)
@@ -107,6 +125,14 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('narwhal_engine_lifecycle_state{iid="p",state="blocked"} 1', response.text)
         self.assertIn('narwhal_engine_lifecycle_state{iid="d",state="active"} 1', response.text)
 
+    async def test_quarantine_metric_reports_each_held_engine(self):
+        """Each engine under a live quarantine or inference-probe hold exports 1."""
+        self.router.scheduler.quarantined["p"] = math.inf
+        self.router.scheduler.quarantined["d"] = self.router._clock() - 1.0
+        response = await self.client.get("/metrics")
+        self.assertIn('narwhal_engine_quarantined{iid="p"} 1', response.text)
+        self.assertNotIn('narwhal_engine_quarantined{iid="d"}', response.text)
+
     async def test_state_and_metrics_share_event_loop_lag(self):
         self.router.monitoring.observe_event_loop_lag(0.03)
         self.router.monitoring.observe_event_loop_lag(0.01)
@@ -120,10 +146,34 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitoring["event_loop_lag_high_water_s"], 0.03)
         self.assertIn("narwhal_event_loop_lag_seconds 0.01", metrics_response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.03", metrics_response.text)
-        # The route's response model keeps each engine's residency synchronisation.
-        residency = state_response.json()["residency"]
-        self.assertEqual(set(residency), {spec.iid for spec in self.router.cfg.engines})
-        self.assertTrue(all(row["known"] is False for row in residency.values()))
+
+    async def test_state_response_keeps_residency_snapshot(self):
+        view = self.router.residency.views["p"]
+        view.known, view.reason, view.epoch, view.sequence = True, "", "e1", 4
+        view.block_size, view.resyncs = 16, 2
+        view.groups = {"g0": ("full", 16, {b"a", b"b"})}
+
+        response = await self.client.get("/narwhal/state")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["residency"], self.router.residency.snapshot())
+        self.assertEqual(response.json()["residency"]["p"]["resident_blocks"], {"g0": 2})
+
+    async def test_state_response_keeps_slo_met_and_peer_release_rounds(self):
+        now = [100.0]
+        self.router.peer_release = PeerRelease(lambda: now[0])
+        self.router.peer_release.track({"p": "ejected"})
+        now[0] = 170.0
+        self.assertEqual(self.router.peer_release.due(), ["p"])
+        self.router.slo_met = 5
+
+        response = await self.client.get("/narwhal/state")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(set(body), set(self.router.state()))
+        self.assertEqual(body["slo_met"], 5)
+        self.assertEqual(body["peer_release"], {"p": {"rounds": 1, "next_round_s": 55.0}})
 
     async def test_state_retains_documented_controller_decision_fields(self):
         details = {
@@ -180,9 +230,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(decision[field], value)
 
     async def test_dashboard_and_alerts_use_router_metric_names(self):
-        dashboard_path = ROOT / "tools/observability/grafana-narwhal.json"
-        dashboard = json.loads(dashboard_path.read_text())
-        self.assertEqual(dashboard["metadata"]["name"], "narwhal-router")
+        self.assertEqual(dashboard()["metadata"]["name"], "narwhal-router")
         response = await self.client.get("/metrics")
         required = {
             "tools/observability/grafana-narwhal.json": (
@@ -205,10 +253,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(name, response.text)
 
     async def test_dashboard_scopes_latency_quantiles_to_the_selected_router(self):
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        elements = dashboard["spec"]["elements"]
+        elements = dashboard()["spec"]["elements"]
         panels = {
-            elements[name]["spec"]["title"]: elements[name]["spec"]
+            elements[name]["spec"]["title"]: elements[name]
             for name in ("panel-50", "panel-51", "panel-52")
         }
         self.assertEqual(
@@ -217,41 +264,29 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
         for title, panel in panels.items():
             with self.subTest(title=title):
-                expressions = [
-                    query["spec"]["query"]["spec"]["expr"]
-                    for query in panel["data"]["spec"]["queries"]
-                ]
+                expressions = panel_queries(panel)
                 self.assertTrue(all('instance=~"$router"' in expr for expr in expressions))
                 self.assertTrue(all("$iid" not in expr for expr in expressions))
                 for expression in expressions:
                     if "histogram_quantile" in expression:
-                        self.assertIn("sum by (instance, le)", expression)
+                        self.assertIn("sum by (instance, slo, le)", expression)
                         self.assertIn("[$__rate_interval]", expression)
 
-        ttft_queries = panels["Time to first token"]["data"]["spec"]["queries"]
-        tpot_queries = panels["Time per output token"]["data"]["spec"]["queries"]
+        ttft_queries = panels["Time to first token"]["spec"]["data"]["spec"]["queries"]
         self.assertEqual(
             [query["spec"]["query"]["spec"]["legendFormat"] for query in ttft_queries],
             ["p50", "p95", "p99", "SLO"],
         )
-        self.assertIn('metric="ttft"', ttft_queries[-1]["spec"]["query"]["spec"]["expr"])
-        self.assertIn('metric="tpot"', tpot_queries[-1]["spec"]["query"]["spec"]["expr"])
-        waiting = " ".join(
-            query["spec"]["query"]["spec"]["expr"]
-            for query in panels["Request waiting time"]["data"]["spec"]["queries"]
-        )
+        self.assertIn('metric="ttft"', panel_queries(panels["Time to first token"])[-1])
+        self.assertIn('metric="tpot"', panel_queries(panels["Time per output token"])[-1])
+        waiting = " ".join(panel_queries(panels["Request waiting time"]))
         self.assertIn("narwhal_queue_wait_seconds_bucket", waiting)
         self.assertIn("narwhal_seat_seconds_bucket", waiting)
-        exceptions = elements["panel-12"]["spec"]["data"]["spec"]["queries"]
-        self.assertIn(
-            "narwhal_retry_attempts_total",
-            " ".join(query["spec"]["query"]["spec"]["expr"] for query in exceptions),
-        )
+        self.assertIn("narwhal_retry_attempts_total", " ".join(panel_queries(elements["panel-12"])))
 
     def test_engine_views_mark_held_and_unreachable_engines(self):
         """The engine table ranks each engine's state and the role history marks held periods."""
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        elements = dashboard["spec"]["elements"]
+        elements = dashboard()["spec"]["elements"]
         table = elements["panel-7"]["spec"]
         for query in table["data"]["spec"]["queries"]:
             self.assertEqual(query["spec"]["query"]["spec"].get("format"), "table")
@@ -267,6 +302,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "narwhal_ejected",
             "narwhal_engine_draining",
             "narwhal_engine_breaker_verifying",
+            'narwhal_engine_quarantined{job="narwhal-router",instance=~"$router",iid=~"$iid"}',
             "narwhal_probation_instances",
             "vllm:num_requests_waiting",
             'narwhal_resident_requests{job="narwhal-router",instance=~"$router",iid=~"$iid",phase="prefill"}',
@@ -293,6 +329,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Backlogged",
                 "Probation",
                 "Verifying",
+                "Quarantined",
                 "Draining",
                 "Ejected",
                 "Validating",
@@ -301,9 +338,16 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Restarting",
             ],
         )
+        quarantined = next(
+            code for code, entry in mappings.items() if entry["text"] == "Quarantined"
+        )
+        self.assertIn(
+            f"label_replace({quarantined} * max by(iid) (narwhal_engine_quarantined{{", state
+        )
         history = elements["panel-8"]["spec"]
-        expr = history["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"]
+        expr = panel_queries(elements["panel-8"])[0]
         for source in (
+            "narwhal_engine_quarantined",
             "narwhal_engine_draining",
             "narwhal_ejected",
             'state="validating"',
@@ -316,62 +360,128 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             name: entry["color"]
             for name, entry in ((entry["text"], entry) for entry in mappings.values())
         }
-        for code, name in enumerate(
-            ("Draining", "Ejected", "Validating", "Blocked", "Unreachable", "Restarting"), start=4
-        ):
+        held = (
+            "Quarantined",
+            "Draining",
+            "Ejected",
+            "Validating",
+            "Blocked",
+            "Unreachable",
+            "Restarting",
+        )
+        for code, name in enumerate(held, start=4):
             self.assertEqual(roles[str(code)]["text"], name)
             self.assertEqual(roles[str(code)]["color"], table_colors[name])
+        self.assertIn("label_replace(4 * max by(iid) (narwhal_engine_quarantined{", expr)
 
-    def test_headline_row_reports_goodput_and_latency_against_the_slo(self):
-        """The first row reports goodput over ended requests and p95 latency against the SLO."""
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        elements = dashboard["spec"]["elements"]
+    def test_headline_row_reports_requests_and_latency_against_the_slo(self):
+        """The first row holds one-row Requests and Latency tables beside the Router block."""
+        spec = dashboard()["spec"]
+        elements = spec["elements"]
         row = sorted(
             (item["spec"]["x"], item["spec"]["element"]["name"])
-            for item in dashboard["spec"]["layout"]["spec"]["items"]
+            for item in spec["layout"]["spec"]["items"]
             if item["spec"]["y"] == 4
         )
-        self.assertEqual(
-            [elements[name]["spec"]["title"] for _, name in row],
-            ["Goodput", "Load", "TTFT p95", "TPOT p95", "Engines", "Router"],
-        )
+        titles = [elements[name]["spec"]["title"] for _, name in row]
+        self.assertEqual(titles, ["Requests", "Latency", "Router"])
 
-        def expressions(name):
-            specs = (
-                query["spec"]["query"]["spec"]
-                for query in elements[name]["spec"]["data"]["spec"]["queries"]
+        def columns(name):
+            panel = elements[name]["spec"]
+            self.assertEqual(panel["vizConfig"]["kind"], "table")
+            organize = next(
+                step["spec"]["options"]
+                for step in panel["data"]["spec"]["transformations"]
+                if step["kind"] == "organize"
             )
-            return {spec["legendFormat"]: spec["expr"] for spec in specs}
+            names = organize["renameByName"]
+            order = sorted(organize["indexByName"], key=organize["indexByName"].get)
+            exprs = {
+                names[f"Value #{query['spec']['refId']}"]: query["spec"]["query"]["spec"]["expr"]
+                for query in panel["data"]["spec"]["queries"]
+            }
+            overrides = {
+                o["matcher"]["options"]: {prop["id"]: prop["value"] for prop in o["properties"]}
+                for o in panel["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+            }
+            return [names[field] for field in order], exprs, overrides
 
-        goodput = expressions(row[0][1])["Within SLO"]
-        met, ended = goodput.split(" / ", 1)
+        request_columns, requests, request_styles = columns(row[0][1])
+        latency_columns, latency, latency_styles = columns(row[1][1])
+        self.assertEqual(
+            request_columns,
+            [
+                "Within SLO",
+                "Offered",
+                "Completed",
+                "Cancelled",
+                "Dropped",
+                "Refused",
+                "Rejected",
+                "Failed",
+                "Expired",
+            ],
+        )
+        self.assertEqual(latency_columns, ["TTFT / SLO", "TPOT / SLO", "TTFT p95", "TPOT p95"])
+        met, ended = requests["Within SLO"].split(" / ", 1)
         self.assertIn("narwhal_slo_met_total", met)
-        for outcome in ("served", "failed", "refused", "rejected", "expired", "cancelled"):
-            self.assertIn(f"narwhal_{outcome}_total", ended)
-        self.assertNotIn("narwhal_offered_total", ended)
-        for _, name in row:
-            self.assertEqual(len(expressions(name)), 2)
-        # Ratios and percentiles summarise the displayed interval.
-        for _, name in row[:4]:
-            for expr in expressions(name).values():
-                self.assertIn("[$__range]", expr)
-                self.assertNotIn("$__rate_interval", expr)
-        for (_, name), metric in zip(row[2:4], ("ttft", "tpot"), strict=True):
-            share = expressions(name)["Of SLO"]
+        missed, dropped_ended = requests["Dropped"].split(" / ", 1)
+        for outcome in ("refused", "rejected", "failed", "expired"):
+            self.assertIn(f"narwhal_{outcome}_total", missed)
+        for total in (ended, dropped_ended):
+            for outcome in ("served", "failed", "refused", "rejected", "expired", "cancelled"):
+                self.assertIn(f"narwhal_{outcome}_total", total)
+            self.assertNotIn("narwhal_offered_total", total)
+        counts = {
+            "Offered": "offered",
+            "Completed": "served",
+            "Cancelled": "cancelled",
+            "Refused": "refused",
+            "Rejected": "rejected",
+            "Failed": "failed",
+            "Expired": "expired",
+        }
+        for name, metric in counts.items():
+            self.assertTrue(
+                requests[name].startswith(f"round(sum(increase(narwhal_{metric}_total{{"),
+                requests[name],
+            )
+        # Every column summarises the displayed interval.
+        for expr in [*requests.values(), *latency.values()]:
+            self.assertIn("[$__range]", expr)
+            self.assertNotIn("$__rate_interval", expr)
+        for metric in ("ttft", "tpot"):
+            share = latency[f"{metric.upper()} / SLO"]
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
-        self.assertTrue(expressions(row[4][1])["Flips"].startswith("round(sum(increase("))
-        # Latency values pick their own precision so milliseconds fit beside the share.
-        for _, name in row[2:4]:
-            config = elements[name]["spec"]["vizConfig"]["spec"]["fieldConfig"]
-            self.assertNotIn("decimals", config["defaults"])
-            p95 = next(o for o in config["overrides"] if o["matcher"]["options"] == "p95")
-            self.assertNotIn("decimals", [prop["id"] for prop in p95["properties"]])
+        self.assertTrue(latency["TPOT p95"].endswith(" * 1000"))
+        # Each router configuration's p95 is divided by that configuration's SLO.
+        for metric in ("ttft", "tpot"):
+            share = latency[f"{metric.upper()} / SLO"]
+            self.assertIn("sum by (instance, slo, le)", share)
+            self.assertIn("/ on(instance, slo)", share)
+            self.assertIn("max_over_time(narwhal_slo_seconds{", share)
+        # Status values colour their cells, as the engine table colours Role and State.
+        for styles, name in (
+            (request_styles, "Within SLO"),
+            (request_styles, "Dropped"),
+            (latency_styles, "TTFT / SLO"),
+            (latency_styles, "TPOT / SLO"),
+        ):
+            self.assertEqual(styles[name]["unit"], "percentunit")
+            self.assertEqual(styles[name]["custom.cellOptions"]["type"], "color-background")
+        self.assertEqual(
+            (latency_styles["TTFT p95"]["unit"], latency_styles["TTFT p95"]["decimals"]),
+            ("suffix: s", 1),
+        )
+        self.assertEqual(
+            (latency_styles["TPOT p95"]["unit"], latency_styles["TPOT p95"]["decimals"]),
+            ("suffix: ms", 0),
+        )
 
     def test_prompt_token_rates_exclude_kv_transfer(self):
         """Prompt token rates count tokens each engine prefilled itself."""
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        elements = dashboard["spec"]["elements"]
+        elements = dashboard()["spec"]["elements"]
         throughput = next(
             query["spec"]["query"]["spec"]["expr"]
             for query in elements["panel-49"]["spec"]["data"]["spec"]["queries"]
@@ -393,19 +503,19 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_alert_history_timeline_and_outcome_markers(self):
         """Fleet events keeps firing history, and Request outcomes marks alert periods."""
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        events = dashboard["spec"]["elements"]["panel-37"]["spec"]
+        spec = dashboard()["spec"]
+        events = spec["elements"]["panel-37"]["spec"]
         self.assertEqual(events["vizConfig"]["kind"], "state-timeline")
         query = events["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]
         self.assertTrue(query["range"])
         self.assertIn('severity="page"', query["expr"])
         self.assertIn('severity="warn"', query["expr"])
-        outcomes = dashboard["spec"]["elements"]["panel-11"]["spec"]["id"]
+        outcomes = spec["elements"]["panel-11"]["spec"]["id"]
         # Fleet events sits beside Request outcomes at a quarter of the row, and the
         # role history sits beside the engine table.
         grid = {
             item["spec"]["element"]["name"]: item["spec"]
-            for item in dashboard["spec"]["layout"]["spec"]["items"]
+            for item in spec["layout"]["spec"]["items"]
         }
         self.assertEqual(grid["panel-37"]["y"], grid["panel-11"]["y"])
         self.assertEqual(
@@ -417,11 +527,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             (grid["panel-7"]["x"], grid["panel-7"]["width"], grid["panel-8"]["x"]), (0, 16, 16)
         )
         self.assertEqual(grid["panel-8"]["width"], 8)
-        table = dashboard["spec"]["elements"]["panel-7"]["spec"]["vizConfig"]["spec"]["options"]
+        table = spec["elements"]["panel-7"]["spec"]["vizConfig"]["spec"]["options"]
         self.assertEqual(table["sortBy"], [{"displayName": "Engine", "desc": False}])
         markers = {
             annotation["spec"]["name"]: annotation["spec"]
-            for annotation in dashboard["spec"]["annotations"]
+            for annotation in spec["annotations"]
             if annotation["spec"]["name"].startswith("Narwhal")
         }
         self.assertEqual(set(markers), {"Narwhal warnings", "Narwhal pages"})
@@ -433,8 +543,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_request_outcomes_plot_every_terminal_counter_from_zero(self):
         """Each terminal counter has its own unstacked series beside offered."""
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        panel = dashboard["spec"]["elements"]["panel-11"]["spec"]
+        panel = dashboard()["spec"]["elements"]["panel-11"]["spec"]
         expressions = {
             query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
             for query in panel["data"]["spec"]["queries"]

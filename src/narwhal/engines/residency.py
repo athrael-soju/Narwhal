@@ -69,6 +69,16 @@ class _Group:
                 del self.names[entry[0]]
 
 
+@dataclass(frozen=True)
+class ResidencyChanges:
+    """Batch changes after a sequence and the index state read with them."""
+
+    sequence: int
+    block_size: int | None
+    reason: str
+    changes: list[dict[str, Any]]
+
+
 class ResidencyIndex:
     """Apply one engine process's cache events and serve its named resident blocks."""
 
@@ -293,8 +303,8 @@ class ResidencyIndex:
                 "groups": groups,
             }
 
-    def changes_after(self, sequence: int) -> tuple[int, list[dict[str, Any]]] | None:
-        """Return the last applied sequence and the ordered batch changes after `sequence`.
+    def changes_after(self, sequence: int) -> ResidencyChanges | None:
+        """Return the ordered batch changes after `sequence` with the index state.
 
         Each change lists a group's identities that the batch made resident or
         evicted. None means the caller needs a snapshot.
@@ -305,11 +315,11 @@ class ResidencyIndex:
             if sequence > self.sequence:
                 return None
             if sequence == self.sequence:
-                return self.sequence, []
+                return ResidencyChanges(self.sequence, self.block_size, self.reason, [])
             retained = list(self._changes)
             if not retained or retained[0]["sequence"] > sequence + 1:
                 return None
-            return self.sequence, [
+            changes = [
                 {
                     "sequence": c["sequence"],
                     "cleared": c["cleared"],
@@ -325,6 +335,7 @@ class ResidencyIndex:
                 for c in retained
                 if c["sequence"] > sequence
             ]
+            return ResidencyChanges(self.sequence, self.block_size, self.reason, changes)
 
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
         """Return how many leading prompt blocks this engine can reuse."""

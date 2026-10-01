@@ -16,6 +16,11 @@ def buckets_for(slo_s: float) -> tuple[float, ...]:
     return tuple(round(f * slo_s, 6) for f in _SLO_FRACTIONS)
 
 
+def slo_label(slo_s: float) -> str:
+    """Label value naming the target that scaled a histogram's edges."""
+    return f"{slo_s:g}"
+
+
 @dataclass
 class Histogram:
     """Prometheus histogram with fixed bucket edges."""
@@ -24,6 +29,7 @@ class Histogram:
     counts: list[int] = field(default_factory=list)
     total: float = 0.0
     n: int = 0
+    labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.counts:
@@ -40,12 +46,19 @@ class Histogram:
     def render(self, name: str, help_text: str) -> list[str]:
         """Render the histogram's Prometheus exposition lines."""
         out = [f"# HELP {name} {help_text}", f"# TYPE {name} histogram"]
+        prefix = "".join(f'{k}="{v}",' for k, v in self.labels.items())
+        series = "{" + prefix[:-1] + "}" if prefix else ""
         for edge, count in zip(self.buckets, self.counts, strict=True):
-            out.append(f'{name}_bucket{{le="{edge}"}} {count}')
-        out.append(f'{name}_bucket{{le="+Inf"}} {self.n}')
-        out.append(f"{name}_sum {self.total}")
-        out.append(f"{name}_count {self.n}")
+            out.append(f'{name}_bucket{{{prefix}le="{edge}"}} {count}')
+        out.append(f'{name}_bucket{{{prefix}le="+Inf"}} {self.n}')
+        out.append(f"{name}_sum{series} {self.total}")
+        out.append(f"{name}_count{series} {self.n}")
         return out
+
+
+def slo_histogram(slo_s: float) -> Histogram:
+    """Histogram whose edges scale with `slo_s`, labelled with that target."""
+    return Histogram(buckets_for(slo_s), labels={"slo": slo_label(slo_s)})
 
 
 def _lines(
@@ -272,7 +285,7 @@ def _render_refusals(state: dict) -> list[str]:
     )
     out += _lines(
         "narwhal_rejected_total",
-        "Requests rejected by authentication or a concurrency limit",
+        "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness",
         "counter",
         [({}, state.get("admission", {}).get("rejected", 0))],
     )
@@ -459,7 +472,7 @@ def _render_demand(state: dict) -> list[str]:
 
 
 def _render_availability(state: dict) -> list[str]:
-    """Render engine ejections, breaker state and prefill-floor breaches."""
+    """Render engine ejections, quarantines, breaker state and prefill-floor breaches."""
     out: list[str] = []
     out += _lines(
         "narwhal_ejected_instances",
@@ -472,6 +485,12 @@ def _render_availability(state: dict) -> list[str]:
         "1 while this instance is ejected",
         "gauge",
         [({"iid": iid}, 1) for iid in state.get("ejected", [])],
+    )
+    out += _lines(
+        "narwhal_engine_quarantined",
+        "1 while a failure quarantine or inference-probe hold excludes the engine from placement",
+        "gauge",
+        [({"iid": iid}, 1) for iid in state.get("quarantined", [])],
     )
     breaker = state.get("breaker") or {}
     streak_samples: list[tuple[Mapping[str, str], float | int]] = [
@@ -723,7 +742,7 @@ def _render_slo(state: dict) -> list[str]:
         "Configured service-level latency budget in seconds",
         "gauge",
         [
-            ({"metric": metric}, float(slo[field]))
+            ({"metric": metric, "slo": slo_label(float(slo[field]))}, float(slo[field]))
             for metric, field in (("ttft", "ttft_s"), ("tpot", "tpot_s"))
             if slo.get(field) is not None
         ],

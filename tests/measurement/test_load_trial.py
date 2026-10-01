@@ -258,6 +258,29 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
             workload = trial.load_workload(args.out / "workload.json")
             self.assertEqual(workload["token_pool"], [11, 12, 13])
 
+    async def test_prepare_rejects_a_workload_that_run_rejects(self):
+        def handler(request):
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": ""}]})
+            return httpx.Response(
+                200, json={"choices": [{"token_ids": list(range(32)), "finish_reason": "length"}]}
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(
+                out=Path(directory),
+                input_tokens=8192,
+                output_tokens=128,
+                seed=1729,
+                prefix_tokens=None,
+                families=None,
+            )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.assertRaisesRegex(ValueError, "Workload requires a model"):
+                    await trial.prepare(client, "http://test", args)
+            self.assertFalse((args.out / "seed-response.json").exists())
+            self.assertFalse((args.out / "workload.json").exists())
+
 
 @contextmanager
 def local_router():

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
-from .prefill import prefill_seconds
+from .prefill import prefill_seconds, resident_prefill_seconds
 
 # Projections reuse a waiting request's cache evidence checked within this many seconds.
 CACHE_RECHECK_S = 0.25
@@ -301,13 +301,10 @@ class SplitScorer:
         self.monitor = demand.monitor
         self.scheduler = demand.scheduler
 
-    def _recheck(self, waiting: Iterable[Request]) -> None:
+    def recheck(self, waiting: Iterable[Request]) -> None:
         """Refresh the cache evidence of requests waiting for prefill placement."""
-        recheck = self.scheduler.recheck_cache_evidence
-        if recheck is not None:
-            for row in waiting:
-                if row.phase is Phase.PREFILL and row.cached_tokens:
-                    recheck(row, CACHE_RECHECK_S)
+        for row in waiting:
+            self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
 
     def project_prefill(
         self,
@@ -336,7 +333,7 @@ class SplitScorer:
         waiting = [row for row in self.monitor.waiting.values() if row.phase is Phase.PREFILL]
         if request is not None and all(row.rid != request.rid for row in waiting):
             waiting.append(request)
-        self._recheck(waiting)
+        self.recheck(waiting)
         if not waiting:
             return None
         # Stable sorting preserves queue publication order when several offers
@@ -347,7 +344,7 @@ class SplitScorer:
         resident_prefill = 0.0
         for inst in pool:
             profile = profiles[inst.iid]
-            resident = sum(prefill_seconds(profile, row) for row in inst.prefill.values())
+            resident = resident_prefill_seconds(profile, inst)
             penalty = (
                 self.scheduler.health.penalty_s
                 if self.scheduler.health is not None
@@ -417,13 +414,12 @@ class SplitScorer:
             if (profile := self.scheduler.profiles.get(inst.iid)) is not None
         )
         waiting = tuple(self.monitor.waiting.values())
-        self._recheck(waiting)
         resident_prefill = 0.0
         resident_covered = True
         for inst in instances:
             profile = self.scheduler.profiles.get(inst.iid)
             if profile is not None:
-                resident_prefill += sum(prefill_seconds(profile, r) for r in inst.prefill.values())
+                resident_prefill += resident_prefill_seconds(profile, inst)
             if inst.decode:
                 resident_covered = (
                     resident_covered

@@ -27,9 +27,9 @@ Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect s
 
 ### Metric boundaries
 
-Goodput, Load, the headline p95 values and the flip count sum `increase()` over the displayed interval.
+The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
 
-**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance` and `le`. **Request waiting time** uses the same `instance` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
+**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance`, `slo` and `le`. **Request waiting time** uses the same `instance`, `slo` and `le` grouping to calculate queue-wait and seat-time p95. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 

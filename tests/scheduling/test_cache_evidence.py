@@ -8,32 +8,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
-from narwhal.scheduling.costs import prefill_seconds
 from narwhal.scheduling.demand import Arrival
+from narwhal.scheduling.prefill import prefill_seconds
 from narwhal.scheduling.scoring import CACHE_RECHECK_S
 from narwhal.serving import router as router_module
 from narwhal.serving.app import create_app
 from narwhal.types import Request, Role
-from tests.fixtures import fleet, profile
+from tests.fixtures import fleet, hold_prefix, profile, put_warm, warm
 
 BLOCK = 4
-
-
-def warm(iid, **changes):
-    """Return a profile with a warm fit that makes cached prefill cheap."""
-    return replace(
-        profile(iid, ttft_a=1e-6, ttft_b=0.002, ttft_c=0.01),
-        cached_ttft_a=1e-8,
-        cached_ttft_b=0.0001,
-        cached_ttft_c=0.01,
-        cached_ttft_d=0.0,
-        cached_cv_mape=0.05,
-        cached_min_prefix_tokens=4,
-        cached_max_prefix_tokens=64,
-        cached_min_suffix_tokens=1,
-        cached_max_suffix_tokens=64,
-        **changes,
-    )
 
 
 class CacheEvidenceTests(unittest.TestCase):
@@ -50,11 +33,7 @@ class CacheEvidenceTests(unittest.TestCase):
     def hold(self, iid, tokens, *, salt=None):
         """Make one engine's residency view hold every full block of `tokens`."""
         namespace = replace(self.namespace, cache_salt=salt)
-        view = self.router.residency.view(iid)
-        view.known, view.block_size = True, BLOCK
-        view.groups = {
-            "0": ("full_attention", None, set(block_identities(namespace, tokens, BLOCK)))
-        }
+        hold_prefix(self.router.residency.view(iid), namespace, tokens, BLOCK)
 
     def test_sizing_reports_each_engines_cached_prompt_tokens(self):
         prompt = list(range(22))
@@ -69,39 +48,40 @@ class CacheEvidenceTests(unittest.TestCase):
         self.assertEqual(identities, {BLOCK: block_identities(self.namespace, prompt[:16], BLOCK)})
         # The final prompt token is always computed.
         self.assertEqual(
-            self.router.prefix_cache_tokens({"prompt": prompt[:16]}, prompt[:16])[self.first], 12
+            self.router.prefix_cache_evidence({"prompt": prompt[:16]}, prompt[:16])[0][self.first],
+            12,
         )
 
     def test_evidence_needs_the_same_namespace_text_only_and_known_residency(self):
         prompt = list(range(16))
         self.hold(self.first, prompt, salt="salt")
-        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
         self.assertEqual(
-            self.router.prefix_cache_tokens({"cache_salt": "salt"}, prompt), {self.first: 12}
+            self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {self.first: 12}
         )
         image = {
             "messages": [{"role": "user", "content": [{"type": "image_url"}]}],
             "cache_salt": "salt",
         }
-        self.assertEqual(self.router.prefix_cache_tokens(image, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence(image, prompt)[0], {})
         self.router.residency.view(self.first).known = False
-        self.assertEqual(self.router.prefix_cache_tokens({"cache_salt": "salt"}, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {})
         self.router.cfg.engine_contract = None
         self.router.residency.view(self.first).known = True
-        self.assertEqual(self.router.prefix_cache_tokens({"cache_salt": "salt"}, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {})
 
     def test_fields_that_change_the_prefilled_tokens_carry_no_evidence(self):
         """Truncation and template inputs outside token counting leave the request cold."""
         prompt = list(range(16))
         self.hold(self.first, prompt)
-        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {self.first: 12})
+        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {self.first: 12})
         for field, value in (
             ("truncate_prompt_tokens", 8),
             ("documents", [{"text": "doc"}]),
             ("reasoning_effort", "low"),
         ):
             with self.subTest(field=field):
-                self.assertEqual(self.router.prefix_cache_tokens({field: value}, prompt), {})
+                self.assertEqual(self.router.prefix_cache_evidence({field: value}, prompt)[0], {})
 
     def test_a_speculative_decoding_contract_prices_cold(self):
         prompt = list(range(16))
@@ -109,7 +89,7 @@ class CacheEvidenceTests(unittest.TestCase):
         self.router.cfg.engine_contract = contract
         self.namespace = CacheNamespace(self.cfg.model, contract.fingerprint())
         self.hold(self.first, prompt)
-        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
 
     def test_boundary_state_must_sit_at_the_reusable_prefix_end(self):
         """A block-aligned prompt reuses at most the blocks before its final token."""
@@ -122,9 +102,9 @@ class CacheEvidenceTests(unittest.TestCase):
             "0": ("full_attention", None, set(blocks)),
             "1": ("mamba", None, {blocks[1]}),
         }
-        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {})
+        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
         view.groups["1"] = ("mamba", None, {blocks[0]})
-        self.assertEqual(self.router.prefix_cache_tokens({}, prompt), {self.first: 4})
+        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {self.first: 4})
 
     def test_token_ids_outside_the_identity_range_carry_no_evidence(self):
         prompt = list(range(16))
@@ -152,8 +132,7 @@ class CacheEvidenceTests(unittest.TestCase):
         scheduler = self.router.scheduler
         role = scheduler.monitor.instances[self.first].role
         for iid in (self.first, self.second):
-            digest = scheduler.profiles.get(iid).generation_digest
-            scheduler.profiles.put(warm(iid, generation_digest=digest))
+            put_warm(scheduler.profiles, iid)
             scheduler.monitor.instances[iid].role = role
         cold = Request("cold", 40)
         placed = scheduler.schedule(cold)
@@ -180,8 +159,7 @@ class CacheEvidenceTests(unittest.TestCase):
         scheduler = self.router.scheduler
         role = scheduler.monitor.instances[self.first].role
         for iid in (self.first, self.second):
-            digest = scheduler.profiles.get(iid).generation_digest
-            scheduler.profiles.put(warm(iid, generation_digest=digest))
+            put_warm(scheduler.profiles, iid)
             scheduler.monitor.instances[iid].role = role
         cold_iid = scheduler.schedule(Request("cold", 40)).iid
         other = self.second if cold_iid == self.first else self.first
@@ -202,8 +180,7 @@ class PlacementRecheckTests(unittest.TestCase):
         self.first, self.second = (spec.iid for spec in self.cfg.engines)
         role = self.scheduler.monitor.instances[self.first].role
         for iid in (self.first, self.second):
-            digest = self.scheduler.profiles.get(iid).generation_digest
-            self.scheduler.profiles.put(warm(iid, generation_digest=digest))
+            put_warm(self.scheduler.profiles, iid)
             self.scheduler.monitor.instances[iid].role = role
         self.namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
         self.prompt = list(range(40))
@@ -211,9 +188,7 @@ class PlacementRecheckTests(unittest.TestCase):
         cold_iid = self.scheduler.schedule(Request("cold", 40)).iid
         self.warm_iid = self.second if cold_iid == self.first else self.first
         self.view = self.router.residency.view(self.warm_iid)
-        self.view.known, self.view.block_size, self.view.sequence = True, BLOCK, 5
-        self.blocks = block_identities(self.namespace, self.prompt, BLOCK)
-        self.view.groups = {"0": ("full_attention", None, set(self.blocks))}
+        self.blocks = hold_prefix(self.view, self.namespace, self.prompt, BLOCK, sequence=5)
 
     def sized(self):
         cached, sequences, identities = self.router.prefix_cache_evidence({}, self.prompt)
@@ -264,7 +239,7 @@ class PlacementRecheckTests(unittest.TestCase):
         request.demand_arrival = demand.resize_arrival(
             observation, len(self.prompt), 4, at=now, cached_tokens=request.cached_tokens
         )
-        request.demand_arrived_at = now
+        request.arrived_at = now
         warm = demand.estimate(now, window_s=60.0, step_s=1.0)[0]
         self.view.forget("engine restarted")
         self.scheduler.schedule(request)
@@ -294,6 +269,7 @@ class PlacementRecheckTests(unittest.TestCase):
 
         def captured():
             controller._demand(now)
+            controller.scorer.recheck(self.scheduler.monitor.waiting.values())
             return controller.scorer.capture(
                 now,
                 controller.last_demand,
@@ -309,6 +285,36 @@ class PlacementRecheckTests(unittest.TestCase):
         self.assertAlmostEqual(controller.scorer.project_prefill(now).queued_prefill_s, cold_price)
         self.assertAlmostEqual(captured().queued_prefill_s, cold_price)
         self.assertEqual(request.cached_tokens, {})
+
+    def test_the_reactive_step_captures_rechecked_waiting_evidence(self):
+        controller = self.router.controller
+        demand = controller.demand
+        now = self.router._clock()
+        request = self.sized()
+        observation = demand.saw_arrival(len(self.prompt), wanted_len=4, at=now)
+        request.demand_arrival = demand.resize_arrival(
+            observation, len(self.prompt), 4, at=now, cached_tokens=request.cached_tokens
+        )
+        request.arrived_at = now
+        self.scheduler.monitor.waiting[request.rid] = request
+        self.view.forget("engine restarted")
+        controller._last_step -= controller.step_s
+        captured = []
+        capture = controller.scorer.capture
+
+        def spy(*args, **kwargs):
+            captured.append(capture(*args, **kwargs))
+            return captured[-1]
+
+        with patch.object(controller.scorer, "capture", side_effect=spy):
+            controller.step()
+        cold_price = self.scheduler.profiles.get(self.warm_iid).prefill_time(40)
+        self.assertEqual(len(captured), 1)
+        self.assertAlmostEqual(captured[0].queued_prefill_s, cold_price)
+        self.assertEqual(request.cached_tokens, {})
+        self.assertEqual([row.value for row in demand.arrivals.rows()], [Arrival(len(self.prompt))])
+        [(_, option)] = captured[0].demand_options
+        self.assertAlmostEqual(controller.last_demand.prefill_engines, option.prefill_engines)
 
     def test_projections_recheck_waiting_evidence_once_per_interval(self):
         """Projections reuse fresh evidence; placement and unknown views recheck at once."""
@@ -354,9 +360,7 @@ class PlacementRecheckTests(unittest.TestCase):
 
     def test_long_prompts_hash_in_a_worker_thread(self):
         long = list(range(router_module.HASH_THREAD_TOKENS + 8))
-        self.view.groups = {
-            "0": ("full_attention", None, set(block_identities(self.namespace, long, BLOCK)))
-        }
+        hold_prefix(self.view, self.namespace, long, BLOCK)
         for prompt, threaded in ((long, True), (self.prompt, False)):
             with (
                 self.subTest(tokens=len(prompt)),
@@ -380,8 +384,7 @@ class SharedCostContractTests(unittest.TestCase):
         self.scheduler.recheck_cache_evidence = None
         self.iid = self.cfg.engines[0].iid
         for spec in self.cfg.engines:
-            digest = self.scheduler.profiles.get(spec.iid).generation_digest
-            self.scheduler.profiles.put(warm(spec.iid, generation_digest=digest))
+            put_warm(self.scheduler.profiles, spec.iid)
             self.scheduler.monitor.instances[spec.iid].role = self.scheduler.monitor.instances[
                 self.iid
             ].role

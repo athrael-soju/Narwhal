@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 import tools.deployment.launch_engine as launcher
 from tests.deployment.fixtures import (
     cache_settings_line,
+    cuda_engine,
     engine_config_modules,
     launcher_inputs,
     runtime,
@@ -175,18 +176,9 @@ class EngineLauncherTests(unittest.TestCase):
                 tempfile.TemporaryDirectory() as folder,
             ):
                 record, env = launcher_inputs(Path(folder))
-                record.update(
-                    gpu_ids=["0"],
-                    tensor_parallel_size=1,
-                    gpu_visibility_env="CUDA_VISIBLE_DEVICES",
-                    accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
-                    vllm_args=["--tensor-parallel-size", "1"],
-                )
+                cuda_engine(record, visible=visible)
+                record["vllm_args"] = ["--tensor-parallel-size", "1"]
                 record["transfer"]["gpu_tls"] = gpu_tls
-                record["environment"] = {
-                    "CUDA_VISIBLE_DEVICES": visible,
-                    "UCX_NET_DEVICES": "fabric0",
-                }
                 if cache is not None:
                     record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
                 plan, values = build(record, env, Path(folder) / "launch")
@@ -381,18 +373,8 @@ class EngineLauncherTests(unittest.TestCase):
                 root = Path(folder)
                 record, env = launcher_inputs(root)
                 if ipc:
-                    record.update(
-                        gpu_ids=["0"],
-                        tensor_parallel_size=1,
-                        gpu_visibility_env="CUDA_VISIBLE_DEVICES",
-                        accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
-                        vllm_args=["--tensor-parallel-size", "1"],
-                    )
-                    record["transfer"]["gpu_tls"] = "cuda"
-                    record["environment"] = {
-                        "CUDA_VISIBLE_DEVICES": "0,1",
-                        "UCX_NET_DEVICES": "fabric0",
-                    }
+                    cuda_engine(record, visible="0,1")
+                    record["vllm_args"] = ["--tensor-parallel-size", "1"]
                 if cache is not None:
                     record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
                 Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))

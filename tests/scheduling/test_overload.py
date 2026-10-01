@@ -6,22 +6,18 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.config import FleetConfig
-from narwhal.profiling.store import ProfileStore
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.types import Phase, Request, Role
-from tests.fixtures import ROOT, fleet, profile
+from tests.fixtures import fleet
 
 
 class PinnedPlacementTests(unittest.TestCase):
     def router(self, *, pinned):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        cfg = fleet(Path(folder.name))
-        if pinned:
-            cfg.engines = [replace(spec, pin=True) for spec in cfg.engines]
+        cfg = fleet(Path(folder.name), pinned=("e0", "e3") if pinned else ())
         return create_app(cfg).state.router
 
     def test_pinned_prefill_engines_take_no_decode_legs(self):
@@ -47,13 +43,7 @@ class PinnedPlacementTests(unittest.TestCase):
         """An unpinned engine covering another role's legs stays while it alone covers them."""
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
-        e0, e1, e3 = cfg.engines[0], cfg.engines[1], cfg.engines[3]
-        cfg.engines = [e0, replace(e1, pin=True), replace(e3, pin=True)]
-        cfg.profiles_path = Path(folder.name) / "profiles.json"
-        store = ProfileStore(cfg.profiles_path)
-        for spec in cfg.engines:
-            store.put(profile(spec.iid))
+        cfg = fleet(Path(folder.name), engines=("e0", "e1", "e3"), pinned=("e1", "e3"))
         scheduler = create_app(cfg).state.router.scheduler
         self.assertTrue(scheduler.quarantine("e3", 30.0))
         self.assertEqual(scheduler.schedule(Request("a", 10, phase=Phase.DECODE)).iid, "e0")
@@ -67,16 +57,10 @@ class PinnedPlacementTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         for remove in ("eject", "drain"):
             with self.subTest(remove=remove):
-                cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
-                cfg.engines = [
-                    replace(spec, pin=True)
-                    for spec in cfg.engines
-                    if spec.iid in ("e0", "e3", "e4", "e5")
-                ]
-                cfg.profiles_path = Path(folder.name) / f"profiles-{remove}.json"
-                store = ProfileStore(cfg.profiles_path)
-                for spec in cfg.engines:
-                    store.put(profile(spec.iid))
+                root = Path(folder.name) / remove
+                root.mkdir()
+                engines = ("e0", "e3", "e4", "e5")
+                cfg = fleet(root, engines=engines, pinned=engines)
                 scheduler = create_app(cfg).state.router.scheduler
                 self.assertTrue(scheduler.quarantine("e3", 30.0))
                 getattr(scheduler, remove)("e4")
@@ -92,6 +76,14 @@ class PinnedPlacementTests(unittest.TestCase):
                 router.scheduler.eject("e3")
                 self.assertIs(router.scheduler.role_placeable(Role.DECODE), placeable)
                 self.assertTrue(router.scheduler.role_placeable(Role.PREFILL))
+
+    def test_reassigned_pins_reach_the_availability_rule(self):
+        """Pins set after construction decide which engines a hold may remove."""
+        scheduler = self.router(pinned=False).scheduler
+        scheduler.pinned = frozenset({"e0", "e3"})
+        self.assertFalse(scheduler.quarantine("e3", 30.0))
+        scheduler.pinned = frozenset()
+        self.assertTrue(scheduler.quarantine("e3", 30.0))
 
 
 class DispatcherFallbackTests(unittest.IsolatedAsyncioTestCase):

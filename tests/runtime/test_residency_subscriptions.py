@@ -10,7 +10,7 @@ from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex
 from narwhal.runtime.residency import ResidencySubscriptions
-from tests.fixtures import ROOT
+from tests.fixtures import ROOT, hold_prefix
 
 SIDECAR = "http://sidecar:8010"
 
@@ -169,3 +169,35 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         bare = ResidencySubscriptions([EngineSpec("e2", "http://engine")])
         await bare.refresh(cold)
         self.assertEqual(bare.view("e2").reason, "engine has no attestation sidecar")
+
+
+class ResidencyMatchTests(unittest.TestCase):
+    """Prompt identities match known views that report a block size."""
+
+    def test_match_covers_every_view_or_the_named_engines(self):
+        contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
+        namespace = CacheNamespace("model", contract.fingerprint())
+        prompt = tuple(range(16))
+        engines = ("full", "half", "unknown", "unsized", "coarse")
+        subscriptions = ResidencySubscriptions(
+            [EngineSpec(iid, "http://engine") for iid in engines]
+        )
+        views = subscriptions.views
+        names = hold_prefix(views["full"], namespace, prompt, 4, sequence=7)
+        hold_prefix(views["half"], namespace, prompt[:8], 4)
+        hold_prefix(views["unknown"], namespace, prompt, 4, sequence=2)
+        views["unknown"].known = False
+        hold_prefix(views["unsized"], namespace, prompt, 4)
+        views["unsized"].block_size = None
+        hold_prefix(views["coarse"], namespace, prompt, 8)
+        self.assertEqual(subscriptions.block_sizes(), {4, 8})
+        by_size = {4: names}
+        self.assertEqual(
+            subscriptions.match(by_size), ({"full": 16, "half": 8}, {"full": 7}, {4: names})
+        )
+        self.assertEqual(
+            subscriptions.match(by_size, engines=["half", "unknown", "unsized", "missing"]),
+            ({"half": 8}, {}, {4: names[:2]}),
+        )
+        self.assertEqual(subscriptions.match(by_size, engines=[]), ({}, {}, {}))
+        self.assertEqual(subscriptions.match({}), ({}, {}, {}))

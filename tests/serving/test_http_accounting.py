@@ -11,16 +11,16 @@ from unittest.mock import patch
 
 import httpx
 
-from narwhal.engines.prefix import CacheNamespace, block_identities
+from narwhal.engines.prefix import CacheNamespace
 from narwhal.serving import execution
 from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
+from narwhal.serving.response import RequestStreamResponse
 from narwhal.serving.router import NarwhalRouter
 from narwhal.serving.saturation import SIZING_MIN_SAMPLES, RecentDelays
 from narwhal.types import Phase, Request, Role
-from tests.fixtures import fleet, invalid_token_choices
-from tests.scheduling.test_cache_evidence import warm
+from tests.fixtures import fleet, hold_prefix, invalid_token_choices, put_warm
 
 
 class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
@@ -104,13 +104,10 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         client = self.client()
         scheduler = self.router.scheduler
         prefill = next(i for i in scheduler.monitor.instances.values() if i.role is Role.PREFILL)
-        digest = scheduler.profiles.get(prefill.iid).generation_digest
-        scheduler.profiles.put(warm(prefill.iid, generation_digest=digest))
+        put_warm(scheduler.profiles, prefill.iid)
         prompt = list(range(40))
         namespace = CacheNamespace(self.cfg.model, self.cfg.engine_contract.fingerprint())
-        view = self.router.residency.view(prefill.iid)
-        view.known, view.block_size, view.sequence = True, 4, 3
-        view.groups = {"0": ("full_attention", None, set(block_identities(namespace, prompt, 4)))}
+        hold_prefix(self.router.residency.view(prefill.iid), namespace, prompt, 4, sequence=3)
         response = await client.post(
             "/v1/completions",
             json={"model": self.cfg.model, "prompt": prompt, "max_tokens": 1, "stream": False},
@@ -281,11 +278,23 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_requests_meet_the_slo_only_within_both_targets(self):
         """A completion counts toward the SLO only when TTFT and TPOT stay within it."""
         client = self.client()
+        slo = self.router.cfg.slo
         self.assertEqual((await self.post(client)).status_code, 200)
         self.assertEqual((self.router.served, self.router.slo_met), (1, 1))
-        self.router.cfg.slo = replace(self.router.cfg.slo, ttft_s=1e-9)
+        self.router.cfg.slo = replace(slo, ttft_s=1e-9)
         self.assertEqual((await self.post(client)).status_code, 200)
         self.assertEqual((self.router.served, self.router.slo_met), (2, 1))
+        self.decode_frames = [
+            {"choices": [{"index": 0, "text": "x", "token_ids": [1], "finish_reason": None}]},
+            {"choices": [{"index": 0, "text": "y", "token_ids": [2], "finish_reason": "length"}]},
+        ]
+        self.router.cfg.slo = replace(slo, tpot_s=1e-9)
+        response = await client.post(
+            "/v1/completions",
+            json={"model": self.cfg.model, "prompt": "hello", "max_tokens": 2, "stream": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual((self.router.served, self.router.slo_met), (3, 1))
         metrics = await client.get("/metrics")
         self.assertIn("narwhal_slo_met_total 1", metrics.text)
 
@@ -468,7 +477,7 @@ class HeldStreamTests(unittest.IsolatedAsyncioTestCase):
         first = await anext(stream)
         finished = []
         state = SimpleNamespace(finish=lambda terminal: finished.append(terminal))
-        response = execution.held_stream(first, stream, state)
+        response = RequestStreamResponse(stream, state, first=first)
         await response.aclose()
         self.assertEqual(closed, [True])
         self.assertEqual(finished, ["cancelled"])

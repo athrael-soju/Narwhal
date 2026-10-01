@@ -1,4 +1,4 @@
-"""Engine request headers and predictive refusal responses."""
+"""Engine request headers, overload rejections and predictive refusal responses."""
 
 from __future__ import annotations
 
@@ -18,6 +18,16 @@ def forward_headers(headers: dict[str, str]) -> dict[str, str]:
         (value for name, value in headers.items() if name.lower() == "x-request-id"), None
     )
     return {"x-request-id": request_id} if request_id is not None else {}
+
+
+def overloaded_response(state: RequestLifecycle, message: str) -> JSONResponse:
+    """Record a capacity rejection and return its 429 response."""
+    state.finish("rejected", error=message, status=429)
+    return JSONResponse(
+        status_code=429,
+        headers={"retry-after": "1"},
+        content={"error": {"message": message, "type": "server_overloaded_error"}},
+    )
 
 
 def refuse_request(
@@ -89,6 +99,7 @@ def refuse_request(
         cause = "queue"
         log.info("refused %s: priced %.2fs vs %.2fs budget", rid, priced_s, budget)
     state.finish("refused", error=detail, status=429, extra={"refused_cause": cause})
+    state.outcome["public_error"] = message
     return JSONResponse(
         status_code=429,
         headers=headers,

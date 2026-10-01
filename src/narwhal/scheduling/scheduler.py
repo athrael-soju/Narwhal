@@ -18,6 +18,7 @@ from .costs import Cost
 from .health import DriftTracker
 from .monitor import InstanceMonitor
 from .outcomes import OutcomeWindow
+from .prefill import prefill_seconds, resident_prefill_seconds
 
 log = logging.getLogger("narwhal.scheduler")
 
@@ -52,7 +53,6 @@ class GlobalScheduler:
         self.th = thresholds or Thresholds()
         self._clock = clock
         self.health = health
-        self.pinned = pinned
         self.min_prefill = max(1, min_prefill)
         self.min_decode = max(1, min_decode)
         self.advisory = advisory
@@ -102,6 +102,15 @@ class GlobalScheduler:
     def _notify_eject(self, iid: str) -> None:
         if self.on_eject is not None:
             self.on_eject(iid)
+
+    @property
+    def pinned(self) -> frozenset[str]:
+        """Engines that take only their configured role's legs."""
+        return self.availability.pinned
+
+    @pinned.setter
+    def pinned(self, pinned: frozenset[str]) -> None:
+        self.availability.pinned = pinned
 
     @property
     def ejected(self) -> dict[str, float]:
@@ -178,6 +187,14 @@ class GlobalScheduler:
     ) -> list[Instance]:
         """Return endpoints eligible for new work and role changes."""
         return self.availability.live_instances(role, exclude=exclude)
+
+    def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
+        """Return the engines in `instances` that place `role`'s legs."""
+        return self.availability.role_pool(role, instances)
+
+    def role_covered_without(self, iid: str) -> bool:
+        """Return whether another live engine places every role that `iid` places."""
+        return self.availability.role_covered_without(iid)
 
     def cost(self, request: Request, inst: Instance, *, warm: bool = True) -> Cost:
         """Price a request with the current health and prefix-reuse evidence."""
@@ -340,17 +357,14 @@ class GlobalScheduler:
 
     def role_placeable(self, role: Role) -> bool:
         """Return whether a live engine of `role`, or a live unpinned engine, can take a leg."""
-        return any(
-            inst.role is role or inst.iid not in self.pinned for inst in self.live_instances()
-        )
+        return bool(self.role_pool(role, self.live_instances()))
 
     def prefill_ready_s(self, request: Request, inst: Instance) -> float:
         """Return seconds until `request` finishes prefill behind `inst`'s resident queue."""
         profile = self.profiles.get(inst.iid)
         if profile is None:
             return 0.0
-        queue = sum(costs.prefill_seconds(profile, r) for r in inst.prefill.values())
-        return queue + costs.prefill_seconds(profile, request)
+        return resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
 
     def decode_admits(
         self,
@@ -432,7 +446,7 @@ class GlobalScheduler:
             done = 0.0
             for r in inst.prefill.values():
                 if prefill_profile is not None:
-                    done += costs.prefill_seconds(prefill_profile, r)
+                    done += prefill_seconds(prefill_profile, r)
                 spans.append(span(r, done, step))
         events = sorted(
             (t, order, kv)
@@ -466,7 +480,7 @@ class GlobalScheduler:
         while a request waits.
         """
         floors = [
-            costs.prefill_seconds(profile, request)
+            prefill_seconds(profile, request)
             for inst in self._prefill_candidates()
             if (profile := self.profiles.get(inst.iid)) is not None
         ]
@@ -499,9 +513,7 @@ class GlobalScheduler:
         if inst.role is Role.PREFILL:
             indicator = 0.0 if inst.decode else 1.0
             resident = (
-                sum(costs.prefill_seconds(profile, r) for r in inst.prefill.values())
-                if profile
-                else float(inst.prefill_tokens())
+                resident_prefill_seconds(profile, inst) if profile else float(inst.prefill_tokens())
             )
             return (indicator, resident)
         indicator = 0.0 if inst.prefill else 1.0
@@ -736,29 +748,39 @@ class GlobalScheduler:
         # Profiles assume sequential prefill and batched decode, so prefer the
         # matching role whenever that pool has a live engine.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
-        candidates = [i for i in instances if i.role is want] or [
-            i for i in instances if i.iid not in self.pinned
-        ]
+        candidates = self.role_pool(want, instances)
         if not candidates:
             raise RuntimeError("no schedulable instances for the pinned roles")
         if request.phase is Phase.PREFILL:
             request.cache_placement = None
-            if request.cached_tokens and self.recheck_cache_evidence is not None:
-                self.recheck_cache_evidence(request, 0.0)
-        costs = {i.iid: self.cost(request, i) for i in candidates}
+            self.recheck_evidence(request, 0.0)
+        prices = {i.iid: self.cost(request, i) for i in candidates}
 
         # 2. Lowest-cost instance that also meets the SLO.
-        eligible = [i for i in candidates if self.meets_slo(request, costs[i.iid])]
-        if eligible:
-            chosen = min(eligible, key=lambda i: (costs[i.iid], i.iid))
-        else:
+        chosen, served = self._cheapest(request, candidates, prices)
+        if not served:
             # Admission decides whether to accept an over-budget placement.
             # Role changes belong to the monitoring controller.
             self.unserved += 1
-            chosen = min(candidates, key=lambda i: (costs[i.iid], i.iid))
         if request.phase is Phase.PREFILL and request.cached_tokens:
             request.cache_placement = self._cache_placement(request, chosen, candidates)
         return chosen
+
+    def recheck_evidence(self, request: Request, fresh_s: float) -> None:
+        """Refresh a prefill request's cache evidence older than `fresh_s` seconds."""
+        if (
+            request.phase is Phase.PREFILL
+            and request.cached_tokens
+            and self.recheck_cache_evidence is not None
+        ):
+            self.recheck_cache_evidence(request, fresh_s)
+
+    def _cheapest(
+        self, request: Request, candidates: list[Instance], prices: dict[str, Cost]
+    ) -> tuple[Instance, bool]:
+        """Return the cheapest candidate within the SLO, else the cheapest, and whether it fits."""
+        eligible = [i for i in candidates if self.meets_slo(request, prices[i.iid])]
+        return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
 
     def _cache_placement(
         self, request: Request, chosen: Instance, candidates: list[Instance]
@@ -771,15 +793,14 @@ class GlobalScheduler:
             "placed_iid": chosen.iid,
             "placed_cached_tokens": request.cached_tokens.get(chosen.iid, 0),
             "evidence_sequence": request.cache_sequences.get(chosen.iid),
-            "predicted_prefill_s": costs.prefill_seconds(profile, request),
+            "predicted_prefill_s": prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
             "cold_choice_iid": self._cold_choice(request, candidates),
         }
 
     def _cold_choice(self, request: Request, candidates: list[Instance]) -> str:
         cold = {i.iid: self.cost(request, i, warm=False) for i in candidates}
-        eligible = [i for i in candidates if self.meets_slo(request, cold[i.iid])]
-        return min(eligible or candidates, key=lambda i: (cold[i.iid], i.iid)).iid
+        return self._cheapest(request, candidates, cold)[0].iid
 
     def health_pass(self) -> None:
         """Sample live engines and apply drift verdicts."""
@@ -803,11 +824,7 @@ class GlobalScheduler:
             if observed > 0.0 and expected > 0.0:
                 self.health.note(inst.iid, observed / expected)
         for verdict, iid in self.health.tick():
-            if (
-                verdict == "evict"
-                and self.availability.role_covered_without(iid)
-                and self.eject(iid)
-            ):
+            if verdict == "evict" and self.role_covered_without(iid) and self.eject(iid):
                 self.health.evicted(iid)
                 log.warning(
                     "ejected %s after sustained drift",

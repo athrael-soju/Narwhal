@@ -8,7 +8,6 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -19,7 +18,13 @@ from fastapi import FastAPI, HTTPException
 
 from ..cli_support import add_version_argument
 from ..config import EngineContract
-from ..contracts import ATTESTATION, ContractVersionError, validate_document, versioned
+from ..contracts import (
+    ATTESTATION,
+    ContractVersionError,
+    canonical_digest,
+    validate_document,
+    versioned,
+)
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
@@ -63,25 +68,13 @@ class AttestationDocument:
         if unknown:
             raise ValueError(f"unknown attestation field(s): {', '.join(unknown)}")
         contract = _read_contract(raw.get("contract"))
-        sources = raw.get("sources")
-        if not isinstance(sources, dict):
+        if not isinstance(raw.get("sources"), dict):
             raise ValueError("attestation sources must be an object")
-        if not all(
-            isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in sources.items()
-        ):
-            raise ValueError("attestation sources must map field names to nonempty strings")
-        unknown_sources = sorted(set(sources) - set(contract.fields()))
-        if unknown_sources:
-            raise ValueError(
-                f"sources name unknown contract field(s): {', '.join(unknown_sources)}"
-            )
-        missing_sources = sorted(_populated_fields(contract) - set(sources))
-        if missing_sources:
-            raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
+        sources = _read_sources(raw["sources"], contract)
         launch = raw.get("launch")
         if launch is not None and not isinstance(launch, dict):
             raise ValueError("attestation launch must be an object")
-        return cls(contract=contract, sources=dict(sources), launch=launch)
+        return cls(contract=contract, sources=sources, launch=launch)
 
 
 def _read_contract(raw: Any) -> EngineContract:
@@ -145,6 +138,21 @@ def _read_contract(raw: Any) -> EngineContract:
     if contract.image_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", contract.image_digest):
         raise ValueError("contract.image_digest must be an immutable sha256 digest")
     return contract
+
+
+def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
+    """Validate the evidence source named for each populated contract field."""
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
+    ):
+        raise ValueError("attestation sources must map field names to nonempty strings")
+    unknown_sources = sorted(set(raw) - set(contract.fields()))
+    if unknown_sources:
+        raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
+    missing_sources = sorted(_populated_fields(contract) - set(raw))
+    if missing_sources:
+        raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
+    return dict(raw)
 
 
 def _populated_fields(contract: EngineContract) -> set[str]:
@@ -212,10 +220,7 @@ def make_attestation(
 
 def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
     """Digest the contract and launch evidence that fix an engine's timing."""
-    raw = json.dumps(
-        {"contract": contract, "launch": launch}, sort_keys=True, separators=(",", ":")
-    ).encode()
-    return "sha256:" + sha256(raw).hexdigest()
+    return canonical_digest({"contract": contract, "launch": launch})
 
 
 def verify_attestation(
@@ -291,34 +296,12 @@ def verify_attestation(
 
 
 def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
-    raw = {
-        **({"schema": payload["schema"]} if "schema" in payload else {}),
-        "schema_version": payload.get("schema_version"),
-        "contract": payload.get("contract"),
-        "sources": payload.get("sources"),
-    }
-    contract = _read_contract(raw["contract"])
-    sources = raw["sources"]
-    if not isinstance(sources, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in sources.items()
-    ):
-        raise ValueError("attestation sources must map field names to nonempty strings")
-    unknown_sources = sorted(set(sources) - set(contract.fields()))
-    if unknown_sources:
-        raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
-    missing_sources = sorted(_populated_fields(contract) - set(sources))
-    if missing_sources:
-        raise ValueError(f"sources missing contract field(s): {', '.join(missing_sources)}")
-    launch = payload.get("launch")
-    return AttestationDocument(
-        contract, dict(sources), launch=launch if isinstance(launch, dict) else None
-    )
+    contract = _read_contract(payload.get("contract"))
+    return AttestationDocument(contract, _read_sources(payload.get("sources"), contract))
 
 
 def _payload_digest(payload: dict[str, Any]) -> str:
-    unsigned = {k: v for k, v in payload.items() if k != "attestation_digest"}
-    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
-    return "sha256:" + sha256(raw).hexdigest()
+    return canonical_digest({k: v for k, v in payload.items() if k != "attestation_digest"})
 
 
 def build_app(
@@ -390,13 +373,12 @@ def build_app(
         result = index.changes_after(after)
         if result is None:
             raise HTTPException(status_code=410, detail="resynchronise from the residency snapshot")
-        sequence, changes = result
         return {
             "epoch": epoch,
-            "sequence": sequence,
-            "block_size": index.block_size,
-            "reason": index.reason,
-            "changes": changes,
+            "sequence": result.sequence,
+            "block_size": result.block_size,
+            "reason": result.reason,
+            "changes": result.changes,
         }
 
     return app

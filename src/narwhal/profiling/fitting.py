@@ -8,6 +8,8 @@ from collections.abc import Sequence
 
 MAX_PREFILL_FIT_MAPE = 0.20
 MAX_PREFILL_POINT_ERROR = 0.50
+# Warm prefill held-out error above this rejects the fit.
+MAX_CACHED_CV_MAPE = 0.20
 # Lengths each side of the block rule needs for a split fit.
 SPLIT_REGIME_LENGTHS = 2
 # Lengths a split fit needs: its four terms and two residual degrees of freedom.
@@ -81,6 +83,16 @@ def splits_prefill(length: float, block_tokens: int | None) -> bool:
     return block_tokens is not None and length > block_tokens and length % block_tokens != 0
 
 
+def split_step(tokens: float, split: float | None, block_tokens: int | None) -> float:
+    """Return `split` when `tokens` computed tokens end inside a block past the first."""
+    return split if split is not None and splits_prefill(tokens, block_tokens) else 0.0
+
+
+def relative_error(predicted: float, observed: float) -> float:
+    """Return the absolute error of `predicted` as a share of `observed`."""
+    return abs(predicted - observed) / max(observed, 1e-9)
+
+
 def fit_prefill_samples(
     samples: list[tuple[float, float]],
     block_tokens: int | None = None,
@@ -104,7 +116,7 @@ def fit_prefill_samples(
 
     def point_errors(a: float, b: float, c: float, step: float) -> list[float]:
         return [
-            abs(a * length * length + b * length + c + step * flag - elapsed) / max(elapsed, 1e-9)
+            relative_error(a * length * length + b * length + c + step * flag, elapsed)
             for (length, elapsed), flag in zip(representatives, flags, strict=True)
         ]
 
@@ -147,24 +159,7 @@ def fit_decode_plane(samples: list[tuple[float, float, float]]) -> tuple[float, 
     rhs = [sum(row[i] * y for row, y in zip(rows, ys, strict=True)) for i in range(3)]
     # Reject unidentifiable axes even if a boundary fit could hide them.
     _solve(gram, rhs)
-    best = [0.0, 0.0, 0.0]
-    best_error = sum(y * y for y in ys)
-    for mask in range(1, 8):
-        active = [bool(mask & (1 << i)) for i in range(3)]
-        matrix = [
-            [gram[i][j] if active[i] and active[j] else float(i == j) for j in range(3)]
-            for i in range(3)
-        ]
-        coefficients = _solve(matrix, [rhs[i] if active[i] else 0.0 for i in range(3)])
-        if any(value < 0 for value in coefficients):
-            continue
-        error = sum(
-            (sum(a * x for a, x in zip(coefficients, row, strict=True)) - y) ** 2
-            for row, y in zip(rows, ys, strict=True)
-        )
-        if error < best_error:
-            best, best_error = coefficients, error
-    request_slope, kv_slope, intercept = best
+    request_slope, kv_slope, intercept = _nonnegative_fit(rows, ys)
     return kv_slope / k_scale, request_slope / r_scale, intercept
 
 
@@ -177,7 +172,7 @@ def decode_mape(
     errors = []
     for requests, kv_tokens, observed in samples:
         predicted = request_slope * requests + kv_slope * kv_tokens + intercept
-        errors.append(abs(predicted - observed) / max(observed, 1e-9))
+        errors.append(relative_error(predicted, observed))
     return sum(errors) / len(errors) if errors else 0.0
 
 
@@ -226,13 +221,13 @@ def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> li
     return [w / s for w, s in zip(best, scales, strict=True)]
 
 
-def _cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
-    # Terms for a, b, c, d: suffix attention, suffix tokens, constant, prefix read.
+def cached_features(prefix: float, suffix: float) -> tuple[float, float, float, float]:
+    """Return the warm prefill terms for a, b, c, d: suffix attention, suffix, 1, prefix."""
     return (2 * prefix * suffix + suffix * suffix, suffix, 1.0, prefix)
 
 
 # A warm fit needs more cases than it has terms.
-CACHED_FIT_MIN_CASES = len(_cached_features(1.0, 1.0)) + 1
+CACHED_FIT_MIN_CASES = len(cached_features(1.0, 1.0)) + 1
 
 
 def cached_fit_possible(cases: Sequence[tuple[float, float]]) -> bool:
@@ -249,7 +244,7 @@ def _fit_cached_groups(
     groups: list[tuple[float, float, float]],
 ) -> tuple[float, float, float, float]:
     a, b, c, d = _nonnegative_fit(
-        [_cached_features(p, s) for p, s, _ in groups], [y for _, _, y in groups]
+        [cached_features(p, s) for p, s, _ in groups], [y for _, _, y in groups]
     )
     return a, b, c, d
 
@@ -262,7 +257,8 @@ def fit_cached_prefill(
     """Fit warm prefill `c + b*S + d*P + a*(2*P*S + S*S)` from (prefix, suffix, seconds) samples.
 
     Suffixes that split carry the cold `split`. Returns the coefficients, the per-case
-    medians and the leave-one-case-out error.
+    medians and the leave-one-case-out error; raises when that error exceeds
+    `MAX_CACHED_CV_MAPE`.
     """
     if any(not math.isfinite(v) or v < 0 for sample in samples for v in sample):
         raise ValueError("cached prefill samples must be finite and nonnegative")
@@ -276,17 +272,18 @@ def fit_cached_prefill(
         raise ValueError(
             "a cached prefill fit needs two prefix lengths, two suffix lengths and five cases"
         )
-
-    def step(suffix: float) -> float:
-        return split if split and splits_prefill(suffix, block_tokens) else 0.0
-
-    stepless = [(p, s, y - step(s)) for p, s, y in groups]
+    stepless = [(p, s, y - split_step(s, split, block_tokens)) for p, s, y in groups]
     coefficients = _fit_cached_groups(stepless)
     errors = []
     for index, (prefix, suffix, observed) in enumerate(groups):
         weights = _fit_cached_groups(stepless[:index] + stepless[index + 1 :])
-        predicted = step(suffix) + sum(
-            w * f for w, f in zip(weights, _cached_features(prefix, suffix), strict=True)
+        predicted = split_step(suffix, split, block_tokens) + sum(
+            w * f for w, f in zip(weights, cached_features(prefix, suffix), strict=True)
         )
-        errors.append(abs(predicted - observed) / max(observed, 1e-9))
-    return coefficients, groups, sum(errors) / len(errors)
+        errors.append(relative_error(predicted, observed))
+    cv_mape = sum(errors) / len(errors)
+    if cv_mape > MAX_CACHED_CV_MAPE:
+        raise ValueError(
+            f"warm prefill held-out error {cv_mape:.1%} exceeds {MAX_CACHED_CV_MAPE:.0%}"
+        )
+    return coefficients, groups, cv_mape

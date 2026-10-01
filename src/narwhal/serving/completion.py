@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 _INTEGER_FIELDS = ("n", "best_of", "max_tokens", "max_completion_tokens")
+# Request fields that change the prefilled tokens outside the counted render.
+UNCOUNTED_RENDER_FIELDS = ("truncate_prompt_tokens", "documents", "reasoning_effort")
 
 
 def output_cap(body: dict[str, Any]) -> int:
@@ -15,6 +17,27 @@ def output_cap(body: dict[str, Any]) -> int:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return 0
+
+
+def _multimodal(body: dict[str, Any]) -> bool:
+    """Return whether a chat request carries non-text content parts."""
+    for message in body.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list) and any(
+            not isinstance(part, dict) or part.get("type") != "text" for part in content
+        ):
+            return True
+    return False
+
+
+def cacheable_render(body: dict[str, Any]) -> bool:
+    """Return whether the counted render covers every prefilled token of the request.
+
+    Non-text chat content and a set `UNCOUNTED_RENDER_FIELDS` field make it uncacheable.
+    """
+    return not _multimodal(body) and all(
+        body.get(field) is None for field in UNCOUNTED_RENDER_FIELDS
+    )
 
 
 def completion_body_error(body: Any) -> tuple[str, str | None] | None:

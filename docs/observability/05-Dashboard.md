@@ -11,46 +11,47 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 ## Selectors
 
-The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the out-of-service count, the engine table and **Engine role history** to the engines you pick. Both selectors default to All.
+The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. Both selectors default to All.
 
 ## Headline row
 
-Each headline block leads with a status value coloured against its target.
+The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing now.
 
 <div class="narwhal-panel-row stats" markdown>
 
-![Goodput block with 99.6% within SLO and 37.59K requests.](../assets/observability/headline-goodput.png)
+![Requests table with 99.8% within SLO, 18.1K offered, 18.1K completed, 0 cancelled, 0.2% dropped and 29 failed.](../assets/observability/headline-requests.png)
 
-![Load block with 0.4% unserved and 37.79K offered.](../assets/observability/headline-load.png)
+</div>
 
-![TTFT p95 block at 15% of the SLO, 313 ms.](../assets/observability/headline-ttft-p95.png)
+<div class="narwhal-panel-row stats" markdown>
 
-![TPOT p95 block at 34% of the SLO, 15.4 ms.](../assets/observability/headline-tpot-p95.png)
-
-![Engines block with 0 engines out of service and 0 flips.](../assets/observability/headline-engines.png)
+![Latency table with TTFT p95 at 10% and TPOT p95 at 34% of the SLO, 0.2 s and 15 ms.](../assets/observability/headline-latency.png)
 
 ![Router block with admission Ready and 0 firing alerts.](../assets/observability/headline-router.png)
 
 </div>
 
-Goodput, Load, both p95 blocks and the flip count cover the displayed interval. The out-of-service count, admission and alerts show the current state.
+| Requests column | Shows |
+| --- | --- |
+| Within SLO | Share of ended requests that met both the TTFT and TPOT SLOs |
+| Offered, Completed, Cancelled | Requests clients sent, requests completed and requests their clients abandoned |
+| Dropped | Share of ended requests that were refused, rejected, failed or expired |
+| Refused, Rejected, Failed, Expired | The count of each dropped outcome |
 
-**Goodput** shows how many ended requests met both the TTFT and TPOT SLOs, as a share and as a count. The share's total is every completed, failed, refused, rejected, expired and cancelled request.
+Ended requests are completed, failed, refused, rejected, expired and cancelled requests.
 
-**Load** shows the **Unserved** share beside the number of requests clients **Offered**. Unserved counts refused, rejected, failed and expired requests over the same total.
-
-**TTFT p95** and **TPOT p95** give the 95th-percentile time to first token and time per output token, as a share of the SLO and as a time.
-
-**Engines** counts engines in an [out-of-service state](#engine-states) and the role flips in the interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing.
+| Latency column | Shows |
+| --- | --- |
+| TTFT / SLO, TPOT / SLO | 95th-percentile time to first token and time per output token as a share of the SLO the router ran with |
+| TTFT p95, TPOT p95 | The same percentiles as times |
 
 Status colours:
 
 | Value | Green | Amber | Red |
 | --- | --- | --- | --- |
 | Within SLO | 95% or more | 90% to 95% | below 90% |
-| Unserved | below 1% | 1% to 5% | 5% or more |
-| Of SLO | below 80% | 80% to 100% | 100% or more |
-| Out of service | 0 | | 1 or more |
+| Dropped | below 1% | 1% to 5% | 5% or more |
+| TTFT / SLO and TPOT / SLO | below 80% | 80% to 100% | 100% or more |
 | Admission | Ready | | Not ready or Offline |
 | Alerts | 0 | | 1 or more |
 
@@ -101,7 +102,7 @@ In a healthy fleet, **completed** follows **offered** and the other series stay 
 | completed | Requests completed successfully |
 | failed | Requests that ended in an error |
 | refused (predictive) | Requests predictive admission refused for a projected TTFT or decode SLO miss |
-| rejected (capacity) | Requests rejected by authentication or a concurrency limit |
+| rejected (capacity) | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness |
 | expired | Requests terminated by their admission or total deadline |
 | cancelled | Requests their client abandoned before completion |
 | invalid | Malformed or unsupported client requests rejected before dispatch |
@@ -172,7 +173,8 @@ The **State** column shows the most serious state that applies to an engine. The
 | Switching | The engine finishes requests from its previous role after a flip | In service |
 | Backlogged | vLLM reports waiting requests | In service |
 | Probation | Placement ranks the engine lower after latency drift | In service |
-| Verifying | A breaker verification probe is in flight, and an inference probe holds the engine out of placement while other engines cover its role | In service |
+| Verifying | A breaker health or inference probe is in flight | In service |
+| Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement | Out of service |
 | Draining | An operator drain holds the engine out of placement | Out of service |
 | Ejected | The breaker removed the engine from placement | Out of service |
 | Validating | Readmission checks run against the engine | Out of service |

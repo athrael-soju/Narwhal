@@ -18,6 +18,7 @@ from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
+from tests.profiling.fixtures import patched_profile_sweeps
 
 
 class MeasuredStream(httpx.AsyncByteStream):
@@ -578,15 +579,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
         ]
         evidence = {}
-        with (
-            patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
-            patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
-            patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
-            patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
-            patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=[7, 7, 7])),
-            patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
-            redirect_stdout(io.StringIO()),
-        ):
+        with patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]):
             row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
         self.assertEqual(evidence["prefix_cache_hit_tokens"], 0)
         self.assertEqual((row.decode_min_requests, row.decode_max_requests), (1, 16))
@@ -610,16 +603,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             ([7, 3, 3], None),
         ):
             evidence = {}
-            decode_sweep = AsyncMock(return_value=decode)
             with (
                 self.subTest(counters=counters),
-                patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
-                patch.object(probe, "probe_decode", decode_sweep),
-                patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
-                patch.object(probe, "cache_block_tokens", AsyncMock(return_value=None)),
-                patch.object(probe, "prefix_cache_hits", AsyncMock(side_effect=counters)),
-                patch.object(probe, "probe_cached_prefill", AsyncMock(return_value=([], "none"))),
-                redirect_stdout(io.StringIO()),
+                patched_profile_sweeps(prefill, decode, hits=counters),
             ):
                 if message:
                     with self.assertRaisesRegex(RuntimeError, message):
@@ -628,7 +614,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         )
                     self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
                     # Cached prefill fails before the decode sweep runs.
-                    decode_sweep.assert_not_awaited()
+                    probe.probe_decode.assert_not_awaited()
                 else:
                     await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
                     self.assertIsNone(evidence["prefix_cache_hit_tokens"])

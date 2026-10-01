@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -17,9 +16,12 @@ import httpx
 
 from narwhal.config import EngineContract, FleetConfig
 from narwhal.deployment.launch_engine import (
+    digest,
     handshake_policy,
+    read_env,
     registration_layout,
     run_runtime_script,
+    write_private,
 )
 from narwhal.engines.attestation import (
     AttestationDocument,
@@ -32,10 +34,6 @@ from narwhal.engines.attestation import (
 )
 
 
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def read_json(path: Path) -> dict:
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
@@ -43,14 +41,8 @@ def read_json(path: Path) -> dict:
     return value
 
 
-def write_private_text(path: Path, data: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as output:
-        output.write(data)
-
-
-def write_private(path: Path, value: dict) -> None:
-    write_private_text(path, json.dumps(value, indent=2) + "\n")
+def write_private_json(path: Path, value: dict) -> None:
+    write_private(path, json.dumps(value, indent=2) + "\n")
 
 
 def checked_plan(run: Path) -> tuple[dict, dict, str]:
@@ -108,7 +100,7 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
         or startup.get("vllm_version") != checked["vllm_api_version"]
     ):
         raise ValueError("Native startup evidence differs from the live serving plan")
-    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    values = read_env(run / "engine.env")
     key = values.get("VLLM_API_KEY", "")
     headers = {"Authorization": f"Bearer {key}"} if key else None
     identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
@@ -196,7 +188,7 @@ def capture_model_dimensions(run: Path) -> Path:
     if destination.exists():
         raise ValueError("Live model dimensions already exist; retain the capture")
     if native:
-        values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+        values = read_env(run / "engine.env")
         command = [
             plan["python_executable"],
             "-c",
@@ -229,7 +221,7 @@ def capture_model_dimensions(run: Path) -> Path:
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"} if native else None,
     )
     log = run / f"model-dimensions.live-{uuid.uuid4().hex}.log"
-    write_private_text(log, result.stdout + "\nSTDERR\n" + result.stderr)
+    write_private(log, result.stdout + "\nSTDERR\n" + result.stderr)
     if result.returncode:
         raise ValueError(f"Live model dimension inspection failed; inspect {log}")
     try:
@@ -276,7 +268,7 @@ def capture_model_dimensions(run: Path) -> Path:
     else:
         record.update(image_id=checked["image_id"], container_id=identity)
     record["capture_log_sha256"] = digest(log)
-    write_private(destination, record)
+    write_private_json(destination, record)
     return destination
 
 
@@ -286,7 +278,7 @@ def capture_nixl(run: Path) -> Path:
     identity = live_native(run, plan, checked) if native else live_container(run, checked)
     if native:
         command = [plan["python_executable"], "-c", NIXL_CAPTURE]
-        values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+        values = read_env(run / "engine.env")
     else:
         assert isinstance(identity, str)
         command = ["docker", "exec", identity, "python3", "-c", NIXL_CAPTURE]
@@ -310,7 +302,7 @@ def capture_nixl(run: Path) -> Path:
     else:
         record.update(image_id=checked["image_id"], container_id=identity)
     destination = run / "nixl-connector-version.json"
-    write_private(destination, record)
+    write_private_json(destination, record)
     return destination
 
 
@@ -345,7 +337,7 @@ print('NARWHAL_TRANSFER_MODE=' + json.dumps({
     record = parse_tagged_capture(output, "NARWHAL_TRANSFER_MODE=", "transfer mode")
     record.update(plan_sha256=plan_hash, process=process)
     destination = run / "transfer-mode.json"
-    write_private(destination, record)
+    write_private_json(destination, record)
     return destination
 
 
@@ -355,7 +347,7 @@ def capture_native_http(run: Path) -> None:
     if plan.get("backend") != "native":
         raise ValueError("native HTTP capture requires a native launch plan")
     live_native(run, plan, checked)
-    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    values = read_env(run / "engine.env")
     key = values.get("VLLM_API_KEY", "")
     headers = {"Authorization": f"Bearer {key}"} if key else None
     with httpx.Client(timeout=10, headers=headers) as client:
@@ -371,8 +363,8 @@ def capture_native_http(run: Path) -> None:
         != read_json(run / "shared-start.json")["process_start_time_seconds"]
     ):
         raise ValueError("native HTTP process start differs from the launch record")
-    write_private(run / "version.json", version)
-    write_private_text(run / "metrics.txt", metrics_response.text)
+    write_private_json(run / "version.json", version)
+    write_private(run / "metrics.txt", metrics_response.text)
 
 
 def capture_native(run: Path) -> Path:
@@ -391,7 +383,7 @@ def capture_native(run: Path) -> Path:
     capture_native_transfer_mode(run)
     capture_native_http(run)
     snapshot = run / "startup-attestation.log"
-    write_private_text(snapshot, (run / "startup.log").read_text())
+    write_private(snapshot, (run / "startup.log").read_text())
     return generate(run, snapshot)
 
 
@@ -625,7 +617,7 @@ def generate(run: Path, startup_log: Path) -> Path:
     destination = run / "engine-attestation.json"
     temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
     try:
-        write_private(temporary, record)
+        write_private_json(temporary, record)
         AttestationDocument.load(temporary)
         os.link(temporary, destination)
     finally:
@@ -714,10 +706,10 @@ def finalize_fleet(path: Path) -> EngineContract:
     raw_fleet["engine_contract"] = contracts[0].fields()
     backup = Path("runs") / f"fleet.before-attestation-{uuid.uuid4().hex}.json"
     backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    write_private(backup, read_json(path))
+    write_private_json(backup, read_json(path))
     temporary = path.with_name(path.name + f".tmp-{uuid.uuid4().hex}")
     try:
-        write_private(temporary, raw_fleet)
+        write_private_json(temporary, raw_fleet)
         parsed = FleetConfig.load(temporary)
         if parsed.engine_contract != contracts[0]:
             raise ValueError("Generated router contract failed fleet validation")

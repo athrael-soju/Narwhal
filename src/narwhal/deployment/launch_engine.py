@@ -186,6 +186,12 @@ def kv_events_directory(plan: dict) -> None:
             raise ValueError(f"{path} must be a directory private to the launching user")
 
 
+def container_options(plan: dict) -> list[str]:
+    """Create the plan's socket directory and return its shared Docker options."""
+    kv_events_directory(plan)
+    return list(plan["common"])
+
+
 def remove_kv_events_directory(plan: dict) -> None:
     """Remove the plan's socket directory once its engine process has stopped."""
     if plan.get("kv_events") is None:
@@ -250,10 +256,29 @@ def write_private(path: Path, data: str) -> None:
         stream.write(data)
 
 
+def write_once(path: Path, text: str, mismatch: str) -> None:
+    """Create a private file, or accept an existing one with the same text."""
+    try:
+        write_private(path, text)
+    except FileExistsError:
+        if path.read_text() != text:
+            raise ValueError(mismatch) from None
+
+
 def append_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as stream:
         stream.write(data)
+
+
+def env_file_name(plan: dict) -> str:
+    """Return the launch directory's environment file for the plan's backend."""
+    return "engine.env" if plan.get("backend") == "native" else "container.env"
+
+
+def read_env(path: Path) -> dict[str, str]:
+    """Read a KEY=VALUE environment file."""
+    return dict(line.split("=", 1) for line in path.read_text().splitlines())
 
 
 def build(
@@ -671,12 +696,11 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
     from narwhal.deployment import stages
 
     if plan.get("backend") != "native":
-        kv_events_directory(plan)
         return docker(
             [
                 "run",
                 "--rm",
-                *plan["common"],
+                *container_options(plan),
                 "--entrypoint",
                 "python3",
                 plan["image"],
@@ -687,7 +711,7 @@ def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str],
             run,
             log,
         )
-    values = dict(line.split("=", 1) for line in (run / "engine.env").read_text().splitlines())
+    values = read_env(run / "engine.env")
     if (run / log).exists():
         raise FileExistsError(17, "inspection log already exists", str(run / log))
     result = stages.run(
@@ -709,8 +733,7 @@ def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
     if not isinstance(plan, dict):
         raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
-    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    if digest(run / env_file) != plan.get("env_sha256"):
+    if digest(run / env_file_name(plan)) != plan.get("env_sha256"):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan
 
@@ -720,7 +743,6 @@ def check(run: Path, plan: dict) -> None:
     from narwhal.deployment import stages
 
     native = plan.get("backend") == "native"
-    env_file = "engine.env" if native else "container.env"
     log = "runtime-check.log" if native else "image-check.log"
     if (run / "checked.json").exists():
         require_checked(run, plan)
@@ -746,11 +768,9 @@ def check(run: Path, plan: dict) -> None:
         and not trust_remote_code
     ):
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
+    environment = read_env(run / env_file_name(plan))
     ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
-    if (
-        ds_required
-        and "VLLM_SSM_CONV_STATE_LAYOUT=DS" not in (run / env_file).read_text().splitlines()
-    ):
+    if ds_required and environment.get("VLLM_SSM_CONV_STATE_LAYOUT") != "DS":
         raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
     if native:
         model_path = Path(plan["model_path"])
@@ -847,10 +867,9 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         json.dumps(engine_arguments(plan)),
     ]
     if native:
-        values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
         result = stages.run(
             [plan["python_executable"], *arguments],
-            env={**os.environ, **values},
+            env={**os.environ, **environment},
             stage="native-runtime-check",
             log=run / log,
         )
@@ -866,7 +885,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
             [
                 "run",
                 "--rm",
-                *plan["common"],
+                *container_options(plan),
                 "--entrypoint",
                 "python3",
                 plan["image"],
@@ -903,12 +922,10 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         raise ValueError(
             f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
         )
-    environment = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
     ipc_cache = environment.get("UCX_CUDA_IPC_CACHE")
     ipc_peers = plan.get(
         "cuda_ipc_peers", "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
     )
-    marker = run / "checked.json"
     evidence = {
         "plan_sha256": digest(run / "launch.json"),
         "vllm_api_version": api_version,
@@ -926,12 +943,11 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
     else:
         assert inspection is not None
         evidence["image_id"] = inspection["Id"]
-    value = json.dumps(evidence)
-    if marker.exists():
-        if marker.read_text() != value:
-            raise ValueError("runtime identity changed; prepare a fresh launch directory")
-    else:
-        write_private(marker, value)
+    write_once(
+        run / "checked.json",
+        json.dumps(evidence),
+        "runtime identity changed; prepare a fresh launch directory",
+    )
     print("Runtime identity, package pins, connector import and tokenizer passed.")
     if ipc_peers and evidence["peer_release"]:
         print(
@@ -1052,12 +1068,11 @@ def model_dimensions(run: Path, plan: dict) -> None:
     destination = run / "model-dimensions.json"
     if destination.exists():
         raise ValueError("model dimensions exist; retain the capture and use a fresh plan")
-    kv_events_directory(plan)
     output = docker(
         [
             "run",
             "--rm",
-            *plan["common"],
+            *container_options(plan),
             "--mount",
             f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-inspect.py,readonly",
             "--mount",
@@ -1285,13 +1300,12 @@ def measure_cache(run: Path, plan: dict) -> None:
         (run / name).exists() for name in ("container.id", "cache-probe.id", "cache-layout.json")
     ):
         raise ValueError("launch directory has a container or sizing record; use a fresh plan")
-    kv_events_directory(plan)
     cid = docker(
         [
             "create",
             "--name",
             plan["name"] + "-cache-probe",
-            *plan["common"],
+            *container_options(plan),
             "--mount",
             f"type=bind,src={Path(__file__).resolve()},dst=/narwhal-probe.py,readonly",
             "--mount",
@@ -1334,13 +1348,12 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError("cache capture plan changed; prepare a fresh launch plan")
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
-    kv_events_directory(plan)
     cid = docker(
         [
             "create",
             "--name",
             plan["name"],
-            *plan["common"],
+            *container_options(plan),
             "--env",
             "NARWHAL_CAPTURE_CACHE=1",
             "--env",
@@ -1394,8 +1407,7 @@ def gpu_memory(gpu_uuid: str) -> dict[str, int]:
 
 def validate_shared_gpu(run: Path, plan: dict) -> None:
     """Bind the serving CUDA selection to the UUID used for shared memory accounting."""
-    env_file = "engine.env" if plan.get("backend") == "native" else "container.env"
-    values = dict(line.split("=", 1) for line in (run / env_file).read_text().splitlines())
+    values = read_env(run / env_file_name(plan))
     selected = values.get("CUDA_VISIBLE_DEVICES", "")
     expected = plan["shared_device"]["gpu_uuid"]
     if selected == expected:

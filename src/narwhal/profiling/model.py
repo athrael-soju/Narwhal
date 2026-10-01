@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from typing import Any
+
+from .fitting import cached_features, split_step
 
 _FLOAT_FIELDS = (
     "ttft_a",
@@ -51,21 +53,8 @@ _INT_FIELDS = (
 _REQUIRED_FIELDS = ("iid", "ttft_a", "ttft_b", "ttft_c", "tpot_slope", "tpot_intercept")
 
 
-_OPTIONAL_FLOAT_FIELDS = (
-    "decode_fit_mape",
-    "decode_cv_mape",
-    "colocated_prefill_rps",
-    "colocated_decode_rps",
-    "ttft_split",
-    "cached_ttft_a",
-    "cached_ttft_b",
-    "cached_ttft_c",
-    "cached_ttft_d",
-    "cached_cv_mape",
-)
-
 # Fields a warm prefill fit sets together.
-_CACHED_FIELDS = (
+CACHED_PROFILE_FIELDS = (
     "cached_ttft_a",
     "cached_ttft_b",
     "cached_ttft_c",
@@ -76,7 +65,6 @@ _CACHED_FIELDS = (
     "cached_min_suffix_tokens",
     "cached_max_suffix_tokens",
 )
-CACHED_PROFILE_FIELDS = _CACHED_FIELDS
 
 
 _DECODE_BOUNDS = (
@@ -85,35 +73,6 @@ _DECODE_BOUNDS = (
     "decode_min_kv_tokens",
     "decode_max_kv_tokens",
 )
-
-
-_OPTIONAL_DEFAULTS: dict[str, Any] = {
-    "generation_digest": None,
-    "kv_capacity_tokens": None,
-    "tpot_request_slope": 0.0,
-    "decode_min_requests": None,
-    "decode_max_requests": None,
-    "decode_min_kv_tokens": None,
-    "decode_max_kv_tokens": None,
-    "decode_fit_mape": None,
-    "decode_cv_mape": None,
-    "prefill_min_tokens": None,
-    "prefill_max_tokens": None,
-    "decode_min_output_tokens": None,
-    "decode_max_output_tokens": None,
-    "colocated_group": None,
-    "colocated_target_role": None,
-    "colocated_prefill_engines": None,
-    "colocated_decode_engines": None,
-    "colocated_prefill_rps": None,
-    "colocated_decode_rps": None,
-    "ttft_block_tokens": None,
-    "ttft_split": None,
-    **dict.fromkeys(_CACHED_FIELDS),
-}
-
-
-_FIELD_NAMES = frozenset(_REQUIRED_FIELDS) | frozenset(_OPTIONAL_DEFAULTS)
 
 
 def _check(raw: Mapping[str, Any], label: str) -> None:
@@ -184,9 +143,9 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
             raise ValueError(f"{where}: {name} is required on a current profile")
     if ("ttft_block_tokens" in values) != ("ttft_split" in values):
         raise ValueError(f"{where}: ttft_block_tokens and ttft_split go together")
-    cached = [name for name in _CACHED_FIELDS if name in values]
-    if cached and len(cached) != len(_CACHED_FIELDS):
-        missing = sorted(set(_CACHED_FIELDS) - set(cached))
+    cached = [name for name in CACHED_PROFILE_FIELDS if name in values]
+    if cached and len(cached) != len(CACHED_PROFILE_FIELDS):
+        missing = sorted(set(CACHED_PROFILE_FIELDS) - set(cached))
         raise ValueError(f"{where}: a cached prefill fit requires {', '.join(missing)}")
     group = raw.get("colocated_group")
     role = raw.get("colocated_target_role")
@@ -271,10 +230,7 @@ class Profile:
 
     def _split_step(self, tokens: int) -> float:
         """Return `ttft_split` when `tokens` computed tokens end inside a block past the first."""
-        block = self.ttft_block_tokens
-        if self.ttft_split is None or block is None or tokens <= block or not tokens % block:
-            return 0.0
-        return self.ttft_split
+        return split_step(tokens, self.ttft_split, self.ttft_block_tokens)
 
     def cached_prefill_time(self, prefix_tokens: int, suffix_tokens: int) -> float | None:
         """Predict prefill time with `prefix_tokens` cached; None outside the warm fit's domain.
@@ -296,12 +252,12 @@ class Profile:
             or not self.cached_min_suffix_tokens <= suffix_tokens <= self.cached_max_suffix_tokens
         ):
             return None
-        p, s = float(prefix_tokens), float(suffix_tokens)
+        attention, suffix, _, prefix = cached_features(float(prefix_tokens), float(suffix_tokens))
         return max(
             0.0,
-            self.cached_ttft_a * (2 * p * s + s * s)
-            + self.cached_ttft_b * s
-            + self.cached_ttft_d * p
+            self.cached_ttft_a * attention
+            + self.cached_ttft_b * suffix
+            + self.cached_ttft_d * prefix
             + self.cached_ttft_c
             + self._split_step(suffix_tokens),
         )
@@ -418,6 +374,15 @@ class Profile:
         if interval <= 0 or interval > tpot_slo_s:
             return 0.0
         return best / (output_tokens * interval)
+
+
+_OPTIONAL_DEFAULTS: dict[str, Any] = {
+    f.name: f.default for f in fields(Profile) if f.default is not MISSING
+}
+_OPTIONAL_FLOAT_FIELDS = tuple(
+    name for name in _FLOAT_FIELDS if _OPTIONAL_DEFAULTS.get(name, MISSING) is None
+)
+_FIELD_NAMES = frozenset(f.name for f in fields(Profile))
 
 
 def decode_evidence_problems(

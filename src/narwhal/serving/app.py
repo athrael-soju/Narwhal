@@ -355,14 +355,7 @@ def create_app(
                 capture,
                 transport=lifecycle_transport,
             )
-            for iid in capture:
-                start = starts.get(iid)
-                # A stopped, ejected engine keeps the last process identity the router verified.
-                if start is None and iid in router.scheduler.ejected:
-                    start = router.lifecycle.process_starts.get(iid)
-                    if start is not None:
-                        failures.pop(iid, None)
-                router.lifecycle.record_old_identity(iid, start, failures.get(iid, ""))
+            failures = router.lifecycle.bind_drain_identities(capture, starts, failures)
             _persist_handoff(router)
             if not controls_fleet(router):
                 return _lifecycle_error(router, 503, "router control was fenced during drain")

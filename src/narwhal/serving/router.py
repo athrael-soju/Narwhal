@@ -15,17 +15,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..config import FleetConfig
 from ..contracts import STATE, versioned
 from ..engines.client import (
-    FIRST_OUTPUT_DETAIL,
     EngineClient,
     EngineError,
     InferenceProbe,
+    first_output_timeout,
     leg_failure_class,
 )
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.prefix import CacheNamespace, block_identities
 from ..observability.journal import RunJournal
-from ..observability.metrics import Histogram, buckets_for
+from ..observability.metrics import slo_histogram
 from ..profiling.store import ProfileStore
 from ..runtime.lifecycle import LifecycleManager
 from ..runtime.monitoring import MonitoringLedger
@@ -38,10 +38,11 @@ from ..scheduling.monitor import InstanceMonitor
 from ..scheduling.scheduler import GlobalScheduler
 from ..types import LEG_OVERLOAD, LEG_STREAM, Instance, Phase, Request, Role
 from .admission import AdmissionQueue, QueueExpired, QueueFull
-from .completion import output_cap
+from .completion import cacheable_render, output_cap
 from .dispatch import Dispatcher
 from .execution import request_error, serve_request
 from .lifecycle import RequestExpired, RequestLifecycle
+from .records import overloaded_response
 from .retry import RetryBudget
 from .saturation import SATURATED_TTFT_SHARE, SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
 
@@ -56,8 +57,6 @@ HASH_THREAD_TOKENS = 8192
 # First and longest skip of an engine after a failed exact count; each failure doubles it.
 TOKENIZE_BACKOFF_S = 1.0
 TOKENIZE_BACKOFF_MAX_S = 30.0
-# Request fields that change the prefilled tokens outside the counted render.
-UNCOUNTED_RENDER_FIELDS = ("truncate_prompt_tokens", "documents", "reasoning_effort")
 
 
 def _hash_prompt(
@@ -70,17 +69,6 @@ def _hash_prompt(
         return {size: block_identities(namespace, reusable, size) for size in sizes}
     except ValueError:
         return {}
-
-
-def _multimodal(body: dict[str, Any]) -> bool:
-    """Return whether a chat request carries non-text content parts."""
-    for message in body.get("messages") or []:
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, list) and any(
-            not isinstance(part, dict) or part.get("type") != "text" for part in content
-        ):
-            return True
-    return False
 
 
 class NarwhalRouter:
@@ -231,8 +219,8 @@ class NarwhalRouter:
         self.retry_attempts = 0
         self.decode_tokens_observed = 0
         self.upstream_seconds = {"prefill": 0.0, "decode": 0.0}
-        self.ttft = Histogram(buckets_for(cfg.slo.ttft_s))
-        self.tpot = Histogram(buckets_for(cfg.slo.tpot_s))
+        self.ttft = slo_histogram(cfg.slo.ttft_s)
+        self.tpot = slo_histogram(cfg.slo.tpot_s)
         self.controller = ReactiveController(
             self.monitor,
             self.scheduler,
@@ -261,10 +249,10 @@ class NarwhalRouter:
         self.dispatcher = Dispatcher(self)
         self.monitor.on_capacity_change = self.dispatcher.notify
         self.retry_budget = RetryBudget(cfg.serving.retry_budget, cfg.serving.retry_replenish)
-        self.queue_wait = Histogram(buckets_for(cfg.serving.queue_timeout_s or cfg.slo.ttft_s))
+        self.queue_wait = slo_histogram(cfg.serving.queue_timeout_s or cfg.slo.ttft_s)
         # Measure how long admitted work occupies capacity.
         self._seat_since: dict[str, float] = {}
-        self.seat = Histogram(buckets_for(cfg.slo.ttft_s))
+        self.seat = slo_histogram(cfg.slo.ttft_s)
         self.monitoring = MonitoringLedger(clock, on_event=self.journal.write)
 
     @property
@@ -279,10 +267,6 @@ class NarwhalRouter:
     def _token_accounting(self) -> str:
         """Return the decode token-accounting mode the fleet's dialect guarantees."""
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
-
-    async def input_length(self, body: dict[str, Any]) -> int:
-        """Return the exact or estimated input token count."""
-        return (await self.size(body))[0]
 
     async def size(
         self, body: dict[str, Any]
@@ -314,7 +298,9 @@ class NarwhalRouter:
                     )
                 except EngineError:
                     failures = self._tokenize_backoff.get(engine.iid, (0, 0.0))[0] + 1
-                    delay = min(TOKENIZE_BACKOFF_S * 2 ** (failures - 1), TOKENIZE_BACKOFF_MAX_S)
+                    delay = min(
+                        TOKENIZE_BACKOFF_S * 2 ** min(failures - 1, 16), TOKENIZE_BACKOFF_MAX_S
+                    )
                     self._tokenize_backoff[engine.iid] = (failures, self._clock() + delay)
                     raise
                 if got is not None:
@@ -341,10 +327,6 @@ class NarwhalRouter:
         ordered = candidates[start:] + candidates[:start]
         return min(ordered, key=lambda i: len(i.prefill) + len(i.decode))
 
-    def prefix_cache_tokens(self, body: dict[str, Any], token_ids: Sequence[int]) -> dict[str, int]:
-        """Return the prompt tokens each engine can serve from its prefix cache."""
-        return self.prefix_cache_evidence(body, token_ids)[0]
-
     def prefix_cache_evidence(
         self, body: dict[str, Any], token_ids: Sequence[int]
     ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
@@ -354,7 +336,7 @@ class NarwhalRouter:
         with an uncounted render field, fleets without an engine contract and out-of-range
         token IDs return empty evidence.
         """
-        return self._match_evidence(_hash_prompt(*self._evidence_inputs(body, token_ids)))
+        return self.residency.match(_hash_prompt(*self._evidence_inputs(body, token_ids)))
 
     async def _cache_evidence(
         self, body: dict[str, Any], token_ids: Sequence[int]
@@ -362,8 +344,10 @@ class NarwhalRouter:
         """`prefix_cache_evidence`, hashing a long prompt in a worker thread."""
         inputs = self._evidence_inputs(body, token_ids)
         if len(inputs[1]) >= HASH_THREAD_TOKENS:
-            return self._match_evidence(await asyncio.to_thread(_hash_prompt, *inputs))
-        return self._match_evidence(_hash_prompt(*inputs))
+            by_size = await asyncio.to_thread(_hash_prompt, *inputs)
+        else:
+            by_size = _hash_prompt(*inputs)
+        return self.residency.match(by_size)
 
     def _evidence_inputs(
         self, body: dict[str, Any], token_ids: Sequence[int]
@@ -372,8 +356,7 @@ class NarwhalRouter:
         if (
             contract is None
             or len(token_ids) < 2
-            or _multimodal(body)
-            or any(body.get(field) is not None for field in UNCOUNTED_RENDER_FIELDS)
+            or not cacheable_render(body)
             # Speculative decoding shortens vLLM's prefix hits by a block.
             or contract.speculative_config not in ("", "disabled")
         ):
@@ -382,26 +365,7 @@ class NarwhalRouter:
         namespace = CacheNamespace(
             self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
         )
-        sizes = {v.block_size for v in self.residency.views.values() if v.known and v.block_size}
-        return namespace, token_ids[:-1], sizes
-
-    def _match_evidence(
-        self, by_size: dict[int, list[bytes]]
-    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
-        matched: dict[int, int] = {}
-        cached: dict[str, int] = {}
-        sequences: dict[str, int] = {}
-        for iid, view in self.residency.views.items():
-            size = view.block_size
-            if not view.known or not size or size not in by_size:
-                continue
-            blocks = view.cached_prefix_blocks(by_size[size])
-            if blocks > 0:
-                cached[iid] = blocks * size
-                matched[size] = max(matched.get(size, 0), blocks)
-                if view.sequence is not None:
-                    sequences[iid] = view.sequence
-        return cached, sequences, {size: by_size[size][:n] for size, n in matched.items()}
+        return namespace, token_ids[:-1], self.residency.block_sizes()
 
     def recheck_cache_evidence(self, request: Request, fresh_s: float = 0.0) -> None:
         """Refresh the request's cache evidence from current residency.
@@ -421,18 +385,17 @@ class NarwhalRouter:
             return
         request.cache_checked_at = now
         before = dict(request.cached_tokens)
+        cached, sequences, _ = self.residency.match(
+            request.cache_identities, engines=request.cached_tokens.keys()
+        )
         for iid in list(request.cached_tokens):
-            view = self.residency.views.get(iid)
-            if view is not None and view.block_size:
-                identities = request.cache_identities.get(view.block_size, [])
-                blocks = view.cached_prefix_blocks(identities)
-                if blocks:
-                    request.cached_tokens[iid] = blocks * view.block_size
-                    if view.sequence is not None:
-                        request.cache_sequences[iid] = view.sequence
-                    continue
-            del request.cached_tokens[iid]
-            request.cache_sequences.pop(iid, None)
+            if iid in cached:
+                request.cached_tokens[iid] = cached[iid]
+                if iid in sequences:
+                    request.cache_sequences[iid] = sequences[iid]
+            else:
+                del request.cached_tokens[iid]
+                request.cache_sequences.pop(iid, None)
         if request.cached_tokens != before:
             self.controller.demand.reprice_arrival(request)
 
@@ -492,24 +455,9 @@ class NarwhalRouter:
                 self.monitor.waiting.pop(rid, None)
                 state.queue_wait_s += self._clock() - began
             state.phase = "admission"
-            response = await serve_request(
-                self,
-                rid,
-                endpoint,
-                body,
-                headers,
-                arrived=arrived,
-                offered=True,
-                lifecycle=state,
-            )
+            response = await serve_request(state, endpoint, body, headers)
         except QueueFull:
-            kind = "server_overloaded_error"
-            state.finish("rejected", error=kind, status=429)
-            response = JSONResponse(
-                status_code=429,
-                headers={"retry-after": "1"},
-                content={"error": {"message": kind, "type": kind}},
-            )
+            response = overloaded_response(state, "server_overloaded_error")
         except (QueueExpired, RequestExpired):
             state.finish("expired", error="queue deadline expired", status=504)
             response = JSONResponse(
@@ -568,12 +516,7 @@ class NarwhalRouter:
         if klass is None:
             # PoolTimeout and caller-side 4xx legs are handled above.
             return
-        if (
-            klass == LEG_STREAM
-            and progressed
-            and isinstance(exc, EngineError)
-            and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
-        ):
+        if klass == LEG_STREAM and progressed and first_output_timeout(exc):
             # A first-token timeout while the engine produced other output is overload.
             klass = LEG_OVERLOAD
         if klass == "stream":
@@ -590,10 +533,7 @@ class NarwhalRouter:
         elif verdict in ("verify_health", "verify_inference"):
             if verdict == "verify_inference":
                 self.scheduler.inference_suspects.add(iid)
-                if self.scheduler.availability.role_covered_without(iid):
-                    self.scheduler.quarantined[iid] = math.inf
-                    self.scheduler.refresh_floor_state()
-                else:
+                if not self.scheduler.quarantine(iid, math.inf):
                     log.warning(
                         "%s stays live during inference verification: it alone serves its role", iid
                     )
@@ -640,7 +580,7 @@ class NarwhalRouter:
             self.scheduler.record_answer(iid, "health")
             log.info("suspect %s passed health verification; health failure classes cleared", iid)
             return
-        if not self.scheduler.availability.role_covered_without(iid):
+        if not self.scheduler.role_covered_without(iid):
             log.warning("%s stays live after a failed /health probe: it alone serves its role", iid)
             return
         if self.scheduler.eject(iid):
@@ -658,7 +598,7 @@ class NarwhalRouter:
             probe = await self.engines.probe_inference(
                 url,
                 prefill_url=producer.url if producer is not None else None,
-                deadline_s=max(self.cfg.first_token_timeout_s or 0.0, self.cfg.health_timeout_s),
+                deadline_s=self.cfg.probe_deadline_s(),
             )
             if not self._resolve_inference_probe(iid, probe):
                 return
@@ -696,7 +636,7 @@ class NarwhalRouter:
         if not failed:
             return True
         detail = ", ".join(f"{name} leg failed {klass}" for name, klass in sorted(failed.items()))
-        if not self.scheduler.availability.role_covered_without(iid):
+        if not self.scheduler.role_covered_without(iid):
             self.scheduler.quarantined.pop(iid, None)
             self.scheduler.refresh_floor_state()
             log.warning(

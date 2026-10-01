@@ -16,6 +16,7 @@ from narwhal.profiling import probe
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
 from narwhal.profiling.model import Profile
 from tests.fixtures import profile
+from tests.profiling.fixtures import patched_profile_sweeps
 
 A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
 
@@ -343,17 +344,9 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
         ]
         evidence = {}
-        with (
-            patch.object(probe, "probe_prefill", AsyncMock(return_value=prefill)),
-            patch.object(probe, "probe_decode", AsyncMock(return_value=decode)),
-            patch.object(probe, "kv_capacity", AsyncMock(return_value=100_000)),
-            patch.object(probe, "cache_block_tokens", AsyncMock(return_value=block)),
-            patch.object(probe, "prefix_cache_hits", AsyncMock(return_value=7)),
-            patch.object(
-                probe, "probe_cached_prefill", AsyncMock(return_value=sweep_result)
-            ) as sweep,
-            redirect_stdout(io.StringIO()),
-        ):
+        with patched_profile_sweeps(
+            prefill, decode, hits=7, block=block, warm=sweep_result
+        ) as sweep:
             row = await probe.profile_instance(
                 None, "e0", "http://e", "stub", evidence=evidence, **kwargs
             )

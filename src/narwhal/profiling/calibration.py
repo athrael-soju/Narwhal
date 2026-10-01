@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 
 from ..config import FleetConfig
-from ..engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from ..engines.client import EngineClient, EngineError, first_output_timeout
 from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
@@ -376,11 +376,7 @@ async def calibrate(
                                 RuntimeError,
                             ) as exc:
                                 failures += 1
-                                expired = (
-                                    isinstance(exc, EngineError)
-                                    and exc.status == 504
-                                    and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
-                                )
+                                expired = first_output_timeout(exc) and exc.status == 504
                                 row.update(
                                     status=(
                                         "request_expired"

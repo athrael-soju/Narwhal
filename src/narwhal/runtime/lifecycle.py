@@ -157,6 +157,21 @@ class LifecycleManager:
         )
         self.refresh()
 
+    def bind_drain_identities(
+        self, capture: list[str], starts: dict[str, float], failures: dict[str, str]
+    ) -> dict[str, str]:
+        """Bind each captured drain identity and return the unresolved capture failures."""
+        remaining = dict(failures)
+        for iid in capture:
+            start = starts.get(iid)
+            # A stopped, ejected engine keeps the last process identity the router verified.
+            if start is None and iid in self.router.scheduler.ejected:
+                start = self.process_starts.get(iid)
+                if start is not None:
+                    remaining.pop(iid, None)
+            self.record_old_identity(iid, start, remaining.get(iid, ""))
+        return remaining
+
     def start_recovery_validation(self, engines: list[str], *, wave: bool = False) -> bool:
         """Hold ejected engines while the full recovery gate runs."""
         if self.router.cfg.engine_restart_policy == "whole_wave":

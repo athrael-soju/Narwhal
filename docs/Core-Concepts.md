@@ -6,7 +6,7 @@ description: How Narwhal moves dual-capability engines between prefill and decod
 
 Narwhal assigns prefill and decode roles across dual-capability engines that serve one model.
 
-A role move changes placement for new requests, while  Model weights, KV paths, and resident requests stay on their engines.
+A role move changes placement for new requests. Model weights, KV paths, and resident requests stay on their engines.
 
 ## Concept pages
 

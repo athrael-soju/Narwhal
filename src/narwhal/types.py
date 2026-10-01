@@ -65,9 +65,8 @@ class Request:
     cache_checked_at: float | None = None
     # Journal record of the cache-priced placement.
     cache_placement: dict[str, Any] | None = None
-    # Offered-demand cohort and its arrival time, repriced when cache evidence changes.
+    # Offered-demand cohort, repriced when cache evidence changes.
     demand_arrival: Any = None
-    demand_arrived_at: float | None = None
 
     @property
     def length(self) -> int:

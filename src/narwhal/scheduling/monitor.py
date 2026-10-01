@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from ..profiling.store import ProfileStore
 from ..types import Instance, Phase, Request, Role
-from .prefill import prefill_seconds
+from .prefill import resident_prefill_seconds
 
 
 @dataclass
@@ -140,7 +140,7 @@ class InstanceMonitor:
             return
         inst = self.instances[iid]
         # Resident requests keep their placement-time price.
-        w.current = sum(prefill_seconds(profile, r) for r in inst.prefill.values())
+        w.current = resident_prefill_seconds(profile, inst)
 
     def dispatched(self, iid: str, request: Request) -> None:
         """Record a request dispatch."""

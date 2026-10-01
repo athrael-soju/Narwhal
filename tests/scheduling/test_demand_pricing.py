@@ -3,13 +3,11 @@
 import random
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
-from narwhal.scheduling.demand import Demand
+from narwhal.scheduling.demand import Arrival, Demand
 from narwhal.serving.app import create_app
-from tests.fixtures import fleet
-from tests.scheduling.test_cache_evidence import warm
+from tests.fixtures import fleet, profile, put_warm
 
 
 def reference_price_profiles(
@@ -24,7 +22,7 @@ def reference_price_profiles(
     correction=None,
     prefill_iids=None,
 ):
-    """Price every row on its own, as the window pricing did before shape reuse."""
+    """Price every row on its own, without the per-shape memo."""
     window = horizon_s if horizon_s is not None else window_s
     span = min(window, max(step_s, now - model.started_at))
     h0 = now - window
@@ -48,7 +46,20 @@ def reference_price_profiles(
     expected_decode = 0.0
     estimates = model._output_estimates() if estimates is None else estimates
     correction = model._decode_correction() if correction is None else correction
-    capacities = {}
+
+    def capacity_at(input_tokens, output_tokens):
+        values = [
+            p.decode_rps(
+                model.scheduler.slo.tpot_s,
+                input_tokens + output_tokens / 2.0,
+                output_tokens,
+                correction=correction,
+                request_cap=model.scheduler.decode_concurrency,
+            )
+            for p in profiles
+        ]
+        return sum(values) / len(values) if values else None
+
     for row in model.expected_decode.rows(h0):
         input_len, wanted_len = row.value
         output_len = (
@@ -57,21 +68,9 @@ def reference_price_profiles(
         if output_len == 0:
             complete = False
             continue
-        key = (model._capacity_bucket(input_len), model._capacity_bucket(output_len))
-        if key not in capacities:
-            bucket_input, bucket_output = key
-            values = [
-                p.decode_rps(
-                    model.scheduler.slo.tpot_s,
-                    bucket_input + bucket_output / 2.0,
-                    bucket_output,
-                    correction=correction,
-                    request_cap=model.scheduler.decode_concurrency,
-                )
-                for p in profiles
-            ]
-            capacities[key] = sum(values) / len(values) if values else None
-        capacity = capacities[key]
+        capacity = capacity_at(
+            model._capacity_bucket(input_len), model._capacity_bucket(output_len)
+        ) or capacity_at(input_len, output_len)
         if not capacity:
             complete = False
             continue
@@ -92,9 +91,7 @@ class WindowPricingTests(unittest.TestCase):
         self.router = create_app(fleet(Path(folder.name))).state.router
         scheduler = self.router.scheduler
         for iid in scheduler.monitor.instances:
-            digest = scheduler.profiles.get(iid).generation_digest
-            profile = warm(iid, generation_digest=digest)
-            scheduler.profiles.put(replace(profile, cached_max_prefix_tokens=4096))
+            put_warm(scheduler.profiles, iid, cached_max_prefix_tokens=4096)
 
     def test_pricing_matches_the_row_by_row_reference(self):
         rng = random.Random(3)
@@ -130,3 +127,48 @@ class WindowPricingTests(unittest.TestCase):
                         demand.price_profiles(now, **kwargs),
                         reference_price_profiles(demand, now, **kwargs),
                     )
+
+    def test_a_decode_shape_whose_bucket_leaves_the_domain_prices_its_exact_length(self):
+        scheduler = self.router.scheduler
+        profiles = tuple(profile(iid) for iid in scheduler.monitor.instances)
+        demand = type(self.router.controller.demand)(
+            scheduler.monitor, scheduler, self.router._clock, window_s=60.0, bucket_s=1.0
+        )
+        bucket_context = demand._capacity_bucket(98_000) + demand._capacity_bucket(2_000) / 2
+        self.assertGreater(bucket_context, profiles[0].decode_max_kv_tokens)
+        now = self.router._clock()
+        demand.saw_arrival(98_000, wanted_len=2_000, at=now)
+        kwargs = {"window_s": 60.0, "step_s": 1.0, "profiles": profiles}
+        priced = demand.price_profiles(now, **kwargs)
+        self.assertTrue(priced.complete)
+        self.assertGreater(priced.decode_engines, 0.0)
+        self.assertEqual(priced, reference_price_profiles(demand, now, **kwargs))
+
+    def test_merged_overflow_arrivals_price_cold(self):
+        scheduler = self.router.scheduler
+        iids = list(scheduler.monitor.instances)
+        profiles = tuple(scheduler.profiles.get(iid) for iid in iids)
+        now = 1000.0
+        shapes = self.router.controller.demand.arrivals.max_shapes
+
+        def offered(count):
+            demand = type(self.router.controller.demand)(
+                scheduler.monitor, scheduler, lambda: now, window_s=60.0, bucket_s=1.0
+            )
+            for i in range(count):
+                observation = demand.saw_arrival(1100, wanted_len=4, at=now)
+                cached = {iids[0]: 1050 + i % 40, iids[1]: 1050 + i // 40}
+                demand.resize_arrival(observation, 1100, 4, at=now, cached_tokens=cached)
+            return demand
+
+        def price(demand):
+            return demand.price_profiles(
+                now, window_s=60.0, step_s=1.0, profiles=profiles
+            ).prefill_engines
+
+        full, overflowed = offered(shapes), offered(shapes + 5)
+        [row] = [row for row in overflowed.arrivals.rows() if row.overflow]
+        self.assertEqual((row.count, row.value), (5, Arrival(1100)))
+        cold = sum(p.prefill_time(1100) for p in profiles) / len(profiles)
+        self.assertLess(price(full), shapes * cold)
+        self.assertAlmostEqual(price(overflowed) - price(full), 5 * cold)

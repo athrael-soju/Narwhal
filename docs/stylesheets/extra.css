@@ -295,7 +295,8 @@
 
 /* overrides/hooks/panel_rows.py sets each item's flex-grow to its image's
    pixel width. Images in a row share a pixel height, so the row fills the
-   column and every image renders at the same height. */
+   column and every image renders at the same height. Stats rows on a page
+   share one scale set by the widest stats row. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;
@@ -308,28 +309,12 @@
 }
 
 @media screen and (max-width: 44.9375em) {
-  .md-typeset .narwhal-panel-row.stats {
-    flex-flow: row wrap;
-  }
-
-  .md-typeset .narwhal-panel-row.stats > p {
-    flex: 1 1 40%;
-  }
-}
-
-@media screen and (max-width: 44.9375em) {
   .md-typeset .narwhal-panel-row {
     flex-direction: column;
   }
-}
 
-/* Headline stat blocks: three per row above phone width */
-@media screen and (min-width: 45em) {
-  .md-typeset .narwhal-panel-row.stats {
-    flex-wrap: wrap;
-  }
-
-  .md-typeset .narwhal-panel-row.stats > p {
-    flex: 1 1 30%;
+  .md-typeset .narwhal-panel-row.stats img {
+    width: auto;
+    max-width: 100%;
   }
 }

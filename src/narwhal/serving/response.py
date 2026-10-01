@@ -21,18 +21,20 @@ class RequestStreamResponse(StreamingResponse):
         stream: AsyncGenerator[str, None],
         lifecycle: RequestLifecycle,
         *,
-        owned: AsyncGenerator[str, None] | None = None,
+        first: str | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.upstream = stream
-        # A started generator that `stream` wraps and closes only once iteration begins.
-        self.owned = owned
+        # A frame already read from `stream`, sent before the rest of it.
+        self.first = first
         self.closed = False
         self.iterator = self._iterate()
         super().__init__(self.iterator, media_type="text/event-stream")
 
     async def _iterate(self) -> AsyncGenerator[str, None]:
         try:
+            if self.first is not None:
+                yield self.first
             async for line in self.upstream:
                 yield line
         finally:
@@ -44,11 +46,7 @@ class RequestStreamResponse(StreamingResponse):
         self.closed = True
         try:
             with anyio.CancelScope(shield=True):
-                try:
-                    await self.upstream.aclose()
-                finally:
-                    if self.owned is not None:
-                        await self.owned.aclose()
+                await self.upstream.aclose()
         finally:
             self.lifecycle.finish("cancelled")
 

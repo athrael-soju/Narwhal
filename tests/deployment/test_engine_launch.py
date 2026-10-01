@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from tests.deployment.fixtures import launch_document
+from tests.deployment.fixtures import cuda_engine, launch_document, runtime
 from tools.deployment.engine_launch import expose_colocated_gpus, selected_launch
 
 
@@ -72,14 +72,8 @@ class EngineLaunchTests(unittest.TestCase):
 
     def cuda_engines(self, count, **changes):
         document = launch_document()
-        base = document["engines"]["engine-1"]
-        base.update(
-            gpu_ids=["0"],
-            tensor_parallel_size=1,
-            gpu_visibility_env="CUDA_VISIBLE_DEVICES",
-            accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
-            **changes,
-        )
+        base = cuda_engine(document["engines"]["engine-1"])
+        base.update(changes)
         env = {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
         launches = {}
         for n in range(1, count + 1):
@@ -95,6 +89,26 @@ class EngineLaunchTests(unittest.TestCase):
         visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
         self.assertEqual(visible, {"engine-1": "0,1,2", "engine-2": "1,0,2", "engine-3": "2,0,1"})
         self.assertEqual(launches["engine-2"]["vllm_args"], ["--tensor-parallel-size", "1"])
+
+    def test_shared_device_engine_keeps_its_gpu_out_of_peer_lists(self):
+        document = launch_document()
+        base = document["engines"]["engine-1"]
+        for n in range(1, 4):
+            document["engines"][f"engine-{n}"] = cuda_engine(copy.deepcopy(base), gpu=str(n - 1))
+        shared = document["engines"]["engine-2"]
+        shared["runtime"] = runtime()
+        shared["runtime"]["extra_args"] += ["--gpu-memory-utilization", "0.4"]
+        shared["shared_device"] = {
+            "group": "node-1:GPU-test",
+            "gpu_uuid": "GPU-test",
+            "device_allowance": 0.5,
+            "gpu_memory_utilization": 0.4,
+        }
+        env = {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
+        launches = {role: selected_launch(document, role, env) for role in document["engines"]}
+        expose_colocated_gpus(launches, [["engine-1", "engine-2", "engine-3"]])
+        visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
+        self.assertEqual(visible, {"engine-1": "0,2", "engine-2": "1", "engine-3": "2,0"})
 
     def test_engines_on_separate_hosts_keep_their_own_gpus(self):
         launches = self.cuda_engines(2)

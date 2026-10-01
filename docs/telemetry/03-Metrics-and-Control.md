@@ -28,7 +28,7 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | HTTP retention | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water` |
 | Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests` |
-| Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
+| Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_engine_quarantined`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
 | Floors | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total` |
 | Role controller | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
 | Demand history | `narwhal_demand_history_cells`, `narwhal_demand_history_cell_limit`, `narwhal_demand_history_observations`, `narwhal_demand_history_overflow_observations` |
@@ -57,7 +57,7 @@ The lifecycle gauges mirror fields of each engine's record in [`GET /narwhal/lif
 
 ## Reading latency histograms
 
-`narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
+`narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label. Its `slo` label, and the `slo` label on each latency histogram, carry the target that scaled the histogram's bucket edges.
 
 | Histogram | Measures | Bucket scale |
 | --- | --- | --- |
@@ -74,8 +74,8 @@ Bucket boundaries, as multiples of the bucket scale:
 
 Histogram aggregation:
 
-- Compute quantiles from bucket rates grouped by `instance` and `le`.
-- Sum buckets only across routers with identical bucket edges.
+- Compute quantiles from bucket rates grouped by `instance`, `slo` and `le`.
+- Divide a quantile by the `narwhal_slo_seconds` series with the same `instance` and `slo`.
 
 ## Inspecting retained attainment evidence
 

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from statistics import median
 
 from ..profiling.model import Profile
 from ..types import Request, Role
 from .monitor import InstanceMonitor
+from .prefill import warm_prefill_time
 from .scheduler import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
@@ -35,6 +36,11 @@ class Arrival:
 
     input_len: int
     cached: tuple[tuple[str, int], ...] = ()
+
+    @classmethod
+    def of(cls, input_len: int, cached_tokens: Mapping[str, int] | None = None) -> Arrival:
+        """Build an arrival from cached tokens per engine."""
+        return cls(input_len, tuple(sorted((cached_tokens or {}).items())))
 
 
 ArrivalObservation = tuple[Cohort[Arrival] | None, Cohort[tuple[int, int]] | None]
@@ -129,20 +135,18 @@ class DemandModel:
         Returns the arrival's cohort for later repricing.
         """
         arrival, expected = observation
-        cached = tuple(sorted((cached_tokens or {}).items()))
-        repriced = self.arrivals.replace(arrival, Arrival(input_len, cached), at=at)
+        repriced = self.arrivals.replace(arrival, Arrival.of(input_len, cached_tokens), at=at)
         self.expected_decode.replace(expected, (input_len, max(0, wanted_len)), at=at)
         return repriced
 
     def reprice_arrival(self, request: Request) -> None:
         """Price the request's offered prefill with its rechecked cache evidence."""
-        if request.demand_arrival is None or request.demand_arrived_at is None:
+        if request.demand_arrival is None or request.arrived_at is None:
             return
-        cached = tuple(sorted(request.cached_tokens.items()))
         request.demand_arrival = self.arrivals.replace(
             request.demand_arrival,
-            Arrival(request.input_len, cached),
-            at=request.demand_arrived_at,
+            Arrival.of(request.input_len, request.cached_tokens),
+            at=request.arrived_at,
         )
 
     def saw_completion(
@@ -268,8 +272,9 @@ class DemandModel:
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
         capacities: dict[tuple[int, int], float | None] = {}
-        # Capacity bucket per expected shape; None marks an unknown expected output.
-        buckets: dict[tuple[int, int, bool], tuple[int, int] | None] = {}
+        exact_capacities: dict[tuple[int, int], float | None] = {}
+        # Capacity bucket and exact shape per expected shape; None marks an unknown output.
+        buckets: dict[tuple[int, int, bool], tuple[tuple[int, int], tuple[int, int]] | None] = {}
         for expected_row in self.expected_decode.rows(h0):
             input_len, wanted_len = expected_row.value
             expected_shape = (input_len, wanted_len, expected_row.overflow)
@@ -282,29 +287,26 @@ class DemandModel:
                     else self._expected_output(input_len, wanted_len, estimates)
                 )
                 buckets[expected_shape] = (
-                    (self._capacity_bucket(input_len), self._capacity_bucket(output_len))
+                    (
+                        (self._capacity_bucket(input_len), self._capacity_bucket(output_len)),
+                        (input_len, output_len),
+                    )
                     if output_len
                     else None
                 )
-            key = buckets[expected_shape]
-            if key is None:
+            shapes = buckets[expected_shape]
+            if shapes is None:
                 demand_complete = False
                 continue
+            key, exact = shapes
             if key not in capacities:
-                bucket_input, bucket_output = key
-                context = bucket_input + bucket_output / 2.0
-                values = [
-                    p.decode_rps(
-                        self.scheduler.slo.tpot_s,
-                        context,
-                        bucket_output,
-                        correction=correction,
-                        request_cap=self.scheduler.decode_concurrency,
-                    )
-                    for p in profiles
-                ]
-                capacities[key] = sum(values) / len(values) if values else None
+                capacities[key] = self._shape_capacity(profiles, key, correction)
             capacity = capacities[key]
+            if not capacity:
+                # A bucket without capacity prices the exact shape.
+                if exact not in exact_capacities:
+                    exact_capacities[exact] = self._shape_capacity(profiles, exact, correction)
+                capacity = exact_capacities[exact]
             if not capacity:
                 demand_complete = False
                 continue
@@ -317,6 +319,24 @@ class DemandModel:
             complete=demand_complete,
         )
 
+    def _shape_capacity(
+        self, profiles: tuple[Profile, ...], key: tuple[int, int], correction: float
+    ) -> float | None:
+        """Return the mean decode request rate for one input and output length."""
+        input_len, output_len = key
+        context = input_len + output_len / 2.0
+        values = [
+            p.decode_rps(
+                self.scheduler.slo.tpot_s,
+                context,
+                output_len,
+                correction=correction,
+                request_cap=self.scheduler.decode_concurrency,
+            )
+            for p in profiles
+        ]
+        return sum(values) / len(values) if values else None
+
     @staticmethod
     def _arrival_price(
         profiles: tuple[Profile, ...],
@@ -327,16 +347,14 @@ class DemandModel:
         """Return the mean cold prefill price, or the cheapest warm price, for one arrival."""
         if not profiles or not all(p.covers_prefill(length) for p in profiles):
             return None
-        cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
-        tokens_by_iid = dict(cached)
-        for p in profiles:
-            if prefill_iids is not None and p.iid not in prefill_iids:
-                continue
-            tokens = tokens_by_iid.get(p.iid, 0)
-            warm = p.cached_prefill_time(tokens, length - tokens) if tokens else None
-            if warm is not None:
-                cost = min(cost, warm)
-        return cost
+        cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+        tokens = dict(cached)
+        warm = (
+            warm_prefill_time(p, length, tokens.get(p.iid, 0))
+            for p in profiles
+            if prefill_iids is None or p.iid in prefill_iids
+        )
+        return min((cold, *(price for price in warm if price is not None)))
 
     @staticmethod
     def _shape_bucket(tokens: int) -> int:

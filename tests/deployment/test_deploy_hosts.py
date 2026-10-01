@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.deployment.fixtures import launch_document, runtime
+from tests.deployment.fixtures import cuda_engine, launch_document, runtime
 from tools.deployment.deploy_hosts import (
     forward_ports,
     install,
@@ -124,17 +124,10 @@ class HostDeploymentTests(unittest.TestCase):
         self.hosts = [
             Host("node-1", "NODE_1_SSH", "NODE_1_PASSWORD", ("router", "engine-1", "engine-2"))
         ]
-        engine = launch_document()["engines"]["engine-1"]
-        engine.update(
-            gpu_ids=["0"],
-            tensor_parallel_size=1,
-            gpu_visibility_env="CUDA_VISIBLE_DEVICES",
-            accelerator_devices=["/dev/nvidiactl", "/dev/nvidia0"],
-            runtime=runtime(),
-        )
+        engine = cuda_engine(launch_document()["engines"]["engine-1"])
+        engine["runtime"] = runtime()
         engine["runtime"]["extra_args"].extend(("--max-num-seqs", "8"))
-        second = json.loads(json.dumps(engine))
-        second.update(gpu_ids=["1"], accelerator_devices=["/dev/nvidiactl", "/dev/nvidia1"])
+        second = cuda_engine(json.loads(json.dumps(engine)), gpu="1")
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             fleet = root / "fleet.json"

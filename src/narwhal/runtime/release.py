@@ -135,7 +135,7 @@ async def release_round(
     live = [inst for inst in router.scheduler.live_instances() if inst.iid in specs]
     producers = [inst for inst in live if can_produce(specs[inst.iid])]
     consumers = [inst for inst in live if can_consume(specs[inst.iid])]
-    deadline = max(router.cfg.first_token_timeout_s or 0.0, router.cfg.health_timeout_s)
+    deadline = router.cfg.probe_deadline_s()
     # A retry takes the next producer in each consumer's rotation.
     shift = 0 if only is None else 1
 

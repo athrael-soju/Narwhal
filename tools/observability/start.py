@@ -68,6 +68,11 @@ class Listener:
             host = f"[{host}]"
         return f"{host}:{self.port}"
 
+    @property
+    def url(self) -> str:
+        """Return an HTTP URL reachable from the host."""
+        return f"http://{self.authority}"
+
 
 @dataclass(frozen=True)
 class Service:
@@ -112,19 +117,17 @@ class ComposeStack:
         self,
         runner: Runner = subprocess.run,
         env: Mapping[str, str] | None = None,
-        renderer_token: Path = RENDERER_TOKEN,
+        token_path: Path = RENDERER_TOKEN,
     ) -> None:
         self._runner = runner
-        self._renderer_token = renderer_token
         self._compose_env = dict(os.environ if env is None else env)
-        listener = parse_prometheus_listener(
-            self._compose_env.get("NARWHAL_PROMETHEUS_LISTEN_ADDRESS", "127.0.0.1:9090")
-        )
-        self._compose_env["NARWHAL_PROMETHEUS_URL"] = f"http://{listener.authority}"
-        grafana = configured_services(self._compose_env)[1].listener
-        renderer = Listener(grafana.host, RENDERER_PORT)
-        self._compose_env["NARWHAL_GRAFANA_URL"] = f"http://{grafana.authority}"
-        self._compose_env["NARWHAL_RENDERER_ADDRESS"] = renderer.authority
+        prometheus, grafana = configured_services(self._compose_env)
+        self._compose_env["NARWHAL_PROMETHEUS_URL"] = prometheus.listener.url
+        self._compose_env["NARWHAL_GRAFANA_URL"] = grafana.listener.url
+        self._compose_env["NARWHAL_RENDERER_ADDRESS"] = Listener(
+            grafana.listener.host, RENDERER_PORT
+        ).authority
+        self._compose_env["NARWHAL_RENDERER_TOKEN"] = renderer_token(token_path)
         self._prefix = [
             "docker",
             "compose",
@@ -150,7 +153,6 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
-        self._compose_env["NARWHAL_RENDERER_TOKEN"] = renderer_token(self._renderer_token)
         result = self._run("up", "-d", timeout_s=COMPOSE_UP_TIMEOUT_S)
         if result.stdout:
             print(result.stdout, end="")
@@ -540,7 +542,7 @@ def verify_dashboard_contract(document: dict[str, object]) -> None:
 
 
 def _verify_http(service: Service, get: HttpGet, prometheus_url: str) -> None:
-    base = f"http://{service.listener.authority}"
+    base = service.listener.url
     if service.name == "prometheus":
         status, ready = get(f"{base}/-/ready", 2.0)
         if status != 200 or "Prometheus Server is Ready" not in ready:
@@ -582,7 +584,7 @@ def _verify_targets(
     get: HttpGet,
 ) -> None:
     """Require the deployed target identities, scrape health and router readiness."""
-    base = f"http://{prometheus.listener.authority}"
+    base = prometheus.listener.url
     status, body = get(f"{base}/api/v1/targets", 2.0)
     if status != 200:
         raise StartupError(f"Prometheus targets returned HTTP {status}")
@@ -694,7 +696,7 @@ def wait_ready(
 ) -> dict[str, Container]:
     """Wait for the launched containers and their versioned HTTP contracts."""
     prometheus = next(service for service in services if service.name == "prometheus")
-    prometheus_url = f"http://{prometheus.listener.authority}"
+    prometheus_url = prometheus.listener.url
     launched: dict[str, Container] = {}
     for service in services:
         container = stack.container(service.name)
@@ -759,7 +761,7 @@ def start(
     for service in services:
         container = launched[service.name]
         print(
-            f"{service.label} ready at http://{service.listener.authority} "
+            f"{service.label} ready at {service.listener.url} "
             f"({container.cid[:12]}, {container.image})"
         )
     return launched

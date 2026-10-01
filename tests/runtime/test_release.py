@@ -1,6 +1,8 @@
 """Check peer release rounds after an engine ejection or drain."""
 
 import asyncio
+import os
+import runpy
 import tempfile
 import unittest
 from dataclasses import replace
@@ -70,6 +72,12 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         self.assertGreater(RELEASE_AFTER_S[0], ENGINE_TTL_S)
         self.assertGreater(RELEASE_AFTER_S[-1], 3600.0)
         self.assertEqual(list(RELEASE_AFTER_S), sorted(RELEASE_AFTER_S))
+
+    def test_the_capture_hook_waits_through_two_release_rounds(self):
+        with patch.dict(os.environ):
+            os.environ.pop("NARWHAL_CAPTURE_CACHE", None)
+            hook = runpy.run_path(str(ROOT / "src/narwhal/deployment/cache_capture_hook.py"))
+        self.assertGreater(hook["PEER_RELEASE_WAIT_S"], RELEASE_AFTER_S[1])
 
 
 class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):

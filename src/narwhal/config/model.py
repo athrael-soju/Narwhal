@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
 
+from ..contracts import canonical_digest
 from ..scheduling.control import SLO, Thresholds
 from ..serving.policy import ServingPolicy
 from ..types import Role
@@ -89,8 +88,7 @@ class EngineContract:
 
     def fingerprint(self) -> str:
         """Return a short digest of the complete declared representation."""
-        raw = json.dumps(self.fields(), sort_keys=True, separators=(",", ":")).encode()
-        return sha256(raw).hexdigest()[:16]
+        return canonical_digest(self.fields())[7:23]
 
     def missing(self) -> list[str]:
         """List undeclared compatibility fields in the engine contract."""
@@ -285,6 +283,10 @@ class FleetConfig:
         if self.control_connections > 0:
             return self.control_connections
         return max(4, 2 * len(self.engines))
+
+    def probe_deadline_s(self) -> float:
+        """Inference-probe deadline: the longer of the first-token and health budgets."""
+        return max(self.first_token_timeout_s or 0.0, self.health_timeout_s)
 
     def engine_auth_mode(self) -> str:
         """Return the engine-authentication mode."""

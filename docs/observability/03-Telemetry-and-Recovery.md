@@ -33,8 +33,8 @@ The deployment's alert manager routes `severity="page"` and `severity="warn"` al
 | --- | --- |
 | Browser connection fails | Check the SSH tunnel and the route to the router host. |
 | `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolating-a-second-monitoring-stack). |
-| Startup reports a command deadline | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`. |
-| Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana`. |
+| Startup reports a command deadline | Check Docker daemon health, registry reachability, and the [Compose service status](#inspecting-compose-services). |
+| Startup reports a container exit or readiness deadline | Inspect the Prometheus and Grafana [Compose logs](#inspecting-compose-services). |
 | Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps. |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets`. |
@@ -44,6 +44,20 @@ The deployment's alert manager routes `severity="page"` and `severity="warn"` al
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid`. |
 
 Verify each fix with a `make observe` rerun that passes the [readiness contract](01-Start-and-Verify.md#readiness-contract).
+
+### Inspecting Compose services
+
+Every Compose command for `tools/observability/compose.yml` requires `NARWHAL_RENDERER_TOKEN`.
+
+`make observe` stores the token in `runs/observability/renderer-token`.
+
+Load the token in the deployed checkout on the router host, then query the services:
+
+```bash
+export NARWHAL_RENDERER_TOKEN="$(cat runs/observability/renderer-token)"
+docker compose -f tools/observability/compose.yml ps
+docker compose -f tools/observability/compose.yml logs prometheus grafana
+```
 
 ### Mount permission failures
 

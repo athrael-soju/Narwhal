@@ -482,6 +482,22 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
         self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
 
+    def test_compose_queries_before_up_carry_the_renderer_token(self) -> None:
+        path = self._token()
+        calls: list[tuple[list[str], dict[str, str]]] = []
+
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            passed_env = kwargs.get("env")
+            assert isinstance(passed_env, dict)
+            calls.append((command, dict(passed_env)))
+            return CompletedProcess(command, 0, "", "")
+
+        self.assertIsNone(observe.ComposeStack(runner, {}, path).container("prometheus"))
+        command, env = calls[0]
+        self.assertEqual(command[-4:], ["ps", "--all", "--quiet", "prometheus"])
+        self.assertIn("NARWHAL_RENDERER_TOKEN", env)
+        self.assertEqual(env["NARWHAL_RENDERER_TOKEN"], path.read_text().strip())
+
     def test_wildcard_grafana_bind_uses_loopback_for_render_callback(self) -> None:
         for bind, expected, renderer in (
             ("0.0.0.0", "http://127.0.0.1:3000", "127.0.0.1:8081"),
@@ -559,6 +575,7 @@ class ReadinessTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             mock.patch.object(observe, "load_contract", return_value=self.contract),
+            mock.patch.object(observe, "ComposeStack"),
             mock.patch.object(observe, "start", side_effect=observe.StartupError("occupied")),
             redirect_stderr(stderr),
         ):
@@ -573,7 +590,7 @@ class ReadinessTests(unittest.TestCase):
             calls.append((command, kwargs.get("timeout")))
             return CompletedProcess(command, 0, "", "")
 
-        stack = observe.ComposeStack(runner, renderer_token=self._token())
+        stack = observe.ComposeStack(runner, token_path=self._token())
         stack.up()
         self.assertIsNone(stack.container("prometheus"))
         self.assertEqual(calls[0][1], observe.COMPOSE_UP_TIMEOUT_S)
@@ -584,6 +601,7 @@ class ReadinessTests(unittest.TestCase):
         timeout = TimeoutExpired(["docker", "compose", "up", "-d"], 300.0)
         with (
             mock.patch.object(observe, "load_contract", return_value=self.contract),
+            mock.patch.object(observe, "ComposeStack"),
             mock.patch.object(observe, "start", side_effect=timeout),
             redirect_stderr(stderr),
         ):

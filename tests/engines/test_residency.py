@@ -172,15 +172,16 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(index, 0, stored([1, 2], prompt))
         self.apply(index, 1, {"type": "BlockRemoved", "block_hashes": [2], "group_idx": 0})
         self.assertEqual(index.cached_prefix_blocks(names), 1)
-        sequence, changes = index.changes_after(0)
-        self.assertEqual(sequence, 1)
-        self.assertEqual(changes[0]["groups"]["0"]["removed"], [names[1].hex()])
-        self.assertEqual(index.changes_after(1), (1, []))
+        result = index.changes_after(0)
+        self.assertEqual((result.sequence, result.block_size), (1, 4))
+        self.assertEqual(result.changes[0]["groups"]["0"]["removed"], [names[1].hex()])
+        result = index.changes_after(1)
+        self.assertEqual((result.sequence, result.changes), (1, []))
         self.assertIsNone(index.changes_after(5))
         self.apply(index, 2, {"type": "AllBlocksCleared"})
         self.assertTrue(index.known)
         self.assertEqual(index.cached_prefix_blocks(names), 0)
-        self.assertTrue(index.changes_after(1)[1][0]["cleared"])
+        self.assertTrue(index.changes_after(1).changes[0]["cleared"])
 
     def test_changes_report_net_presence_per_batch_with_duplicate_copies(self):
         """vLLM can hold one hash twice; a batch's change lists only net transitions."""
@@ -193,15 +194,17 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(
             index, 1, stored([4], (12, 13, 14, 15), parent=3), {**removed, "block_hashes": [4]}
         )
-        delta = index.changes_after(0)[1][0]["groups"]["0"]
+        delta = index.changes_after(0).changes[0]["groups"]["0"]
         self.assertEqual((delta["stored"], delta["removed"]), ([], []))
         # A second copy of block 3 arrives and one copy leaves.
         self.apply(index, 2, stored([3], prompt[8:], parent=2), {**removed, "block_hashes": [3]})
         self.assertEqual(index.cached_prefix_blocks(names), 3)
-        self.assertEqual(index.changes_after(1)[1][0]["groups"]["0"]["removed"], [])
+        self.assertEqual(index.changes_after(1).changes[0]["groups"]["0"]["removed"], [])
         self.apply(index, 3, {**removed, "block_hashes": [3]})
         self.assertEqual(index.cached_prefix_blocks(names), 2)
-        self.assertEqual(index.changes_after(2)[1][0]["groups"]["0"]["removed"], [names[2].hex()])
+        self.assertEqual(
+            index.changes_after(2).changes[0]["groups"]["0"]["removed"], [names[2].hex()]
+        )
 
     def test_change_log_bound_and_mixed_block_sizes(self):
         index = ResidencyIndex(MODEL, TOKENIZER, max_change_blocks=3)
@@ -212,7 +215,7 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(index, 2, stored([2], prompt[4:], parent=1))
         # The log holds at most three changed blocks, so batch 0 leaves it.
         self.assertIsNone(index.changes_after(-1))
-        self.assertEqual(len(index.changes_after(0)[1]), 2)
+        self.assertEqual(len(index.changes_after(0).changes), 2)
         # The batch-count bound applies with the block bound.
         bounded = ResidencyIndex(MODEL, TOKENIZER, max_changes=2, max_change_blocks=3)
         for sequence in range(4):
@@ -220,7 +223,7 @@ class ResidencyIndexTests(unittest.TestCase):
                 bounded, sequence, stored([sequence + 1], range(4 * sequence, 4 * sequence + 4))
             )
         self.assertIsNone(bounded.changes_after(0))
-        self.assertEqual(len(bounded.changes_after(1)[1]), 2)
+        self.assertEqual(len(bounded.changes_after(1).changes), 2)
         self.apply(index, 3, stored([9], prompt, group=1, size=8))
         self.assertFalse(index.known)
         self.assertIn("block size 8", index.snapshot()["reason"])
