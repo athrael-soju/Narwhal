@@ -39,9 +39,13 @@ copyright: Copyright &copy; athrael-soju
 
 plugins:
   - search
+  - glightbox:
+      manual: true
+      background: none
 
 hooks:
   - overrides/hooks/llms_txt.py
+  - overrides/hooks/panel_rows.py
 
 markdown_extensions:
   - admonition

@@ -285,23 +285,26 @@
   }
 }
 
+/* Span the same width as tables, whose wrapper extends 0.8rem past the
+   content and pads them by 0.15rem. */
 .md-typeset .narwhal-panel-row {
   display: flex;
   gap: 0.5rem;
-  margin: 1em 0;
+  margin: 1em -0.65rem;
 }
 
+/* overrides/hooks/panel_rows.py sets each item's flex-grow to its image's
+   pixel width. Images in a row share a pixel height, so the row fills the
+   column and every image renders at the same height. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;
+  min-width: 0;
 }
 
 .md-typeset .narwhal-panel-row img {
+  display: block;
   width: 100%;
-}
-
-.md-typeset .narwhal-panel-row.wide-first > p:first-child {
-  flex-grow: 3;
 }
 
 @media screen and (max-width: 44.9375em) {

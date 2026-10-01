@@ -401,17 +401,24 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('severity="page"', query["expr"])
         self.assertIn('severity="warn"', query["expr"])
         outcomes = dashboard["spec"]["elements"]["panel-11"]["spec"]["id"]
-        # Fleet events sits beside the engine table at a quarter of the row.
+        # Fleet events sits beside Request outcomes at a quarter of the row, and the
+        # role history sits beside the engine table.
         grid = {
             item["spec"]["element"]["name"]: item["spec"]
             for item in dashboard["spec"]["layout"]["spec"]["items"]
         }
-        self.assertEqual(grid["panel-37"]["y"], grid["panel-7"]["y"])
+        self.assertEqual(grid["panel-37"]["y"], grid["panel-11"]["y"])
         self.assertEqual(
-            (grid["panel-7"]["x"], grid["panel-7"]["width"], grid["panel-37"]["x"]), (0, 18, 18)
+            (grid["panel-11"]["x"], grid["panel-11"]["width"], grid["panel-37"]["x"]), (0, 18, 18)
         )
         self.assertEqual(grid["panel-37"]["width"], 6)
-        self.assertEqual(grid["panel-11"]["width"], 24)
+        self.assertEqual(grid["panel-8"]["y"], grid["panel-7"]["y"])
+        self.assertEqual(
+            (grid["panel-7"]["x"], grid["panel-7"]["width"], grid["panel-8"]["x"]), (0, 16, 16)
+        )
+        self.assertEqual(grid["panel-8"]["width"], 8)
+        table = dashboard["spec"]["elements"]["panel-7"]["spec"]["vizConfig"]["spec"]["options"]
+        self.assertEqual(table["sortBy"], [{"displayName": "Engine", "desc": False}])
         markers = {
             annotation["spec"]["name"]: annotation["spec"]
             for annotation in dashboard["spec"]["annotations"]

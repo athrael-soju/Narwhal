@@ -1,12 +1,12 @@
 # Observability asset contracts
 
-The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard. Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
+The pinned Compose project starts Prometheus and Grafana with Narwhal alert rules and the provisioned **Narwhal Orchestrator** dashboard, plus the Grafana Image Renderer for PNG renders of dashboards and panels. Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
 ## Dashboard
 
 [Read the dashboard](../../docs/observability/05-Dashboard.md) explains each panel and engine state.
 
-**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. Each block in the first row pairs a status value, coloured against its target, with a context value: goodput within the SLOs and its request count, the unserved share and the offered count, TTFT and TPOT p95 as a share of their SLOs and in seconds, out-of-service engines and flips, and router admission and firing Narwhal alerts. The engine table, beside fleet events (a timeline of the Narwhal alerts that fired in the displayed interval) at a quarter of the row, lists the most serious states first and shows resident Narwhal work, native vLLM work, KV occupancy, prefix cache hits and token rate. The role history below the table marks outage periods in the same colours as the table's State column, to the right of pool assignments. Request outcomes follow, then TTFT, TPOT and request-wait quantiles, pool pressure beside retries, and token throughput. Request outcomes also marks when each alert started firing.
+**Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`. Each block in the first row pairs a status value, coloured against its target, with a context value: goodput within the SLOs and its request count, the unserved share and the offered count, TTFT and TPOT p95 as a share of their SLOs and in seconds, out-of-service engines and flips, and router admission and firing Narwhal alerts. The engine table lists engines in ID order and shows resident Narwhal work, native vLLM work, KV occupancy, prefix cache hits and token rate. The role history beside it, at a third of the row, marks outage periods in the same colours as the table's State column. Request outcomes follow, with fleet events (a timeline of the Narwhal alerts that fired in the displayed interval) beside them at a quarter of the row, then pool assignments, TTFT and TPOT quantiles beside token throughput, and pool pressure, request-wait quantiles and retries side by side. Request outcomes also marks when each alert started firing.
 
 The dashboard selects every router target in the data source when it opens. The shipped scrape configuration binds one router and one fleet to each data source, so the bare dashboard URL immediately populates router totals and pool pressure. **Engine detail** filters the engine table and role timeline.
 
@@ -32,7 +32,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 ## Dashboard maintenance
 
-`make observe` stages `tools/observability/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. Refresh the staged copy and verify provisioning after changing the source dashboard:
+`make observe` stages `tools/observability/grafana-narwhal.json` at `runs/observability/mounts/grafana-dashboards/narwhal.json`. Grafana polls that directory mount every 30 seconds and replaces UI edits from the staged file. The file uses the `dashboard.grafana.app/v2alpha1` schema, and startup reads it back through Grafana's `v2beta1` dashboard API. Refresh the staged copy and verify provisioning after changing the source dashboard:
 
 ```bash
 make observe

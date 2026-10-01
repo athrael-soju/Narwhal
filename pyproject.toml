@@ -57,6 +57,7 @@ dev = [
 ]
 docs = [
   "mkdocs-material==9.7.7",
+  "mkdocs-glightbox==0.5.2",
 ]
 
 [project.scripts]

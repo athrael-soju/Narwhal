@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import io
 import json
+import stat
+import tempfile
 import unittest
 import urllib.error
 from collections.abc import Callable
 from contextlib import redirect_stderr
+from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
@@ -54,29 +57,52 @@ def _healthy_get(url: str, timeout_s: float) -> tuple[int, str]:
         return 200, json.dumps({"database": "ok", "version": observe.GRAFANA_VERSION})
     if url.endswith("/api/datasources/name/Prometheus"):
         return 200, json.dumps({"type": "prometheus", "url": "http://127.0.0.1:9090"})
-    if url.endswith("/api/dashboards/uid/narwhal-router"):
+    if url.endswith(observe.DASHBOARD_PATH):
         return 200, json.dumps(_dashboard())
     raise AssertionError(url)
 
 
 def _dashboard() -> dict[str, object]:
     return {
-        "dashboard": {
-            "uid": "narwhal-router",
-            "templating": {
-                "list": [
-                    {
+        "apiVersion": "dashboard.grafana.app/v2beta1",
+        "metadata": {"name": "narwhal-router"},
+        "spec": {
+            "variables": [
+                {
+                    "kind": "QueryVariable",
+                    "spec": {
                         "name": "router",
                         "includeAll": True,
                         "allValue": ".*",
                         "current": {"text": "All", "value": "$__all"},
-                    }
-                ]
-            },
-            "panels": [
-                {"targets": [{"expr": 'rate(narwhal_offered_total{instance=~"$router"}[1m])'}]}
+                    },
+                }
             ],
-        }
+            "elements": {
+                "panel-1": {
+                    "spec": {
+                        "data": {
+                            "spec": {
+                                "queries": [
+                                    {
+                                        "spec": {
+                                            "query": {
+                                                "spec": {
+                                                    "expr": (
+                                                        "rate(narwhal_offered_total"
+                                                        '{instance=~"$router"}[1m])'
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        },
     }
 
 
@@ -307,11 +333,17 @@ class ReadinessTests(unittest.TestCase):
 
     def test_dashboard_rejects_an_empty_router_selection(self) -> None:
         document = _dashboard()
-        router = document["dashboard"]["templating"]["list"][0]  # type: ignore[index]
+        router = document["spec"]["variables"][0]["spec"]  # type: ignore[index]
         router["includeAll"] = False
         router["current"] = {"text": "", "value": ""}
         with self.assertRaisesRegex(observe.StartupError, "default to every configured target"):
             observe.verify_dashboard_contract(document)
+
+    def test_shipped_dashboard_passes_the_readiness_contract(self) -> None:
+        dashboard = json.loads((observe.BASE / "grafana-narwhal.json").read_text())
+        observe.verify_dashboard_contract(
+            {"metadata": dashboard["metadata"], "spec": dashboard["spec"]}
+        )
 
     def test_shipped_dashboard_defaults_to_the_discovered_router(self) -> None:
         dashboard = json.loads((observe.BASE / "grafana-narwhal.json").read_text())
@@ -392,6 +424,8 @@ class ReadinessTests(unittest.TestCase):
         datasource = (observe.BASE / "grafana/provisioning/datasources/prometheus.yml").read_text()
         self.assertIn(f"image: {observe.PROMETHEUS_IMAGE}", compose)
         self.assertIn(f"image: {observe.GRAFANA_IMAGE}", compose)
+        self.assertIn(f"image: {observe.RENDERER_IMAGE}", compose)
+        self.assertIn('GF_RENDERING_CALLBACK_URL: "${NARWHAL_GRAFANA_URL', compose)
         self.assertIn(
             'NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL',
             compose,
@@ -415,7 +449,7 @@ class ReadinessTests(unittest.TestCase):
                     return CompletedProcess(command, 0, "", "")
 
                 env = {"NARWHAL_PROMETHEUS_LISTEN_ADDRESS": bind}
-                observe.ComposeStack(runner, env).up()
+                observe.ComposeStack(runner, env, self._token()).up()
                 self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_URL"], expected)
                 self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_LISTEN_ADDRESS"], bind)
 
@@ -426,6 +460,50 @@ class ReadinessTests(unittest.TestCase):
 
                 stack = FakeStack({"prometheus": [self.prometheus], "grafana": [self.grafana]})
                 observe.wait_ready(observe.configured_services(env), stack, get=get)
+
+    def _token(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name) / "observability" / "renderer-token"
+
+    def test_renderer_token_is_private_and_stable(self) -> None:
+        path = self._token()
+        calls: list[dict[str, str]] = []
+
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            passed_env = kwargs.get("env")
+            assert isinstance(passed_env, dict)
+            calls.append(passed_env)
+            return CompletedProcess(command, 0, "", "")
+
+        observe.ComposeStack(runner, {}, path).up()
+        observe.ComposeStack(runner, {}, path).up()
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
+        self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
+
+    def test_wildcard_grafana_bind_uses_loopback_for_render_callback(self) -> None:
+        for bind, expected, renderer in (
+            ("0.0.0.0", "http://127.0.0.1:3000", "127.0.0.1:8081"),
+            ("[::]", "http://[::1]:3000", "[::1]:8081"),
+            ("127.0.0.2", "http://127.0.0.2:3000", "127.0.0.2:8081"),
+        ):
+            with self.subTest(bind=bind):
+                calls: list[dict[str, str]] = []
+
+                def runner(
+                    command: list[str], *, calls: list[dict[str, str]] = calls, **kwargs: object
+                ) -> CompletedProcess[str]:
+                    passed_env = kwargs.get("env")
+                    assert isinstance(passed_env, dict)
+                    calls.append(passed_env)
+                    return CompletedProcess(command, 0, "", "")
+
+                observe.ComposeStack(
+                    runner, {"NARWHAL_GRAFANA_BIND_ADDRESS": bind}, self._token()
+                ).up()
+                self.assertEqual(calls[0]["NARWHAL_GRAFANA_URL"], expected)
+                self.assertEqual(calls[0]["NARWHAL_RENDERER_ADDRESS"], renderer)
 
     def test_container_change_rejects_an_unrelated_response(self) -> None:
         replacement = _container("x" * 64, observe.GRAFANA_IMAGE)
@@ -495,7 +573,7 @@ class ReadinessTests(unittest.TestCase):
             calls.append((command, kwargs.get("timeout")))
             return CompletedProcess(command, 0, "", "")
 
-        stack = observe.ComposeStack(runner)
+        stack = observe.ComposeStack(runner, renderer_token=self._token())
         stack.up()
         self.assertIsNone(stack.container("prometheus"))
         self.assertEqual(calls[0][1], observe.COMPOSE_UP_TIMEOUT_S)
