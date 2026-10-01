@@ -12,8 +12,6 @@ if TYPE_CHECKING:
     from .controller import PrefillRecovery, ReactiveController
 
 Evaluation = tuple[SplitScore, float, float, bool, bool, bool, bool]
-# Recent demand covers the last 1/RECENT_WINDOW_PARTS of the demand window.
-RECENT_WINDOW_PARTS = 4
 
 
 class ReactivePolicy:
@@ -96,7 +94,6 @@ class ReactivePolicy:
             correction=correction,
             window_s=controller.window_s,
             step_s=controller.step_s,
-            recent_s=controller.window_s / RECENT_WINDOW_PARTS,
         )
         n = snapshot.current_prefill + snapshot.current_decode
         current_p = snapshot.current_prefill
@@ -211,44 +208,15 @@ class ReactivePolicy:
                     key=lambda projection: projection.projected_ttft_s,
                 )
 
-        # A receiving phase short of engines in both the window and recent
-        # demand prices the donor phase on recent demand.
-        recent = {
-            toward: snapshot.recent_donor(toward)
-            for toward in (False, True)
-            if not urgent_ready
-            and snapshot.receiver_overloaded(toward, controller.scheduler.th.expand)
-        }
-
-        def donor_ratio(candidate: SplitScore) -> float:
-            toward = candidate.prefill > current_p
-            view = recent.get(toward)
-            scores = [candidate] if view is None else [candidate, view.score(candidate.prefill)]
-            return min(
-                max(score.tpot_ratio, score.decode_queue_ratio) if toward else score.ttft_ratio
-                for score in scores
-            )
-
-        def recent_details(toward: bool) -> dict[str, object]:
-            if toward not in recent or snapshot.recent_demand is None:
-                return {}
-            return {
-                "recent_window_s": rounded(controller.window_s / RECENT_WINDOW_PARTS),
-                "recent_prefill_work": rounded(snapshot.recent_demand.prefill_engines),
-                "recent_decode_work": rounded(snapshot.recent_demand.decode_engines),
-            }
-
-        def objective_gain(candidate: SplitScore) -> float:
-            view = recent.get(candidate.prefill > current_p)
-            if view is None:
-                return current.objective - candidate.objective
-            return view.score(current_p).objective - view.score(candidate.prefill).objective
-
         evaluations: list[Evaluation] = [
             (
                 candidate,
-                donor_ratio(candidate),
-                objective_gain(candidate),
+                (
+                    max(candidate.tpot_ratio, candidate.decode_queue_ratio)
+                    if candidate.prefill > current_p
+                    else candidate.ttft_ratio
+                ),
+                current.objective - candidate.objective,
                 (
                     candidate.decode_kv_capacity_tokens is None
                     or candidate.decode_tokens_per_engine <= candidate.decode_kv_capacity_tokens
@@ -365,11 +333,8 @@ class ReactivePolicy:
                 if urgent_ready
                 else "mixed_pressure"
                 if mixed_pressure
-                else "recent_demand"
-                if (candidate.prefill > current_p) in recent
                 else "source_shrink"
             )
-            details.update(recent_details(candidate.prefill > current_p))
             details["observed_prefill_ratio"] = rounded(observed_prefill)
             details["recovery_prefill_ratio"] = rounded(recovery_prefill)
             details["queued_prefill_s"] = rounded(snapshot.queued_prefill_s)
@@ -445,11 +410,8 @@ class ReactivePolicy:
             if urgent_ready
             else "mixed_pressure"
             if mixed_pressure
-            else "recent_demand"
-            if (direction > 0) in recent
             else "source_shrink"
         )
-        details.update(recent_details(direction > 0))
         if prefill_recovery is not None:
             details.update(prefill_recovery.details(now))
             details["decision_basis"] = "projected_ttft_recovery"
@@ -465,10 +427,10 @@ class ReactivePolicy:
                     }
                 )
 
-        view = recent.get(direction > 0)
-        destination_ratio = max(
-            score.ttft_ratio if direction > 0 else max(score.tpot_ratio, score.decode_queue_ratio)
-            for score in ([current] if view is None else [current, view.score(current_p)])
+        destination_ratio = (
+            current.ttft_ratio
+            if direction > 0
+            else max(current.tpot_ratio, current.decode_queue_ratio)
         )
         # Relaxing decode shrink requires repeated pressure, even with complete
         # demand. Objective margin, evidence and dwell still constrain reversals.

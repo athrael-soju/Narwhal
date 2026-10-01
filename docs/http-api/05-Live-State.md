@@ -231,8 +231,6 @@ Optional fields, by evaluation stage:
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                               |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                              |
 | `source_pressure_safe`                            | Whether source-pool pressure is at or below the shrink threshold or `mixed_pressure` applies               |
-| `recent_window_s`                                 | Span of recent demand under `recent_demand`, one quarter of `controller.reactive.window_s`                 |
-| `recent_prefill_work`, `recent_decode_work`       | Prefill and decode demand over `recent_window_s`, in engines                                               |
 
 Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens`.
 
@@ -241,7 +239,6 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | `eligibility_rule`        | Proposal                                                             |
 | ------------------------- | -------------------------------------------------------------------- |
 | `source_shrink`           | Ordinary consolidation                                               |
-| `recent_demand`           | Consolidation priced on recent demand for an overloaded receiver     |
 | `mixed_pressure`          | Observed prefill recovery exceeds the decode shrink threshold        |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request |
 

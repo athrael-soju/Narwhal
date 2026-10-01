@@ -422,17 +422,6 @@ Ordinary consolidation requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-The `recent_demand` rule applies when the receiving phase's demand reaches `controller.thresholds.expand` times its current engine count over both spans:
-
-- the full `controller.reactive.window_s`
-- the last quarter of `controller.reactive.window_s`
-
-Under `recent_demand`:
-
-- projected source load is the lower of the window and recent estimates
-- the objective prices the donor phase on recent demand
-- the objective prices the receiving phase on the larger of the window and recent estimates
-
 The `mixed_pressure` rule moves one decode engine to prefill when projected decode load is above `shrink` and all of these hold:
 
 - measured prefill load reaches `controller.thresholds.expand`
@@ -445,7 +434,7 @@ One confirmation is enough in two cases:
 - All of these hold:
   - Demand evidence is complete.
   - The applicable rule differs from `mixed_pressure`.
-  - The destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`, using the higher of the window and recent ratios under `recent_demand`.
+  - The destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`.
 
 Every other move needs:
 

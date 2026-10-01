@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
@@ -104,9 +104,6 @@ class SplitSnapshot:
     waiting_decode_requests: int = 0
     # Decode residents on engines that currently hold the decode role.
     decode_role_requests: int = 0
-    # Demand over the most recent part of the window, for the current and adjacent splits.
-    recent_demand: Demand | None = None
-    recent_options: tuple[tuple[int, Demand], ...] = ()
 
     @property
     def decode_recovery_ratio(self) -> float:
@@ -132,47 +129,6 @@ class SplitSnapshot:
         return max(
             self.prefill_pressure,
             self.resident_prefill_s / (self.current_prefill * self.ttft_slo),
-        )
-
-    def receiver_overloaded(self, toward_prefill: bool, expand: float) -> bool:
-        """Whether the receiving phase needs its engines at `expand` in the window and recently."""
-        if self.recent_demand is None:
-            return False
-        if toward_prefill:
-            need = min(self.demand.prefill_engines, self.recent_demand.prefill_engines)
-            return need >= expand * self.current_prefill
-        need = min(self.demand.decode_engines, self.recent_demand.decode_engines)
-        return need >= expand * self.current_decode
-
-    def recent_donor(self, toward_prefill: bool) -> SplitSnapshot:
-        """Price the donor phase on recent demand and the receiving phase on the larger estimate."""
-        if self.recent_demand is None:
-            return self
-        recent = dict(self.recent_options)
-
-        def mix(window: Demand, latest: Demand) -> Demand:
-            if toward_prefill:
-                prefill = max(window.prefill_engines, latest.prefill_engines)
-                decode = latest.decode_engines
-            else:
-                prefill = latest.prefill_engines
-                decode = max(window.decode_engines, latest.decode_engines)
-            return Demand(
-                prefill,
-                decode,
-                window.arrivals,
-                window.output_observations,
-                window.complete and latest.complete,
-            )
-
-        return replace(
-            self,
-            demand=mix(self.demand, self.recent_demand),
-            demand_options=tuple(
-                (prefill, mix(row, recent[prefill]))
-                for prefill, row in self.demand_options
-                if prefill in recent
-            ),
         )
 
     def score(
@@ -444,12 +400,10 @@ class SplitScorer:
         correction: float | None = None,
         window_s: float | None = None,
         step_s: float | None = None,
-        recent_s: float | None = None,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values.
 
         Splits cover the live engines; unavailable engines add no capacity.
-        `recent_s` also prices every split over the most recent `recent_s` seconds.
         """
         instances = tuple(self.scheduler.live_instances())
         profiles = tuple(
@@ -514,16 +468,13 @@ class SplitScorer:
             profile_options_list.append((prefill, rows))
             prefill_iids[prefill] = {iid for iid, role in roles.items() if role is Role.PREFILL}
         profile_options = tuple(profile_options_list)
-
-        def options(span: float | None) -> tuple[tuple[int, Demand], ...]:
-            if span is None or step_s is None:
-                return ()
-            return tuple(
+        demand_options = (
+            tuple(
                 (
                     prefill,
                     self.demand.price_profiles(
                         now,
-                        window_s=span,
+                        window_s=window_s,
                         step_s=step_s,
                         profiles=rows,
                         estimates=estimates,
@@ -533,11 +484,8 @@ class SplitScorer:
                 )
                 for prefill, rows in profile_options
             )
-
-        demand_options = options(window_s)
-        recent_options = options(recent_s)
-        recent_demand = next(
-            (row for prefill, row in recent_options if prefill == current_prefill), None
+            if window_s is not None and step_s is not None
+            else ()
         )
         return SplitSnapshot(
             at=now,
@@ -570,8 +518,6 @@ class SplitScorer:
             active_decode_instances=sum(bool(inst.decode) for inst in instances),
             profile_options=profile_options,
             demand_options=demand_options,
-            recent_demand=recent_demand,
-            recent_options=recent_options,
             offered_inputs=tuple(
                 row.value.input_len
                 for row in self.demand.arrivals.rows(
