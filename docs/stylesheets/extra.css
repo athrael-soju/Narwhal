@@ -293,10 +293,10 @@
   margin: 1em -0.65rem;
 }
 
-/* overrides/hooks/panel_rows.py sets each item's flex-grow to its image's
-   pixel width. Images in a row share a pixel height, so the row fills the
-   column and every image renders at the same height. Stats rows on a page
-   share one scale set by the widest stats row. */
+/* overrides/hooks/panel_rows.py sizes each item. In a plain row, flex-grow
+   is the image's pixel width, so the row fills the column at one image
+   height. In a stats row, flex-basis is the image's share of the page's
+   widest stats row, so stats images share one scale. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;

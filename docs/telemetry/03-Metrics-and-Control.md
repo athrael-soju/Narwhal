@@ -75,7 +75,7 @@ Bucket boundaries, as multiples of the bucket scale:
 Histogram aggregation:
 
 - Compute quantiles from bucket rates grouped by `instance`, `slo` and `le`.
-- Divide a quantile by the `narwhal_slo_seconds` series with the same `instance` and `slo`.
+- Divide a `narwhal_ttft_seconds` or `narwhal_tpot_seconds` quantile by the `narwhal_slo_seconds` series with the matching `metric`, `instance` and `slo`.
 
 ## Inspecting retained attainment evidence
 
