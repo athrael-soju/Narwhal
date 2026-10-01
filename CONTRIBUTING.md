@@ -1,6 +1,6 @@
 # Contributing
 
-## Set up the checkout
+## Setting up the checkout
 
 Fork [Narwhal](https://github.com/athrael-soju/Narwhal) and clone your fork:
 
@@ -96,7 +96,7 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Fleet acceptance on GPU hosts follows [Deploy a fleet](docs/Deploy.md):
+Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 
 1. Inspect devices and artifacts.
 2. Start each checked engine.
@@ -194,7 +194,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Working fleet configurations              | `config/fleet.json` or the ignored `config/fleet.*.json` pattern                                 |
 | Live engine addresses and site paths      | Those ignored files, or node URLs from the ignored `.env` through the documented endpoint syntax |
 
-Site automation provides host credentials, the source distribution, network configuration, and engine process launch. [Gate D: Prove the transfer fabric against the serving cache](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
+Site automation provides host credentials, the source distribution, network configuration, and engine process launch. [Gate D: Proving the transfer fabric against the serving cache](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
 
 ## Issues
 

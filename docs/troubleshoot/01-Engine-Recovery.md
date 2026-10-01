@@ -22,17 +22,17 @@ Prerequisites:
 | --- | --- |
 | `recovery.engine_restart_policy` is `individual` | The steps below |
 | `recovery.engine_restart_policy` is `whole_wave` | [Whole-wave recovery](#whole-wave-recovery) |
-| Planned restart | [Restart one engine](../operate/03-Restart-Engines.md#7-restart-one-engine) |
+| Planned restart | [Restarting one engine](../operate/03-Restart-Engines.md#7-restarting-one-engine) |
 
 Steps for `individual` recovery:
 
 1. Start the engine.
-2. Verify its endpoints per [Replace the process](../operate/03-Restart-Engines.md#72-replace-the-process).
+2. Verify its endpoints per [Replacing the process](../operate/03-Restart-Engines.md#72-replacing-the-process).
 3. Restart its attestation sidecar through the configured process manager.
 4. Read the sidecar log.
 5. Repair each named endpoint or contract failure.
 6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only:
-    1. [Activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activate-replacement-profiles).
+    1. [Activate fresh profiles while preserving its hold](../operate/03-Restart-Engines.md#activating-replacement-profiles).
     2. Request readmission.
 7. Follow `/narwhal/lifecycle` until readmission completes.
 8. Confirm `accepts_new: true`.
@@ -53,17 +53,17 @@ Triggers for whole-wave recovery:
 
 Steps for whole-wave recovery:
 
-1. [Start a whole-wave drain](../operate/03-Restart-Engines.md#81-drain-the-wave).
-2. If drain identity capture fails, follow [Recover an unplanned whole-wave hold](../operate/03-Restart-Engines.md#83-recover-an-unplanned-whole-wave-hold).
+1. [Start a whole-wave drain](../operate/03-Restart-Engines.md#81-draining-the-wave).
+2. If drain identity capture fails, follow [Recovering an unplanned whole-wave hold](../operate/03-Restart-Engines.md#83-recovering-an-unplanned-whole-wave-hold).
 3. Wait until `wave.ready_to_stop` is `true`.
 4. Confirm `/ready` returns HTTP 503.
 5. Stop every engine process tree through the external supervisor.
 6. Verify that only the intended worker processes hold accelerator memory.
 7. Launch every engine from the same immutable image and launch contract.
 8. Start a fresh attestation sidecar for each engine.
-9. While the wave is held, [activate one replacement profile store](../operate/03-Restart-Engines.md#activate-replacement-profiles) covering every engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
+9. While the wave is held, [activate one replacement profile store](../operate/03-Restart-Engines.md#activating-replacement-profiles) covering every engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
 10. Request whole-wave readmission.
 11. Wait for fabric validation to pass.
 12. Confirm `/ready` returns HTTP 200.
 13. Restore ingress.
-14. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).
+14. Run the drills in [Validating every release](../operate/05-Release-Drills.md#11-validating-every-release).

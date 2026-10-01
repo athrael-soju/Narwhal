@@ -8,9 +8,9 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 
 ### 10.1 Rolling upgrade with compatible handoff versions
 
-#### Upgrade the standby
+#### Upgrading the standby
 
-1. Check that both releases share a [handoff version](01-Start-Routers.md#2-keep-one-deployment-set).
+1. Check that both releases share a [handoff version](01-Start-Routers.md#2-keeping-one-deployment-set).
 2. Record the active router's `ha.epoch` from `/narwhal/state`.
 3. Stop the standby.
 4. Install the new deployment set on that host.
@@ -18,19 +18,19 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 6. Check that `/health` returns HTTP 200 on the new standby.
 7. Check that `/ready` returns HTTP 503 on the new standby.
 
-#### Hand off to the upgraded router
+#### Handing off to the upgraded router
 
 1. Stop the old active router gracefully.
-2. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in [Upgrade the standby](#upgrade-the-standby).
+2. Verify the upgraded router's `ha.epoch` exceeds the epoch recorded in [Upgrading the standby](#upgrading-the-standby).
 3. Check that it is the only backend returning HTTP 200 from `/ready`.
 
-#### Upgrade the former active router
+#### Upgrading the former active router
 
 1. Install the same deployment set on the stopped router's host.
 2. Start that router as standby.
 3. Wait for its `/ready` to return HTTP 503.
 
-### 10.2 Upgrade across a handoff-version change
+### 10.2 Upgrading across a handoff-version change
 
 Incompatible handoff versions need a maintenance window.
 
@@ -43,7 +43,7 @@ Incompatible handoff versions need a maintenance window.
 7. Confirm the primary is the only backend returning HTTP 200 from `/ready`.
 8. Restore ingress.
 
-### 10.3 Roll back
+### 10.3 Rolling back
 
 1. Remove the router you are rolling back from the load balancer.
 2. Stop the new router gracefully.
@@ -59,7 +59,7 @@ Incompatible handoff versions need a maintenance window.
     - the profiles
     - the first-token calibration artifact for the live process generations
     - a state handoff the restored build supports
-5. If process generations changed, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before preflight.
+5. If process generations changed, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before preflight.
 6. For fresh roles and zeroed counters, set `recovery.resume: false` and drop `--resume`.
 7. Confirm exactly one router holds the lease: the rollback router or its fenced peer.
 8. Start the rollback build.

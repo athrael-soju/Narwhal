@@ -4,7 +4,7 @@ description: Check the schema versions of Narwhal interfaces and documents befor
 
 # Interface versions and compatibility
 
-## Check interface compatibility before deployment
+## Checking interface compatibility before deployment
 
 Validation fails when a document's schema name or version differs from the pair its Narwhal reader supports.
 
@@ -58,7 +58,7 @@ To compare manifests:
     diff installed-contracts.json candidate-contracts.json
     ```
 
-3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-roll-back).
+3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#103-rolling-back).
 
 | `diff` result | Installed-release documents on the candidate |
 | --- | --- |

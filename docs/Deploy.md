@@ -2,7 +2,7 @@
 description: Deploy Narwhal on a multi-node vLLM fleet with NIXL KV transfer, from host discovery to live serving.
 ---
 
-# Deploy a fleet
+# Deploying a fleet
 
 ## Operating model
 
@@ -119,10 +119,10 @@ Work to repeat by change:
 | Offered rate or request count within the profiled workload range | 1. Drain the router.<br>2. Run the next trial point on the existing engine profiles, fabric samples, and full preflight.                                                                                                                   |
 | SLO or first-token deadline                                      | 1. Run `narwhal-check` with the revised limits against the saved profiles and live handoffs.<br>2. Load the edited fleet in the router.                                                                                                    |
 | Router restart with the same fleet configuration                 | Restart the router.                                                                                                                                                                                                                        |
-| Engine restart whose sidecar attests the `launch_digest` recorded in the saved profiles and calibration | 1. Capture its live cache layout and attestation.<br>2. Run full preflight against the saved profiles and [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline). |
-| Engine restart whose sidecar attests a `launch_digest` different from the saved profiles and calibration, or reports `attestation_digest` as its only digest | 1. Capture its live cache layout and attestation.<br>2. Profile the new process generation.<br>3. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).<br>4. Run full preflight. |
+| Engine restart whose sidecar attests the `launch_digest` recorded in the saved profiles and calibration | 1. Capture its live cache layout and attestation.<br>2. Run full preflight against the saved profiles and [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
+| Engine restart whose sidecar attests a `launch_digest` different from the saved profiles and calibration, or reports `attestation_digest` as its only digest | 1. Capture its live cache layout and attestation.<br>2. Profile the new process generation.<br>3. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).<br>4. Run full preflight. |
 | Cache geometry change after an engine restart                    | Recalculate the engine's fabric budget from the new `cache-layout.json`.                                                                                                                                                                   |
-| Fabric route, host assignment, or transport                      | 1. Measure the affected directed links against the source budget.<br>2. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).<br>3. Exercise the live KV paths in preflight.      |
+| Fabric route, host assignment, or transport                      | 1. Measure the affected directed links against the source budget.<br>2. [Recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).<br>3. Exercise the live KV paths in preflight.      |
 
 ## Evidence and recovery index
 

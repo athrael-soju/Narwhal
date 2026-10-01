@@ -2,9 +2,9 @@
 description: Freeze the deployment inputs and discover the hosts of a Narwhal vLLM fleet.
 ---
 
-# Gate A: Freeze inputs and discover the real deployment
+# Gate A: Freezing inputs and discovering the real deployment
 
-## Load the private environment
+## Loading the private environment
 
 1. In a fresh management checkout, copy `.env.example` to `.env`.
 2. Restrict `.env` to mode 0600.
@@ -52,7 +52,7 @@ Per-node overrides:
 | `NARWHAL_NODE_<n>_ATTESTATION_URL`                             | The attestation service is reachable through another address. |
 | `NARWHAL_NODE_<n>_ENGINE_PORT`, `NARWHAL_NODE_<n>_ATTEST_PORT` | The service is bound to a different port.                     |
 
-## Stage and identify the checkpoint
+## Staging and identifying the checkpoint
 
 | Variable                    | Value                                        |
 | --------------------------- | -------------------------------------------- |
@@ -80,7 +80,7 @@ Discovery compares the model directories across replicas:
 
 A replica mismatch stops discovery with an error that names the first differing file.
 
-## Run discovery and access checks
+## Running discovery and access checks
 
 Each engine host needs:
 
@@ -173,7 +173,7 @@ Rerun discovery after a change to the hardware, model, image, checkpoint, launch
 1. Archive the generated `config/` files.
 2. Run discovery into a new output directory.
 
-## Confirm the launch policy
+## Confirming the launch policy
 
 | Engine roles on a GPU host | GPU allocation                                                |
 | -------------------------- | ------------------------------------------------------------- |
@@ -226,4 +226,4 @@ A failed deployment command prints `<host-id>: blocked at <operation>; inspect i
 
 Record the first failing host and gate in the private record.
 
-Continue with [Gate B: Package and install the approved revision](02-Install.md).
+Continue with [Gate B: Packaging and installing the approved revision](02-Install.md).

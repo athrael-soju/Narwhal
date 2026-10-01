@@ -4,7 +4,7 @@ description: Validate the measured per-engine cost model that narwhal-profile wr
 
 # Engine profiles and capacity
 
-## Validate the engine cost model
+## Validating the engine cost model
 
 `narwhal-profile` writes one measured cost-model row per engine into `profiles.path`.
 
@@ -48,7 +48,7 @@ Preflight checks the measured decode bounds and fit errors.
 
 | Fleet | Load updated profiles |
 | --- | --- |
-| With `engine_contract` | [Activate the fresh store with router resume](../operate/03-Restart-Engines.md#activate-replacement-profiles). |
+| With `engine_contract` | [Activate the fresh store with router resume](../operate/03-Restart-Engines.md#activating-replacement-profiles). |
 | Otherwise | Restart the router. |
 
 A malformed profile aborts the operation and names the affected file, engine, and field:
@@ -107,7 +107,7 @@ For the `profile has no generation evidence` error from preflight, router startu
 1. Write a fresh store with `narwhal-profile` against the current engine processes.
 2. Keep the `.samples.json` sidecar.
 
-The [refit procedure](../measure/01-Profile.md#repair-profiles-produced-by-the-earlier-raw-repeat-fitter) requires:
+The [refit procedure](../measure/01-Profile.md#repairing-profiles-produced-by-the-earlier-raw-repeat-fitter) requires:
 
 - a `generation_digest` in each saved profile
 - a `generation_evidence` object in its sample row

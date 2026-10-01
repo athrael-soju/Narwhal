@@ -16,7 +16,7 @@ description: Define the production boundary and start a Narwhal primary and stan
 | Shared storage | One lease domain shared by both router hosts |
 | Monitoring | Metric scraping, journal retention, and paging per site policy |
 
-## 2. Keep one deployment set
+## 2. Keeping one deployment set
 
 Install on both router hosts, with the same release identifier:
 
@@ -24,7 +24,7 @@ Install on both router hosts, with the same release identifier:
 - the fleet configuration
 - the profile store
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
-- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test)
+- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freezing-the-deployment-under-test)
 
 First-token calibration after an engine relaunch:
 
@@ -37,7 +37,7 @@ First-token calibration after an engine relaunch:
 
 Recalibration sequence:
 
-1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 2. Distribute the new artifact and fleet configuration.
 3. Restart the routers.
 
@@ -50,9 +50,9 @@ narwhal-check --print-contract-versions
 | Handoff contract versions on both routers | Procedure |
 | --- | --- |
 | Match | [Rolling upgrade](04-Upgrade-and-Validate.md#101-rolling-upgrade-with-compatible-handoff-versions) |
-| Differ | [Upgrade across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrade-across-a-handoff-version-change) |
+| Differ | [Upgrading across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrading-across-a-handoff-version-change) |
 
-## 3. Configure the client path
+## 3. Configuring the client path
 
 | Network | Interfaces |
 | --- | --- |
@@ -76,9 +76,9 @@ Each engine leg receives:
 
 Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg).
 
-## 4. Start a router pair
+## 4. Starting a router pair
 
-Run the final [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) against the deployment set.
+Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set.
 
 Router pair requirements:
 

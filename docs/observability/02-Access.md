@@ -2,11 +2,11 @@
 description: Open the Narwhal Grafana dashboard from a workstation and isolate a second monitoring stack.
 ---
 
-# Access dashboards and isolate listeners
+# Accessing dashboards and isolating listeners
 
-## Access the dashboard from a workstation
+## Accessing the dashboard from a workstation
 
-An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
+An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
 
 To open a monitoring tunnel:
 
@@ -27,7 +27,7 @@ To open a monitoring tunnel:
 
 Grafana grants anonymous Viewer access through the local tunnel.
 
-## Isolate a second monitoring stack
+## Isolating a second monitoring stack
 
 | Variable | Default |
 | --- | --- |
@@ -60,4 +60,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-[![Next: Read the dashboard](https://img.shields.io/badge/next-Read%20the%20dashboard-0f766e)](05-Dashboard.md)
+[![Next: Reading the dashboard](https://img.shields.io/badge/next-Reading%20the%20dashboard-0f766e)](05-Dashboard.md)

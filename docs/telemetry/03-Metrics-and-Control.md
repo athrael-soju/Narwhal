@@ -4,7 +4,7 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 # Metrics and role controller state
 
-## Read live state from Prometheus
+## Reading live state from Prometheus
 
 Starting values in a new router process:
 
@@ -37,7 +37,7 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
-## Inspect scheduling and role control
+## Inspecting scheduling and role control
 
 | Metric | Meaning |
 | --- | --- |
@@ -45,7 +45,7 @@ Split journal rows by `run` when comparing restored outcome counts with offered 
 | `narwhal_flips_refused_total` | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
 | `narwhal_pool_load` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), with `1.0` at the phase target. |
 
-## Read latency histograms
+## Reading latency histograms
 
 `narwhal_slo_seconds` exports the configured `ttft` and `tpot` budgets through the `metric` label.
 
@@ -67,11 +67,11 @@ Histogram aggregation:
 - Compute quantiles from bucket rates grouped by `instance` and `le`.
 - Sum buckets only across routers with identical bucket edges.
 
-## Inspect retained attainment evidence
+## Inspecting retained attainment evidence
 
 `narwhal_attainment_evidence_pruned_total` appears with a `kind` label of `buckets` or `outcomes` after the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment).
 
-## Inspect demand history and decode floor
+## Inspecting demand history and decode floor
 
 Demand histories clear on router restart.
 
@@ -83,7 +83,7 @@ Demand histories clear on router restart.
 | `narwhal_demand_history_observations` | gauge | same `window` values | Original observations represented by the window. |
 | `narwhal_demand_history_overflow_observations` | gauge | same `window` values | Observations merged past the cohort limit. |
 
-## Inspect consolidation gates
+## Inspecting consolidation gates
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |

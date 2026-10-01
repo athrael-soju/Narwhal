@@ -6,7 +6,7 @@ description: The deployment environment, generated artifacts, host inventory and
 
 ## 12. Deployment inputs and generated artifacts
 
-The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirm-the-launch-policy).
+The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirming-the-launch-policy).
 
 Discovery writes one private set of files per fleet at mode 0600:
 

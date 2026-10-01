@@ -2,7 +2,7 @@
 description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana dashboard.
 ---
 
-# Set up observability
+# Setting up observability
 
 `make observe` starts three services for the deployed fleet:
 
@@ -16,19 +16,19 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
 <div class="grid cards" markdown>
 
--   [Start and verify monitoring](observability/01-Start-and-Verify.md)
+-   [Starting and verifying monitoring](observability/01-Start-and-Verify.md)
 
     ---
 
     Configure the monitored deployment, start Prometheus and Grafana, and verify targets.
 
--   [Access dashboards and isolate listeners](observability/02-Access.md)
+-   [Accessing dashboards and isolating listeners](observability/02-Access.md)
 
     ---
 
     Reach the dashboard from a workstation and isolate a second monitoring stack.
 
--   [Read the dashboard](observability/05-Dashboard.md)
+-   [Reading the dashboard](observability/05-Dashboard.md)
 
     ---
 
@@ -40,7 +40,7 @@ description: Monitor a Narwhal fleet with Prometheus and a provisioned Grafana d
 
     Feed GPU telemetry, inspect alerts, troubleshoot monitoring, and retain captures.
 
--   [Monitor a WSL2 development fleet](observability/04-WSL2.md)
+-   [Monitoring a WSL2 development fleet](observability/04-WSL2.md)
 
     ---
 

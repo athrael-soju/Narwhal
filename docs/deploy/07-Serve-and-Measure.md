@@ -2,9 +2,9 @@
 description: Start the Narwhal router and validate fleet capacity through the private path.
 ---
 
-# Gate G: Start the service and validate capacity through the private path
+# Gate G: Starting the service and validating capacity through the private path
 
-## Start and locally verify the router
+## Starting and locally verifying the router
 
 Replace `<served-model>` with the fleet model.
 
@@ -39,7 +39,7 @@ Replace `<served-model>` with the fleet model.
     | `/metrics`        | Router metrics.                                                         |
     | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`. |
 
-## Start the monitoring stack on the router
+## Starting the monitoring stack on the router
 
 In the router shell, run:
 
@@ -51,7 +51,7 @@ make observe
 
 Retain the target-discovery and dashboard-verification output.
 
-## Tunnel router, Prometheus, and Grafana to the workstation
+## Tunnelling router, Prometheus, and Grafana to the workstation
 
 1. On the workstation, open a terminal in the checkout with `.env` loaded.
 2. Open the tunnel:
@@ -98,7 +98,7 @@ Tunnel settings:
 | Log             | `runs/access-<id>/`                                   |
 | Latency         | Includes SSH network and encryption overhead.         |
 
-### Troubleshoot the tunnel
+### Troubleshooting the tunnel
 
 | Symptom                                                             | Fix                                                                          |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -106,7 +106,7 @@ Tunnel settings:
 | A forwarded request fails after SSH connects                        | Inspect the listener on the router host.                                     |
 | A service listens on an address other than the router's `127.0.0.1` | Pass one tunnel per remote address, each with `--remote-address`.            |
 
-## Run the initial capacity trial
+## Running the initial capacity trial
 
 The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#prepare-check-and-start-each-engine) on every engine.
 
@@ -121,7 +121,7 @@ Candidate thresholds:
 Run the trial:
 
 1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
-2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freeze-the-deployment-under-test) under a new deployment identifier.
+2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freezing-the-deployment-under-test) under a new deployment identifier.
 3. Attach Gate F's passing preflight to the deployment evidence.
 4. Retain the monitoring startup output and the router and engine scrape evidence.
 5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
@@ -152,5 +152,5 @@ Close the trial:
 2. Save the client records and the post-load KV ring output.
 3. Stop the client.
 4. Press Ctrl+C in the tunnel terminal when private access ends.
-5. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operate Narwhal](../Operate.md).
+5. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operating Narwhal](../Operate.md).
 6. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).

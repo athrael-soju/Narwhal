@@ -93,7 +93,7 @@ A window that closes with at least one observation and fewer than `recovery.heal
 - a complete `engine_contract`
 - `recovery.liveness_every > 0`
 
-Under `whole_wave`, an ejection or identity failure places a whole-wave hold on the fleet until an operator completes the [engine-wave restart](../operate/03-Restart-Engines.md#8-restart-an-engine-wave).
+Under `whole_wave`, an ejection or identity failure places a whole-wave hold on the fleet until an operator completes the [engine-wave restart](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave).
 
 ---
 
@@ -129,7 +129,7 @@ Contracted resume and automatic takeover require:
 | Per-engine dwell timestamps                                      | Cleared                                               |
 | Prefill-to-decode cooldown                                       | Begins when Narwhal creates the replacement scheduler |
 
-Configure warm-standby takeover with the `narwhal-serve` options in [Start a router pair](../operate/01-Start-Routers.md#4-start-a-router-pair).
+Configure warm-standby takeover with the `narwhal-serve` options in [Starting a router pair](../operate/01-Start-Routers.md#4-starting-a-router-pair).
 
 ---
 

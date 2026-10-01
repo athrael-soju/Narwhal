@@ -48,17 +48,17 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
     <tr>
       <td>Fault tolerance</td>
       <td>Fails over to a warm-standby router and readmits engines against their live process generation.</td>
-      <td><a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operate%20Narwhal-0f766e" alt="Operate Narwhal documentation"></a></td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operating%20Narwhal-0f766e" alt="Operating Narwhal documentation"></a></td>
     </tr>
     <tr>
       <td>Measurement</td>
       <td>Profiles engines and runs ordered benchmark points with retained evidence.</td>
-      <td><a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measure%20a%20fleet-0f766e" alt="Measure a fleet documentation"></a></td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measuring%20a%20fleet-0f766e" alt="Measuring a fleet documentation"></a></td>
     </tr>
     <tr>
       <td>Observability</td>
       <td>Exports router and engine metrics to Prometheus and a provisioned Grafana dashboard.</td>
-      <td><a href="https://athrael-soju.github.io/Narwhal/Observability/"><img src="https://img.shields.io/badge/docs-Set%20up%20observability-0f766e" alt="Set up observability documentation"></a></td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/Observability/"><img src="https://img.shields.io/badge/docs-Setting%20up%20observability-0f766e" alt="Setting up observability documentation"></a></td>
     </tr>
     <tr>
       <td>Operator tooling</td>
@@ -162,7 +162,7 @@ Narwhal is the first open-source LLM inference framework that automatically hot-
   <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM."></a>
 </p>
 
-## Get the commands
+## Getting the commands
 
 Install on Linux with Python 3.11 or newer:
 
@@ -194,7 +194,7 @@ For each deployment:
   <a href="https://athrael-soju.github.io/Narwhal/Install-from-PyPI/"><img src="https://img.shields.io/badge/docs-Install%20from%20PyPI-0f766e" alt="Install from PyPI documentation"></a>
 </p>
 
-## Try it on one GPU
+## Trying it on one GPU
 
 Narwhal dev runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2.
 
@@ -228,7 +228,7 @@ narwhal dev down
   </tbody>
 </table>
 
-## Bring up a fleet
+## Bringing up a fleet
 
 Run these gates from a management workstation:
 
@@ -272,7 +272,7 @@ Run these gates from a management workstation:
 </table>
 
 <p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Deploy/"><img src="https://img.shields.io/badge/docs-Deploy%20a%20fleet-0f766e" alt="Deploy a fleet documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Deploy/"><img src="https://img.shields.io/badge/docs-Deploying%20a%20fleet-0f766e" alt="Deploying a fleet documentation"></a>
 </p>
 
 ## Documentation

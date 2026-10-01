@@ -36,7 +36,7 @@ Takeover with `--standby-of URL` requires both:
 - `--standby-takeover-after` consecutive polls have failed.
 - The shared lease has expired.
 
-Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#4-start-a-router-pair).
+Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#4-starting-a-router-pair).
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |

@@ -2,9 +2,9 @@
 description: Reconcile client offers with the Narwhal router journal and record deployment acceptance.
 ---
 
-# Reconcile and accept
+# Reconciling and accepting
 
-## 10. Join client offers to the router journal
+## 10. Joining client offers to the router journal
 
 `requests.jsonl` holds one terminal record per scheduled offer, identified by request sequence and `client_rid`.
 
@@ -22,7 +22,7 @@ A response is complete when:
 
 `batched_token_events` counts stream events that carry more than one token under the helper's `stream_interval: 1`.
 
-Client TTFT and TPOT follow the [measurement contract](01-Profile.md#1-define-the-measurement-contract).
+Client TTFT and TPOT follow the [measurement contract](01-Profile.md#1-defining-the-measurement-contract).
 
 Latency percentiles use complete responses.
 
@@ -45,7 +45,7 @@ Deployment attainment is `within_candidate_limits / offered` from the client `su
 - A timeout or disconnect after partial output counts as a miss.
 - The warmup in `warmup.json` is excluded from scoring.
 
-## 11. Check throughput denominators and client limits
+## 11. Checking throughput denominators and client limits
 
 Each `summary.json` throughput divides by the elapsed time through the final response drain:
 
@@ -62,7 +62,7 @@ Before assigning a serving throughput ceiling, compare:
 - router and engine metrics
 - admission queues and resident work in `state-before.json`, `state-after-warmup.json`, and `state-after.json`
 
-## 12. Preserve run integrity
+## 12. Preserving run integrity
 
 Each trial writes to a new directory:
 
@@ -76,13 +76,13 @@ Each trial writes to a new directory:
 | Trial `manifest.json` | Management checkout Git revision and helper SHA-256 |
 | Router journal `meta` row | Installed router package version, Git description, and source digest |
 
-### Confirm KV transfer after load
+### Confirming KV transfer after load
 
 1. Query the dashboard series.
-2. Run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#run-the-initial-capacity-trial).
+2. Run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial).
 3. Compare exact output across role changes with resident requests.
 
-## 13. Record deployment acceptance
+## 13. Recording deployment acceptance
 
 Record the highest tested offered rate that met the candidate client target, with:
 

@@ -154,7 +154,7 @@ Prerequisites:
   engine, attestation, and NIXL port assignments
 - a separately identified process that stays alive during both checks
 
-### Interrupt startup with SIGINT
+### Interrupting startup with SIGINT
 
 1. Start a fresh process generation with `narwhal dev up`.
 2. Wait for a committed engine identity and an observed CUDA allocation.
@@ -164,7 +164,7 @@ Prerequisites:
 6. From a fresh shell, run `narwhal dev status`.
 7. From the same shell, run `narwhal dev down`.
 
-### Interrupt verification with SIGKILL
+### Interrupting verification with SIGKILL
 
 1. Start a fresh process generation.
 2. Verify the fresh process generation.
@@ -175,7 +175,7 @@ Prerequisites:
 7. Run `narwhal dev down` twice.
 8. Compare surviving process identities, device memory, and bound ports against the baseline.
 
-### Retain the evidence
+### Retaining the evidence
 
 1. Confirm the separately identified process's identity after teardown.
 2. Record vLLM, driver, CUDA, and GPU versions with the signal and barrier.

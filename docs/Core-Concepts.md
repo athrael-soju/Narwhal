@@ -47,11 +47,11 @@ A role move:
 | KV handoff | The backend's key-value (KV) descriptor that a prefill engine returns and a decode engine consumes. | [![Disaggregated backend execution documentation](https://img.shields.io/badge/docs-Disaggregated%20backend%20execution-0f766e)](http-api/03-Backend-and-Failures.md#disaggregated-backend-execution) |
 | State handoff | The active router's versioned high-availability (HA) state document at `/narwhal/handoff`, read by standby routers and `--resume`. | [![State handoff documentation](https://img.shields.io/badge/docs-State%20handoff-0f766e)](http-api/07-Handoff-and-Lifecycle.md#state-handoff) |
 | Attestation sidecar | The `narwhal-attest` process that returns HTTP 503 after the engine process changes. | [![narwhal-attest documentation](https://img.shields.io/badge/docs-narwhal--attest-0f766e)](cli/Attest.md) |
-| Sample sidecar | The `.samples.json` file beside the profile store, holding raw observations and process evidence for each fit. | [![Retain profile samples and fits documentation](https://img.shields.io/badge/docs-Retain%20profile%20samples%20and%20fits-0f766e)](measure/01-Profile.md#3-retain-profile-samples-and-fits) |
-| Process generation | The engine identity a profile binds to: the verified attestation's [`launch_digest` or `attestation_digest`](configuration/01-Fleet-Schema.md#33-attestation) with `engine_contract`, otherwise the vLLM version and process start time. | [![Validate the engine cost model documentation](https://img.shields.io/badge/docs-Validate%20the%20engine%20cost%20model-0f766e)](telemetry/02-Profiles.md#validate-the-engine-cost-model) |
-| Whole-wave | Scope of the `whole_wave` restart policy, covering every configured engine as one wave. | [![Restart an engine wave documentation](https://img.shields.io/badge/docs-Restart%20an%20engine%20wave-0f766e)](operate/03-Restart-Engines.md#8-restart-an-engine-wave) |
-| Lease domain | Shared storage with POSIX `flock`, coherent reads, and atomic rename, giving both routers of a pair one lease. | [![Start a router pair documentation](https://img.shields.io/badge/docs-Start%20a%20router%20pair-0f766e)](operate/01-Start-Routers.md#4-start-a-router-pair) |
-| Deployment set | The Narwhal release, fleet configuration, profile store, deployment evidence, and configured first-token calibration artifact sharing one release identifier. | [![Keep one deployment set documentation](https://img.shields.io/badge/docs-Keep%20one%20deployment%20set-0f766e)](operate/01-Start-Routers.md#2-keep-one-deployment-set) |
+| Sample sidecar | The `.samples.json` file beside the profile store, holding raw observations and process evidence for each fit. | [![Retaining profile samples and fits documentation](https://img.shields.io/badge/docs-Retaining%20profile%20samples%20and%20fits-0f766e)](measure/01-Profile.md#3-retaining-profile-samples-and-fits) |
+| Process generation | The engine identity a profile binds to: the verified attestation's [`launch_digest` or `attestation_digest`](configuration/01-Fleet-Schema.md#33-attestation) with `engine_contract`, otherwise the vLLM version and process start time. | [![Validating the engine cost model documentation](https://img.shields.io/badge/docs-Validating%20the%20engine%20cost%20model-0f766e)](telemetry/02-Profiles.md#validating-the-engine-cost-model) |
+| Whole-wave | Scope of the `whole_wave` restart policy, covering every configured engine as one wave. | [![Restarting an engine wave documentation](https://img.shields.io/badge/docs-Restarting%20an%20engine%20wave-0f766e)](operate/03-Restart-Engines.md#8-restarting-an-engine-wave) |
+| Lease domain | Shared storage with POSIX `flock`, coherent reads, and atomic rename, giving both routers of a pair one lease. | [![Starting a router pair documentation](https://img.shields.io/badge/docs-Starting%20a%20router%20pair-0f766e)](operate/01-Start-Routers.md#4-starting-a-router-pair) |
+| Deployment set | The Narwhal release, fleet configuration, profile store, deployment evidence, and configured first-token calibration artifact sharing one release identifier. | [![Keeping one deployment set documentation](https://img.shields.io/badge/docs-Keeping%20one%20deployment%20set-0f766e)](operate/01-Start-Routers.md#2-keeping-one-deployment-set) |
 | Engines eligible for placement | Engines left after ejection, drain, and quarantine exclusions, reported as `available_instances` in `/health` and used as the live count for role floors. | [![Pool and SLO fields documentation](https://img.shields.io/badge/docs-Pool%20and%20SLO%20fields-0f766e)](http-api/05-Live-State.md#pool-and-slo-fields) |
 
 ## Related reference material
@@ -70,7 +70,7 @@ A role move:
 
     Fleet fields, environment inputs, and their defaults.
 
--   [Measure a fleet](Measure.md)
+-   [Measuring a fleet](Measure.md)
 
     ---
 
@@ -82,7 +82,7 @@ A role move:
 
     Completion, inspection, and lifecycle endpoints.
 
--   [Operate Narwhal](Operate.md)
+-   [Operating Narwhal](Operate.md)
 
     ---
 

@@ -2,18 +2,18 @@
 description: Measure the highest offered request rate a Narwhal fleet sustains within its TTFT and TPOT targets.
 ---
 
-# Measure a fleet
+# Measuring a fleet
 
 A fleet measurement reports the highest tested offered rate that meets the fleet's time to first token (TTFT) and time per output token (TPOT) targets.
 
-## Run a measurement
+## Running a measurement
 
 1. [Measurement contract and profiling](measure/01-Profile.md): router and client latency boundaries, and the idle-fleet latency profile.
 2. [Targets and deployment freeze](measure/02-Targets-and-Freeze.md): production TTFT and TPOT targets, and the frozen deployment under test.
 3. [Synthetic load trial](measure/03-Load-Trial.md): 200 requests each at 0.5 and 1 request/s through the private router tunnel.
-4. [Reconcile and accept](measure/04-Reconcile-and-Accept.md): the client-to-journal join, throughput and client-limit checks, the post-load KV ring check, and deployment acceptance.
+4. [Reconciling and accepting](measure/04-Reconcile-and-Accept.md): the client-to-journal join, throughput and client-limit checks, the post-load KV ring check, and deployment acceptance.
 
-## Automate benchmark points
+## Automating benchmark points
 
 <div class="grid cards" markdown>
 

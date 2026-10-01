@@ -270,7 +270,7 @@ Each inference probe leg, prefill and decode, has a budget of the larger of `eng
 
 Configure the first-token deadline:
 
-1. Run [first-token deadline calibration](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+1. Run [first-token deadline calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 2. Set `engine.first_token_timeout_s` above the candidate it prints.
 3. Set `engine.first_token_calibration_path` to its artifact.
 

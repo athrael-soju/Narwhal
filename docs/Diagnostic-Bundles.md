@@ -116,7 +116,7 @@ Filter free-text logs with site tooling when they hold credentials or request co
 
 ## Manual collection
 
-When the installed collector is unavailable, use the [incident capture commands](Troubleshoot.md#capture-router-and-engine-state):
+When the installed collector is unavailable, use the [incident capture commands](Troubleshoot.md#capturing-router-and-engine-state):
 
 - Keep each HTTP status with its response.
 - Use a separate private directory per router.

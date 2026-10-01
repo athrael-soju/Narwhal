@@ -2,11 +2,11 @@
 description: Measure UCX TCP and RDMA bandwidth on each directed host edge of a Narwhal fleet against its KV cache budget.
 ---
 
-# Gate D: Prove the transfer fabric against the serving cache
+# Gate D: Proving the transfer fabric against the serving cache
 
 Measure each directed host edge against its source cache group's budget while the fleet is idle.
 
-## Build the source budget
+## Building the source budget
 
 Initial trial parameters:
 
@@ -107,7 +107,7 @@ max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) *
 headroom / 1e9
 ```
 
-## Bind each sample to a directed route
+## Binding each sample to a directed route
 
 Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 
@@ -140,7 +140,7 @@ Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 6. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source.
 7. Confirm that each route selects `NARWHAL_FABRIC_INTERFACE` and the discovered source address.
 
-## Measure `ucx_tcp`
+## Measuring `ucx_tcp`
 
 1. Install `iperf3` on each host that is missing it:
 
@@ -194,7 +194,7 @@ Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
 | 1                       | The measured rate is below the budget.                       |
 | 2                       | An input file is invalid, or the output file already exists. |
 
-## Measure `ucx_rdma`
+## Measuring `ucx_rdma`
 
 The test measures one-way RDMA writes between host-memory buffers.
 
@@ -273,12 +273,12 @@ The test measures one-way RDMA writes between host-memory buffers.
 14. For multi-rail deployments, test every selected HCA port.
 15. Retain every report.
 
-## Complete the matrix and match retained evidence
+## Completing the matrix and matching retained evidence
 
 | KV handoff           | Qualified by                                                      |
 | -------------------- | ----------------------------------------------------------------- |
 | Between engine hosts | This matrix                                                       |
-| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#run-preflight) |
+| Within one host      | The [Gate F preflight](06-Profile-and-Preflight.md#running-preflight) |
 
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
@@ -337,7 +337,7 @@ Reuse a retained sample:
 | 1                      | The retained sample is below the recalculated budget.                                   |
 | 2                      | The current link fingerprint or the retained sample differs from the recorded evidence. |
 
-## Troubleshoot an edge below its budget
+## Troubleshooting an edge below its budget
 
 When `record-edge` or `reuse-edge` exits 1:
 

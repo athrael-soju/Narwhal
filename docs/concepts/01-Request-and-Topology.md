@@ -23,7 +23,7 @@ KV transfer across the configured ring or mesh is allowed for a vLLM engine with
 
 | Requirement | Provider |
 | --- | --- |
-| Attestation inputs captured from the live process | [Gate E](../deploy/05-Attest.md#capture-the-attestation-inputs) |
+| Attestation inputs captured from the live process | [Gate E](../deploy/05-Attest.md#capturing-the-attestation-inputs) |
 | The process bound to its image, NIXL connector, and runtime features | Attestation sidecar |
 | The attested process validated | [`narwhal-check`](../cli/Check.md) |
 

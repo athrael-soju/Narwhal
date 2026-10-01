@@ -2,9 +2,9 @@
 description: Run the narwhal-check preflight gates against profiled, idle Narwhal engines.
 ---
 
-# Gate F: Profile once and run the live KV contract
+# Gate F: Profiling once and running the live KV contract
 
-## Profile idle engines
+## Profiling idle engines
 
 Run these steps from the router shell.
 
@@ -55,10 +55,10 @@ Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 
 Set the service-level objective (SLO) targets before preflight:
 
-1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#5-set-production-slos) from the service requirement and the measured engine curves.
+1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#5-setting-production-slos) from the service requirement and the measured engine curves.
 2. Keep the time per output token (TPOT) target above the measured per-token floor.
 
-## Calibrate the first-token deadline
+## Calibrating the first-token deadline
 
 Calibration inputs, with the engines idle:
 
@@ -115,7 +115,7 @@ Repeat the calibration when the model, process generation, transport, or served 
 
 Retain the fleet file, the raw artifact, the command, and the process identities together.
 
-## Run preflight
+## Running preflight
 
 With the engines otherwise idle, run the preflight from the router shell:
 
@@ -183,4 +183,4 @@ The gate reports the first-token time for each passing transfer.
 
 Keep the command, fleet file, preflight output, process identities, and profile store together.
 
-[![Next: Gate G: Start the service and validate capacity through the private path](https://img.shields.io/badge/next-Gate%20G%3A%20Start%20the%20service%20and%20validate%20capacity%20through%20the%20private%20path-0f766e)](07-Serve-and-Measure.md)
+[![Next: Gate G: Starting the service and validating capacity through the private path](https://img.shields.io/badge/next-Gate%20G%3A%20Starting%20the%20service%20and%20validating%20capacity%20through%20the%20private%20path-0f766e)](07-Serve-and-Measure.md)

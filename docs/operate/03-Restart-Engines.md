@@ -38,11 +38,11 @@ umask 077
 mkdir -p "$RUN_DIR"
 ```
 
-## 7. Restart one engine
+## 7. Restarting one engine
 
 This procedure applies when `recovery.engine_restart_policy` is `individual`.
 
-### 7.1 Drain the engine
+### 7.1 Draining the engine
 
 Drain `e0` with a 300-second deadline:
 
@@ -73,16 +73,16 @@ PY
 
 Stop the engine when the check passes.
 
-### 7.2 Replace the process
+### 7.2 Replacing the process
 
 1. Restart the engine and its attestation sidecar through their configured process manager.
 2. Check that the engine's `/health` returns HTTP 200.
 3. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
-6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only, [activate replacement profiles](#activate-replacement-profiles) while the engine stays excluded.
+6. If the attested `launch_digest` changed or the sidecar reports an attestation digest only, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
 
-### 7.3 Request readmission
+### 7.3 Requesting readmission
 
 Request readmission for `e0`:
 
@@ -144,9 +144,9 @@ Fabric checks by engine role:
 Verify placement:
 
 1. Send a routed request.
-2. Verify its engine placement and terminal outcome in the [request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal).
+2. Verify its engine placement and terminal outcome in the [request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal).
 
-### 7.4 Recover an unplanned ejection
+### 7.4 Recovering an unplanned ejection
 
 When an ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds, automatic recovery validates the engine.
 
@@ -156,12 +156,12 @@ Recovery procedures:
 | --- | --- |
 | The engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections | 1. Start the attestation sidecar through its process manager.<br>2. Wait for the next recovery probe. |
 | A restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it` | 1. Wait up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release).<br>2. Read the engine's release rounds in [`peer_release.<id>`](../http-api/05-Live-State.md#peer_release) from `GET /narwhal/state`. |
-| That engine fails at startup with free GPU memory below its budget | [Restart the engine wave](#8-restart-an-engine-wave). |
+| That engine fails at startup with free GPU memory below its budget | [Restart the engine wave](#8-restarting-an-engine-wave). |
 | Every check passes and the profiles match the running process | The engine returns to placement automatically. |
-| The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activate-replacement-profiles).<br>3. Request readmission. |
+| The attested `launch_digest` changed or the sidecar reports an attestation digest only | 1. Wait for lifecycle state `blocked`.<br>2. [Measure and activate replacement profiles](#activating-replacement-profiles).<br>3. Request readmission. |
 | Any other check fails | 1. Repair the blocked engine.<br>2. Request readmission. |
 
-### 7.5 Recover loss of every placement peer
+### 7.5 Recovering loss of every placement peer
 
 In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract), one failed member holds the whole wave when every placement peer is lost.
 
@@ -173,14 +173,14 @@ In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#3-eng
     {"wave":true}
     ```
 
-When an individual hold has removed the last available peer, promote it to a whole-wave hold and follow [Restart an engine wave](#8-restart-an-engine-wave):
+When an individual hold has removed the last available peer, promote it to a whole-wave hold and follow [Restarting an engine wave](#8-restarting-an-engine-wave):
 
 ```text
 POST /narwhal/lifecycle/drain
 {"wave":true}
 ```
 
-## 8. Restart an engine wave
+## 8. Restarting an engine wave
 
 Set `recovery.engine_restart_policy` to `whole_wave` when engine builds share peer state across the fleet.
 
@@ -189,7 +189,7 @@ Under `whole_wave`:
 - a confirmed ejection, process change, or identity failure holds the whole wave
 - the router's `/ready` returns HTTP 503 until whole-wave readmission completes
 
-### 8.1 Drain the wave
+### 8.1 Draining the wave
 
 Drain the wave with a 600-second deadline:
 
@@ -224,12 +224,12 @@ PY
 
 Issue the first supervisor stop command when the check passes.
 
-### 8.2 Restart the fleet
+### 8.2 Restarting the fleet
 
 1. Restart every engine and attestation sidecar from one immutable build with the recorded process manager commands.
 2. Retain old and new identities.
-3. Repeat the [Replace the process](#72-replace-the-process) checks for every member.
-4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activate-replacement-profiles) for each engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
+3. Repeat the [Replacing the process](#72-replacing-the-process) checks for every member.
+4. When every attestation sidecar serves valid attestation, [activate replacement profiles](#activating-replacement-profiles) for each engine whose attested `launch_digest` changed or whose sidecar reports an attestation digest only.
 
 Request whole-wave readmission:
 
@@ -239,7 +239,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   -d '{"wave":true}' > "$RUN_DIR/wave-readmitted.json"
 ```
 
-Every wave member returns to placement together when every member passes every [readmission check](#73-request-readmission).
+Every wave member returns to placement together when every member passes every [readmission check](#73-requesting-readmission).
 
 Verify the completed wave:
 
@@ -273,7 +273,7 @@ If readmission fails:
 2. Repair the failure.
 3. Request whole-wave readmission again.
 
-### 8.3 Recover an unplanned whole-wave hold
+### 8.3 Recovering an unplanned whole-wave hold
 
 Drain the wave before replacing any process during an unplanned whole-wave hold.
 
@@ -319,19 +319,19 @@ PY
 
 | Drain result | Response | Member `old_process_start` | Next step |
 | --- | :---: | --- | --- |
-| Every identity recorded | HTTP 200 | Recorded | Verify `wave.ready_to_stop` and follow [Restart the fleet](#82-restart-the-fleet). |
-| An identity read fails | HTTP 503 | `null` for that member | Repair the identity read and retry [Drain the wave](#81-drain-the-wave). |
+| Every identity recorded | HTTP 200 | Recorded | Verify `wave.ready_to_stop` and follow [Restarting the fleet](#82-restarting-the-fleet). |
+| An identity read fails | HTTP 503 | `null` for that member | Repair the identity read and retry [Draining the wave](#81-draining-the-wave). |
 
 If an engine stopped during identity collection:
 
 1. Start that engine through its process manager during the whole-wave hold.
 2. Wait for its process identity endpoints to answer.
-3. Retry [Drain the wave](#81-drain-the-wave).
+3. Retry [Draining the wave](#81-draining-the-wave).
 4. Repeat the drain check until `wave.ready_to_stop = true`.
-5. [Restart the fleet](#82-restart-the-fleet), including every process started for identity collection.
+5. [Restarting the fleet](#82-restarting-the-fleet), including every process started for identity collection.
 6. Request whole-wave readmission.
 
-## Activate replacement profiles
+## Activating replacement profiles
 
 Prerequisites:
 
@@ -349,13 +349,13 @@ For a warm standby router:
 1. Stop it through its process manager before replacing the active router.
 2. Restart it with the same final profile store after readmission.
 
-### 1. Refresh the profiles
+### 1. Refreshing the profiles
 
-1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) with the recorded measurement recipe.
+1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) with the recorded measurement recipe.
 2. With a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
-3. When `engine.first_token_calibration_path` is set, [recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) and set that path in the fleet file to the new artifact.
+3. When `engine.first_token_calibration_path` is set, [recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) and set that path in the fleet file to the new artifact.
 
-### 2. Prepare the activation configuration
+### 2. Preparing the activation configuration
 
 | Variable | Value |
 | --- | --- |
@@ -396,7 +396,7 @@ PY
 | `recovery.state_path` | `$RUN_DIR/resume-state.json` |
 | State handoff `schema_version` | `1` |
 
-### 3. Run full preflight
+### 3. Running full preflight
 
 Run full preflight on the idle fleet:
 
@@ -406,7 +406,7 @@ narwhal-check --fleet "$ACTIVATION_FLEET" > "$RUN_DIR/activation-preflight.log" 
 
 When the command exits 0, keep the log, profiles, and sample files.
 
-### 4. Capture the held state
+### 4. Capturing the held state
 
 Capture the state handoff:
 
@@ -451,7 +451,7 @@ PY
 | `activation-handoff.json` | Pre-restart evidence to keep |
 | `resume-state.json` | Copy read and updated by the replacement router |
 
-### 5. Restart the router with resume enabled
+### 5. Restarting the router with resume enabled
 
 1. Stop the old router through its process manager.
 2. Wait for that process to exit.
@@ -470,7 +470,7 @@ Startup requires these to match the live process generation:
 - the engine attestation
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set
 
-### 6. Verify the hold before readmission
+### 6. Verifying the hold before readmission
 
 Set the same `ROUTER_URL` and `RUN_DIR` in another terminal.
 
@@ -503,11 +503,11 @@ During an individual hold, `/ready` returns HTTP 200 and the held engine reports
 
 Complete the activation:
 
-1. Request [individual readmission](#73-request-readmission) or [whole-wave readmission](#82-restart-the-fleet).
+1. Request [individual readmission](#73-requesting-readmission) or [whole-wave readmission](#82-restarting-the-fleet).
 2. Verify the readmission checks and a routed request.
 3. Reopen external admission.
 
-## 9. Detect process replacement
+## 9. Detecting process replacement
 
 When `recovery.liveness_every` is above `0`, a liveness sweep probes each engine's `/health` every `recovery.liveness_every * controller.monitor_interval_s` seconds.
 

@@ -13,7 +13,7 @@ The trial compares the throughput of requests that meet the service-level object
 
 Both arms run with the backend's prefix caching on.
 
-## Freeze the comparison
+## Freezing the comparison
 
 Record these in the private execution record before the first measured run:
 
@@ -28,7 +28,7 @@ Each run's score is its `qualified_rps_including_drain` and `attainment`.
 
 Refusals and failures count as misses.
 
-## Choose the workload shape
+## Choosing the workload shape
 
 | Symbol | Meaning |
 | --- | --- |
@@ -60,7 +60,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 | `--cached-suffix-lens` | Lengths that bracket the trial's uncached suffix |
 | `--decode-input-lens` | Lengths up to the trial's input length |
 
-## Prepare each arm
+## Preparing each arm
 
 | Arm | `runtime.extra_args` | Residency routes | Router pricing |
 | --- | --- | --- | --- |
@@ -71,8 +71,8 @@ For each arm:
 
 1. Launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine).
 2. Attest the engines as in [Gate E](../deploy/05-Attest.md).
-3. Profile the engines with the lengths from [Choose the workload shape](#choose-the-workload-shape).
-4. Calibrate the first-token deadline over every directed engine pair as in [Gate F](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline).
+3. Profile the engines with the lengths from [Choosing the workload shape](#choosing-the-workload-shape).
+4. Calibrate the first-token deadline over every directed engine pair as in [Gate F](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 5. Run a passing preflight.
 6. Start the router with `pin: false` on every engine and the recorded controller settings.
 
@@ -81,9 +81,9 @@ Before each cache-aware run, confirm:
 - every engine's `residency` record reports [`"known": true`](../cli/Attest.md#when-residency-is-known)
 - every profile carries its `cached_` fields
 
-## Create the workloads
+## Creating the workloads
 
-1. Set `NARWHAL_TRIAL_URL` and `TRIAL_DIR` as in [Create the trial directory and workload](03-Load-Trial.md#create-the-trial-directory-and-workload).
+1. Set `NARWHAL_TRIAL_URL` and `TRIAL_DIR` as in [Creating the trial directory and workload](03-Load-Trial.md#creating-the-trial-directory-and-workload).
 2. From the management workstation, prepare a repeated-prefix workload for each pass and one cold control with the same shape.
 
 Repeated-prefix workload:
@@ -115,16 +115,16 @@ Prompts by workload:
 | Repeated-prefix | One of the family prefixes followed by a suffix unique to its run and sequence |
 | Cold control | A unique prefix for every request |
 
-## Set the offered rates
+## Setting the offered rates
 
 1. In the baseline arm, run a 60-second point at each pilot rate, each with a fresh repeated-prefix workload.
 2. Take `R_b` as the highest pilot rate with attainment at or above the recorded attainment.
 3. Set the low rate to `1.1 * R_b` and the high rate to `1.3 * R_b`, each rounded to 0.5 request/s.
 
-## Check cache-aware pricing
+## Checking cache-aware pricing
 
 1. In the cache-aware arm, run one short, unscored point with a repeated-prefix workload.
-2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Join client offers to the router journal](04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal).
+2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Joining client offers to the router journal](04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal).
 3. Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#cache-placement) record of each row with `placed_cached_tokens` above 0.
 
 Next step by comparison result:
@@ -134,7 +134,7 @@ Next step by comparison result:
 | Below on every row | Start the measured runs |
 | At or above on any row | Revisit the workload shape and the warm prefill lengths |
 
-## Run each point
+## Running each point
 
 Run these in each arm, in this order:
 
@@ -178,9 +178,9 @@ A run that exits with status `0` or `2` writes `summary.json` with:
 Between runs:
 
 1. Drain the router.
-2. Reconcile the run with the journal as in [Reconcile and accept](04-Reconcile-and-Accept.md).
+2. Reconcile the run with the journal as in [Reconciling and accepting](04-Reconcile-and-Accept.md).
 
-## Exercise a role change
+## Exercising a role change
 
 Run one separate, unscored cache-aware point after the measured runs.
 
@@ -196,7 +196,7 @@ Run the role-change point:
 6. Confirm that the move's `flips` record reports a numeric `drained_s`.
 7. Confirm that the moved engine's `residency` record keeps `"known": true` and the same `epoch` across the change.
 
-## Report the result
+## Reporting the result
 
 For each arm and point, report:
 

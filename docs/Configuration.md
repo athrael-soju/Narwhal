@@ -31,7 +31,7 @@ Fleet file header:
 }
 ```
 
-The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#check-interface-compatibility-before-deployment).
+The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#checking-interface-compatibility-before-deployment).
 
 Responsibilities under fleet schema version 1:
 

@@ -4,7 +4,7 @@ description: Define the TTFT and TPOT measurement contract and build a validated
 
 # Measurement contract and profiling
 
-## 1. Define the measurement contract
+## 1. Defining the measurement contract
 
 Record time to first token (TTFT) and time per output token (TPOT) separately for each source:
 
@@ -37,11 +37,11 @@ Counting rules:
 | Output length | Every identified token ID, including empty-text and reasoning-only tokens |
 | TPOT | Requires at least two identified tokens |
 
-Record the [journal contract](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) stream-accounting rule with each result set.
+Record the [journal contract](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) stream-accounting rule with each result set.
 
-## 2. Reuse or create an idle-fleet latency profile
+## 2. Reusing or creating an idle-fleet latency profile
 
-A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profile idle engines](../deploy/06-Profile-and-Preflight.md#profile-idle-engines) while the engine processes and runtime stay the same.
+A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profile idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while the engine processes and runtime stay the same.
 
 Profile every new engine process or runtime before you select deployment SLOs:
 
@@ -154,7 +154,7 @@ Roll out the warm fit:
 4. Compare its held-out error with the recorded threshold.
 5. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.
 
-## 3. Retain profile samples and fits
+## 3. Retaining profile samples and fits
 
 Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the deployment record.
 
@@ -189,7 +189,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 | Reports `kv_cache_size_tokens` | Physical KV constraint |
 | Omits `kv_cache_size_tokens` | TPOT-derived limit |
 
-## 4. Validate the profile before using it
+## 4. Validating the profile before using it
 
 ### Prefill fit
 
@@ -202,7 +202,7 @@ The profiler rejects a TTFT curve over the per-length medians at these errors:
 | Mean error | 20% |
 | Worst-point error | 50% |
 
-### Repair profiles produced by the earlier raw-repeat fitter
+### Repairing profiles produced by the earlier raw-repeat fitter
 
 | Sample sidecar | Repair |
 | --- | --- |

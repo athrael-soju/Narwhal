@@ -40,7 +40,7 @@ When both routers return HTTP 503 from `/ready`, read the refusal reasons:
 
 1. Keep client traffic stopped.
 2. Restore a compatible router release.
-3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keep-one-deployment-set).
+3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keeping-one-deployment-set).
 
 If handoff restoration fails:
 
@@ -53,5 +53,5 @@ If handoff restoration fails:
 
 ## Router rollback
 
-1. Follow [Roll back](../operate/04-Upgrade-and-Validate.md#103-roll-back).
-2. Run the drills in [Validate every release](../operate/05-Release-Drills.md#11-validate-every-release).
+1. Follow [Rolling back](../operate/04-Upgrade-and-Validate.md#103-rolling-back).
+2. Run the drills in [Validating every release](../operate/05-Release-Drills.md#11-validating-every-release).

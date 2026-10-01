@@ -76,7 +76,7 @@ JSON results and diagnostics redact:
 - bearer values
 - credential query parameters
 
-## Validate a result
+## Validating a result
 
 ```python
 import json

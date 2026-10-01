@@ -2,9 +2,9 @@
 description: Validate and start every vLLM engine in a Narwhal fleet.
 ---
 
-# Gate C: Validate and start every engine
+# Gate C: Validating and starting every engine
 
-## Inspect every engine host
+## Inspecting every engine host
 
 Run these checks in the installed engine-role shell on every engine host.
 
@@ -118,7 +118,7 @@ For ROCm containers:
 - A `/dev/dri` mapping exposes every DRI device on the host.
 - Verify the user, group, and container-user permissions on each device file.
 
-## Derive cache-equivalence groups
+## Deriving cache-equivalence groups
 
 From the management shell with `config/deployment.env` loaded:
 
@@ -173,7 +173,7 @@ Prefix caching for the Gate G [capacity trial](../measure/03-Load-Trial.md):
 | Item     | Value                                                                                                           |
 | -------- | --------------------------------------------------------------------------------------------------------------- |
 | Flag     | vLLM's `--no-enable-prefix-caching` in `runtime.extra_args`                                                     |
-| Input    | [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirm-the-launch-policy), written to `runtime.extra_args` by discovery |
+| Input    | [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy), written to `runtime.extra_args` by discovery |
 | Deadline | Before preparing the launch plans                                                                               |
 
 To add the flag after launch:
@@ -307,7 +307,7 @@ Before you reuse a failed deployment:
 1. Inspect the retained partial output.
 2. Follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery).
 
-## Prove the live HTTP process
+## Proving the live HTTP process
 
 1. Wait for the engine's `/health` endpoint to return HTTP 200.
 2. Run the probe from the same engine-role shell:
@@ -362,7 +362,7 @@ Before you reuse a failed deployment:
 - Leave each serving container running through the workload trial.
 - Keep the engines idle during fabric qualification and profiling.
 
-## Capture the live cache layout
+## Capturing the live cache layout
 
 In each engine-role shell, capture the cache layout and create the fabric run directory:
 
@@ -383,4 +383,4 @@ Compare the resolved layouts and page geometry within each signature group:
 | Every engine in the group matches | One budget for the group          |
 | An engine differs                 | A separate budget for that engine |
 
-[![Next: Gate D: Prove the transfer fabric against the serving cache](https://img.shields.io/badge/next-Gate%20D%3A%20Prove%20the%20transfer%20fabric%20against%20the%20serving%20cache-0f766e)](04-Qualify-Fabric.md)
+[![Next: Gate D: Proving the transfer fabric against the serving cache](https://img.shields.io/badge/next-Gate%20D%3A%20Proving%20the%20transfer%20fabric%20against%20the%20serving%20cache-0f766e)](04-Qualify-Fabric.md)

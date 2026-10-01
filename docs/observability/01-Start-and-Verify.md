@@ -2,7 +2,7 @@
 description: Start Prometheus and Grafana for a Narwhal router and verify every scrape target.
 ---
 
-# Start and verify monitoring
+# Starting and verifying monitoring
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 - `curl`
 - network reachability from the router host to every engine metrics endpoint
 
-Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#open-installed-role-shells).
+Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells).
 
 | Shell state | Value |
 | --- | --- |
@@ -22,7 +22,7 @@ Run every command on this page in the [installed router-role shell](../deploy/02
 | Environment | `runs/deployment/.env.router` |
 | Python | `.venv` active |
 
-## Configure the monitored deployment
+## Configuring the monitored deployment
 
 | Variable | Value |
 | --- | --- |
@@ -38,7 +38,7 @@ export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 
 [Environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) in the fleet file resolve from the variables loaded in the router-role shell.
 
-## Start Prometheus and Grafana
+## Starting Prometheus and Grafana
 
 Run:
 
@@ -68,7 +68,7 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | Prometheus and Grafana HTTP checks, including datasource and dashboard | 60 seconds after the containers start |
 | Target health and `narwhal_router_ready` | 60 seconds after the HTTP checks pass |
 
-## Verify Prometheus targets
+## Verifying Prometheus targets
 
 Query the scrape state from the router host:
 
@@ -112,4 +112,4 @@ Grafana and the image renderer share the token in `runs/observability/renderer-t
 
 Each `make observe` run regenerates the staged files and resets their permissions.
 
-[![Next: Access dashboards and isolate listeners](https://img.shields.io/badge/next-Access%20dashboards%20and%20isolate%20listeners-0f766e)](02-Access.md)
+[![Next: Accessing dashboards and isolating listeners](https://img.shields.io/badge/next-Accessing%20dashboards%20and%20isolating%20listeners-0f766e)](02-Access.md)

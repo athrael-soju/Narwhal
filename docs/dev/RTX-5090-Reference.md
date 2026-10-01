@@ -19,7 +19,7 @@ Prerequisites:
 | Device share for all four engines | Up to 0.5 |
 | Free VRAM required by `narwhal dev init` | Half the total VRAM plus 2,048 MiB |
 
-## Select the RTX 5090 template
+## Selecting the RTX 5090 template
 
 Export the packaged reference template:
 
@@ -37,7 +37,7 @@ The template pins:
 - a minimum of 30,000 MiB total VRAM
 - the same runtime and model hashes as the installed small-GPU template
 
-## Launch and verify the reference
+## Launching and verifying the reference
 
 1. Run `ip -brief -4 address`.
 2. Find the Linux network interface that carries a single IPv4 address.
@@ -85,7 +85,7 @@ The expected response content is `5`.
 
 Forward metrics to Prometheus and Grafana with the [WSL2 monitoring example](../observability/04-WSL2.md).
 
-## Replay all three role splits
+## Replaying all three role splits
 
 The `role_cycle` in the reference template fixes the token pool, random seeds, and workload order.
 

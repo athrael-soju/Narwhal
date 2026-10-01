@@ -191,7 +191,7 @@ Checks 1 to 4 cover the candidate and its role-permitted peers.
 
 To load updated profiles:
 
-1. Restart the router with its hold preserved through [Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles).
+1. Restart the router with its hold preserved through [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles).
 2. Repeat lifecycle readmission.
 
 ### Whole-wave restart policy
@@ -199,5 +199,5 @@ To load updated profiles:
 Under `recovery.engine_restart_policy: whole_wave`:
 
 1. Drain the wave.
-2. When `wave.ready_to_stop` is `true`, restart the wave through its [supervisor sequence](../operate/03-Restart-Engines.md#8-restart-an-engine-wave).
+2. When `wave.ready_to_stop` is `true`, restart the wave through its [supervisor sequence](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave).
 3. Readmit the wave.

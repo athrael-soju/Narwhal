@@ -26,7 +26,7 @@ Same-engine decode:
 
 ### Descriptor validation
 
-Run [preflight](../deploy/06-Profile-and-Preflight.md#run-preflight) to validate the pinned engine contract and role-permitted KV transfers.
+Run [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) to validate the pinned engine contract and role-permitted KV transfers.
 
 Decode rejects a KV handoff descriptor with:
 

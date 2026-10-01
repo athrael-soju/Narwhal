@@ -4,7 +4,7 @@ description: Diagnose requests and SLO attainment from the Narwhal JSON Lines re
 
 # Request journal
 
-## Diagnose a request from the journal
+## Diagnosing a request from the journal
 
 `--journal <path>` on `narwhal-serve` sets the JSON Lines journal path, `journal.jsonl` beside `profiles.path` by default.
 
@@ -133,7 +133,7 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 
-### Separate transfer and decode queueing
+### Separating transfer and decode queueing
 
 For requests whose first byte follows prefill:
 
@@ -144,7 +144,7 @@ For requests whose first byte follows prefill:
 
 ## Attainment accounting
 
-Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
+Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
 
 An offer passes when the client received a completed response within the applicable limits.
 
@@ -196,4 +196,4 @@ A failed profile-generation check during a health or inference recovery probe:
 | `error` | Failed checks. |
 | `at` | Unix wall-clock seconds. |
 
-Inspect the engine's [profile generation evidence](02-Profiles.md#validate-the-engine-cost-model) before retrying recovery.
+Inspect the engine's [profile generation evidence](02-Profiles.md#validating-the-engine-cost-model) before retrying recovery.

@@ -164,7 +164,7 @@ Restarted serving engine:
 | Has a `launch.peer_release` attestation that is `false`, missing, or unreadable | Keeps the stopped producer's memory mapped |
 | Has zero other producers for its release probe | Receives zero release probes |
 
-A [wave restart](../operate/03-Restart-Engines.md#8-restart-an-engine-wave) recovers a crashed engine in both cases.
+A [wave restart](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) recovers a crashed engine in both cases.
 
 ### Last-engine protection
 
@@ -214,7 +214,7 @@ Automatic recovery with `engine_contract` set, under `recovery.engine_restart_po
 | The ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds | Automatic recovery runs the readmission checks. |
 | The engine fails automatic recovery | The engine stays blocked until an operator requests readmission. |
 | A blocked engine waits while another engine stays in placement | Each other ejected engine recovers individually. |
-| Zero engines remain in placement | Recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recover-loss-of-every-placement-peer). |
+| Zero engines remain in placement | Recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recovering-loss-of-every-placement-peer). |
 | A whole-wave member is blocked | The member holds the wave. |
 
 Readmission checks, in order:
@@ -272,7 +272,7 @@ The state handoff records:
 
 With `engine_contract` configured, resume requires an accepted process identity for each engine the saved state handoff counts as available.
 
-[Activate replacement profiles](../operate/03-Restart-Engines.md#activate-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
+[Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
 
 ### Atomic state handoff writes
 

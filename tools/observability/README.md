@@ -2,11 +2,11 @@
 
 The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** dashboard, and the Grafana Image Renderer.
 
-Follow [Set up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
+Follow [Setting up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
 ## Dashboard
 
-<a href="../../docs/observability/05-Dashboard.md"><img src="https://img.shields.io/badge/docs-Read%20the%20dashboard-0f766e" alt="Read the dashboard documentation"></a>
+<a href="../../docs/observability/05-Dashboard.md"><img src="https://img.shields.io/badge/docs-Reading%20the%20dashboard-0f766e" alt="Reading the dashboard documentation"></a>
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
@@ -61,7 +61,7 @@ Goodput, Load, the headline p95 values and the flip count sum `increase()` over 
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws current assignment and queue series. Engine latency covers engine processing, while deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) defines the metric groups and lifecycle.
+[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 

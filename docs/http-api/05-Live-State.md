@@ -69,7 +69,7 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 | `lifecycle`                                       | [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)      |
 | `attainment`, `demand_history`, `demand_evidence` | [SLO attainment and demand accounting](06-SLO-and-Demand.md)                      |
 | `peer_release`                                    | [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)    |
-| Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) |
+| Per-request evidence                              | [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) |
 
 ### `health`
 

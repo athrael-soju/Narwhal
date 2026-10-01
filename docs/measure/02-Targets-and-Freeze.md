@@ -4,7 +4,7 @@ description: Set production TTFT and TPOT SLOs and freeze the Narwhal deployment
 
 # Targets and deployment freeze
 
-## 5. Set production SLOs
+## 5. Setting production SLOs
 
 | Field        | Target                       |
 | ------------ | ---------------------------- |
@@ -37,7 +37,7 @@ The `narwhal-check` `slo` gate passes each engine when:
 
 With one or two successful probes, the pace gate requires a saved prefill profile for each engine.
 
-## 6. Freeze the deployment under test
+## 6. Freezing the deployment under test
 
 1. Assign a deployment identifier before the load test.
 2. Attach the exact artifacts to it:
@@ -70,5 +70,5 @@ Before the next rate, wait for:
 
 Stop the sweep at the first of:
 
-- a run that misses the [trial's attainment target](03-Load-Trial.md#7-run-the-synthetic-deployment-trial)
+- a run that misses the [trial's attainment target](03-Load-Trial.md#7-running-the-synthetic-deployment-trial)
 - a tested rate at the intended operating ceiling

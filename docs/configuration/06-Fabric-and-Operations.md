@@ -15,9 +15,9 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 If the helper changes, start a new preparation directory.
 
-### 17.1 Calculate the workload budget
+### 17.1 Calculating the workload budget
 
-[Cache-equivalence grouping](../deploy/03-Validate-Engines.md#derive-cache-equivalence-groups) groups engine roles by:
+[Cache-equivalence grouping](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) groups engine roles by:
 
 - discovered image
 - model configuration
@@ -149,7 +149,7 @@ To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
 | `narwhal-serve` option | Request timing records                                                                                                                                          |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default                | [`journal.jsonl`](../telemetry/01-Journal.md#diagnose-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation) |
+| Default                | [`journal.jsonl`](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation) |
 | `--journal PATH`       | `PATH`                                                                                                                                                          |
 
 ---

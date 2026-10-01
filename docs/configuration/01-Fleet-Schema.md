@@ -38,7 +38,7 @@ fleet.json: controller.monitor_interval_s must be a number; serving.max_connecti
 
 ### 1.3 Environment loading
 
-Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#load-the-private-environment) loads.
+Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#loading-the-private-environment) loads.
 
 | Variable                            | Use                                                                                                | Default          |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------- |
@@ -141,7 +141,7 @@ The optional `hardware` block needs all three fields when present.
 
 | Field                              | Notes                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `hardware.accelerator`             | Nonempty accelerator product name from [engine-host inspection](../deploy/03-Validate-Engines.md#inspect-every-engine-host). |
+| `hardware.accelerator`             | Nonempty accelerator product name from [engine-host inspection](../deploy/03-Validate-Engines.md#inspecting-every-engine-host). |
 | `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                           |
 | `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                       |
 
@@ -168,7 +168,7 @@ The optional `hardware` block needs all three fields when present.
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
 
-Capture every contract value from the deployed engine in [Gate E: capture attestation inputs](../deploy/05-Attest.md#capture-the-attestation-inputs).
+Capture every contract value from the deployed engine in [Gate E: capture attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Values to check against the live engine:
 

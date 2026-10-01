@@ -143,7 +143,7 @@ The RTX 5090 reference's `role_cycle` holds deterministic workloads for three ro
 - 2P:2D, two prefill and two decode engines
 - 3P:1D, three prefill and one decode engine
 
-[Replay the workloads](../dev/RTX-5090-Reference.md#replay-all-three-role-splits) through a verified fleet from a checkout:
+[Replay the workloads](../dev/RTX-5090-Reference.md#replaying-all-three-role-splits) through a verified fleet from a checkout:
 
 ```bash
 python -m tools.measurement.dev_cycle --instance runs/dev

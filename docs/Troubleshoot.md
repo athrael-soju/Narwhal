@@ -2,9 +2,9 @@
 description: Capture diagnostic bundles and recover a Narwhal fleet from router, admission and overload failures.
 ---
 
-# Troubleshoot a fleet
+# Troubleshooting a fleet
 
-## Capture router and engine state
+## Capturing router and engine state
 
 Collect one bundle per incident router, with:
 
@@ -108,8 +108,8 @@ Ratio definitions:
 | Ratio | Numerator | Denominator |
 | --- | --- | --- |
 | Load-test router outcome | Router completions | Admitted requests |
-| [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-join-client-offers-to-the-router-journal) | Client completions that meet the service-level objective | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
+| [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) | Client completions that meet the service-level objective | All scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses |
 
-## Validate recovery
+## Validating recovery
 
-Run the [release validation drills](operate/05-Release-Drills.md#11-validate-every-release).
+Run the [release validation drills](operate/05-Release-Drills.md#11-validating-every-release).

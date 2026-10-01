@@ -2,7 +2,7 @@
 description: Install the narwhal-inference package from PyPI on Linux with Python 3.11 or newer.
 ---
 
-# Install Narwhal from PyPI
+# Installing Narwhal from PyPI
 
 `narwhal-inference` installs the `narwhal` Python package and six commands for local development, engine launch, attestation, profiling, preflight and routing.
 
@@ -21,7 +21,7 @@ narwhal-serve --version
 narwhal --help
 ```
 
-## Verify the installation
+## Verifying the installation
 
 Expected `narwhal-serve --version` output:
 
@@ -40,14 +40,14 @@ For each deployment:
 
 ## Before serving requests
 
-[Deploy a fleet](Deploy.md) qualifies these production inputs:
+[Deploying a fleet](Deploy.md) qualifies these production inputs:
 
 - separately provisioned vLLM engines with compatible KV transfer
 - engine attestation
 - a fleet configuration
 - measured profiles
 
-## Install from a source checkout
+## Installing from a source checkout
 
 In a repository checkout, `make setup` installs Narwhal and its development dependencies into `.venv`.
 

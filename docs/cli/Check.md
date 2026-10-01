@@ -100,7 +100,7 @@ narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 
 ## First-token calibration
 
-Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrate-the-first-token-deadline) before recording evidence for a fleet.
+Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before recording evidence for a fleet.
 
 The `--calibration-out` file holds:
 

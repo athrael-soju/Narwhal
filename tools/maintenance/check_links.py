@@ -16,6 +16,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# A link whose text is an image, such as a badge.
+IMAGE_LINK = re.compile(r"\[!\[[^\]]*\]\([^)\s]+\)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HTML_LINK = re.compile(r"<(?:a|img)\b[^>]*?\b(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.I)
 ROOT = Path(__file__).resolve().parents[2]
 CANONICAL = "/athrael-soju/Narwhal/"
@@ -99,7 +101,8 @@ def dangling(files: list[Path], root: Path = ROOT) -> list[str]:
     cache: dict[Path, set[str]] = {}
     for md in files:
         text = prose(md.read_text())
-        targets = [target for _, target in LINK.findall(text)] + HTML_LINK.findall(text)
+        targets = [target for _, target in LINK.findall(text)]
+        targets += IMAGE_LINK.findall(text) + HTML_LINK.findall(text)
         for target in targets:
             resolved = local_target(md, target, root)
             if resolved is None:

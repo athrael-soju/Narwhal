@@ -14,7 +14,7 @@ For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefi
 
 The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on and pinned to the RTX 5090.
 
-## Prepare Ubuntu or WSL2
+## Preparing Ubuntu or WSL2
 
 1. Install the NVIDIA driver for your host:
 
@@ -35,7 +35,7 @@ The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on a
 
 5. Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
 
-## Install the runtime and model
+## Installing the runtime and model
 
 Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md).
 
@@ -84,7 +84,7 @@ Create a custom template:
 3. Initialize a fresh instance with
    `narwhal dev init --template runs/small-cuda-template.json --instance runs/dev-custom`.
 
-## Initialize and verify an instance
+## Initializing and verifying an instance
 
 Run the lifecycle commands with the interface name from `ip`:
 
@@ -147,7 +147,7 @@ Two `narwhal dev` options change the layout and target:
 | `--port-base` on `narwhal dev init` | Selects a different port layout |
 | `--instance` on any command | Targets another instance |
 
-## Inspect and stop the instance
+## Inspecting and stopping the instance
 
 The run directory that `status` prints holds:
 
@@ -253,7 +253,7 @@ Recover from a failed stage, with `PATH` as the instance directory:
 
 If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 
-## Contribute another GPU recipe
+## Contributing another GPU recipe
 
 Contribute a template for a new small CUDA GPU:
 

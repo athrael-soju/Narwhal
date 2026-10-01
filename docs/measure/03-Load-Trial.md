@@ -4,9 +4,9 @@ description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen 
 
 # Synthetic load trial
 
-## 7. Run the synthetic deployment trial
+## 7. Running the synthetic deployment trial
 
-1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnel-router-prometheus-and-grafana-to-the-workstation).
+1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
 2. Confirm that the 0.5 request/s rate passes.
 3. Wait for the router to drain.
 4. Send the same 200 requests at 1 request/s.
@@ -28,7 +28,7 @@ HTTP refusals, stream errors, timeouts, and scheduling misses count in the 200-o
 - Each engine is [launched](../deploy/03-Validate-Engines.md#prepare-check-and-start-each-engine) with `--no-enable-prefix-caching` in `runtime.extra_args`.
 - `checked.json` shows `"prefix_caching": false`.
 
-### Create the trial directory and workload
+### Creating the trial directory and workload
 
 ```bash
 make setup
@@ -87,7 +87,7 @@ An offer over either limit becomes a terminal `client_schedule_miss` record with
 
 Check client CPU and scheduling lag before raising either limit.
 
-## 8. Measure 0.5 request/s
+## 8. Measuring 0.5 request/s
 
 ```bash
 .venv/bin/python tools/measurement/load_trial.py run \
@@ -115,7 +115,7 @@ For exit code `2`:
 | `true`                  | The rate missed the attainment target | Keep the result and stop                                                          |
 | `false`                 | Client scheduling missed              | 1. Inspect `requests.jsonl`.<br>2. Repair client scheduling.<br>3. Repeat the rate. |
 
-## 9. Measure 1 request/s
+## 9. Measuring 1 request/s
 
 The router has drained when `/narwhal/state` reports zero for:
 

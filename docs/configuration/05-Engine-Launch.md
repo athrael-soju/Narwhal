@@ -166,7 +166,7 @@ Discovery fills the `runtime` object from these sources:
 | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Package pins and supported runtime-environment fields | Selected image                                                                  |
 | Model dtype                                           | Model config                                                                    |
-| Launch policy                                         | [Environment launch policy](../deploy/01-Discover.md#confirm-the-launch-policy) |
+| Launch policy                                         | [Environment launch policy](../deploy/01-Discover.md#confirming-the-launch-policy) |
 
 Operator input for each `runtime` field:
 
@@ -235,7 +235,7 @@ The check fails when the resolved endpoints differ from `launch.json`.
 
 With `peer_release: false`, the check prints a warning that this engine keeps a stopped peer's GPU memory mapped.
 
-The [live HTTP process check](../deploy/03-Validate-Engines.md#prove-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
+The [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
 
 The image's NIXL connector must implement the fleet's required `kv_both` behavior.
 

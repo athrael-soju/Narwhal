@@ -32,7 +32,7 @@ The deployment's alert manager routes `severity="page"` and `severity="warn"` al
 | Symptom | Check or action |
 | --- | --- |
 | Browser connection fails | Check the SSH tunnel and the route to the router host. |
-| `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolate-a-second-monitoring-stack). |
+| `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolating-a-second-monitoring-stack). |
 | Startup reports a command deadline | Check Docker daemon health, registry reachability, and `docker compose -f tools/observability/compose.yml ps`. |
 | Startup reports a container exit or readiness deadline | Inspect `docker compose -f tools/observability/compose.yml logs prometheus grafana`. |
 | Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps. |
@@ -52,9 +52,9 @@ Verify each fix with a `make observe` rerun that passes the [readiness contract]
 3. Read the [staged mount permissions](01-Start-and-Verify.md#staged-monitoring-files) and container logs.
 4. Save the failure output in the private deployment record.
 
-## Retain monitoring captures
+## Retaining monitoring captures
 
 - Save deployment addresses and captured responses under `runs/`.
 - Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
 
-[![Next: Monitor placement and control](https://img.shields.io/badge/next-Monitor%20placement%20and%20control-0f766e)](../operate/02-Monitor.md#6-monitor-placement-and-control)
+[![Next: Monitoring placement and control](https://img.shields.io/badge/next-Monitoring%20placement%20and%20control-0f766e)](../operate/02-Monitor.md#6-monitoring-placement-and-control)

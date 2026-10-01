@@ -92,7 +92,7 @@ Other non-streaming values return HTTP `400` `invalid_request_error` with the op
 | Backend request ID | One per engine attempt and phase   | Engine requests and the KV handoff |
 | `client_rid`       | Trusted request ID sent by ingress | Request journal                    |
 
-[Configure ingress](../operate/01-Start-Routers.md#3-configure-the-client-path) to:
+[Configure ingress](../operate/01-Start-Routers.md#3-configuring-the-client-path) to:
 
 1. Authenticate the client.
 2. Strip the client's credentials.

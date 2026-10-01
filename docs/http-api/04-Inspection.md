@@ -96,7 +96,7 @@ With zero eligible engines, the response is:
 }
 ```
 
-During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-wave):
+During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave):
 
 - `/health` reports `maintenance`
 - `/ready` reports the lifecycle reason
@@ -104,4 +104,4 @@ During a [whole-wave hold](../operate/03-Restart-Engines.md#8-restart-an-engine-
 
 ## `GET /metrics`
 
-Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#read-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.
+Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) in Prometheus exposition format `0.0.4`.
