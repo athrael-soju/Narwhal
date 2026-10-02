@@ -13,6 +13,27 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. Both selectors default to All.
 
+## Colours
+
+Each colour keeps one meaning on every panel.
+
+| Colour | Hex | Meaning |
+| --- | --- | --- |
+| Teal | `#299E97` | Prefill role, **Prefill/s** and TTFT p95 |
+| Teal shades | `#1A847E`, `#49B7B0` | TTFT p50 and p99 |
+| Blue | `#336B9E` | Decode role, **Decode/s** and TPOT p50 |
+| Blue shades | `#4E86BB`, `#69A2D8` | TPOT p95 and p99 |
+| Violet | `#8C84CE` | Colocated role |
+| Green | `#56A64B` | Serving, Ready, completed and within target |
+| Amber | `#C8963E` | Backlogged, Probation, Verifying, warnings, refused, retry attempts and the pool target |
+| Orange | `#E0752D` | Quarantined and rejected |
+| Red | `#D44A3A` | Ejected, Unreachable, failed, pages and SLO lines |
+| Dark red | `#A11D1D` | Blocked and expired |
+| Magenta | `#9E4AA4` | Switching, Validating and queue wait |
+| Grey | `#8E9196` | Draining, Restarting, N/A, cancelled, ended before sizing, seat time and engine table bars |
+| Olive | `#7A6813` | invalid |
+| Theme text | | offered |
+
 ## Headline row
 
 The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing now.
@@ -80,7 +101,7 @@ The engine table shows each engine's current role, state and load. **Engine role
 | Prefix hits | Share of prompt tokens served from the engine's prefix cache |
 | Tokens/s | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines |
 
-In **Engine role history**, teal is Prefill, blue is Decode and grey-violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
+In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
 
 ## Request outcomes and fleet events
 
@@ -139,7 +160,7 @@ These panels show how long requests take and how much work the engines complete.
 
 **Time to first token** plots the p50, p95 and p99 time from router arrival to the end of prefill. **Time per output token** plots the same percentiles of each ended request's average time between output tokens after prefill.
 
-Both panels draw the selected router's SLO as a line. When p95 crosses it, more than 5% of requests in that window missed the SLO.
+Both panels draw the selected router's SLO as a dashed red line. When p95 crosses it, more than 5% of requests in that window missed the SLO.
 
 **Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). Prefill/s counts vLLM's `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total.
 

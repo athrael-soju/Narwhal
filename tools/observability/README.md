@@ -75,6 +75,8 @@ make observe
 curl -fsS http://127.0.0.1:3000/api/health
 ```
 
+Give every series a fixed colour from the [dashboard colour key](../../docs/observability/05-Dashboard.md#colours).
+
 Validate changed queries against traffic, idle engines, failed scrapes, router restart and the **Engine detail** selector before deploying the dashboard. Keep live addresses and captured responses under `runs/`.
 
 ## Alert rules
