@@ -265,17 +265,17 @@ Optional fields, by evaluation stage:
 | `eligibility_rule`                                | Rule applied to a scored proposal                                                                                                                             |
 | `demand_horizon_s`                                | Demand span that priced the proposal, in seconds                                                                                                              |
 | `steady_horizon_s`                                | Confirmation span, in seconds                                                                                                                                 |
-| `steady_prefill_work`, `steady_decode_work`       | Prefill and decode demand over `steady_horizon_s`, in engines, `null` with incomplete demand or on a projected-TTFT recovery evaluation                       |
-| `steady_demand_s`                                 | Seconds that confirmation-span demand has matched window demand, `null` while they differ, with incomplete demand, or on a projected-TTFT recovery evaluation |
+| `steady_prefill_work`, `steady_decode_work`       | Prefill and decode demand over `steady_horizon_s`, in engines. The value is `null` with incomplete demand or on a projected-TTFT recovery evaluation.                 |
+| `steady_demand_s`                                 | Seconds since confirmation-span demand began to match window demand. The value is `null` while they differ, with incomplete demand, or on a projected-TTFT recovery evaluation. |
 | `departure_age_s`                                 | Seconds since the open departure began                                                                                                                        |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                                                                      |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                  |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                 |
-| `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or `mixed_pressure` or `steady_demand` applies                                                          |
+| `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or whether `mixed_pressure` or `steady_demand` applies                                                 |
 
 Scored decisions add decode capacity fields: `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens`.
 
-Scored decisions add the demand horizon fields: `demand_horizon_s`, `steady_horizon_s`, `steady_prefill_work`, `steady_decode_work`, and `steady_demand_s`.
+Scored decisions add the demand span fields: `demand_horizon_s`, `steady_horizon_s`, `steady_prefill_work`, `steady_decode_work`, and `steady_demand_s`.
 
 Scored decisions during an open departure add `departure_age_s`.
 
@@ -288,7 +288,7 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                  |
 | `mixed_pressure`          | Observed prefill recovery exceeds the decode shrink threshold                                                         |
 | `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) move, priced on confirmation-span demand |
-| `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with source pressure between `shrink` and `expand` |
+| `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
 | `source_shrink`           | Ordinary consolidation                                                                                                |
 
 #### Demand spans

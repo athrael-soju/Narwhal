@@ -8,7 +8,7 @@ description: How the Narwhal role controller moves engines between prefill and d
 
 The role controller runs at most one regular evaluation per `controller.reactive.step_s`. Each evaluation considers every adjacent prefill/decode split, one engine move away from the current split. It prices each split by the worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
 
-The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) is the largest projected decode-slot wait over the time left to `slo.ttft_s` after prefill, among requests waiting for decode or in prefill.
+The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) is the largest ratio of a request's projected slot wait to its time left to `slo.ttft_s` after prefill. It covers requests that wait for a decode slot and requests in prefill.
 
 The evaluation prices splits from measured window demand. Decode-to-prefill candidates use the larger of the short- and long-horizon decode estimates. Role floors and engine eligibility limit the available moves, and floor restoration moves one engine per monitor pass while a phase sits below its configured floor.
 
@@ -29,24 +29,31 @@ When the queue drains before the evaluation, the trigger clears. When TTFT stays
 
 Source load at or below `controller.thresholds.shrink` drives consolidation. Sustained prefill load at or above `controller.thresholds.expand` can move decode capacity into prefill. Both paths require passing the profile, safety, and confirmation checks.
 
-A decode-to-prefill move by the role controller requires a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) and stable decode demand. Prefill-to-decode moves with source load at or below `controller.thresholds.shrink` and floor restorations in either direction proceed with the window open.
+A decode-to-prefill move by the role controller requires a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) and stable decode demand. These moves proceed with the window open:
+
+- prefill-to-decode moves with source load at or below `controller.thresholds.shrink`
+- floor restorations in either direction
 
 The window closes when `controller.reactive.evidence_span_s` has elapsed with at least `controller.reactive.evidence_min_arrivals` arrivals, or when `controller.reactive.evidence_max_span_s` has elapsed under sparse traffic. A first-token timeout, an applied move toward decode, or a decode-floor restoration restarts the window.
 
 The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fields in `/narwhal/state` report the demand, overflow, and inputs behind each role-controller decision.
 
-The [controller decision](../http-api/05-Live-State.md#controller-decisions) fields name the rule and the demand horizons behind each decision.
+The [controller decision](../http-api/05-Live-State.md#controller-decisions) fields name the rule and the demand spans of each decision.
 
 ### Departures from a settled split
 
-The confirmation span is `controller.reactive.step_s` times the sustained confirmation count, the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`.
+A departure moves one engine when demand shifts after a settled run. It prices the move on confirmation-span demand.
 
-A departure moves one engine toward a demand shift on confirmation-span demand.
+| Term                         | Meaning                                                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sustained confirmation count | The larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`                                                             |
+| Confirmation span            | `controller.reactive.step_s` times the sustained confirmation count, 15 s by default                                                                          |
+| Settled run                  | A period in which every adjacent split improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, on window and confirmation-span demand |
 
 The role controller opens a departure when all of these hold:
 
-- A settled run has lasted `controller.reactive.evidence_span_s`: every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on confirmation-span demand.
-- Confirmation-span demand for a phase differs from window demand by more than a `controller.reactive.demand_rise_tolerance` fraction of the larger estimate.
+- The current settled run is at least `controller.reactive.evidence_span_s` long.
+- Confirmation-span demand for a phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate.
 - On confirmation-span demand, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
 
 The departure's move to that split requires:
@@ -56,13 +63,13 @@ The departure's move to that split requires:
 
 Moves that follow the departure's move use window demand.
 
-The departure holds the reverse move for `controller.reactive.window_s` after it opens, or until a window-demand move continues in its direction.
+The departure holds the reverse move for `controller.reactive.window_s` after it opens, or until a window-demand move continues in the departure's direction.
 
 ### Steady demand
 
 Demand is steady when both hold:
 
-- Demand over the confirmation span has matched window demand within `controller.reactive.demand_rise_tolerance` for `controller.reactive.evidence_span_s`.
+- For the last `controller.reactive.evidence_span_s`, confirmation-span demand matches window demand within `controller.reactive.demand_rise_tolerance`.
 - The arrival-evidence window is closed.
 
 Under steady demand, a consolidation move with source load above `controller.thresholds.shrink` requires:

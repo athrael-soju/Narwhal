@@ -27,7 +27,7 @@ The decode check projects the slot each request holds in the decode pool.
 
 The check admits the request when the fleet has zero live decode engines, or when a live decode engine's profile or profiled `decode_max_requests` is unset.
 
-The decode pool has one slot per request, up to the sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive.
+Each request holds one slot. The decode pool's slot count is the sum of each live decode engine's `decode_max_requests`, capped per engine by `serving.decode_concurrency` when that setting is positive.
 
 | Request                                    | Reaches decode                      | Holds a slot                                                                       |
 | ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- |
@@ -35,7 +35,7 @@ The decode pool has one slot per request, up to the sum of `decode_max_requests`
 | Request waiting for a decode slot          | Now                                 | From the earliest free slot until its projected last token                         |
 | Request in prefill, and the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token |
 
-Free slots go to requests in the order they reach decode.
+The check assigns free slots to requests in the order they reach decode.
 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
@@ -49,12 +49,12 @@ A capped request with three or more finished requests in its bucket expects its 
 
 Below the expected output, remaining output is the expected output minus delivered output. At or past the expected output, remaining output is the output cap minus delivered output, or unknown for an uncapped request.
 
-Unknown remaining output sets these holds:
+When a request's remaining output is unknown, the check uses these holds:
 
 - the checked request holds its slot for the instant the slot starts
 - every other request holds its slot indefinitely
 
-A request resident in decode generates at its decode engine's token interval. Every other request generates at the fleet mean of the engine intervals. An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode KV token bound, times the [decode correction](#71-load-definitions).
+A request resident in decode generates at its decode engine's token interval. Every other request generates at the fleet mean of the engine intervals. An engine's interval is its profiled token interval times the [decode correction](#71-load-definitions). The profiled interval is for a full batch at the current mean context, within the decode KV token bound.
 
 The check admits the request when all three checks pass:
 
@@ -62,7 +62,7 @@ The check admits the request when all three checks pass:
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) |
 | KV tokens | Peak request KV over the checked request's hold fits the sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request holds decode alone |
-| TPOT      | A live decode engine meets `slo.tpot_s` with the request and the residents generating when its slot starts, or the request misses `slo.tpot_s` on every idle decode engine |
+| TPOT      | When the request's slot starts, a live decode engine meets `slo.tpot_s` with the request and the residents still generating on that engine, or the request misses `slo.tpot_s` on every idle decode engine |
 
 ### 4.2 Waiting, phase concurrency, and retries
 
@@ -357,7 +357,7 @@ max over waiting decode requests and requests in prefill:
   slot wait / (slo.ttft_s - time since arrival - time until the request reaches decode)
 ```
 
-The split's decode pool has the live mean decode slots per engine times its decode engine count.
+The split's slot count is its decode engine count times the live mean slot count per decode engine.
 
 A request at or past its TTFT deadline when it reaches decode contributes zero.
 
@@ -382,17 +382,20 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-The `mixed_pressure` rule moves one decode engine to prefill when projected decode load is above `shrink` and all of these hold:
+The `mixed_pressure` rule moves one decode engine to prefill when all of these hold:
 
-- measured prefill load reaches `controller.thresholds.expand`
+- projected source load is above `controller.thresholds.shrink`
+- the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
 - every engine has a profile
-- the move improves the worst projected SLO ratio by a positive amount of at least `controller.reactive.movement_margin`
+- the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
+
+A settled run is a period in which every adjacent split improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, on window and confirmation-span demand.
 
 The role controller opens a departure when all of these hold:
 
-- for the settled run, every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on confirmation-span demand
+- the current settled run is at least `controller.reactive.evidence_span_s` long
 - confirmation-span demand for either phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate
-- an adjacent split improves the confirmation-span worst projected SLO ratio by at least `controller.reactive.movement_margin`
+- on confirmation-span demand, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`
 
 The `settled_departure` rule moves one engine toward that split when both hold on confirmation-span demand:
 
@@ -401,15 +404,15 @@ The `settled_departure` rule moves one engine toward that split when both hold o
 
 Moves that follow the departure's move use window demand.
 
-The departure holds the reverse move until `controller.reactive.window_s` has elapsed since it opened, or until a window-demand move continues in the departure's direction.
+The departure holds the reverse move for `controller.reactive.window_s` after it opens, or until a window-demand move continues in the departure's direction.
 
 When `mixed_pressure` applies to the departure's split on window demand, that split keeps window demand and the `mixed_pressure` rule.
 
-A departure closes before its move when the best confirmation-span adjacent split changes direction or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
+A departure closes before its move when, on confirmation-span demand, the best adjacent split changes direction or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
 
 Demand is steady when both hold:
 
-- for `controller.reactive.evidence_span_s`, confirmation-span demand and window demand for each phase have differed by at most `controller.reactive.demand_rise_tolerance` times the larger estimate
+- for the last `controller.reactive.evidence_span_s`, confirmation-span demand and window demand for each phase differ by at most `controller.reactive.demand_rise_tolerance` times the larger estimate
 - the arrival-evidence window is closed
 
 The `steady_demand` rule moves one engine under steady demand when both hold:
@@ -497,7 +500,7 @@ These fields tune demand estimation, move confirmation, the arrival-evidence win
 | `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span for decode-to-prefill consolidation, the duration of matching demand that makes demand steady, and the settled-run length. | Positive, at most `evidence_max_span_s`                  |
 | `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                                                                                      | Positive, at least `evidence_span_s`, at most `window_s` |
 | `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.                                                                     | At least 1                                               |
-| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand, and the fraction of the larger estimate within which two demand horizons match. | Zero or greater                                          |
+| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand, and the fraction of the larger estimate within which two demand spans match.    | Zero or greater                                          |
 | `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live-to-profile decode correction.                                                                                                | Positive                                                 |
 | `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live-to-profile decode correction.                                                                                                | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction.                                                                            | `(0, 1]`                                                 |

@@ -114,7 +114,7 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget. |
 | `queue` | The prompt alone fits the TTFT budget, and the cheapest placement including queueing exceeds it. |
 | `aggregate_unpriced` | Every candidate engine carries decode work. |
-| `decode` | The projected [decode slot wait](../configuration/02-Serving-and-Role-Control.md#decode-admission-check) pushes the projected TTFT past the budget, projected decode KV tokens exceed live decode capacity, or decode load pushes the request past `slo.tpot_s`. |
+| `decode` | The request fails one of the three [decode admission checks](../configuration/02-Serving-and-Role-Control.md#decode-admission-check): slot wait, KV tokens or TPOT. |
 
 #### Attempt failures
 
