@@ -261,7 +261,7 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         print(
             f"profiling {prefill} prefill / {count - prefill} decode", file=sys.stderr, flush=True
         )
-        _run(run, "narwhal.profiling.probe", args, f"profile-{prefill}p{count - prefill}d")
+        _run(run, "narwhal.profiling.cli", args, f"profile-{prefill}p{count - prefill}d")
         sources.append(profile)
     if len(sources) == 1:
         (run / "profiles.json").write_bytes(sources[0].read_bytes())
@@ -269,7 +269,7 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         args = ["--fleet", str(run / "fleet.json"), "--out", str(run / "profiles.json")]
         for source in sources:
             args.extend(["--merge", str(source)])
-        _run(run, "narwhal.profiling.probe", args, "profile-merge")
+        _run(run, "narwhal.profiling.cli", args, "profile-merge")
 
 
 def _helper_records(run: Path) -> list[tuple[Path, dict]]:

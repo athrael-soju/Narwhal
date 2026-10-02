@@ -1,5 +1,6 @@
 """Check profiling measurements, token counts and output-file protection."""
 
+import asyncio
 import io
 import json
 import tempfile
@@ -13,8 +14,20 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.config.model import SharedDeviceAllocation
-from narwhal.profiling import probe
+from narwhal.engines.dialect import VllmDialect
+from narwhal.profiling import (
+    cli,
+    decode,
+    engine_io,
+    live,
+    neighbour,
+    offline,
+    prefill,
+    sweep,
+    warm,
+)
 from narwhal.profiling.generation import GenerationEvidence
+from narwhal.profiling.model import CACHED_PROFILE_FIELDS
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
@@ -55,13 +68,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"count": 32, "max_model_len": 32})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
-            load = probe.NeighbourLoad(
+            load = neighbour.NeighbourLoad(
                 client,
                 [("p", "http://prefill", Role.PREFILL)],
                 "stub",
-                probe.VllmDialect(),
+                VllmDialect(),
                 3.8,
-                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                neighbour.ColocatedWorkload(100, 100, 32, 32, 8),
                 observation_timeout_s=75.0,
             )
             with self.assertRaisesRegex(ValueError, "exceeds max_model_len"):
@@ -83,22 +96,22 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(request.url.path)
 
-        workload = probe.ColocatedWorkload(40.0, 40.0, 256, 512, 8)
+        workload = neighbour.ColocatedWorkload(40.0, 40.0, 256, 512, 8)
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
-            load = probe.NeighbourLoad(
+            load = neighbour.NeighbourLoad(
                 client,
                 [("p", "http://prefill", Role.PREFILL), ("d", "http://decode", Role.DECODE)],
                 "stub",
-                probe.VllmDialect(),
+                VllmDialect(),
                 3.8,
                 workload,
             )
             with (
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+                patch.object(neighbour, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=4096)),
             ):
                 await load.start()
-            await probe.asyncio.sleep(0.08)
+            await asyncio.sleep(0.08)
             measured = await load.stop()
         self.assertIn("prefill", calls)
         self.assertIn("decode", calls)
@@ -112,30 +125,30 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_colocated_load_requires_completions_from_each_same_role_peer(self):
         """Every decoder contributes completed requests during the measurement window."""
-        good_completed = probe.asyncio.Event()
+        good_completed = asyncio.Event()
 
         async def answer(request):
             if request.url.host == "stalled":
-                await probe.asyncio.Event().wait()
+                await asyncio.Event().wait()
             good_completed.set()
             return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
-            load = probe.NeighbourLoad(
+            load = neighbour.NeighbourLoad(
                 client,
                 [("d1", "http://good", Role.DECODE), ("d2", "http://stalled", Role.DECODE)],
                 "stub",
-                probe.VllmDialect(),
+                VllmDialect(),
                 3.8,
-                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                neighbour.ColocatedWorkload(100, 100, 32, 32, 8),
             )
             with (
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+                patch.object(neighbour, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=4096)),
             ):
                 await load.start()
             good_completed.clear()
-            await probe.asyncio.wait_for(good_completed.wait(), timeout=1)
+            await asyncio.wait_for(good_completed.wait(), timeout=1)
             with self.assertRaisesRegex(RuntimeError, "d2: completed 0 requests"):
                 await load.stop()
         measured = load.evidence()
@@ -147,7 +160,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_colocated_load_retains_a_peer_task_exception(self):
         """A malformed response fails qualification after earlier peer completions."""
         fail = False
-        failed = probe.asyncio.Event()
+        failed = asyncio.Event()
 
         async def answer(request):
             if fail and request.url.host == "failing":
@@ -156,22 +169,22 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
-            load = probe.NeighbourLoad(
+            load = neighbour.NeighbourLoad(
                 client,
                 [("d1", "http://good", Role.DECODE), ("d2", "http://failing", Role.DECODE)],
                 "stub",
-                probe.VllmDialect(),
+                VllmDialect(),
                 3.8,
-                probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                neighbour.ColocatedWorkload(100, 100, 32, 32, 8),
             )
             with (
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+                patch.object(neighbour, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=4096)),
             ):
                 await load.start()
-            await probe.asyncio.sleep(0.02)
+            await asyncio.sleep(0.02)
             fail = True
-            await probe.asyncio.wait_for(failed.wait(), timeout=1)
+            await asyncio.wait_for(failed.wait(), timeout=1)
             with self.assertRaisesRegex(RuntimeError, "d2: AttributeError"):
                 await load.stop()
         measured = load.evidence()
@@ -198,7 +211,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps({"engines": {"e0": {"profile": asdict(row)}}})
                 )
             output = root / "merged.json"
-            self.assertEqual(probe.merge_profiles(sources, output, {"e0"}), 0)
+            self.assertEqual(offline.merge_profiles(sources, output, {"e0"}), 0)
             merged = ProfileStore(output)
             merged.bind_role_mix({"e0": "gpu-0"}, lambda group: (1, 2), lambda iid: Role.PREFILL)
             self.assertEqual(merged.profiles_for_split(["e0"], 1, 2)[0].colocated_group, "gpu-0")
@@ -206,7 +219,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(merged.all_profiles()), 2)
 
     async def test_merge_accepts_evidence_saved_before_optional_profile_fields(self):
-        newer = ("ttft_block_tokens", "ttft_split", *probe.CACHED_PROFILE_FIELDS)
+        newer = ("ttft_block_tokens", "ttft_split", *CACHED_PROFILE_FIELDS)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             sources = [root / "one.json", root / "two.json"]
@@ -227,14 +240,14 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 path.with_suffix(".samples.json").write_text(
                     json.dumps({"engines": {"e0": {"profile": saved}}})
                 )
-            self.assertEqual(probe.merge_profiles(sources, root / "merged.json", {"e0"}), 0)
+            self.assertEqual(offline.merge_profiles(sources, root / "merged.json", {"e0"}), 0)
             # Evidence from another measurement stops the merge.
             stale = {**asdict(rows[0]), "ttft_c": rows[0].ttft_c + 1.0}
             sources[0].with_suffix(".samples.json").write_text(
                 json.dumps({"engines": {"e0": {"profile": stale}}})
             )
             with self.assertRaisesRegex(ValueError, "lacks matching measurement evidence"):
-                probe.merge_profiles(sources, root / "again.json", {"e0"})
+                offline.merge_profiles(sources, root / "again.json", {"e0"})
 
     async def test_prompt_uses_the_engine_count_after_resizing(self):
         """Prompt resizing records the measured count used as the fit axis."""
@@ -244,7 +257,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 lambda request: httpx.Response(200, json={"count": next(counts)})
             )
         ) as client:
-            text, count = await probe.make_prompt(client, "http://e", "stub", 10)
+            text, count = await engine_io.make_prompt(client, "http://e", "stub", 10)
         self.assertEqual(count, 9)
         self.assertEqual(len(text), 50)
 
@@ -264,7 +277,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             for target in (128, 512, 1020):
                 with self.subTest(target=target):
                     observed_counts.clear()
-                    text, count = await probe.make_prompt(
+                    text, count = await engine_io.make_prompt(
                         client,
                         "http://e",
                         "stub",
@@ -288,7 +301,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
             with self.assertRaisesRegex(RuntimeError, "prefix requires 20 tokens"):
-                await probe.make_prompt(
+                await engine_io.make_prompt(
                     client, "http://e", "stub", 8, prefix="unique ", max_input_tokens=8
                 )
         self.assertLessEqual(calls, 16)
@@ -305,7 +318,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request, response=response: response)
             ) as client:
                 with self.subTest(status=response.status_code), self.assertRaises(RuntimeError):
-                    await probe.make_prompt(client, "http://e", "stub", 10)
+                    await engine_io.make_prompt(client, "http://e", "stub", 10)
 
     async def test_prefill_requires_matching_usage_and_length_finish(self):
         """Prefill samples require matching prompt usage and a length finish after one token."""
@@ -325,18 +338,18 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 )
             ) as client:
                 with (
-                    patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 4))),
+                    patch.object(prefill, "make_prompt", AsyncMock(return_value=("prompt", 4))),
                     redirect_stdout(io.StringIO()),
                 ):
                     if accepted:
-                        samples = await probe.probe_prefill(
+                        samples = await prefill.probe_prefill(
                             client, "http://e", "stub", lens=(4,), repeats=2
                         )
                         self.assertEqual([row[0] for row in samples], [4, 4])
                         self.assertTrue(all(row[1] >= 0 for row in samples))
                     else:
                         with self.assertRaisesRegex(RuntimeError, "exact token usage"):
-                            await probe.probe_prefill(client, "http://e", "stub", lens=(4,))
+                            await prefill.probe_prefill(client, "http://e", "stub", lens=(4,))
 
     async def test_live_context_bounds_prefill_before_completion(self):
         """Live tokenizer limits select a safe sweep and reject an oversized exact count."""
@@ -362,35 +375,38 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             return "x" * target, target
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-            with patch.object(probe, "make_prompt", side_effect=prompt):
-                limit = await probe.engine_context_limit(
-                    client, "http://e", "stub", probe.VllmDialect()
+            with (
+                patch.object(engine_io, "make_prompt", side_effect=prompt),
+                patch.object(prefill, "make_prompt", side_effect=prompt),
+            ):
+                limit = await engine_io.engine_context_limit(
+                    client, "http://e", "stub", VllmDialect()
                 )
-                sweep = probe.bounded_sweep(probe.Sweep(), limit)
+                grid = sweep.bounded_sweep(sweep.Sweep(), limit)
                 with redirect_stdout(io.StringIO()):
-                    samples = await probe.probe_prefill(
+                    samples = await prefill.probe_prefill(
                         client,
                         "http://e",
                         "stub",
-                        sweep.prefill_lens,
+                        grid.prefill_lens,
                         repeats=1,
                         max_model_len=limit,
                     )
-                self.assertEqual(len(samples), len(sweep.prefill_lens))
+                self.assertEqual(len(samples), len(grid.prefill_lens))
                 self.assertEqual(max(sent), 16300)
                 with self.assertRaisesRegex(ValueError, "exceeds.*max_model_len"):
-                    await probe.probe_prefill(
+                    await prefill.probe_prefill(
                         client, "http://e", "stub", lens=(16384,), repeats=1, max_model_len=limit
                     )
                 self.assertEqual(max(sent), 16300)
-        self.assertEqual(max(probe.bounded_sweep(probe.Sweep(), 8192).prefill_lens), 4300)
+        self.assertEqual(max(sweep.bounded_sweep(sweep.Sweep(), 8192).prefill_lens), 4300)
 
     async def test_tokenizer_must_report_live_context_limit(self):
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"count": 1}))
         ) as client:
             with self.assertRaisesRegex(RuntimeError, "no valid max_model_len"):
-                await probe.engine_context_limit(client, "http://e", "stub", probe.VllmDialect())
+                await engine_io.engine_context_limit(client, "http://e", "stub", VllmDialect())
 
     def test_generated_sequence_limits_bound_decode_cohorts_before_measurement(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -404,9 +420,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     }
                 )
             )
-            limits = probe.load_sequence_limits(path, {"e0"})
+            limits = sweep.load_sequence_limits(path, {"e0"})
             self.assertEqual(
-                probe.bounded_sweep(probe.Sweep(), 16384, limits["e0"]).decode_concurrency,
+                sweep.bounded_sweep(sweep.Sweep(), 16384, limits["e0"]).decode_concurrency,
                 (1, 4, 8),
             )
             for invalid in ({"e0": 0}, {"other": 8}, {"e0": True}):
@@ -420,9 +436,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                             }
                         )
                     )
-                    probe.load_sequence_limits(path, {"e0"})
+                    sweep.load_sequence_limits(path, {"e0"})
         with self.assertRaisesRegex(ValueError, "fewer than two"):
-            probe.bounded_sweep(probe.Sweep(), 16384, 1)
+            sweep.bounded_sweep(sweep.Sweep(), 16384, 1)
 
     async def measure(self, frames, *, cohort=1, tokens=3):
         """Run one real decode probe and expose its final resident counters."""
@@ -432,9 +448,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=stream))
         ) as client:
-            with patch.object(probe, "time", SimpleNamespace(monotonic=lambda: stream.now)):
+            with patch.object(decode, "time", SimpleNamespace(monotonic=lambda: stream.now)):
                 try:
-                    await probe._one_decode_stream(
+                    await decode._one_decode_stream(
                         client, "http://e", "stub", "prompt", 10, state, samples, tokens=tokens
                     )
                 finally:
@@ -492,21 +508,21 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         ) as client:
             with (
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 10))),
+                patch.object(decode, "make_prompt", AsyncMock(return_value=("p", 10))),
                 self.assertRaisesRegex(RuntimeError, "insufficient complete-cohort"),
             ):
-                await probe.probe_decode(
+                await decode.probe_decode(
                     client, "http://e", "stub", concurrency=(1,), input_lens=(10,), tokens=2
                 )
 
     def test_overlapping_tokens_cover_the_admission_lag(self):
         """A cohort that never overlapped retries with the lag tokens plus the configured count."""
         lagged = {"cohort": 4, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
-        self.assertEqual(probe._overlapping_tokens(lagged, 64, None), 64 + 128)
-        self.assertIsNone(probe._overlapping_tokens(lagged, 64, 150))
+        self.assertEqual(decode._overlapping_tokens(lagged, 64, None), 64 + 128)
+        self.assertIsNone(decode._overlapping_tokens(lagged, 64, 150))
         overlapped = {"cohort": 4, "first_at": 0.0, "last_join_at": 2.0, "left_at": 5.0}
-        self.assertIsNone(probe._overlapping_tokens(overlapped, 64, None))
-        self.assertIsNone(probe._overlapping_tokens({"cohort": 4}, 64, None))
+        self.assertIsNone(decode._overlapping_tokens(overlapped, 64, None))
+        self.assertIsNone(decode._overlapping_tokens({"cohort": 4}, 64, None))
 
     async def test_decode_sweep_retries_a_lagged_cohort_with_overlapping_tokens(self):
         """Early members that finish before the last one joins get one sized retry."""
@@ -523,10 +539,10 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
         evidence: list[dict[str, object]] = []
         with (
-            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 100))),
-            patch.object(probe, "_one_decode_stream", side_effect=lagged),
+            patch.object(decode, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(decode, "_one_decode_stream", side_effect=lagged),
         ):
-            await probe.probe_decode(
+            await decode.probe_decode(
                 None,
                 "http://e",
                 "stub",
@@ -540,11 +556,11 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence[0]["tokens"], 192)
         calls.clear()
         with (
-            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 100))),
-            patch.object(probe, "_one_decode_stream", side_effect=lagged),
+            patch.object(decode, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(decode, "_one_decode_stream", side_effect=lagged),
             self.assertRaisesRegex(RuntimeError, "insufficient complete-cohort.*tokens=64"),
         ):
-            await probe.probe_decode(
+            await decode.probe_decode(
                 None,
                 "http://e",
                 "stub",
@@ -564,10 +580,10 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with (
-            patch.object(probe, "make_prompt", AsyncMock(return_value=("p", 128))),
-            patch.object(probe, "_one_decode_stream", side_effect=burst),
+            patch.object(decode, "make_prompt", AsyncMock(return_value=("p", 128))),
+            patch.object(decode, "_one_decode_stream", side_effect=burst),
         ):
-            samples = await probe.probe_decode(
+            samples = await decode.probe_decode(
                 None, "http://e", "stub", concurrency=(1,), input_lens=(128,), tokens=4
             )
         self.assertAlmostEqual(samples[0][2], 0.03)
@@ -580,7 +596,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         ]
         evidence = {}
         with patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]):
-            row = await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+            row = await live.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
         self.assertEqual(evidence["prefix_cache_hit_tokens"], 0)
         self.assertEqual((row.decode_min_requests, row.decode_max_requests), (1, 16))
         self.assertEqual((row.decode_min_kv_tokens, row.decode_max_kv_tokens), (100, 10000))
@@ -609,14 +625,14 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             ):
                 if message:
                     with self.assertRaisesRegex(RuntimeError, message):
-                        await probe.profile_instance(
+                        await live.profile_instance(
                             None, "e", "http://e", "stub", evidence=evidence
                         )
                     self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
                     # Cached prefill fails before the decode sweep runs.
-                    probe.probe_decode.assert_not_awaited()
+                    live.probe_decode.assert_not_awaited()
                 else:
-                    await probe.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+                    await live.profile_instance(None, "e", "http://e", "stub", evidence=evidence)
                     self.assertIsNone(evidence["prefix_cache_hit_tokens"])
 
     async def test_cold_probes_salt_every_request(self):
@@ -637,33 +653,35 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        workload = probe.ColocatedWorkload(40.0, 40.0, 4, 4, 3)
+        workload = neighbour.ColocatedWorkload(40.0, 40.0, 4, 4, 3)
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
             with (
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 4))),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=4096)),
+                patch.object(prefill, "make_prompt", AsyncMock(return_value=("prompt", 4))),
+                patch.object(decode, "make_prompt", AsyncMock(return_value=("prompt", 4))),
+                patch.object(neighbour, "make_prompt", AsyncMock(return_value=("prompt", 4))),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=4096)),
                 redirect_stdout(io.StringIO()),
             ):
-                await probe.probe_prefill(client, "http://e", "stub", lens=(4,), repeats=3)
+                await prefill.probe_prefill(client, "http://e", "stub", lens=(4,), repeats=3)
                 state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": 2}
-                await probe.asyncio.gather(
+                await asyncio.gather(
                     *(
-                        probe._one_decode_stream(
+                        decode._one_decode_stream(
                             client, "http://e", "stub", "prompt", 4, state, [], tokens=3
                         )
                         for _ in range(2)
                     )
                 )
-                load = probe.NeighbourLoad(
+                load = neighbour.NeighbourLoad(
                     client,
                     [("p", "http://p", Role.PREFILL)],
                     "stub",
-                    probe.VllmDialect(),
+                    VllmDialect(),
                     3.8,
                     workload,
                 )
                 await load.start()
-                await probe.asyncio.sleep(0.06)
+                await asyncio.sleep(0.06)
                 await load.stop()
         self.assertGreater(len(bodies), 6)
         salts = [body.get("cache_salt") for body in bodies]
@@ -676,11 +694,11 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             with self.assertRaises(FileExistsError):
-                await probe.run(cfg, None)
+                await live.run(cfg, None)
             cfg.profiles_path = Path(folder) / "link.json"
             cfg.profiles_path.symlink_to(Path(folder) / "profiles.json")
             with self.assertRaisesRegex(ValueError, "symlink"):
-                await probe.run(cfg, None, overwrite=True)
+                await live.run(cfg, None, overwrite=True)
 
     async def test_run_writes_profile_and_measurement_sidecar(self):
         """A profiling run writes the selected engine's profile and measurement sidecar."""
@@ -707,19 +725,19 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 return profile(iid)
 
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(
-                    probe,
+                    live,
                     "read_generation",
                     AsyncMock(
                         return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
-                patch.object(probe, "profile_instance", side_effect=measured),
+                patch.object(live, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(await probe.run(cfg, {"e0"}, limits_path=limits_path), 0)
+                self.assertEqual(await live.run(cfg, {"e0"}, limits_path=limits_path), 0)
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), 1)
             self.assertEqual(
                 ProfileStore(cfg.profiles_path).get("e0").generation_digest,
@@ -741,24 +759,25 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request: httpx.Response(200))
             )
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(
-                    probe,
+                    live,
                     "read_generation",
                     AsyncMock(
                         return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
                 patch.object(
-                    probe,
+                    live,
                     "profile_instance",
                     AsyncMock(return_value=replace(profile("e0"), decode_fit_mape=0.5)),
                 ),
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(RuntimeError, "profile rejected"),
             ):
-                await probe.run(cfg, {"e0"})
+                await live.run(cfg, {"e0"})
             self.assertFalse(cfg.profiles_path.exists())
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("profile rejected", saved["engines"]["e0"]["error"])
@@ -770,11 +789,11 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         shared = SharedDeviceAllocation("gpu-0", "uuid", 0.5, 0.1)
         engines[:2] = [replace(spec, shared_device=shared) for spec in engines[:2]]
         lanes = [
-            [spec.iid for spec in lane] for lane in probe._profile_lanes(engines, colocated=False)
+            [spec.iid for spec in lane] for lane in live._profile_lanes(engines, colocated=False)
         ]
         self.assertEqual(lanes[0], [engines[0].iid, engines[1].iid])
         self.assertEqual([len(lane) for lane in lanes[1:]], [1] * (len(engines) - 2))
-        colocated = probe._profile_lanes(engines, colocated=True)
+        colocated = live._profile_lanes(engines, colocated=True)
         self.assertEqual(
             [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
         )
@@ -792,24 +811,24 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
                 active["now"] += 1
                 active["peak"] = max(active["peak"], active["now"])
-                await probe.asyncio.sleep(0.02)
+                await asyncio.sleep(0.02)
                 active["now"] -= 1
                 return profile(iid)
 
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(
-                    probe,
+                    live,
                     "read_generation",
                     AsyncMock(
                         return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
-                patch.object(probe, "profile_instance", side_effect=measured),
+                patch.object(live, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(await probe.run(cfg, None), 0)
+                self.assertEqual(await live.run(cfg, None), 0)
             self.assertEqual(active["peak"], len(cfg.engines))
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), len(cfg.engines))
 
@@ -821,39 +840,43 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             allocation = SharedDeviceAllocation("gpu", "uuid", 0.5, 0.1)
             cfg.engines = [replace(spec, shared_device=allocation) for spec in cfg.engines]
             cfg.engines.append(replace(cfg.engines[1], iid="e4", url="http://stalled"))
-            completed = probe.asyncio.Event()
+            completed = asyncio.Event()
 
             async def answer(request):
                 if request.url.path == "/health":
                     return httpx.Response(200)
                 if request.url.host == "stalled":
-                    await probe.asyncio.Event().wait()
+                    await asyncio.Event().wait()
                 completed.set()
                 return httpx.Response(200, json={"usage": {"completion_tokens": 8}})
 
             async def measured(*args, **kwargs):
                 completed.clear()
-                await probe.asyncio.wait_for(completed.wait(), timeout=1)
+                await asyncio.wait_for(completed.wait(), timeout=1)
                 return profile("e0")
 
             client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "make_prompt", AsyncMock(return_value=("prompt", 32))),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(prefill, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(decode, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(warm, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(neighbour, "make_prompt", AsyncMock(return_value=("prompt", 32))),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(neighbour, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(
-                    probe,
+                    live,
                     "read_generation",
                     AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {}, 100.0)),
                 ),
-                patch.object(probe, "profile_instance", side_effect=measured),
+                patch.object(live, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(RuntimeError, "e4: completed 0 requests"),
             ):
-                await probe.run(
+                await live.run(
                     cfg,
                     {"e0"},
-                    colocated_workload=probe.ColocatedWorkload(100, 100, 32, 32, 8),
+                    colocated_workload=neighbour.ColocatedWorkload(100, 100, 32, 32, 8),
                 )
             self.assertFalse(cfg.profiles_path.exists())
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
@@ -874,22 +897,22 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request: httpx.Response(200))
             )
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
                 patch.object(
-                    probe,
+                    live,
                     "read_generation",
                     AsyncMock(
                         return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
-                patch.object(probe, "probe_prefill", AsyncMock(return_value=bad)),
-                patch.object(probe, "probe_decode", AsyncMock()) as decode,
+                patch.object(live, "probe_prefill", AsyncMock(return_value=bad)),
+                patch.object(live, "probe_decode", AsyncMock()) as decode_probe,
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(ValueError, "prefill median fit error"),
             ):
-                await probe.run(cfg, {"e0"})
-            decode.assert_not_awaited()
+                await live.run(cfg, {"e0"})
+            decode_probe.assert_not_awaited()
             self.assertFalse(cfg.profiles_path.exists())
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertEqual(saved["engines"]["e0"]["prefill"], [list(row) for row in bad])
@@ -907,16 +930,16 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 GenerationEvidence("sha256:" + "b" * 64, {"engine": {"start": 101}}, 101.0),
             )
             with (
-                patch.object(probe.httpx, "AsyncClient", return_value=client),
-                patch.object(probe, "engine_context_limit", AsyncMock(return_value=16384)),
-                patch.object(probe, "profile_instance", AsyncMock(return_value=profile("e0"))),
-                patch.object(probe, "read_generation", AsyncMock(side_effect=generations)),
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(live, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(live, "profile_instance", AsyncMock(return_value=profile("e0"))),
+                patch.object(live, "read_generation", AsyncMock(side_effect=generations)),
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(
                     ValueError, "e0: engine generation changed during profiling"
                 ),
             ):
-                await probe.run(cfg, {"e0"})
+                await live.run(cfg, {"e0"})
             self.assertFalse(cfg.profiles_path.exists())
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("generation changed", saved["engines"]["e0"]["error"])
@@ -952,7 +975,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             source.write_text(json.dumps(original))
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(
-                    probe.main(
+                    cli.main(
                         [
                             "--fleet",
                             str(fleet_path),
@@ -973,7 +996,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sidecar["engines"]["e3"]["prefill"], raw)
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
             with self.assertRaises(FileExistsError):
-                probe.refit_saved_prefill(source, output, {"e0", "e3"})
+                offline.refit_saved_prefill(source, output, {"e0", "e3"})
 
             legacy = root / "legacy.samples.json"
             legacy_record = json.loads(source.read_text())
@@ -982,17 +1005,17 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 row.pop("generation_evidence")
             legacy.write_text(json.dumps(legacy_record))
             with self.assertRaisesRegex(ValueError, "e0: saved samples lack generation evidence"):
-                probe.refit_saved_prefill(legacy, root / "legacy-refit.json", {"e0", "e3"})
+                offline.refit_saved_prefill(legacy, root / "legacy-refit.json", {"e0", "e3"})
 
     def test_kv_capacity_uses_the_smallest_reported_rank(self):
         """The physical bound follows the smallest rank capacity."""
         self.assertEqual(
-            probe.parse_kv_capacity(
+            engine_io.parse_kv_capacity(
                 'x{kv_cache_size_tokens="1000"} 1\nx{kv_cache_size_tokens="900.0"} 1'
             ),
             900,
         )
-        self.assertIsNone(probe.parse_kv_capacity(""))
+        self.assertIsNone(engine_io.parse_kv_capacity(""))
 
     def test_prefix_cache_hits_sum_engine_counters(self):
         """Hit tokens sum across engine label sets and ignore creation timestamps."""
@@ -1002,5 +1025,5 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             'vllm:prefix_cache_hits_total{engine="1",model_name="m"} 30.0\n'
             'vllm:prefix_cache_queries_total{engine="0",model_name="m"} 99.0\n'
         )
-        self.assertEqual(probe.parse_prefix_cache_hits(metrics), 42)
-        self.assertIsNone(probe.parse_prefix_cache_hits("vllm:num_requests_running 0\n"))
+        self.assertEqual(engine_io.parse_prefix_cache_hits(metrics), 42)
+        self.assertIsNone(engine_io.parse_prefix_cache_hits("vllm:num_requests_running 0\n"))

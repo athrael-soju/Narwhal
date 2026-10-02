@@ -1,10 +1,13 @@
 """Keep local lifecycle ownership and readiness tied to the selected instance."""
 
+import ast
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -20,7 +23,7 @@ from narwhal.config import FleetConfig
 from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
-from narwhal.profiling.probe import Sweep, bounded_sweep
+from narwhal.profiling.sweep import Sweep, bounded_sweep
 
 from .fixtures import process_group_with_worker
 
@@ -226,6 +229,25 @@ class DevTests(unittest.TestCase):
                         self.spec,
                         {"run": str(run), "processes": []},
                     )
+
+    def test_up_runs_only_modules_that_start(self):
+        tree = ast.parse(Path(lifecycle.__file__).read_text())
+        modules = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and re.fullmatch(r"narwhal(\.[a-z_]+)+", node.value)
+        }
+        self.assertIn("narwhal.profiling.cli", modules)
+        for module in sorted(modules):
+            with self.subTest(module=module):
+                self.assertIsNotNone(importlib.util.find_spec(module))
+                result = subprocess.run(
+                    [sys.executable, "-m", module, "--help"], capture_output=True, text=True
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("usage:", result.stdout)
 
     def test_four_engine_profiles_cover_both_adjacent_splits(self):
         self.initialize()

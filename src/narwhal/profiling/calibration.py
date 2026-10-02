@@ -24,8 +24,9 @@ from ..engines.dialect import EngineDialect
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
+from .engine_io import engine_context_limit, make_prompt
 from .generation import read_generation
-from .probe import device_key, engine_context_limit, make_prompt
+from .live import device_key
 
 SCHEMA = "narwhal.first-token-calibration"
 RECALIBRATE = "recalibrate with narwhal-check --calibrate-first-token"

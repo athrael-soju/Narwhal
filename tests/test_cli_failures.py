@@ -15,7 +15,7 @@ from narwhal import cli
 from narwhal.deployment import launch_engine
 from narwhal.diagnostics import check
 from narwhal.engines import attestation
-from narwhal.profiling import probe
+from narwhal.profiling import cli as profile_cli
 
 
 class CliFailureTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class CliFailureTests(unittest.TestCase):
             for command, invoke in (
                 ("narwhal-serve", cli.serve),
                 ("narwhal-check", check.main),
-                ("narwhal-profile", probe.main),
+                ("narwhal-profile", profile_cli.main),
             ):
                 for path in paths:
                     with (
@@ -60,7 +60,10 @@ class CliFailureTests(unittest.TestCase):
     def test_http_failures_report_the_request_and_operation(self):
         request = httpx.Request("GET", "http://127.0.0.1:1/health")
         error = httpx.ConnectError("connection refused", request=request)
-        for command, module in (("narwhal-check", check), ("narwhal-profile", probe)):
+        for command, module, runner in (
+            ("narwhal-check", check, check),
+            ("narwhal-profile", profile_cli, profile_cli),
+        ):
             with (
                 tempfile.TemporaryDirectory() as folder,
                 self.subTest(command=command),
@@ -69,7 +72,7 @@ class CliFailureTests(unittest.TestCase):
                     "load",
                     return_value=SimpleNamespace(profiles_path=Path(folder) / "profiles.json"),
                 ),
-                patch.object(module, "run", AsyncMock(side_effect=error)),
+                patch.object(runner, "run", AsyncMock(side_effect=error)),
                 contextlib.redirect_stderr(io.StringIO()) as stderr,
             ):
                 self.assertEqual(module.main(["--fleet", "fixture.json"]), 1)
