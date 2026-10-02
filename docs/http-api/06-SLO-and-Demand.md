@@ -31,6 +31,27 @@ One demand window is `controller.reactive.window_s` seconds long.
 - `pending`: request bodies being read.
 - `observations`: retained offers that terminated before workload sizing.
 
+### Pricing offers
+
+Demand prices each sized offer from the prefill fit. A prompt above a profile's measured prefill range takes the extrapolated fit, the same price admission uses. Decision records count these offers in `extrapolated_arrivals`.
+
+Unsized offers take the window's mean sized price. Demand scales sized prefill work and requested decode work by this ratio:
+
+```text
+(sized offers + retained unsized offers + pending bodies) / sized offers
+```
+
+Decision records count retained unsized offers and pending bodies in `unsized_offers`.
+
+### Incomplete demand
+
+Demand is incomplete when either condition holds:
+
+- the window holds unsized offers and zero sized offers
+- a requested decode shape has zero expected output or zero measured decode capacity
+
+With incomplete demand, the controller acts on the observed phase ratios and the [prefill](#prefill-recovery-ratio) and [decode](#decode-recovery-ratio) recovery ratios.
+
 ### Input-size repricing
 
 Demand history records a parsed offer at entry with its local input-size estimate. When the offer is tokenized after admission, demand history records the tokenization result at the original arrival timestamp. An offer rejected before tokenization keeps the local input-size estimate.

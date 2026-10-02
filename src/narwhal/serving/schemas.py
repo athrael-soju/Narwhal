@@ -242,6 +242,8 @@ class ControllerDecisionOut(BaseModel):
     arrivals: int | None = None
     output_observations: int | None = None
     demand_complete: bool | None = None
+    extrapolated_arrivals: int | None = None
+    unsized_offers: int | None = None
     decision_basis: str | None = None
     observed_prefill_ratio: float | None = None
     recovery_prefill_ratio: float | None = None

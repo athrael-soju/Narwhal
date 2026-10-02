@@ -112,12 +112,12 @@ class ReactivePolicy:
         estimates = controller.demand.refresh_output_estimates()
         correction = controller.demand._decode_correction()
         prefill, decode = controller._demand(now, estimates=estimates, correction=correction)
-        demand = Demand(
-            prefill,
-            decode,
-            controller.demand.arrival_count(),
-            controller.demand.observed_decode.count(),
-            controller.last_demand.complete,
+        demand = replace(
+            controller.last_demand,
+            prefill_engines=prefill,
+            decode_engines=decode,
+            arrivals=controller.demand.arrival_count(),
+            output_observations=controller.demand.observed_decode.count(),
         )
         controller.last_demand = demand
         snapshot = controller.scorer.capture(
@@ -161,6 +161,8 @@ class ReactivePolicy:
                 "arrivals": demand.arrivals,
                 "output_observations": demand.output_observations,
                 "demand_complete": demand.complete,
+                "extrapolated_arrivals": demand.extrapolated,
+                "unsized_offers": demand.unsized,
                 "observed_prefill_ratio": rounded(observed_prefill),
                 "recovery_prefill_ratio": rounded(recovery_prefill),
                 "queued_prefill_s": rounded(snapshot.queued_prefill_s),
@@ -194,13 +196,7 @@ class ReactivePolicy:
 
         # D-to-P candidates price decode at the larger of the short-horizon and window estimates.
         evidence = controller.safety.capture(now, estimates=estimates, correction=correction)
-        envelope_demand = Demand(
-            demand.prefill_engines,
-            evidence.envelope_decode_engines,
-            demand.arrivals,
-            demand.output_observations,
-            demand.complete,
-        )
+        envelope_demand = replace(demand, decode_engines=evidence.envelope_decode_engines)
         th = controller.scheduler.th
         # The confirmation span; steady load prices both phases alike over it and the window.
         confirmation_s = controller.step_s * max(
@@ -577,12 +573,11 @@ class ReactivePolicy:
             correction=correction,
             resident_s=controller.step_s,
         )
-        demand = Demand(
-            prefill,
-            decode,
-            arrivals,
-            controller.last_demand.output_observations,
-            controller.last_demand.complete,
+        demand = replace(
+            controller.last_demand,
+            prefill_engines=prefill,
+            decode_engines=decode,
+            arrivals=arrivals,
         )
         snapshot = controller.scorer.capture(
             now,

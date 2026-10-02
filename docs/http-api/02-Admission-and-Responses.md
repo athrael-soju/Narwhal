@@ -8,6 +8,8 @@ description: TTFT-based admission, streaming and token accounting for Narwhal co
 
 The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_margin)`.
 
+Admission prices a prompt above an engine's measured prefill range on that engine's extrapolated prefill fit.
+
 | Condition                                                                                                                    |  HTTP | Error `type`                                         | `Retry-After`                                      |
 | ---------------------------------------------------------------------------------------------------------------------------- | :---: | ---------------------------------------------------- | -------------------------------------------------- |
 | Malformed JSON or a wrong type in a field the router reads                                                                   | `400` | `invalid_request_error` with the field in `param`    |                                                    |

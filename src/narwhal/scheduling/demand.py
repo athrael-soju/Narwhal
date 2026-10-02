@@ -28,6 +28,10 @@ class Demand:
     arrivals: int
     output_observations: int
     complete: bool = True
+    # Sized offers priced past a profile's measured prefill range.
+    extrapolated: int = 0
+    # Unsized offers priced at the window's sized mean.
+    unsized: int = 0
 
 
 @dataclass(frozen=True)
@@ -248,24 +252,28 @@ class DemandModel:
     ) -> Demand:
         """Price one window against a particular measured role-mix profile set.
 
-        Cached arrivals take warm prices from engines in `prefill_iids`, or every engine.
+        Cached arrivals take warm prices from engines in `prefill_iids`, or every engine. Unsized
+        offers scale sized prefill and requested decode work by total offers over sized offers.
         """
         window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
         h0 = now - window
         prefill = 0.0
-        demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
-        # Price per arrival shape; None marks a length outside a profile's domain.
-        prices: dict[tuple[int, tuple[tuple[str, int], ...]], float | None] = {}
+        sized = self.arrivals.count(h0)
+        unsized = self.unsized.count(h0) + self.unsized_pending
+        demand_complete = bool(profiles) and (sized > 0 or unsized == 0)
+        scale = (sized + unsized) / sized if sized else 1.0
+        extrapolated = 0
+        prices: dict[tuple[int, tuple[tuple[str, int], ...]], float] = {}
         for row in self.arrivals.rows(h0):
+            if not profiles:
+                break
             shape = (row.value.input_len, row.value.cached)
             if shape not in prices:
                 prices[shape] = self._arrival_price(profiles, *shape, prefill_iids)
-            cost = prices[shape]
-            if cost is None:
-                demand_complete = False
-            else:
-                prefill += cost * row.count / span
+            if not all(p.covers_prefill(row.value.input_len) for p in profiles):
+                extrapolated += row.count
+            prefill += prices[shape] * row.count / span
         expected_decode = 0.0
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
@@ -309,14 +317,16 @@ class DemandModel:
                 continue
             expected_decode += expected_row.count / (span * capacity)
         return Demand(
-            prefill_engines=prefill,
+            prefill_engines=prefill * scale,
             decode_engines=max(
                 self.resident_demand(now, window_s if resident_s is None else resident_s),
-                expected_decode,
+                expected_decode * scale,
             ),
             arrivals=self.arrival_count(now - window_s),
             output_observations=self.observed_decode.count(now - 4 * window_s),
             complete=demand_complete,
+            extrapolated=extrapolated,
+            unsized=unsized,
         )
 
     def _shape_capacity(
@@ -343,10 +353,8 @@ class DemandModel:
         length: int,
         cached: tuple[tuple[str, int], ...],
         prefill_iids: Collection[str] | None,
-    ) -> float | None:
+    ) -> float:
         """Return the mean cold prefill price, or the cheapest warm price, for one arrival."""
-        if not profiles or not all(p.covers_prefill(length) for p in profiles):
-            return None
         cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
         tokens = dict(cached)
         warm = (

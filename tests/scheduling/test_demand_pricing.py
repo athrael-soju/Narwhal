@@ -27,10 +27,16 @@ def reference_price_profiles(
     span = min(window, max(step_s, now - model.started_at))
     h0 = now - window
     prefill = 0.0
-    complete = bool(profiles) and not model.unsized_pending and not model.unsized.count(h0)
+    sized = model.arrivals.count(h0)
+    unsized = model.unsized.count(h0) + model.unsized_pending
+    complete = bool(profiles) and (sized > 0 or unsized == 0)
+    scale = (sized + unsized) / sized if sized else 1.0
+    extrapolated = 0
     for row in model.arrivals.rows(h0):
         length = row.value.input_len
-        if profiles and all(p.covers_prefill(length) for p in profiles):
+        if profiles:
+            if not all(p.covers_prefill(length) for p in profiles):
+                extrapolated += row.count
             cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
             cached = dict(row.value.cached)
             for p in profiles:
@@ -41,8 +47,6 @@ def reference_price_profiles(
                 if warm_s is not None:
                     cost = min(cost, warm_s)
             prefill += cost * row.count / span
-        else:
-            complete = False
     expected_decode = 0.0
     estimates = model._output_estimates() if estimates is None else estimates
     correction = model._decode_correction() if correction is None else correction
@@ -76,11 +80,13 @@ def reference_price_profiles(
             continue
         expected_decode += row.count / (span * capacity)
     return Demand(
-        prefill_engines=prefill,
-        decode_engines=max(model.resident_demand(now, window_s), expected_decode),
+        prefill_engines=prefill * scale,
+        decode_engines=max(model.resident_demand(now, window_s), expected_decode * scale),
         arrivals=model.arrival_count(now - window_s),
         output_observations=model.observed_decode.count(now - 4 * window_s),
         complete=complete,
+        extrapolated=extrapolated,
+        unsized=unsized,
     )
 
 
@@ -143,6 +149,55 @@ class WindowPricingTests(unittest.TestCase):
         self.assertTrue(priced.complete)
         self.assertGreater(priced.decode_engines, 0.0)
         self.assertEqual(priced, reference_price_profiles(demand, now, **kwargs))
+
+    def model(self):
+        scheduler = self.router.scheduler
+        return type(self.router.controller.demand)(
+            scheduler.monitor, scheduler, self.router._clock, window_s=60.0, bucket_s=1.0
+        )
+
+    def test_prompts_past_the_prefill_range_price_on_the_extrapolated_fit(self):
+        scheduler = self.router.scheduler
+        profiles = tuple(
+            profile(iid, prefill_max_tokens=1000) for iid in scheduler.monitor.instances
+        )
+        demand = self.model()
+        now = self.router._clock()
+        for _ in range(3):
+            demand.saw_arrival(5000, wanted_len=16, at=now)
+        priced = demand.price_profiles(now, window_s=60.0, step_s=1.0, profiles=profiles)
+        cold = sum(p.prefill_time(5000) for p in profiles) / len(profiles)
+        self.assertTrue(priced.complete)
+        self.assertEqual(priced.extrapolated, 3)
+        span = min(60.0, max(1.0, now - demand.started_at))
+        self.assertAlmostEqual(priced.prefill_engines, 3 * cold / span)
+
+    def test_unsized_offers_take_the_sized_mean(self):
+        scheduler = self.router.scheduler
+        profiles = tuple(profile(iid) for iid in scheduler.monitor.instances)
+        demand = self.model()
+        now = self.router._clock()
+        for _ in range(4):
+            demand.saw_arrival(512, wanted_len=64, at=now)
+        sized = demand.price_profiles(now, window_s=60.0, step_s=1.0, profiles=profiles)
+        demand.unsized_pending += 2
+        demand.resolve_unsized(at=now, retain=True)
+        priced = demand.price_profiles(now, window_s=60.0, step_s=1.0, profiles=profiles)
+        self.assertTrue(priced.complete)
+        self.assertEqual(priced.unsized, 2)
+        self.assertAlmostEqual(priced.prefill_engines, sized.prefill_engines * 6 / 4)
+        self.assertAlmostEqual(priced.decode_engines, sized.decode_engines * 6 / 4)
+
+    def test_unsized_offers_without_sized_offers_leave_demand_incomplete(self):
+        scheduler = self.router.scheduler
+        profiles = tuple(profile(iid) for iid in scheduler.monitor.instances)
+        demand = self.model()
+        now = self.router._clock()
+        demand.unsized_pending += 1
+        demand.resolve_unsized(at=now, retain=True)
+        priced = demand.price_profiles(now, window_s=60.0, step_s=1.0, profiles=profiles)
+        self.assertFalse(priced.complete)
+        self.assertEqual(priced.unsized, 1)
 
     def test_merged_overflow_arrivals_price_cold(self):
         scheduler = self.router.scheduler

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
@@ -98,7 +98,6 @@ class SplitSnapshot:
     active_decode_instances: int = 0
     profile_options: tuple[tuple[int, tuple[Profile, ...]], ...] = ()
     demand_options: tuple[tuple[int, Demand], ...] = ()
-    offered_inputs: tuple[int, ...] = ()
     offered_outputs: tuple[int, ...] = ()
     decode_concurrency: int = 0
     waiting_decode_requests: int = 0
@@ -147,12 +146,12 @@ class SplitSnapshot:
         elif priced is not None and prefill != self.current_prefill:
             # An explicit decode envelope remains a floor, while the candidate
             # role mix supplies the phase costs and measured-domain verdict.
-            demand = Demand(
-                priced.prefill_engines,
-                max(priced.decode_engines, demand.decode_engines),
-                demand.arrivals,
-                demand.output_observations,
-                priced.complete and demand.complete,
+            demand = replace(
+                demand,
+                prefill_engines=priced.prefill_engines,
+                decode_engines=max(priced.decode_engines, demand.decode_engines),
+                complete=priced.complete and demand.complete,
+                extrapolated=priced.extrapolated,
             )
         if prefill <= 0 or decode <= 0:
             return SplitScore(prefill, decode, float("inf"), float("inf"), float("inf"))
@@ -193,7 +192,6 @@ class SplitSnapshot:
                         correction=correction,
                         request_cap=self.decode_concurrency,
                     )
-                    and p.covers_prefill(input_len)
                     and p.covers_decode(1, context)
                     for p in profiles
                 ):
@@ -220,11 +218,6 @@ class SplitSnapshot:
         covered = not include_resident or (
             bool(profiles)
             and pending_covered
-            and all(
-                profile.covers_prefill(length)
-                for profile in profiles
-                for length in self.offered_inputs
-            )
             and all(
                 profile.covers_output(length)
                 for profile in profiles
@@ -457,9 +450,6 @@ class SplitScorer:
             )
             resident_prefill += queued_prefill
         pending = [r for inst in instances for r in inst.prefill.values()] + list(waiting)
-        prefill_covered = all(
-            profile.covers_prefill(request.input_len) for request in pending for profile in profiles
-        )
         estimates = self.demand._output_estimates() if estimates is None else estimates
         pending_shapes = tuple(
             (r.input_len, self.demand._expected_output(r.input_len, r.wanted_len, estimates))
@@ -514,7 +504,7 @@ class SplitScorer:
             current_prefill=sum(inst.role is Role.PREFILL for inst in instances),
             current_decode=sum(inst.role is Role.DECODE for inst in instances),
             profiles=profiles,
-            profiles_complete=len(profiles) == len(instances) and prefill_covered,
+            profiles_complete=len(profiles) == len(instances),
             ttft_slo=self.scheduler.slo.ttft_s,
             tpot_slo=self.scheduler.slo.tpot_s,
             utilization=utilization,
@@ -542,12 +532,6 @@ class SplitScorer:
             active_decode_instances=sum(bool(inst.decode) for inst in instances),
             profile_options=profile_options,
             demand_options=demand_options,
-            offered_inputs=tuple(
-                row.value.input_len
-                for row in self.demand.arrivals.rows(
-                    now - (window_s if window_s is not None else 0.0)
-                )
-            ),
             offered_outputs=tuple(
                 (
                     row.value[1]
@@ -604,4 +588,6 @@ def decision_details(
         "arrivals": demand.arrivals,
         "output_observations": demand.output_observations,
         "demand_complete": demand.complete,
+        "extrapolated_arrivals": demand.extrapolated,
+        "unsized_offers": demand.unsized,
     }

@@ -227,7 +227,7 @@ class MixedPressureTests(unittest.TestCase):
             snapshot.score(2).ttft_ratio,
             snapshot.score(1).ttft_ratio,
         )
-        too_narrow = replace(
+        narrow_prefill = replace(
             snapshot,
             profile_options=(
                 (
@@ -237,9 +237,8 @@ class MixedPressureTests(unittest.TestCase):
                     ),
                 ),
             ),
-            offered_inputs=(100,),
         )
-        self.assertFalse(too_narrow.score(2).decode_profile_covered)
+        self.assertTrue(narrow_prefill.score(2).decode_profile_covered)
 
     def test_donor_selection_requires_the_measured_destination_roles(self) -> None:
         fleet = self.fleet
@@ -315,7 +314,7 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(fleet.scheduler.flips, [])
 
-    def test_candidate_checks_inflight_prefill_domain(self) -> None:
+    def test_candidate_checks_inflight_decode_domain(self) -> None:
         fleet = self.fleet
         self._colocated_candidate()
         fleet.monitor.dispatched("e0", Request("pending", 100, wanted_len=10))
@@ -325,12 +324,11 @@ class MixedPressureTests(unittest.TestCase):
             utilization=0.8,
             observed_load=(0.0, 0.0),
         )
-        self.assertEqual(snapshot.offered_inputs, ())
         self.assertEqual(snapshot.offered_outputs, ())
         candidates = dict(snapshot.profile_options)[2]
         for bounds, covered in (
             ({"decode_max_kv_tokens": 50}, False),
-            ({"prefill_max_tokens": 50}, False),
+            ({"prefill_max_tokens": 50}, True),
             ({"decode_min_kv_tokens": 200, "prefill_min_tokens": 200}, True),
         ):
             with self.subTest(bounds=bounds):
@@ -365,7 +363,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_incomplete_demand_requires_observed_pressure(self) -> None:
         fleet = self.fleet
-        fleet.controller.demand.unsized_pending = 1
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         fleet.pressure = {Role.PREFILL: 0.9, Role.DECODE: 0.9}
         self.assertIsNone(fleet.confirm())
         self.assertIn("incomplete demand requires", fleet.scheduler._last_decision["reason"])
@@ -375,6 +373,26 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(
             fleet.scheduler._last_decision["decision_basis"], "prefill_pressure_recovery"
         )
+
+    def test_prompts_past_the_prefill_range_and_unsized_offers_keep_demand_priced(self) -> None:
+        fleet = self.fleet
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), prefill_max_tokens=1000))
+        fleet.pressure = {Role.PREFILL: 0.8, Role.DECODE: 0.1}
+        demand = fleet.controller.demand
+        for second in range(60):
+            for _ in range(20):
+                fleet.controller.saw_arrival(2000, wanted_len=10, at=fleet.now - second)
+        demand.unsized_pending += 5
+        for _ in range(5):
+            demand.resolve_unsized(at=fleet.now, retain=True)
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler._last_decision
+        self.assertTrue(decision["demand_complete"])
+        self.assertEqual(decision["decision_basis"], "demand_projection")
+        self.assertGreater(decision["extrapolated_arrivals"], 0)
+        self.assertEqual(decision["unsized_offers"], 5)
+        self.assertGreaterEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
 
     def test_demand_prices_outputs_past_the_profiled_decode_length(self) -> None:
         fleet = self.fleet
@@ -458,7 +476,7 @@ class MixedPressureTests(unittest.TestCase):
         for iid in ("e1", "e2"):
             fleet.monitor.instances[iid].role = Role.PREFILL
         fleet.scheduler.decode_concurrency = 2
-        fleet.controller.demand.unsized_pending = 1
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         fleet.pressure = {Role.PREFILL: 0.1, Role.DECODE: 0.1}
         for iid in ("e3", "e4", "e5"):
             for index in range(2):
@@ -506,7 +524,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def queued_prefill(self) -> None:
         fleet = self.fleet
-        fleet.controller.demand.unsized_pending = 1
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         for index in range(4):
             fleet.monitor.dispatched("e0", Request(f"active{index}", 100, wanted_len=10))
         for index in range(20):
