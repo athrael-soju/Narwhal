@@ -91,15 +91,15 @@ Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-th
 
 | Term | Rule |
 | --- | --- |
-| Group | One role-permitted directed pair at one input length, measured `--samples` times |
+| Group | One role-permitted directed pair at one input length, with `--samples` attempts |
 | Sweep `k` | Attempt `k` of every group |
 | Device slot | The engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#21-shared-device-allocation), otherwise the engine |
 | Round | A set of pairs in which each device slot produces at most once and consumes at most once |
 | Round count | The largest number of pairs that one device slot produces or consumes |
-| Sweep 1 | Each group runs alone, ordered by producer ID, then input length in `--input-tokens` order, then pair |
+| Sweep 1 | Each group runs alone in order of producer ID, then input length in `--input-tokens` order, then pair |
 | Sweeps 2 to `--samples` | Each round runs as one lockstep step per input length, in `--input-tokens` order |
 
-A fleet of `n` engines in separate device slots, with every directed pair permitted, takes `n - 1` rounds per input length.
+When `n` engines use separate device slots and the fleet permits every directed pair, the schedule has `n - 1` rounds per input length.
 
 A lockstep step runs two phases across every pair in its round:
 
@@ -116,13 +116,13 @@ These timers bound each attempt:
 | --- | --- |
 | Prompt sizing | `--observation-timeout-s` |
 | Decode start to first output | `--observation-timeout-s` |
-| The attempt's sizing, prefill, and decode | `serving.request_timeout_s`, with the clock paused between the phases |
+| The sum of the attempt's sizing, prefill, and decode times | `serving.request_timeout_s` |
 
 Each calibration handoff forces four output tokens, capped by the producer's and consumer's live context limits. A handoff at a `max_model_len - 1` target gets one output token. A sample succeeds when it produces a token and a valid stream end.
 
 ### Calibration artifact
 
-The `--calibration-out` file holds these fields:
+The artifact at `--calibration-out` holds these fields:
 
 | Field | Contents |
 | --- | --- |
@@ -130,21 +130,24 @@ The `--calibration-out` file holds these fields:
 | `captured_at_unix` | Unix time of the write |
 | `duration_s` | Seconds from the first engine read to the write |
 | `generations` | Each engine's process generation digest |
-| `process_starts` | Each engine's process start time, read with its process generation at the start of the run |
+| `process_starts` | The process start time that `narwhal-check` reads from each engine with its process generation at the start of the run |
 | `samples_per_group` | The `--samples` value |
 | `groups` | Completed and failed counts, p99, maximum, and candidate deadline for each group |
 | `attempts` | The raw attempts |
 | `attempts[].attempt` | Sweep number, from 1 to `samples_per_group` |
 | `attempts[].round` | `null` in sweep 1, otherwise the round number within the input length, from 1 |
-| `candidate_deadline_s` | The largest group candidate deadline |
+| `candidate_deadline_s` | The largest candidate deadline of all groups |
 
 `groups` follow the sweep 1 order.
 
-`attempts` follow the same group order, then `attempt`.
+`attempts` follow the same group order, then ascending `attempt` order.
 
 The artifact is valid evidence when all of these hold:
 
-- the artifact records `captured_at_unix`, `duration_s`, a `process_starts` time for every engine, and a `round` for every attempt
+- the artifact records `captured_at_unix`
+- the artifact records `duration_s`
+- `process_starts` holds a time for every engine
+- every attempt has a `round`
 - every group has at least 100 completed attempts
 - the attempt numbers are distinct
 - the attempt numbers cover the configured sample count
@@ -186,17 +189,17 @@ The gate reports one of these statuses:
 | `uncalibrated` | `engine.first_token_calibration_path` is empty | `WARN` |
 | `rejected` | The artifact fails validation, or an engine's process generation differs or is unreadable | One `FAIL` per problem |
 | `measured` | Every engine is `measured` | `ok` |
-| `reused` | One or more engines are `reused` | `ok`, naming the reused engines |
+| `reused` | One or more engines are `reused` | `ok` with the IDs of the reused engines |
 
 In JSON mode, `data.first_token_calibration` holds:
 
 | Field | Value |
 | --- | --- |
 | `status` | `uncalibrated`, `rejected`, `measured`, or `reused` |
-| `path` | `engine.first_token_calibration_path`, or `null` when empty |
-| `captured_at_unix` | The artifact's capture time when `measured` or `reused`, otherwise `null` |
-| `candidate_deadline_s` | The artifact's candidate deadline when `measured` or `reused`, otherwise `null` |
-| `engines` | The label of each engine when `measured` or `reused`, otherwise `{}` |
+| `path` | `engine.first_token_calibration_path`, or `null` when the path is empty |
+| `captured_at_unix` | The artifact's capture time when `status` is `measured` or `reused`, otherwise `null` |
+| `candidate_deadline_s` | The artifact's candidate deadline when `status` is `measured` or `reused`, otherwise `null` |
+| `engines` | The label of each engine when `status` is `measured` or `reused`, otherwise `{}` |
 
 ## The `slo` gate
 

@@ -86,7 +86,7 @@ The command exits 0 with artifact status `complete` when the artifact holds at l
 
 Only `completed` timings enter the candidate calculation.
 
-For four engines in separate device slots, the command prints the schedule, each group's result, the candidate deadline, and the run duration:
+For four engines in separate device slots, the command prints:
 
 ```text
 calibration groups: 36; concurrent rounds per input length: 3; sweep 1 runs each group alone
@@ -103,7 +103,7 @@ Diagnose the failed transfers and observation expiries before using the candidat
 
 The deadline, the measured prefill, and the router overhead must fit the client time to first token (TTFT) requirement.
 
-Preflight and router startup label an engine relaunched with the same process generation `reused`.
+If an engine relaunched with the same process generation, preflight and router startup label the engine `reused`.
 
 Repeat the calibration when the model, process generation, transport, or served context changes:
 
@@ -123,36 +123,38 @@ With the engines otherwise idle, run the preflight from the router shell:
 
 The full preflight runs these gates:
 
-| Gate          | What must pass                                                                                                                                      |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reach`       | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                         |
-| `calibration` | The configured first-token calibration is valid, matches every running process generation, and has a candidate below `engine.first_token_timeout_s` |
-| `contract`    | Attestation matches the current process and declared runtime                                                                                        |
-| `profile`     | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy    |
-| `model`       | Every engine serves the configured model                                                                                                            |
-| `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                   |
-| `tokenize`    | Exact input sizing succeeds when `engine.tokenize` is on                                                                                            |
-| `produce`     | Every tested producer can export a KV handoff                                                                                                       |
-| `consume`     | Every tested peer can consume that KV handoff                                                                                                       |
-| `slo`         | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                     |
+| Gate          | What must pass                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reach`       | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                                  |
+| `calibration` | The configured first-token calibration is valid, matches every running process generation, and has a candidate deadline below `engine.first_token_timeout_s` |
+| `contract`    | Attestation matches the current process and declared runtime                                                                                                 |
+| `profile`     | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy             |
+| `model`       | Every engine serves the configured model                                                                                                                     |
+| `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
+| `tokenize`    | Exact input sizing succeeds when `engine.tokenize` is on                                                                                                     |
+| `produce`     | Every tested producer can export a KV handoff                                                                                                                |
+| `consume`     | Every tested peer can consume that KV handoff                                                                                                                |
+| `slo`         | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                              |
 
 Preflight and router startup report the first-token calibration:
 
-| Calibration                                                                                                         | Preflight          | Router startup         |
-| ------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------------- |
-| `engine.first_token_calibration_path` empty                                                                         | `WARN`             | Logs a warning         |
-| The artifact fails validation, an engine's process generation differs, or the deadline is at or below the candidate | `FAIL`             | Stops                  |
-| Every engine runs the measured process                                                                              | `ok` measured line | Logs the measured line |
-| One or more engines run a relaunched process with the same process generation                                       | `ok` reused line   | Logs the reused line   |
+| Calibration                                                                   | Preflight          | Router startup         |
+| ----------------------------------------------------------------------------- | ------------------ | ---------------------- |
+| `engine.first_token_calibration_path` is empty                                | `WARN`             | Logs a warning         |
+| The artifact fails validation                                                 | `FAIL`             | Stops                  |
+| An engine's process generation differs from the artifact                      | `FAIL`             | Stops                  |
+| `engine.first_token_timeout_s` is at or below the candidate deadline          | `FAIL`             | Stops                  |
+| Every engine runs the measured process                                        | `ok` measured line | Logs the measured line |
+| One or more engines run a relaunched process with the same process generation | `ok` reused line   | Logs the reused line   |
 
-A fleet running the measured processes prints:
+For a fleet that runs the measured processes, preflight prints:
 
 ```text
 calibration
   ok    first-token calibration measured on the running engines: candidate 1.840s, deadline 2.5s
 ```
 
-A fleet with relaunched engines `e1` and `e3` prints:
+For a fleet with relaunched engines `e1` and `e3`, preflight prints:
 
 ```text
 calibration

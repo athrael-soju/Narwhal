@@ -39,7 +39,7 @@ The state document carries these top-level fields:
 | `thresholds`              | Active reactive-controller thresholds                                                 |
 | `slo`                     | Time to first token (TTFT) and time per output token (TPOT) targets                   |
 | `first_token_timeout_s`   | Decode first-token deadline                                                           |
-| `first_token_calibration` | First-token calibration verified at router startup, with a label for each engine      |
+| `first_token_calibration` | First-token calibration verified at router startup, and a label for each engine       |
 | `resident`                | In-flight prefill and decode work by engine                                           |
 | `pinned`                  | Engines excluded from role changes                                                    |
 | `min_prefill`             | Configured minimum live prefill count                                                 |
@@ -157,7 +157,7 @@ The router takes a new snapshot when:
 
 ### `first_token_calibration`
 
-`first_token_calibration` reports the first-token calibration that router startup verified:
+`first_token_calibration` reports the first-token calibration that the router verified at startup:
 
 | Field                  | Meaning                                                               |
 | ---------------------- | --------------------------------------------------------------------- |
@@ -170,11 +170,11 @@ The router takes a new snapshot when:
 
 | `status`       | Condition                                                                                                  |
 | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `measured`     | The process start the router last verified for every engine matches the calibration                        |
+| `measured`     | For every engine, the process start that the router last verified matches the calibration                  |
 | `reused`       | One or more engines run a relaunched process with the same [process generation](../Core-Concepts.md#terms) |
 | `uncalibrated` | `engine.first_token_calibration_path` is empty                                                             |
 
-An engine readmitted after a relaunch reads `reused`.
+When the router readmits an engine after a relaunch, `engines` reports `reused` for that engine.
 
 ## Admission and serving state
 
