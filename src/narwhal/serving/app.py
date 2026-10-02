@@ -25,14 +25,13 @@ from ..profiling.calibration import verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
-from ..runtime.lifecycle import (
-    LifecycleError,
-    ValidationOutcome,
+from ..runtime.lifecycle import LifecycleError, ValidationOutcome
+from ..runtime.monitoring import monitor_loop, residency_loop
+from ..runtime.readmission import (
     capture_process_identities,
     check_process_identities,
     validate_readmission,
 )
-from ..runtime.monitoring import monitor_loop, residency_loop
 from ..runtime.standby import (
     MAX_HANDOFF_AGE_S,
     PROBE_INTERVAL_S,

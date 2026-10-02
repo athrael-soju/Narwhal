@@ -13,12 +13,8 @@ import httpx
 
 from ..types import Instance, Role
 from . import state as handoff_state
-from .lifecycle import (
-    ValidationOutcome,
-    allow_profile_recovery,
-    check_process_identities,
-    validate_readmission,
-)
+from .lifecycle import ValidationOutcome
+from .readmission import allow_profile_recovery, check_process_identities, validate_readmission
 from .release import release_peers
 from .standby import controls_fleet
 

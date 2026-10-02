@@ -177,7 +177,7 @@ Each area of the Python package lives in one package or module:
 
 Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
 
-`serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` handles engine drains and replacement.
+`serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` holds engine drain state and `runtime/readmission.py` checks process identity and readmits drained engines.
 
 Keep package initializers light and cross-package imports explicit, using `TYPE_CHECKING` for type-only imports across the serving/runtime boundary. Config models import scheduling definitions from `scheduling/control.py` and serving policy from `serving/policy.py`, and those two modules must stay independent of router construction.
 

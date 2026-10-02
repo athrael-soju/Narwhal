@@ -12,7 +12,7 @@ import httpx
 
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.engines.validation import validation_pairs
-from narwhal.runtime import lifecycle
+from narwhal.runtime import readmission
 from narwhal.runtime.lifecycle import DrainRecord, LifecycleError, ValidationOutcome
 from narwhal.runtime.monitoring import readmit
 from narwhal.serving.app import create_app
@@ -101,8 +101,8 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
 
     async def validate(self, *, wave=False, engines=None):
         """Run the complete readmission pipeline under a controlled identity source."""
-        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
-            return await lifecycle.validate_readmission(
+        with patch.object(readmission, "fetch_engine_identity", self.identities):
+            return await readmission.validate_readmission(
                 self.router, engines or ["e0"], wave=wave, transport=self.transport
             )
 
@@ -385,7 +385,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.profiles.put(
             replace(self.router.profiles.get("e0"), generation_digest="sha256:" + "0" * 64)
         )
-        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
+        with patch.object(readmission, "fetch_engine_identity", self.identities):
             self.assertEqual(await readmit(self.router, 0), [])
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertIn("e0", self.router.scheduler.draining)
@@ -398,7 +398,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.router.scheduler.eject("e0")
-        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
+        with patch.object(readmission, "fetch_engine_identity", self.identities):
             self.assertEqual(await readmit(self.router, 0), ["e0"])
         self.assertEqual(self.manager.records["e0"].state, "active")
         self.assertIn("profile generation", self.manager.records["e0"].checks)
@@ -409,8 +409,8 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.finish_drain("e0")
         self.manager.process_starts["e0"] = 101
         self.router.profiles.put(replace(self.router.profiles.get("e0"), generation_digest=None))
-        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
-            self.assertEqual(await lifecycle.check_process_identities(self.router), ["e0"])
+        with patch.object(readmission, "fetch_engine_identity", self.identities):
+            self.assertEqual(await readmission.check_process_identities(self.router), ["e0"])
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertIn("has no generation evidence", self.manager.events[-1]["reason"])
 
@@ -516,11 +516,11 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         a, b = self.cfg.engines
         producer = replace(a, pin=True, role=Role.PREFILL)
         consumer = replace(b, pin=True, role=Role.DECODE)
-        self.assertEqual(lifecycle._single_pairs(producer, [consumer]), [(a.iid, b.iid)])
-        self.assertEqual(lifecycle._single_pairs(consumer, [producer]), [(a.iid, b.iid)])
+        self.assertEqual(readmission._single_pairs(producer, [consumer]), [(a.iid, b.iid)])
+        self.assertEqual(readmission._single_pairs(consumer, [producer]), [(a.iid, b.iid)])
         for target, peer in ((producer, producer), (consumer, consumer)):
             with self.subTest(role=target.role), self.assertRaises(LifecycleError):
-                lifecycle._single_pairs(target, [peer])
+                readmission._single_pairs(target, [peer])
         self.assertEqual(validation_pairs([producer, consumer]), [(a.iid, b.iid)])
         self.assertEqual(validation_pairs([producer]), [])
         third = replace(consumer, iid="extra")
@@ -532,18 +532,18 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_capture_identity_reports_each_unreadable_engine(self):
         """Identity capture reports each engine's process start time or connection error."""
         with patch.object(
-            lifecycle,
+            readmission,
             "fetch_engine_identity",
             side_effect=[
                 EngineIdentity(self.cfg.engine_contract.vllm_version, 100),
                 httpx.ReadTimeout("identity"),
             ],
         ):
-            starts, failures = await lifecycle.capture_process_identities(self.cfg, ["e0", "e3"])
+            starts, failures = await readmission.capture_process_identities(self.cfg, ["e0", "e3"])
         self.assertEqual(starts, {"e0": 100})
         self.assertIn("ReadTimeout", failures["e3"])
         self.cfg.engine_contract = None
-        starts, failures = await lifecycle.capture_process_identities(self.cfg, ["e0", "e3"])
+        starts, failures = await readmission.capture_process_identities(self.cfg, ["e0", "e3"])
         self.assertEqual(starts, {})
         self.assertEqual(set(failures), {"e0", "e3"})
 
@@ -553,14 +553,14 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.finish_drain("e0")
         self.starts["e0"] = 100
         self.bind_profiles()
-        with patch.object(lifecycle, "fetch_engine_identity", self.identities):
-            self.assertEqual(await lifecycle.check_process_identities(self.router), [])
+        with patch.object(readmission, "fetch_engine_identity", self.identities):
+            self.assertEqual(await readmission.check_process_identities(self.router), [])
             self.starts["e0"] = 101
-            self.assertEqual(await lifecycle.check_process_identities(self.router), ["e0"])
+            self.assertEqual(await readmission.check_process_identities(self.router), ["e0"])
             self.assertIn("e0", self.router.scheduler.ejected)
             self.router.standby = True
             self.identities.reset_mock()
-            self.assertEqual(await lifecycle.check_process_identities(self.router), [])
+            self.assertEqual(await readmission.check_process_identities(self.router), [])
             self.identities.assert_not_awaited()
 
 

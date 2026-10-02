@@ -159,7 +159,7 @@ async def standby_loop(
                                     return
                                 router.lease_epoch = lease.epoch
                                 router.lease_holder = lease.holder
-                                from .lifecycle import (
+                                from .readmission import (
                                     allow_profile_recovery,
                                     check_process_identities,
                                 )

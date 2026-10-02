@@ -552,7 +552,7 @@ class NarwhalRouter:
 
     async def _verify_health(self, iid: str, url: str) -> None:
         """Resolve a health-evidence suspect with an engine health probe."""
-        from ..runtime.lifecycle import allow_profile_recovery
+        from ..runtime.readmission import allow_profile_recovery
 
         verdict = await self.engines.healthy(url)
         if verdict is None:
@@ -572,7 +572,7 @@ class NarwhalRouter:
 
     async def _verify_inference(self, iid: str, url: str) -> None:
         """Verify a suspect engine with a prefill/decode probe."""
-        from ..runtime.lifecycle import allow_profile_recovery
+        from ..runtime.readmission import allow_profile_recovery
 
         sources = self._inference_sources.get(iid, {""}).copy()
         for source in sorted(sources):
