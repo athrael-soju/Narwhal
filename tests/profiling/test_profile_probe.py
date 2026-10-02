@@ -409,6 +409,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 probe.bounded_sweep(probe.Sweep(), 16384, limits["e0"]).decode_concurrency,
                 (1, 4, 8),
             )
+            for limit, cohorts in ((48, (1, 4, 16, 48)), (64, (1, 4, 16, 48, 64))):
+                with self.subTest(limit=limit):
+                    self.assertEqual(
+                        probe.bounded_sweep(probe.Sweep(), 16384, limit).decode_concurrency,
+                        cohorts,
+                    )
             for invalid in ({"e0": 0}, {"other": 8}, {"e0": True}):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     path.write_text(

@@ -714,6 +714,26 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
     return store
 
 
+def _sequence_limits(samples: Path) -> dict[str, int]:
+    """Return each engine's `max_num_seqs` recorded in a sample sidecar or its merge sources."""
+    try:
+        document = json.loads(samples.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    limits: dict[str, int] = {}
+    for source in document.get("sources") or ():
+        if isinstance(source, dict) and isinstance(source.get("samples"), str):
+            limits.update(_sequence_limits(Path(source["samples"])))
+    engines = document.get("engines")
+    for iid, evidence in engines.items() if isinstance(engines, dict) else ():
+        value = evidence.get("max_num_seqs") if isinstance(evidence, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool):
+            limits[iid] = value
+    return limits
+
+
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     """Check the store binds the fleet and meets the decode error policy.
 
@@ -723,6 +743,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     print("profile")
     store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
+    limits = _sequence_limits(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
         p = store.get(spec.iid)
         if p is None:
@@ -737,6 +758,13 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             rep.fail(problem)
         if problems:
             continue
+        limit = limits.get(spec.iid)
+        measured = p.decode_max_requests
+        if limit is not None and measured is not None and measured < limit:
+            rep.warn(
+                f"{spec.iid} profile measures decode up to {measured} requests "
+                f"and the engine runs up to {limit}; re-run narwhal-profile with --limits"
+            )
         quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
             f"+{p.ttft_split:.4f} past {p.ttft_block_tokens}-token blocks"
             if p.ttft_split is not None

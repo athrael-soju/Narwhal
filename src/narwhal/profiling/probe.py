@@ -1119,7 +1119,7 @@ def warm_cases(sweep: Sweep, max_model_len: int | None = None) -> list[tuple[int
 
 
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
-    """Keep candidate lengths and cohorts within the serving engine's limits."""
+    """Fit candidate lengths to the context limit and end decode cohorts at `max_num_seqs`."""
     prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
     decode = tuple(n for n in sweep.decode_input_lens if n + sweep.decode_tokens < max_model_len)
     if len(set(prefill)) < 3 or len(set(decode)) < 2:
@@ -1130,7 +1130,7 @@ def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = N
     concurrency = sweep.decode_concurrency
     if max_num_seqs is not None:
         concurrency = tuple(n for n in concurrency if n <= max_num_seqs)
-        if max_num_seqs < max(sweep.decode_concurrency) and max_num_seqs not in concurrency:
+        if max_num_seqs not in concurrency:
             concurrency += (max_num_seqs,)
         if len(set(concurrency)) < 2:
             raise ValueError(

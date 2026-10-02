@@ -1036,6 +1036,37 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
 
+    def test_profile_gate_warns_when_decode_stops_below_the_sequence_limit(self):
+        """A recorded `max_num_seqs` above the profiled request range is a warning."""
+        store = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        samples = self.cfg.profiles_path.with_suffix(".samples.json")
+        first = self.cfg.engines[0].iid
+        for document, warned in (
+            ({"engines": {first: {"max_num_seqs": 64}}}, True),
+            ({"engines": {first: {"max_num_seqs": 16}}}, False),
+            ({"engines": {first: {}}}, False),
+        ):
+            with self.subTest(document=document):
+                samples.write_text(json.dumps(document))
+                report = Report()
+                with redirect_stdout(io.StringIO()):
+                    gate_profile(self.cfg, report)
+                self.assertEqual(report.failed, [])
+                expected = [
+                    f"{first} profile measures decode up to 16 requests and the engine runs "
+                    "up to 64; re-run narwhal-profile with --limits"
+                ]
+                self.assertEqual(report.warnings, expected if warned else [])
+        source = samples.with_name("source.samples.json")
+        source.write_text(json.dumps({"engines": {first: {"max_num_seqs": 64}}}))
+        samples.write_text(json.dumps({"method_version": 3, "sources": [{"samples": str(source)}]}))
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            gate_profile(self.cfg, report)
+        self.assertEqual(len(report.warnings), 1)
+
     async def test_stale_candidate_role_profile_fails_generation_gate(self):
         """A valid current mix cannot admit a stale candidate mix after a restart."""
         live_digest = "sha256:" + "a" * 64

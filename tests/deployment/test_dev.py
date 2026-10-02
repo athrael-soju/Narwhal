@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
@@ -296,8 +297,10 @@ class DevTests(unittest.TestCase):
             cached_suffix_lens=tuple(profile["cached_suffix_lens"]),
         )
         runtime = self.spec["runtime"]
+        bounded = bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"])
+        self.assertEqual(replace(bounded, decode_concurrency=sweep.decode_concurrency), sweep)
         self.assertEqual(
-            bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"]), sweep
+            bounded.decode_concurrency, (*sweep.decode_concurrency, runtime["max_num_seqs"])
         )
 
     def test_repeated_init_preserves_the_existing_instance(self):

@@ -71,6 +71,7 @@ A decode cell is one decode input length and concurrency pair.
 
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency points, including one stream and the intended operating range.
+- With `--limits`, each engine's top concurrency point is its `max_num_seqs`.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live context limit.
 - When fewer than two decode input lengths fit, choose shorter inputs.

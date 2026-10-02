@@ -33,7 +33,7 @@ These options select engines, choose the mode, and set the output files.
 | `--refit-samples PATH` | optional | Sample sidecar for a refit of cold and warm prefill. |
 | `--merge PATH` | optional | Measured profile store to combine with its matching sample sidecar, repeated at least twice. |
 | `--out PATH` | optional | Fresh profile destination for `--refit-samples` and `--merge`, with a matching `.samples.json` sample sidecar. |
-| `--limits PATH` | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
+| `--limits PATH` | requested concurrency points | Generated per-engine `max_num_seqs` limits that end each engine's decode cohorts. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Positive diagnostic HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace live profile and sample files when the first engine completes. |
 
@@ -73,7 +73,7 @@ All modes validate these options:
 | --- | :---: | --- | --- |
 | `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths, filtered to each engine's live `max_model_len`. | At least three distinct usable values |
 | `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. | At least two distinct values |
-| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts, with candidates above an engine's `--limits` value replaced by that value. | At least two distinct usable values |
+| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts up to each engine's `--limits` value, which joins the cohorts as the top count. | At least two distinct usable values |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
 | `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | At least two distinct values and five cases with `--cached-suffix-lens` |
 | `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | At least two distinct values |
