@@ -118,15 +118,17 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Open and close router resources around the ASGI lifespan."""
-        if cfg.first_token_calibration_path is None:
+        calibration = await verify_calibration(cfg, transport=lifecycle_transport)
+        if calibration.status == "uncalibrated":
             log.warning(
                 "first-token deadline is uncalibrated; run narwhal-check "
                 "--calibrate-first-token and set engine.first_token_calibration_path"
             )
+        elif calibration.status == "rejected":
+            raise RuntimeError("; ".join(calibration.problems))
         else:
-            calibration_failures = await verify_calibration(cfg)
-            if calibration_failures:
-                raise RuntimeError("; ".join(calibration_failures))
+            log.info("%s", calibration.summary(cfg.first_token_timeout_s))
+        router.first_token_calibration = calibration
         missing, extra = router.profile_set_diff()
         if missing or extra:
             detail = []

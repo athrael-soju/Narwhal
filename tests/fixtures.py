@@ -8,8 +8,11 @@ import httpx
 from narwhal.config import FleetConfig
 from narwhal.engines.attestation import EngineIdentity
 from narwhal.engines.prefix import block_identities
+from narwhal.engines.validation import validation_pairs
+from narwhal.profiling import calibration
 from narwhal.profiling.generation import identity_generation
 from narwhal.profiling.model import Profile
+from narwhal.profiling.probe import device_key
 from narwhal.profiling.store import ProfileStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +83,66 @@ def fleet(root, engines=("e0", "e3"), pinned=()):
     for spec in cfg.engines:
         store.put(profile(spec.iid))
     return cfg
+
+
+def calibration_document(cfg, generations, starts, seconds=0.25):
+    """Return complete first-token calibration evidence with every sample at `seconds`."""
+    pairs = validation_pairs(cfg.engines, mesh=True)
+    rounds = calibration.calibration_rounds(
+        pairs, {spec.iid: device_key(spec) for spec in cfg.engines}
+    )
+    numbers = {pair: number for number, members in enumerate(rounds, 1) for pair in members}
+    p99, maximum, candidate = calibration.candidate_deadline([seconds] * 100)
+    return {
+        "schema": calibration.SCHEMA,
+        "schema_version": 1,
+        "captured_at_unix": 1000.0,
+        "duration_s": 60.0,
+        "status": "complete",
+        "model": cfg.model,
+        "contract_fingerprint": cfg.engine_contract.fingerprint() if cfg.engine_contract else None,
+        "engine_urls": {spec.iid: spec.url for spec in cfg.engines},
+        "generations": dict(generations),
+        "process_starts": dict(starts),
+        "changed_generations": [],
+        "generation_errors": [],
+        "input_tokens": [8],
+        "samples_per_group": 100,
+        "observation_timeout_s": 10.0,
+        "configured_deadline_s": cfg.first_token_timeout_s,
+        "candidate_deadline_s": candidate,
+        "groups": [
+            {
+                "producer": src,
+                "consumer": dst,
+                "target_input_tokens": 8,
+                "actual_input_tokens_min": 8,
+                "actual_input_tokens_max": 8,
+                "completed": 100,
+                "failed": 0,
+                "p99_seconds": p99,
+                "maximum_seconds": maximum,
+                "candidate_deadline_s": candidate,
+            }
+            for src, dst in pairs
+        ],
+        "attempts": [
+            {
+                "producer": src,
+                "consumer": dst,
+                "target_input_tokens": 8,
+                "requested_output_tokens": 4,
+                "attempt": attempt,
+                "round": None if attempt == 1 else numbers[(src, dst)],
+                "actual_input_tokens": 8,
+                "prefill_seconds": 0.05,
+                "first_token_seconds": seconds,
+                "status": "completed",
+            }
+            for src, dst in pairs
+            for attempt in range(1, 101)
+        ],
+    }
 
 
 def bind_identity_profiles(router):

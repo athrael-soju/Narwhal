@@ -49,6 +49,7 @@ class Report:
     skipped: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     pairs: list[dict[str, object]] = field(default_factory=list)
+    calibration: dict[str, object] = field(default_factory=dict)
 
     def ok(self, msg: str) -> None:
         """Print a passing gate result."""
@@ -138,6 +139,26 @@ async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set
         else:
             rep.fail(f"{spec.iid} /health did not answer 200")
     return live
+
+
+async def gate_calibration(
+    cfg: FleetConfig, rep: Report, transport: httpx.AsyncBaseTransport | None = None
+) -> None:
+    """Check the first-token calibration against the running engines."""
+    print("calibration")
+    check = await verify_calibration(cfg, transport=transport)
+    if check.status == "uncalibrated":
+        rep.warn(
+            "first-token deadline has no calibration evidence; run "
+            "narwhal-check --calibrate-first-token and set "
+            "engine.first_token_calibration_path"
+        )
+    elif check.status == "rejected":
+        for problem in check.problems:
+            rep.fail(problem)
+    else:
+        rep.ok(check.summary(cfg.first_token_timeout_s))
+    rep.calibration = {**check.view(), "path": None if check.path is None else str(check.path)}
 
 
 async def gate_contract(
@@ -939,17 +960,9 @@ async def run(
     )
     try:
         live = await gate_reach(cfg, client, rep)
-        if cfg.first_token_calibration_path is None:
-            rep.warn(
-                "first-token deadline has no calibration evidence; run "
-                "narwhal-check --calibrate-first-token and set "
-                "engine.first_token_calibration_path"
-            )
-        else:
-            for calibration_problem in await verify_calibration(cfg):
-                rep.fail(calibration_problem)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
+        await gate_calibration(cfg, rep)
         incompatible = await gate_contract(cfg, live, rep)
         store = gate_profile(cfg, rep)
         stale = await gate_profile_generation(cfg, store, live, rep)
@@ -1054,7 +1067,13 @@ async def run(
         print(f"directed KV evidence: {evidence_out}")
 
     results.set_data(
-        {"failed": rep.failed, "skipped": rep.skipped, "warnings": rep.warnings, "pairs": rep.pairs}
+        {
+            "failed": rep.failed,
+            "skipped": rep.skipped,
+            "warnings": rep.warnings,
+            "pairs": rep.pairs,
+            "first_token_calibration": rep.calibration,
+        }
     )
     for problem in rep.failed:
         results.record_error("gate_failed", problem, stage="preflight")
@@ -1135,7 +1154,7 @@ def _main(argv: list[str]) -> int:
     ap.add_argument(
         "--no-kv",
         action="store_true",
-        help="run reach, contract, profile, model, pace, tokenize and slo gates "
+        help="run reach, calibration, contract, profile, model, pace, tokenize and slo gates "
         "(default: include produce and consume)",
     )
     ap.add_argument(

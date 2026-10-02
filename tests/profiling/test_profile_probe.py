@@ -713,7 +713,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     probe,
                     "read_generation",
                     AsyncMock(
-                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
                 patch.object(probe, "profile_instance", side_effect=measured),
@@ -747,7 +747,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     probe,
                     "read_generation",
                     AsyncMock(
-                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
                 patch.object(
@@ -803,7 +803,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     probe,
                     "read_generation",
                     AsyncMock(
-                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
                 patch.object(probe, "profile_instance", side_effect=measured),
@@ -844,7 +844,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     probe,
                     "read_generation",
-                    AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {})),
+                    AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {}, 100.0)),
                 ),
                 patch.object(probe, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
@@ -880,7 +880,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     probe,
                     "read_generation",
                     AsyncMock(
-                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}})
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
                     ),
                 ),
                 patch.object(probe, "probe_prefill", AsyncMock(return_value=bad)),
@@ -903,8 +903,8 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request: httpx.Response(200))
             )
             generations = (
-                GenerationEvidence("sha256:" + "a" * 64, {"engine": {"start": 100}}),
-                GenerationEvidence("sha256:" + "b" * 64, {"engine": {"start": 101}}),
+                GenerationEvidence("sha256:" + "a" * 64, {"engine": {"start": 100}}, 100.0),
+                GenerationEvidence("sha256:" + "b" * 64, {"engine": {"start": 101}}, 101.0),
             )
             with (
                 patch.object(probe.httpx, "AsyncClient", return_value=client),

@@ -71,6 +71,8 @@ For an engine launch limit of 16,384 total tokens, run the calibration from the 
 
 The artifact records input tokens, prefill time, decode-to-first-token time, and failed or expired attempts.
 
+Calibration runs [concurrent rounds](../cli/Check.md#sampling-schedule) in which each device slot serves at most one calibration prefill or decode at a time.
+
 The command exits 0 with artifact status `complete` when the artifact holds at least 100 samples per role-permitted directed pair and input length, every attempt completed, and the process generations match. Otherwise it exits 1 with status `incomplete`.
 
 `serving.request_timeout_s` bounds each attempt's prompt sizing, prefill, and decode completion. Each attempt records one of these statuses:
@@ -84,11 +86,24 @@ The command exits 0 with artifact status `complete` when the artifact holds at l
 
 Only `completed` timings enter the candidate calculation.
 
-The command prints the candidate deadline, the largest `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` across pairs and input lengths.
+For four engines in separate device slots, the command prints:
+
+```text
+calibration groups: 36; concurrent rounds per input length: 3; sweep 1 runs each group alone
+e0 -> e1, target 256 tokens: 100/100 completed, 0 failed
+...
+first-token calibration: runs/deployment/first-token-calibration.json
+candidate deadline: above 1.840s
+duration 1200s
+```
+
+The candidate deadline is the largest `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` across pairs and input lengths.
 
 Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
 
 The deadline, the measured prefill, and the router overhead must fit the client time to first token (TTFT) requirement.
+
+If an engine relaunched with the same process generation, preflight and router startup label the engine `reused`.
 
 Repeat the calibration when the model, process generation, transport, or served context changes:
 
@@ -108,19 +123,43 @@ With the engines otherwise idle, run the preflight from the router shell:
 
 The full preflight runs these gates:
 
-| Gate       | What must pass                                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `reach`    | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                      |
-| `contract` | Attestation matches the current process and declared runtime                                                                                     |
-| `profile`  | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy |
-| `model`    | Every engine serves the configured model                                                                                                         |
-| `pace`     | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                |
-| `tokenize` | Exact input sizing succeeds when `engine.tokenize` is on                                                                                         |
-| `produce`  | Every tested producer can export a KV handoff                                                                                                    |
-| `consume`  | Every tested peer can consume that KV handoff                                                                                                    |
-| `slo`      | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                  |
+| Gate          | What must pass                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reach`       | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                                  |
+| `calibration` | The configured first-token calibration is valid, matches every running process generation, and has a candidate deadline below `engine.first_token_timeout_s` |
+| `contract`    | Attestation matches the current process and declared runtime                                                                                                 |
+| `profile`     | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy             |
+| `model`       | Every engine serves the configured model                                                                                                                     |
+| `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
+| `tokenize`    | Exact input sizing succeeds when `engine.tokenize` is on                                                                                                     |
+| `produce`     | Every tested producer can export a KV handoff                                                                                                                |
+| `consume`     | Every tested peer can consume that KV handoff                                                                                                                |
+| `slo`         | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                              |
 
-With `engine.first_token_calibration_path` empty, preflight and router startup warn about the first-token evidence. With the path set, preflight fails and router startup stops when evidence for the running engines is incomplete or the deadline is at or below the candidate.
+Preflight and router startup report the first-token calibration:
+
+| Calibration                                                                   | Preflight          | Router startup         |
+| ----------------------------------------------------------------------------- | ------------------ | ---------------------- |
+| `engine.first_token_calibration_path` is empty                                | `WARN`             | Logs a warning         |
+| The artifact fails validation                                                 | `FAIL`             | Stops                  |
+| An engine's process generation differs from the artifact                      | `FAIL`             | Stops                  |
+| `engine.first_token_timeout_s` is at or below the candidate deadline          | `FAIL`             | Stops                  |
+| Every engine runs the measured process                                        | `ok` measured line | Logs the measured line |
+| One or more engines run a relaunched process with the same process generation | `ok` reused line   | Logs the reused line   |
+
+For a fleet that runs the measured processes, preflight prints:
+
+```text
+calibration
+  ok    first-token calibration measured on the running engines: candidate 1.840s, deadline 2.5s
+```
+
+For a fleet with relaunched engines `e1` and `e3`, preflight prints:
+
+```text
+calibration
+  ok    first-token calibration reused for e1, e3: launch unchanged since capture; candidate 1.840s, deadline 2.5s
+```
 
 Under `recovery.engine_restart_policy: individual`, preflight warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).
 

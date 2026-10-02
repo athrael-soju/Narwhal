@@ -12,54 +12,55 @@ Returns the live scheduler and router state as `narwhal.state` schema version `1
 
 The state document carries these top-level fields:
 
-| Field                   | Meaning                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------- |
-| `schema`                | `narwhal.state`                                                                       |
-| `schema_version`        | State schema version, `1`                                                             |
-| `journal_run`           | Request-journal run ID of the current router process                                  |
-| `served`                | Completed requests                                                                    |
-| `slo_met`               | Completed requests within `slo.ttft_s` and `slo.tpot_s`                               |
-| `failed`                | Requests ending in error                                                              |
-| `offered`               | Completion arrivals                                                                   |
-| `unsized_offered`       | Arrivals that terminated before workload sizing                                       |
-| `expired`               | Deadline expiries                                                                     |
-| `cancelled`             | Client disconnects                                                                    |
-| `invalid_requests`      | Requests refused with HTTP `400`, `404`, or `413` before admission                    |
-| `controller`            | Active role controller, `reactive`                                                    |
-| `token_accounting`      | `token_ids` for exact token identity, otherwise `unavailable`                         |
-| `control`               | Role-controller mode and its decision counts                                          |
-| `monitoring`            | Engine-monitoring loop timing and failure state                                       |
-| `ha`                    | High-availability readiness, standby, lease, and failover-block state                 |
-| `lifecycle`             | Drain state, resident work, and lifecycle events                                      |
-| `admission`             | Router and phase occupancy, queue state, and limits                                   |
-| `serving`               | Retained HTTP work, attempts, and retry state                                         |
-| `http_pools`            | Data and control connection pools and pool-wait timeout                               |
-| `pools`                 | Engines grouped by prefill or decode role                                             |
-| `load`                  | Per-pool load as a ratio to the service-level objective (SLO) target, `1.0` at target |
-| `thresholds`            | Active reactive-controller thresholds                                                 |
-| `slo`                   | Time to first token (TTFT) and time per output token (TPOT) targets                   |
-| `first_token_timeout_s` | Decode first-token deadline                                                           |
-| `resident`              | In-flight prefill and decode work by engine                                           |
-| `pinned`                | Engines excluded from role changes                                                    |
-| `min_prefill`           | Configured minimum live prefill count                                                 |
-| `min_decode`            | Configured minimum live decode count                                                  |
-| `below_floor`           | Current and cumulative prefill-floor breach state                                     |
-| `ejected`               | Engines removed by the breaker                                                        |
-| `peer_release`          | Peer release rounds for each engine out of placement                                  |
-| `draining`              | Engines excluded by lifecycle action                                                  |
-| `probation`             | Engines carrying a predictive-health placement penalty                                |
-| `health`                | Per-engine drift-window accounting                                                    |
-| `quarantined`           | Engines temporarily excluded after engine failure                                     |
-| `breaker`               | Per-engine consecutive failure streaks and probe state                                |
-| `residency`             | Per-engine prefix-residency synchronization with its attestation sidecar              |
-| `decode_floor`          | Decode floor state and restoration count                                              |
-| `attainment`            | SLO outcome buckets for diagnostics                                                   |
-| `demand_history`        | Retained demand, shape counts, and overflow state                                     |
-| `demand_evidence`       | Consolidation evidence used by decode-to-prefill gates                                |
-| `unserved`              | Phase placements where every eligible candidate exceeded the configured SLO           |
-| `panic_bypasses`        | Prefill-to-decode moves allowed through cooldown by panic logic                       |
-| `flips_refused`         | The 20 most recent rejected role changes                                              |
-| `flips`                 | Role changes retained up to `flip_history`                                            |
+| Field                     | Meaning                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `schema`                  | `narwhal.state`                                                                       |
+| `schema_version`          | State schema version, `1`                                                             |
+| `journal_run`             | Request-journal run ID of the current router process                                  |
+| `served`                  | Completed requests                                                                    |
+| `slo_met`                 | Completed requests within `slo.ttft_s` and `slo.tpot_s`                               |
+| `failed`                  | Requests ending in error                                                              |
+| `offered`                 | Completion arrivals                                                                   |
+| `unsized_offered`         | Arrivals that terminated before workload sizing                                       |
+| `expired`                 | Deadline expiries                                                                     |
+| `cancelled`               | Client disconnects                                                                    |
+| `invalid_requests`        | Requests refused with HTTP `400`, `404`, or `413` before admission                    |
+| `controller`              | Active role controller, `reactive`                                                    |
+| `token_accounting`        | `token_ids` for exact token identity, otherwise `unavailable`                         |
+| `control`                 | Role-controller mode and its decision counts                                          |
+| `monitoring`              | Engine-monitoring loop timing and failure state                                       |
+| `ha`                      | High-availability readiness, standby, lease, and failover-block state                 |
+| `lifecycle`               | Drain state, resident work, and lifecycle events                                      |
+| `admission`               | Router and phase occupancy, queue state, and limits                                   |
+| `serving`                 | Retained HTTP work, attempts, and retry state                                         |
+| `http_pools`              | Data and control connection pools and pool-wait timeout                               |
+| `pools`                   | Engines grouped by prefill or decode role                                             |
+| `load`                    | Per-pool load as a ratio to the service-level objective (SLO) target, `1.0` at target |
+| `thresholds`              | Active reactive-controller thresholds                                                 |
+| `slo`                     | Time to first token (TTFT) and time per output token (TPOT) targets                   |
+| `first_token_timeout_s`   | Decode first-token deadline                                                           |
+| `first_token_calibration` | First-token calibration verified at router startup, and a label for each engine       |
+| `resident`                | In-flight prefill and decode work by engine                                           |
+| `pinned`                  | Engines excluded from role changes                                                    |
+| `min_prefill`             | Configured minimum live prefill count                                                 |
+| `min_decode`              | Configured minimum live decode count                                                  |
+| `below_floor`             | Current and cumulative prefill-floor breach state                                     |
+| `ejected`                 | Engines removed by the breaker                                                        |
+| `peer_release`            | Peer release rounds for each engine out of placement                                  |
+| `draining`                | Engines excluded by lifecycle action                                                  |
+| `probation`               | Engines carrying a predictive-health placement penalty                                |
+| `health`                  | Per-engine drift-window accounting                                                    |
+| `quarantined`             | Engines temporarily excluded after engine failure                                     |
+| `breaker`                 | Per-engine consecutive failure streaks and probe state                                |
+| `residency`               | Per-engine prefix-residency synchronization with its attestation sidecar              |
+| `decode_floor`            | Decode floor state and restoration count                                              |
+| `attainment`              | SLO outcome buckets for diagnostics                                                   |
+| `demand_history`          | Retained demand, shape counts, and overflow state                                     |
+| `demand_evidence`         | Consolidation evidence used by decode-to-prefill gates                                |
+| `unserved`                | Phase placements where every eligible candidate exceeded the configured SLO           |
+| `panic_bypasses`          | Prefill-to-decode moves allowed through cooldown by panic logic                       |
+| `flips_refused`           | The 20 most recent rejected role changes                                              |
+| `flips`                   | Role changes retained up to `flip_history`                                            |
 
 On resume and takeover, a new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, and `admission.refused` from the state handoff. Other counters start at zero.
 
@@ -153,6 +154,27 @@ The router takes a new snapshot when:
 - the sidecar epoch changes
 - the change sequence skips a number
 - the previous refresh failed
+
+### `first_token_calibration`
+
+`first_token_calibration` reports the first-token calibration that the router verified at startup:
+
+| Field                  | Meaning                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `status`               | `measured`, `reused`, or `uncalibrated`                               |
+| `captured_at_unix`     | Unix time of the calibration capture, `null` when `uncalibrated`      |
+| `candidate_deadline_s` | Calibration candidate deadline in seconds, `null` when `uncalibrated` |
+| `engines`              | `measured` or `reused` for each engine, `{}` when `uncalibrated`      |
+
+`status` takes these values:
+
+| `status`       | Condition                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `measured`     | For every engine, the process start that the router last verified matches the calibration                  |
+| `reused`       | One or more engines run a relaunched process with the same [process generation](../Core-Concepts.md#terms) |
+| `uncalibrated` | `engine.first_token_calibration_path` is empty                                                             |
+
+When the router readmits an engine after a relaunch, `engines` reports `reused` for that engine.
 
 ## Admission and serving state
 

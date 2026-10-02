@@ -4,7 +4,7 @@ description: Run the narwhal-check deployment preflight gates, from engine reach
 
 # `narwhal-check`
 
-`narwhal-check --fleet PATH` runs these deployment preflight gates in order: `reach`, `contract`, `profile`, `model`, `pace`, `tokenize`, `produce`, `consume`, `slo`.
+`narwhal-check --fleet PATH` runs these deployment preflight gates in order: `reach`, `calibration`, `contract`, `profile`, `model`, `pace`, `tokenize`, `produce`, `consume`, `slo`.
 
 Text output prints each gate name followed by result lines marked `ok`, `FAIL`, `SKIP`, or `WARN`.
 
@@ -87,19 +87,67 @@ narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 
 Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before recording evidence for a fleet.
 
-The `--calibration-out` file holds:
+### Sampling schedule
 
-- the raw attempts
-- the p99 and maximum for each group
-- the candidate deadline
-- the engines' process generations
+| Term | Rule |
+| --- | --- |
+| Group | One role-permitted directed pair at one input length, with `--samples` attempts |
+| Sweep `k` | Attempt `k` of every group |
+| Device slot | The engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#21-shared-device-allocation), otherwise the engine |
+| Round | A set of pairs in which each device slot produces at most once and consumes at most once |
+| Round count | The largest number of pairs that one device slot produces or consumes |
+| Sweep 1 | Each group runs alone in order of producer ID, then input length in `--input-tokens` order, then pair |
+| Sweeps 2 to `--samples` | Each round runs as one lockstep step per input length, in `--input-tokens` order |
 
-During calibration, `--observation-timeout-s` bounds the wait for first output, and `serving.request_timeout_s` bounds the whole attempt.
+When `n` engines use separate device slots and the fleet permits every directed pair, the schedule has `n - 1` rounds per input length.
+
+A lockstep step runs two phases across every pair in its round:
+
+| Phase | Work for each pair | Ends when |
+| --- | --- | --- |
+| Prefill | Prompt sizing and prefill on the producer | Every prefill in the step finishes or fails |
+| Decode | Decode on the consumer from the producer's KV handoff | Every decode in the step finishes or fails |
+
+Each device slot serves at most one calibration prefill or decode at a time.
+
+These timers bound each attempt:
+
+| Interval | Bound |
+| --- | --- |
+| Prompt sizing | `--observation-timeout-s` |
+| Decode start to first output | `--observation-timeout-s` |
+| The sum of the attempt's sizing, prefill, and decode times | `serving.request_timeout_s` |
 
 Each calibration handoff forces four output tokens, capped by the producer's and consumer's live context limits. A handoff at a `max_model_len - 1` target gets one output token. A sample succeeds when it produces a token and a valid stream end.
 
+### Calibration artifact
+
+The artifact at `--calibration-out` holds these fields:
+
+| Field | Contents |
+| --- | --- |
+| `status` | `complete` or `incomplete` |
+| `captured_at_unix` | Unix time of the write |
+| `duration_s` | Seconds from the first engine read to the write |
+| `generations` | Each engine's process generation digest |
+| `process_starts` | The process start time that `narwhal-check` reads from each engine with its process generation at the start of the run |
+| `samples_per_group` | The `--samples` value |
+| `groups` | Completed and failed counts, p99, maximum, and candidate deadline for each group |
+| `attempts` | The raw attempts |
+| `attempts[].attempt` | Sweep number, from 1 to `samples_per_group` |
+| `attempts[].round` | `null` in sweep 1, otherwise the round number within the input length, from 1 |
+| `candidate_deadline_s` | The largest candidate deadline of all groups |
+
+`groups` follow the sweep 1 order.
+
+`attempts` follow the same group order, then ascending `attempt` order.
+
 The artifact is valid evidence when all of these hold:
 
+- the artifact records `captured_at_unix`
+- the artifact records `duration_s`
+- `process_starts` holds a time for every engine
+- every attempt has a `round`
 - every group has at least 100 completed attempts
 - the attempt numbers are distinct
 - the attempt numbers cover the configured sample count
@@ -115,6 +163,43 @@ The artifact is incomplete when any of these happens:
 - an attempt fails
 - an engine's identity changes during the run
 - reading or verifying an engine's identity fails
+
+## The `calibration` gate
+
+The `calibration` gate checks the artifact at `engine.first_token_calibration_path` against each running engine's [process generation](../Core-Concepts.md#terms):
+
+| Fleet and sidecar | Process generation |
+| --- | --- |
+| `engine_contract` set, sidecar reports launch evidence | `launch_digest` |
+| `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
+| `engine_contract` unset | vLLM version and process start time |
+
+The gate labels each running engine:
+
+| Running engine | Result |
+| --- | --- |
+| Process generation differs from `generations` | `FAIL` with `<iid> process differs from first-token calibration` |
+| Same process generation and process start | `measured` |
+| Same process generation, different process start | `reused` |
+
+The gate reports one of these statuses:
+
+| Status | Condition | Output |
+| --- | --- | --- |
+| `uncalibrated` | `engine.first_token_calibration_path` is empty | `WARN` |
+| `rejected` | The artifact fails validation, or an engine's process generation differs or is unreadable | One `FAIL` per problem |
+| `measured` | Every engine is `measured` | `ok` |
+| `reused` | One or more engines are `reused` | `ok` with the IDs of the reused engines |
+
+In JSON mode, `data.first_token_calibration` holds:
+
+| Field | Value |
+| --- | --- |
+| `status` | `uncalibrated`, `rejected`, `measured`, or `reused` |
+| `path` | `engine.first_token_calibration_path`, or `null` when the path is empty |
+| `captured_at_unix` | The artifact's capture time when `status` is `measured` or `reused`, otherwise `null` |
+| `candidate_deadline_s` | The artifact's candidate deadline when `status` is `measured` or `reused`, otherwise `null` |
+| `engines` | The label of each engine when `status` is `measured` or `reused`, otherwise `{}` |
 
 ## The `slo` gate
 

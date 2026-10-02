@@ -205,9 +205,11 @@ Configure the first-token deadline:
 2. Set `engine.first_token_timeout_s` above the candidate it prints.
 3. Set `engine.first_token_calibration_path` to its artifact.
 
-The calibration artifact binds each engine to the same generation digest as its [saved profiles](../telemetry/02-Profiles.md#validating-the-engine-cost-model).
+The calibration artifact binds each engine to the same process generation as its [saved profiles](../telemetry/02-Profiles.md#validating-the-engine-cost-model).
 
-A change to an engine's generation digest makes the calibration artifact stale. An engine relaunch during calibration makes it insufficient.
+If an engine relaunched with the same process generation, preflight and router startup label the engine `reused`.
+
+A change to an engine's process generation makes the calibration artifact stale. An engine relaunch during calibration makes it insufficient.
 
 With an empty `engine.first_token_calibration_path`, preflight and router startup log a warning. A stale or insufficient calibration artifact fails preflight and router startup.
 
