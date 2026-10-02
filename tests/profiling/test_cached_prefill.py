@@ -13,9 +13,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.engines.dialect import VllmDialect
-from narwhal.profiling import engine_io, live, offline, sweep, warm
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS, Profile
+from narwhal.profiling.probe import engine_io, live, offline, sweep, warm
 from tests.fixtures import profile
 from tests.profiling.fixtures import patched_profile_sweeps
 

@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from ..engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect, VllmDialect
 
 _KV_CAPACITY = re.compile(r'kv_cache_size_tokens="([0-9]+(?:\.[0-9]+)?)"')
 

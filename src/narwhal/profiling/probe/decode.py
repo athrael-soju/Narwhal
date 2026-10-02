@@ -9,8 +9,8 @@ import time
 
 import httpx
 
-from ..engines.dialect import EngineDialect, VllmDialect
-from ..engines.stream import event_choices, event_object, token_ids
+from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.stream import event_choices, event_object, token_ids
 from .engine_io import cancel, make_prompt
 from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 

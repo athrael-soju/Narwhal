@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr
 from unittest.mock import AsyncMock, patch
 
-from narwhal.profiling import cli
+from narwhal.profiling.probe import cli
 from tests.fixtures import ROOT
 
 

@@ -15,7 +15,7 @@ from narwhal import cli
 from narwhal.deployment import launch_engine
 from narwhal.diagnostics import check
 from narwhal.engines import attestation
-from narwhal.profiling import cli as profile_cli
+from narwhal.profiling.probe import cli as profile_cli
 
 
 class CliFailureTests(unittest.TestCase):

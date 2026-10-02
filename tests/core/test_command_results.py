@@ -18,7 +18,7 @@ from narwhal.contracts import COMMAND_RESULT, ContractVersionError, manifest, va
 from narwhal.deployment import launch_engine, stages
 from narwhal.dev import cli as dev
 from narwhal.diagnostics import check
-from narwhal.profiling import cli
+from narwhal.profiling.probe import cli
 from tests.deployment.fixtures import launcher_inputs
 from tests.fixtures import ROOT
 

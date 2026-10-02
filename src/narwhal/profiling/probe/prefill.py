@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from ..engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect, VllmDialect
 from .engine_io import completion_body, make_prompt
 from .sweep import PREFILL_LENS, PREFILL_REPEATS
 

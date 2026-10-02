@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 
-from ..engines.dialect import EngineDialect
-from ..types import Role
+from ...engines.dialect import EngineDialect
+from ...types import Role
 from .engine_io import cancel, completion_body, engine_context_limit, make_prompt
 
 

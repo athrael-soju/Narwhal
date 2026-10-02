@@ -15,7 +15,9 @@ import httpx
 
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.engines.dialect import VllmDialect
-from narwhal.profiling import (
+from narwhal.profiling.generation import GenerationEvidence
+from narwhal.profiling.model import CACHED_PROFILE_FIELDS
+from narwhal.profiling.probe import (
     cli,
     decode,
     engine_io,
@@ -26,8 +28,6 @@ from narwhal.profiling import (
     sweep,
     warm,
 )
-from narwhal.profiling.generation import GenerationEvidence
-from narwhal.profiling.model import CACHED_PROFILE_FIELDS
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile

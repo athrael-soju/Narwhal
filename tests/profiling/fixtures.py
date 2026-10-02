@@ -4,7 +4,7 @@ import contextlib
 import io
 from unittest.mock import AsyncMock, patch
 
-from narwhal.profiling import live, warm
+from narwhal.profiling.probe import live, warm
 
 
 @contextlib.contextmanager

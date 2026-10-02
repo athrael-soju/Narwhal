@@ -15,7 +15,7 @@ from ..engines.client import EngineClient, EngineError
 from ..engines.dialect import lookup as lookup_dialect
 from ..engines.validation import can_consume, can_produce
 from ..profiling.calibration import verify_calibration
-from ..profiling.engine_io import engine_context_limit, make_prompt
+from ..profiling.probe.engine_io import engine_context_limit, make_prompt
 from ..profiling.store import ProfileStore
 from .report import Report
 

@@ -23,7 +23,7 @@ from narwhal.config import FleetConfig
 from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
-from narwhal.profiling.sweep import Sweep, bounded_sweep
+from narwhal.profiling.probe.sweep import Sweep, bounded_sweep
 
 from .fixtures import process_group_with_worker
 
@@ -239,7 +239,7 @@ class DevTests(unittest.TestCase):
             and isinstance(node.value, str)
             and re.fullmatch(r"narwhal(\.[a-z_]+)+", node.value)
         }
-        self.assertIn("narwhal.profiling.cli", modules)
+        self.assertIn("narwhal.profiling.probe.cli", modules)
         for module in sorted(modules):
             with self.subTest(module=module):
                 self.assertIsNotNone(importlib.util.find_spec(module))

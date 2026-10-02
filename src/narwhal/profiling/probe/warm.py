@@ -11,10 +11,10 @@ from typing import Any
 
 import httpx
 
-from ..engines.dialect import EngineDialect
+from ...engines.dialect import EngineDialect
+from ..fitting import fit_cached_prefill, relative_error
+from ..model import Profile
 from .engine_io import completion_body, make_prompt, prefix_cache_hits, tokenize
-from .fitting import fit_cached_prefill, relative_error
-from .model import Profile
 from .sweep import Sweep
 
 # Words a primer may add to end past its prefix's last full block.
