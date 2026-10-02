@@ -27,11 +27,48 @@ When the queue drains before the evaluation, the trigger clears. When TTFT stays
 
 Source load at or below `controller.thresholds.shrink` drives consolidation. Sustained prefill load at or above `controller.thresholds.expand` can move decode capacity into prefill. Both paths require passing the profile, safety, and confirmation checks.
 
-A decode-to-prefill move by the role controller requires a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) and stable decode demand. Prefill-to-decode moves and floor restorations in either direction proceed with the window open.
+A decode-to-prefill move by the role controller requires a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation) and stable decode demand. Prefill-to-decode moves with source load at or below `controller.thresholds.shrink` and floor restorations in either direction proceed with the window open.
 
 The window closes when `controller.reactive.evidence_span_s` has elapsed with at least `controller.reactive.evidence_min_arrivals` arrivals, or when `controller.reactive.evidence_max_span_s` has elapsed under sparse traffic. A first-token timeout, an applied move toward decode, or a decode-floor restoration restarts the window.
 
 The [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fields in `/narwhal/state` report the demand, overflow, and inputs behind each role-controller decision.
+
+The [controller decision](../http-api/05-Live-State.md#controller-decisions) fields name the rule and the demand horizons behind each decision.
+
+### Departures from a settled split
+
+A departure moves one engine toward a demand shift on quarter-window demand, a quarter of `controller.reactive.window_s`.
+
+The role controller opens a departure when all of these hold:
+
+- A settled run has lasted half of `controller.reactive.window_s`: every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on quarter-window demand.
+- Quarter-window demand for a phase differs from window demand by more than a `controller.reactive.demand_rise_tolerance` fraction of the larger estimate.
+- On quarter-window demand, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
+
+The departure's move to that split requires:
+
+- source load at or below `controller.thresholds.shrink` on quarter-window demand
+- one confirmation
+
+Moves that follow the departure's move use window demand.
+
+The departure holds the reverse move for `controller.reactive.window_s` after it opens, or until a window-demand move continues in its direction.
+
+### Steady demand
+
+The confirmation span is `controller.reactive.step_s` times the sustained confirmation count, the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`.
+
+Demand is steady when both hold:
+
+- Demand over the confirmation span has matched window demand within `controller.reactive.demand_rise_tolerance` for `controller.reactive.evidence_span_s`.
+- The arrival-evidence window is closed.
+
+Under steady demand, a consolidation move with source load above `controller.thresholds.shrink` requires:
+
+- source load at or below `controller.thresholds.expand`
+- for a decode-to-prefill move, [decode slot load](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) at or below `controller.thresholds.expand`
+- a reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
+- the sustained confirmation count
 
 ### Guards on role changes
 

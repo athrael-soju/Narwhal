@@ -6,7 +6,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..profiling.store import ProfileStore
@@ -21,6 +21,62 @@ from .outcomes import OutcomeWindow
 from .prefill import prefill_seconds, resident_prefill_seconds
 
 log = logging.getLogger("narwhal.scheduler")
+
+# A request's decode hold: start, projected last token and KV tokens.
+DecodeSpan = tuple[float, float, int]
+
+
+def decode_span(
+    request: Request, start: float, token_s: float, estimate: Callable[[Request], int]
+) -> DecodeSpan:
+    """Return `request`'s decode hold from `start` at `token_s` seconds per remaining token.
+
+    Unknown remaining output holds decode indefinitely.
+    """
+    held = request.input_len + request.output_len
+    expected = estimate(request)
+    if expected > request.output_len:
+        left = expected - request.output_len
+    elif request.wanted_len > 0:
+        left = max(0, request.wanted_len - request.output_len)
+    else:
+        return start, float("inf"), held
+    return start, start + left * token_s, held + left
+
+
+@dataclass(frozen=True)
+class DecodeOccupancy:
+    """Decode holds projected from now across the live decode engines."""
+
+    engines: tuple[Instance, ...]
+    slots: int
+    tokens: float
+    # Fleet mean full-slot token interval.
+    step: float
+    # Waiting decode requests, residents and requests in prefill.
+    spans: tuple[DecodeSpan, ...]
+    # Requests in prefill, from their predicted prefill completion.
+    queued: tuple[DecodeSpan, ...]
+    # Projected last token of each resident, by engine and request ID.
+    ends: dict[tuple[str, str], float]
+
+    def peak(
+        self, start: float, end: float, *, held: int = 0, held_kv: float = 0.0
+    ) -> tuple[int, float]:
+        """Return peak requests and KV tokens over `[start, end]` above `held` and `held_kv`."""
+        events = sorted(
+            (t, order, kv)
+            for first, last, kv in self.spans
+            if first <= end and last >= start
+            for t, order in ((max(first, start), 0), (min(last, end), 1))
+        )
+        peak, peak_kv = held, held_kv
+        for _, order, kv in events:
+            held += 1 if order == 0 else -1
+            held_kv += kv if order == 0 else -kv
+            if order == 0:
+                peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
+        return peak, peak_kv
 
 
 class GlobalScheduler:
@@ -365,6 +421,60 @@ class GlobalScheduler:
             return 0.0
         return resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
 
+    def decode_occupancy(
+        self,
+        input_len: int,
+        *,
+        concurrency: int = 0,
+        expected_output: Callable[[Request], int] | None = None,
+    ) -> DecodeOccupancy | None:
+        """Project decode holds from now for a joining request of `input_len` prompt tokens.
+
+        Returns None without live decode engines or with an engine lacking `decode_max_requests`.
+        """
+        engines = tuple(self.live_instances(Role.DECODE))
+        if not engines:
+            return None
+        estimate = expected_output or (lambda r: r.wanted_len)
+        slots, tokens, steps = 0, 0.0, {}
+        for inst in engines:
+            profile = self.profiles.get(inst.iid)
+            if profile is None or profile.decode_max_requests is None:
+                return None
+            limit = profile.decode_max_requests
+            limit = min(limit, concurrency) if concurrency > 0 else limit
+            token_limit = profile.decode_token_limit
+            slots += limit
+            tokens += float("inf") if token_limit is None else token_limit
+            context = (inst.decode_tokens() + input_len) / (len(inst.decode) + 1)
+            batch = limit * context if token_limit is None else min(limit * context, token_limit)
+            steps[inst.iid] = profile.token_interval(batch, limit) * self.monitor.decode_correction(
+                inst.iid
+            )
+        step = sum(steps.values()) / len(steps)
+        spans = [
+            (0.0, float("inf"), decode_span(r, 0.0, step, estimate)[2])
+            for r in self.monitor.waiting.values()
+            if r.phase is Phase.DECODE
+        ]
+        ends: dict[tuple[str, str], float] = {}
+        for inst in engines:
+            for rid, r in inst.decode.items():
+                resident = decode_span(r, 0.0, steps[inst.iid], estimate)
+                spans.append(resident)
+                ends[inst.iid, rid] = resident[1]
+        queued: list[DecodeSpan] = []
+        for inst in self.monitor.instances.values():
+            prefill_profile = self.profiles.get(inst.iid)
+            done = 0.0
+            for r in inst.prefill.values():
+                if prefill_profile is not None:
+                    done += prefill_seconds(prefill_profile, r)
+                queued.append(decode_span(r, done, step, estimate))
+        return DecodeOccupancy(
+            engines, slots, tokens, step, tuple(spans + queued), tuple(queued), ends
+        )
+
     def decode_admits(
         self,
         request: Request,
@@ -378,86 +488,32 @@ class GlobalScheduler:
         Peak slots and KV tokens over the window must fit the fleet, and some engine must
         meet the TPOT budget unless every idle engine misses it.
         """
-        engines = self.live_instances(Role.DECODE)
-        if not engines:
-            return True
         estimate = expected_output or (lambda r: r.wanted_len)
-        slots, tokens, steps = 0, 0.0, {}
-        for inst in engines:
-            profile = self.profiles.get(inst.iid)
-            if profile is None or profile.decode_max_requests is None:
-                return True
-            limit = profile.decode_max_requests
-            limit = min(limit, concurrency) if concurrency > 0 else limit
-            token_limit = profile.decode_token_limit
-            slots += limit
-            tokens += float("inf") if token_limit is None else token_limit
-            context = (inst.decode_tokens() + request.input_len) / (len(inst.decode) + 1)
-            batch = limit * context if token_limit is None else min(limit * context, token_limit)
-            steps[inst.iid] = profile.token_interval(batch, limit) * self.monitor.decode_correction(
-                inst.iid
-            )
-        step = sum(steps.values()) / len(steps)
-
-        def remaining(r: Request) -> int | None:
-            expected = estimate(r)
-            if expected > r.output_len:
-                return expected - r.output_len
-            if r.wanted_len > 0:
-                return max(0, r.wanted_len - r.output_len)
-            return None
-
-        def span(r: Request, start: float, token_s: float) -> tuple[float, float, int]:
-            left = remaining(r)
-            if left is None:
-                return start, float("inf"), r.input_len + r.output_len
-            return start, start + left * token_s, r.input_len + r.output_len + left
-
-        _, end, request_kv = span(request, ready_s, step)
-        end = ready_s if end == float("inf") else end
-        spans = [
-            (0.0, float("inf"), span(r, 0.0, step)[2])
-            for r in self.monitor.waiting.values()
-            if r.phase is Phase.DECODE
-        ]
-        generating: dict[str, dict[str, Request]] = {}
-        for inst in engines:
-            generating[inst.iid] = {}
-            for rid, r in inst.decode.items():
-                resident = span(r, 0.0, steps[inst.iid])
-                spans.append(resident)
-                if resident[1] >= ready_s:
-                    generating[inst.iid][rid] = r
-        for inst in self.monitor.instances.values():
-            prefill_profile = self.profiles.get(inst.iid)
-            done = 0.0
-            for r in inst.prefill.values():
-                if prefill_profile is not None:
-                    done += prefill_seconds(prefill_profile, r)
-                spans.append(span(r, done, step))
-        events = sorted(
-            (t, order, kv)
-            for first, last, kv in spans
-            if first <= end and last >= ready_s
-            for t, order in ((max(first, ready_s), 0), (min(last, end), 1))
+        occupancy = self.decode_occupancy(
+            request.input_len, concurrency=concurrency, expected_output=estimate
         )
-        held, held_kv, peak, peak_kv = 1, float(request_kv), 1, 0.0
-        for _, order, kv in events:
-            held += 1 if order == 0 else -1
-            held_kv += kv if order == 0 else -kv
-            if order == 0:
-                peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
-        if peak > 1 and (peak > slots or peak_kv > tokens):
+        if occupancy is None:
+            return True
+        _, end, request_kv = decode_span(request, ready_s, occupancy.step, estimate)
+        end = ready_s if end == float("inf") else end
+        peak, peak_kv = occupancy.peak(ready_s, end, held=1, held_kv=request_kv)
+        if peak > 1 and (peak > occupancy.slots or peak_kv > occupancy.tokens):
             return False
         decode = replace(request, phase=Phase.DECODE)
+        generating = {
+            inst.iid: {
+                rid: r for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] >= ready_s
+            }
+            for inst in occupancy.engines
+        }
         if any(
             self.meets_slo(decode, self.cost(decode, replace(inst, decode=generating[inst.iid])))
-            for inst in engines
+            for inst in occupancy.engines
         ):
             return True
         return not any(
             self.meets_slo(decode, self.cost(decode, replace(inst, prefill={}, decode={})))
-            for inst in engines
+            for inst in occupancy.engines
         )
 
     def cheapest_own_prefill(self, request: Request) -> float | None:

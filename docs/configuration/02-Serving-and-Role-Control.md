@@ -333,7 +333,24 @@ Enable advisory mode:
 
 An adjacent split moves one engine between prefill and decode.
 
-Ordinary consolidation requires both:
+Adjacent-split decisions use these spans:
+
+| Span              | Length                                                                                                                   | Default |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ | :-----: |
+| Window            | `controller.reactive.window_s`                                                                                           |  120 s  |
+| Settled run       | Half of `controller.reactive.window_s`                                                                                   |   60 s  |
+| Quarter window    | A quarter of `controller.reactive.window_s`                                                                              |   30 s  |
+| Confirmation span | `controller.reactive.step_s` times max(`controller.reactive.confirmations`, `controller.thresholds.sustained_intervals`) |   15 s  |
+
+Each scored decision names one rule in `eligibility_rule`, the first match in this order:
+
+1. `projected_ttft_recovery`
+2. `mixed_pressure`
+3. `settled_departure`
+4. `steady_demand`
+5. `source_shrink`
+
+Ordinary consolidation, the `source_shrink` rule, requires both:
 
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
@@ -344,12 +361,62 @@ The `mixed_pressure` rule moves one decode engine to prefill when projected deco
 - every engine has a profile
 - the move improves the worst projected SLO ratio by a positive amount of at least `controller.reactive.movement_margin`
 
-One confirmation is enough in two cases:
+The role controller opens a departure when all of these hold:
+
+- for the settled run, every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on quarter-window demand
+- quarter-window demand for either phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate
+- an adjacent split improves the quarter-window worst projected SLO ratio by at least `controller.reactive.movement_margin`
+
+The `settled_departure` rule moves one engine toward that split when both hold on quarter-window demand:
+
+- projected source load at or below `controller.thresholds.shrink`
+- reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
+
+Moves that follow the departure's move use window demand.
+
+The departure holds the reverse move until `controller.reactive.window_s` has elapsed since it opened, or until a window-demand move continues in the departure's direction.
+
+When `mixed_pressure` applies to the departure's split on window demand, that split keeps window demand and the `mixed_pressure` rule.
+
+A departure closes before its move when the best quarter-window adjacent split changes direction or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
+
+Demand is steady when both hold:
+
+- for `controller.reactive.evidence_span_s`, confirmation-span demand and window demand for each phase have differed by at most `controller.reactive.demand_rise_tolerance` times the larger estimate
+- the arrival-evidence window is closed
+
+The `steady_demand` rule moves one engine under steady demand when both hold:
+
+- projected source load above `controller.thresholds.shrink` and at or below `controller.thresholds.expand`
+- reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
+
+With a positive `serving.decode_concurrency`, a decode-to-prefill move under `steady_demand` also requires both:
+
+- a profiled `decode_max_requests` for every live decode engine
+- decode slot load at or below `controller.thresholds.expand`
+
+Decode slot load is:
+
+```text
+peak decode requests over the next decode residency
+  / (serving.decode_concurrency * candidate decode engines)
+```
+
+Peak decode requests is the largest number of requests that hold decode at one time, over the waiting, resident and in-prefill holds of the [decode admission check](#decode-admission-check).
+
+The next decode residency starts now and lasts the mean decode hold of the requests in prefill.
+
+Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s` and an open departure unchanged.
+
+A regular evaluation more than twice `controller.reactive.step_s` after the previous regular evaluation restarts the settled run and `steady_demand_s`.
+
+One confirmation is enough in three cases:
 
 - The move originates from a projected-TTFT recovery evaluation.
+- The eligibility rule is `settled_departure`.
 - All of these hold:
   - Demand evidence is complete.
-  - The applicable rule differs from `mixed_pressure`.
+  - The eligibility rule is `source_shrink`.
   - The destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`.
 
 Every other move needs:
@@ -370,7 +437,7 @@ These reset the confirmation sequence:
 
 Prefill-to-decode moves require:
 
-- prefill load at or below `controller.thresholds.shrink`
+- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`
 - an elapsed `controller.thresholds.cooldown_s`, or an armed cooldown bypass
 
 The cooldown bypass arms after `controller.thresholds.sustained_intervals` consecutive passes with both:
@@ -393,7 +460,9 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 
 A first-token timeout or prefill-to-decode recovery move resets the consolidation evidence window.
 
-Moves toward decode can proceed while evidence accumulates.
+The `source_shrink` and `settled_departure` rules move engines toward decode while evidence accumulates.
+
+The `steady_demand` rule requires a closed evidence window in both directions.
 
 State and metrics expose:
 
@@ -405,20 +474,20 @@ State and metrics expose:
 
 These fields tune demand estimation, move confirmation, the arrival-evidence window and the decode correction.
 
-| Field                                               | Default | Meaning                                                                             | Values                                                   |
-| --------------------------------------------------- | :-----: | ----------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `controller.reactive.window_s`                      | `120.0` | Demand-estimation window.                                                           | Positive                                                 |
-| `controller.reactive.confirmations`                 | `2`     | Required consecutive identical adjacent proposals for moves that need confirmation. | At least 1                                               |
-| `controller.reactive.utilization`                   | `0.8`   | Fraction of each engine treated as usable capacity.                                 | Greater than 0, at most 1                                |
-| `controller.reactive.min_arrivals`                  | `10`    | Minimum arrival count required for a decision.                                      | At least 1                                               |
-| `controller.reactive.demand_floor`                  | `0.5`   | Minimum accepted demand signal.                                                     | Positive                                                 |
-| `controller.reactive.movement_margin`               | `0.05`  | Required reduction in worst projected SLO ratio before movement.                    | `[0, 1)`                                                 |
-| `controller.reactive.step_s`                        | `5.0`   | Minimum interval between scheduled adjacent-split evaluations.                      | Positive                                                 |
-| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span required for decode-to-prefill consolidation.           | Positive, at most `evidence_max_span_s`                  |
-| `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                     | Positive, at least `evidence_span_s`, at most `window_s` |
-| `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.    | At least 1                                               |
-| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand.                | Zero or greater                                          |
-| `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live-to-profile decode correction.                               | Positive                                                 |
-| `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live-to-profile decode correction.                               | At least `decode_correction_min`                         |
-| `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction.           | `(0, 1]`                                                 |
-| `controller.reactive.decode_correction_min_samples` | `8`     | Required decode gaps before a window updates the correction.                        | At least 1                                               |
+| Field                                               | Default | Meaning                                                                                                                                              | Values                                                   |
+| --------------------------------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `controller.reactive.window_s`                      | `120.0` | Demand-estimation window and the base of the settled-run and quarter-window spans.                                                                   | Positive                                                 |
+| `controller.reactive.confirmations`                 | `2`     | Required consecutive identical adjacent proposals for moves that need confirmation, and a factor of the confirmation span.                           | At least 1                                               |
+| `controller.reactive.utilization`                   | `0.8`   | Fraction of each engine treated as usable capacity.                                                                                                  | Greater than 0, at most 1                                |
+| `controller.reactive.min_arrivals`                  | `10`    | Minimum arrival count required for a decision.                                                                                                       | At least 1                                               |
+| `controller.reactive.demand_floor`                  | `0.5`   | Minimum accepted demand signal.                                                                                                                      | Positive                                                 |
+| `controller.reactive.movement_margin`               | `0.05`  | Required reduction in worst projected SLO ratio before movement.                                                                                     | `[0, 1)`                                                 |
+| `controller.reactive.step_s`                        | `5.0`   | Minimum interval between scheduled adjacent-split evaluations and the unit of the confirmation span.                                                 | Positive                                                 |
+| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span for decode-to-prefill consolidation and the duration of matching demand that makes demand steady.                        | Positive, at most `evidence_max_span_s`                  |
+| `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                                                                                      | Positive, at least `evidence_span_s`, at most `window_s` |
+| `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.                                                                     | At least 1                                               |
+| `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand, and the fraction of the larger estimate within which two demand horizons match. | Zero or greater                                          |
+| `controller.reactive.decode_correction_min`         | `0.5`   | Lower bound on the live-to-profile decode correction.                                                                                                | Positive                                                 |
+| `controller.reactive.decode_correction_max`         | `2.0`   | Upper bound on the live-to-profile decode correction.                                                                                                | At least `decode_correction_min`                         |
+| `controller.reactive.decode_correction_alpha`       | `0.2`   | Fraction of each qualifying observation window applied to the correction.                                                                            | `(0, 1]`                                                 |
+| `controller.reactive.decode_correction_min_samples` | `8`     | Required decode gaps before a window updates the correction.                                                                                         | At least 1                                               |

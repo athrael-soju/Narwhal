@@ -79,7 +79,12 @@ The role controller scores the current role split and each adjacent split, one e
 
 Demand is the measured window demand, using the larger of the short- and long-horizon decode estimates for decode-to-prefill candidates. The evidence window closes after `controller.reactive.evidence_span_s` and the minimum arrivals, or after `controller.reactive.evidence_max_span_s` under sparse traffic.
 
-The controller moves to the adjacent split that improves the score by at least the configured margin. A decode-to-prefill move requires a closed evidence window and stable decode demand, and a prefill-to-decode move proceeds with the window open.
+The controller moves to the adjacent split that improves the score by at least the configured margin:
+
+- After a settled period, a demand shift moves one engine on quarter-window demand.
+- Under steady demand, the score chooses between adjacent splits after the evidence window closes.
+- A decode-to-prefill move requires a closed evidence window and stable decode demand.
+- A prefill-to-decode move with prefill load at or below `controller.thresholds.shrink` proceeds with the window open.
 
 Each move passes the guards for pinned engines, role floors, cooldown, dwell time, the resident-stream ceiling on decode donors, and engine lifecycle holds. Floor repair moves one engine per monitor pass while a phase sits below its configured floor.
 

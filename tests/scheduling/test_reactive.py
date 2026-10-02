@@ -19,6 +19,7 @@ from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.controller import ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.reactive import Departure
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
@@ -172,6 +173,18 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual([flip.to for flip in fleet.scheduler.flips], [Role.PREFILL] * 2)
         self.assertGreater(fleet.scheduler.pool_load(Role.PREFILL), 1.0)
         self.assertGreater(fleet.scheduler.pool_load(Role.DECODE), 1.0)
+
+    def test_open_departure_keeps_window_pricing_under_mixed_pressure(self) -> None:
+        fleet = self.fleet
+        policy = fleet.controller.reactive
+        policy.departure = Departure(1, fleet.now)
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler._last_decision
+        self.assertEqual(decision["result"], "applied")
+        self.assertEqual(decision["eligibility_rule"], "mixed_pressure")
+        self.assertEqual(decision["demand_horizon_s"], fleet.controller.window_s)
+        self.assertEqual(decision["required_confirmations"], 3)
+        self.assertFalse(policy.departure.moved)
 
     def test_candidate_uses_its_colocated_prefill_cost(self) -> None:
         """A 2P/4D proposal is priced from its own measured mix rows."""

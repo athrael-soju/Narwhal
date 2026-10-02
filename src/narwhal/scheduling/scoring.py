@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
 from ..profiling.model import Profile
@@ -300,6 +300,32 @@ class SplitScorer:
         for row in waiting:
             self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
 
+    def decode_slot_load(self, decode: int) -> float:
+        """Return peak decode-pool requests per slot on `decode` engines."""
+        cap = self.scheduler.decode_concurrency
+        if cap <= 0 or decode <= 0:
+            return 0.0
+        return self.decode_peak_requests() / (decode * cap)
+
+    def decode_peak_requests(self) -> float:
+        """Return peak decode-pool requests over the next decode residency.
+
+        The next decode residency is the mean residency of requests in prefill.
+        Infinity when `decode_occupancy` returns None.
+        """
+        queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
+        occupancy = self.scheduler.decode_occupancy(
+            round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
+            concurrency=self.scheduler.decode_concurrency,
+            expected_output=self.demand.output_estimator(),
+        )
+        if occupancy is None:
+            return float("inf")
+        residencies = [
+            last - first if last < float("inf") else 0.0 for first, last, _ in occupancy.queued
+        ]
+        return occupancy.peak(0.0, sum(residencies) / len(residencies) if residencies else 0.0)[0]
+
     def project_prefill(
         self,
         now: float,
@@ -388,10 +414,13 @@ class SplitScorer:
         correction: float | None = None,
         window_s: float | None = None,
         step_s: float | None = None,
+        resident_s: float | None = None,
+        prefills: Collection[int] | None = None,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values.
 
         Splits cover the live engines; unavailable engines add no capacity.
+        `prefills` limits role-mix pricing to those splits.
         """
         instances = tuple(self.scheduler.live_instances())
         profiles = tuple(
@@ -439,6 +468,8 @@ class SplitScorer:
         # Engines that run prefill under each split.
         prefill_iids: dict[int, set[str]] = {}
         for prefill in range(1, len(instances)):
+            if prefills is not None and prefill not in prefills:
+                continue
             roles = {inst.iid: inst.role for inst in instances}
             rows: tuple[Profile, ...]
             if abs(prefill - current_prefill) > 1:
@@ -467,6 +498,7 @@ class SplitScorer:
                         estimates=estimates,
                         correction=correction,
                         prefill_iids=prefill_iids[prefill],
+                        resident_s=resident_s,
                     ),
                 )
                 for prefill, rows in profile_options
