@@ -26,6 +26,7 @@ from ..engines.dialect import lookup as lookup_dialect
 from ..engines.prefix import CacheNamespace, block_identities
 from ..observability.journal import RunJournal
 from ..observability.metrics import slo_histogram
+from ..profiling.calibration import CalibrationCheck
 from ..profiling.store import ProfileStore
 from ..runtime.lifecycle import LifecycleManager
 from ..runtime.monitoring import MonitoringLedger
@@ -99,6 +100,7 @@ class NarwhalRouter:
         self.lease_holder = ""
         self.failover_blocked = ""
         self.lifecycle_blocked = ""
+        self.first_token_calibration = CalibrationCheck("uncalibrated")
         # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
         self.profiles = ProfileStore(cfg.profiles_path)
@@ -707,6 +709,9 @@ class NarwhalRouter:
             },
             "slo": {"ttft_s": self.cfg.slo.ttft_s, "tpot_s": self.cfg.slo.tpot_s},
             "first_token_timeout_s": self.cfg.first_token_timeout_s,
+            "first_token_calibration": self.first_token_calibration.at_starts(
+                self.lifecycle.process_starts
+            ).view(),
             "resident": {
                 iid: {"prefill": len(i.prefill), "decode": len(i.decode)}
                 for iid, i in self.monitor.instances.items()

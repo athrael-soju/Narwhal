@@ -32,10 +32,15 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.validation import pairs_of
-from narwhal.profiling.generation import GenerationEvidence
+from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
-from tests.fixtures import fleet, profile
+from tests.fixtures import calibration_document, fleet, profile
+
+UNCALIBRATED = (
+    "first-token deadline has no calibration evidence; run narwhal-check "
+    "--calibrate-first-token and set engine.first_token_calibration_path"
+)
 
 
 class PreflightTests(unittest.IsolatedAsyncioTestCase):
@@ -434,6 +439,157 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await check.run(self.cfg, False, True, report=report), 1)
         client.aclose.assert_awaited_once()
 
+    async def _calibrated_engines(self):
+        """Serve launch-attested engines and write a calibration measured on them."""
+        contract = self.cfg.engine_contract
+        values = dict.fromkeys(contract.fields(), "fixture")
+        launches = {spec.iid: {"args": ["--max-num-seqs", "64"]} for spec in self.cfg.engines}
+        starts = dict.fromkeys(launches, 100.0)
+        hosts = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
+
+        def handle(request):
+            iid = hosts[request.url.host]
+            if request.url.path == "/version":
+                return httpx.Response(200, json={"version": contract.vllm_version})
+            if request.url.path == "/metrics":
+                return httpx.Response(200, text=f"process_start_time_seconds {starts[iid]}\n")
+            identity = EngineIdentity(contract.vllm_version, starts[iid])
+            document = AttestationDocument(contract, values, launches[iid])
+            return httpx.Response(200, json=make_attestation(document, identity))
+
+        transport = httpx.MockTransport(handle)
+        live = {
+            spec.iid: await read_generation(spec, contract, timeout_s=1, transport=transport)
+            for spec in self.cfg.engines
+        }
+        path = self.cfg.profiles_path.parent / "calibration.json"
+        document = calibration_document(
+            self.cfg,
+            {iid: generation.digest for iid, generation in live.items()},
+            {iid: generation.process_start_time_seconds for iid, generation in live.items()},
+        )
+        path.write_text(json.dumps(document))
+        self.cfg.first_token_calibration_path = path
+        return launches, starts, transport
+
+    async def test_calibration_gate_reports_measured_and_reused_engines(self):
+        """An identical relaunch keeps the calibration and names the reused engine."""
+        _, starts, transport = await self._calibrated_engines()
+        limits = "candidate 0.800s, deadline 2.5s"
+        for relaunched, line, engines in (
+            (
+                False,
+                f"first-token calibration measured on the running engines: {limits}",
+                {"e0": "measured", "e3": "measured"},
+            ),
+            (
+                True,
+                "first-token calibration reused for e3: launch unchanged since capture; " + limits,
+                {"e0": "measured", "e3": "reused"},
+            ),
+        ):
+            with self.subTest(relaunched=relaunched):
+                starts["e3"] = 101.0 if relaunched else 100.0
+                report = Report()
+                with redirect_stdout(io.StringIO()) as output:
+                    await check.gate_calibration(self.cfg, report, transport)
+                self.assertEqual(output.getvalue().splitlines(), ["calibration", f"  ok    {line}"])
+                self.assertEqual((report.failed, report.warnings), ([], []))
+                self.assertEqual(
+                    report.calibration,
+                    {
+                        "status": "reused" if relaunched else "measured",
+                        "captured_at_unix": 1000.0,
+                        "candidate_deadline_s": 0.8,
+                        "engines": engines,
+                        "path": str(self.cfg.first_token_calibration_path),
+                    },
+                )
+
+    async def test_calibration_gate_warns_without_a_path(self):
+        """A fleet without a calibration path warns and reports uncalibrated."""
+        report = Report()
+        await check.gate_calibration(self.cfg, report)
+        self.assertEqual(report.warnings, [UNCALIBRATED])
+        self.assertEqual(report.failed, [])
+        self.assertEqual(
+            report.calibration,
+            {
+                "status": "uncalibrated",
+                "captured_at_unix": None,
+                "candidate_deadline_s": None,
+                "engines": {},
+                "path": None,
+            },
+        )
+
+    async def test_calibration_gate_fails_a_changed_launch(self):
+        """A relaunch with a changed engine argument rejects the calibration."""
+        launches, starts, transport = await self._calibrated_engines()
+        launches["e3"] = {"args": ["--max-num-seqs", "32"]}
+        starts["e3"] = 101.0
+        report = Report()
+        await check.gate_calibration(self.cfg, report, transport)
+        self.assertEqual(report.failed, ["e3 process differs from first-token calibration"])
+        self.assertEqual(
+            report.calibration,
+            {
+                "status": "rejected",
+                "captured_at_unix": None,
+                "candidate_deadline_s": None,
+                "engines": {},
+                "path": str(self.cfg.first_token_calibration_path),
+            },
+        )
+
+    async def test_preflight_result_data_includes_first_token_calibration(self):
+        """The calibration section follows reach and its result joins the preflight data."""
+        client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(check, "EngineClient", return_value=client))
+            stack.enter_context(
+                patch.object(
+                    check, "colocated_restart_risk", new=AsyncMock(return_value="restart risk")
+                )
+            )
+            for name, value in (("contract", set()), ("model", set()), ("pace", set())):
+                stack.enter_context(
+                    patch.object(check, f"gate_{name}", new=AsyncMock(return_value=value))
+                )
+            stack.enter_context(patch.object(check, "gate_tokenize", new=AsyncMock()))
+            stack.enter_context(patch.object(check, "gate_profile"))
+            stack.enter_context(
+                patch.object(check, "gate_profile_generation", new=AsyncMock(return_value=set()))
+            )
+            stack.enter_context(patch.object(check, "gate_slo"))
+            set_data = stack.enter_context(patch.object(check.results, "set_data"))
+            output = stack.enter_context(redirect_stdout(io.StringIO()))
+            self.assertEqual(await check.run(self.cfg, mesh=False, skip_kv=True), 0)
+        lines = output.getvalue().splitlines()
+        start = lines.index("reach")
+        self.assertEqual(
+            lines[start : start + 6],
+            [
+                "reach",
+                "  ok    e0 /health",
+                "  ok    e3 /health",
+                "  WARN  restart risk",
+                "calibration",
+                f"  WARN  {UNCALIBRATED}",
+            ],
+        )
+        data = set_data.call_args.args[0]
+        self.assertEqual(
+            data["first_token_calibration"],
+            {
+                "status": "uncalibrated",
+                "captured_at_unix": None,
+                "candidate_deadline_s": None,
+                "engines": {},
+                "path": None,
+            },
+        )
+
     async def test_produce_failure_and_consume_empty_output_are_failures(self):
         """A successful HTTP handoff still needs generated token evidence at the consumer."""
         connector = NixlConnector()
@@ -818,7 +974,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         patch.object(
                             check,
                             "read_generation",
-                            new=AsyncMock(return_value=GenerationEvidence(digest, {})),
+                            new=AsyncMock(return_value=GenerationEvidence(digest, {}, 100.0)),
                         )
                     )
                     stack.enter_context(
@@ -907,7 +1063,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             check,
             "read_generation",
-            new=AsyncMock(return_value=GenerationEvidence(live_digest, {})),
+            new=AsyncMock(return_value=GenerationEvidence(live_digest, {}, 100.0)),
         ):
             report = Report()
             unsafe = await check.gate_profile_generation(self.cfg, store, {"e0"}, report)

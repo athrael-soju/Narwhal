@@ -438,6 +438,15 @@ class PeerReleaseOut(BaseModel):
     next_round_s: float | None
 
 
+class FirstTokenCalibrationOut(BaseModel):
+    """First-token calibration verified at startup, labelled by each engine's process start."""
+
+    status: Literal["measured", "reused", "uncalibrated"]
+    captured_at_unix: float | None
+    candidate_deadline_s: float | None
+    engines: dict[str, Literal["measured", "reused"]]
+
+
 class StateOut(BaseModel):
     """Live router and scheduler state."""
 
@@ -471,6 +480,7 @@ class StateOut(BaseModel):
     thresholds: ThresholdsOut
     slo: SLOOut
     first_token_timeout_s: float
+    first_token_calibration: FirstTokenCalibrationOut
     resident: dict[str, ResidentOut]
     pinned: list[str] = []
     min_prefill: int = 1

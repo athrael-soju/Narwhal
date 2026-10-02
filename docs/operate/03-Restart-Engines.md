@@ -340,7 +340,6 @@ For a warm standby router:
 
 1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) with the recorded measurement recipe.
 2. With a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
-3. When `engine.first_token_calibration_path` is set, [recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) and set that path in the fleet file to the new artifact.
 
 ### 2. Preparing the activation configuration
 
@@ -387,6 +386,12 @@ Run full preflight on the idle fleet:
 ```bash
 narwhal-check --fleet "$ACTIVATION_FLEET" > "$RUN_DIR/activation-preflight.log" 2>&1
 ```
+
+If the log reports `process differs from first-token calibration`:
+
+1. [Recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+2. Set `engine.first_token_calibration_path` in `$FLEET` and `$ACTIVATION_FLEET` to the new artifact.
+3. Run full preflight again.
 
 When the command exits 0, keep the log, profiles, and sample files.
 

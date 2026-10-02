@@ -1328,14 +1328,18 @@ class _Unhealthy(Exception):
     """An engine failed its health gate before profiling."""
 
 
+def device_key(spec: EngineSpec) -> str:
+    """Return the engine's shared-device group, or `engine:<iid>` for a dedicated device."""
+    return spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
+
+
 def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
     """Group engines that share a device, or all engines under neighbour load, into one lane."""
     if colocated:
         return [list(targets)]
     lanes: dict[str, list[EngineSpec]] = {}
     for spec in targets:
-        key = spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
-        lanes.setdefault(key, []).append(spec)
+        lanes.setdefault(device_key(spec), []).append(spec)
     return list(lanes.values())
 
 

@@ -39,7 +39,7 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
         generation = "sha256:" + "a" * 64
         generation_reader = patch(
             "narwhal.serving.app.read_generation",
-            new=AsyncMock(return_value=GenerationEvidence(generation, {"engine": {}})),
+            new=AsyncMock(return_value=GenerationEvidence(generation, {"engine": {}}, 100.0)),
         )
         generation_reader.start()
         self.addCleanup(generation_reader.stop)

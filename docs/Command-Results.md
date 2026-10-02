@@ -52,7 +52,7 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and the `sources` count |
 | `narwhal-engine` actions | `runs`, the launch directories |
 | `narwhal-profile` | `engines`, the selected engine IDs |
-| `narwhal-check` preflight | `failed`, `skipped`, `warnings`, and `pairs` |
+| `narwhal-check` preflight | `failed`, `skipped`, `warnings`, `pairs`, and [`first_token_calibration`](cli/Check.md#the-calibration-gate) |
 | `narwhal-check --verify-evidence` | `failed` |
 | `narwhal-check --print-example-config` | The packaged example fleet configuration |
 | `narwhal-check --print-contract-versions` | The versioned interface registry |
