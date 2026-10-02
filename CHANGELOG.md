@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.1](https://github.com/athrael-soju/Narwhal/compare/v0.4.0...v0.4.1) (2026-10-02)
+
+
+* release 0.4.1 ([#237](https://github.com/athrael-soju/Narwhal/issues/237)) ([977a251](https://github.com/athrael-soju/Narwhal/commit/977a2519c801f39526266855d6d7be9ac24c8ef7))
+
+
+### Features
+
+* give dashboard series one colour palette ([#235](https://github.com/athrael-soju/Narwhal/issues/235)) ([c160ad5](https://github.com/athrael-soju/Narwhal/commit/c160ad56f4ba9df3fbba6084855b468450e930f5))
+
 ## [0.4.0](https://github.com/athrael-soju/Narwhal/compare/v0.3.2...v0.4.0) (2026-10-01)
 
 
