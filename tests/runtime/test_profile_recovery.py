@@ -16,6 +16,7 @@ from narwhal.runtime.lease import FileLease
 from narwhal.runtime.monitoring import readmit, sweep_liveness
 from narwhal.runtime.readmission import allow_profile_recovery
 from narwhal.runtime.standby import ready, standby_loop
+from narwhal.serving import verification
 from narwhal.serving.app import create_app
 from tests.fixtures import bind_identity_profiles, fleet
 
@@ -89,14 +90,14 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_health_verification_and_liveness_cannot_clear_stale_quarantine(self):
         self.starts["e0"] += 1
-        for action in (self.router._verify_health, sweep_liveness):
+        for action in (verification.verify_health, sweep_liveness):
             with self.subTest(action=action.__name__):
                 self.router.scheduler.ejected.clear()
                 self.router.scheduler.quarantined["e0"] = self.router._clock() + 100
                 if action == sweep_liveness:
                     await action(self.router)
                 else:
-                    await action("e0", self.cfg.engines[0].url)
+                    await action(self.router, "e0", self.cfg.engines[0].url)
                 self.assertIn("e0", self.router.scheduler.ejected)
                 self.assertNotIn(
                     "e0", [inst.iid for inst in self.router.scheduler.live_instances()]
@@ -144,7 +145,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
             return identity_generation(EngineIdentity("fixture", self.starts["e0"]))
 
         with patch("narwhal.runtime.readmission.read_generation", side_effect=excluded):
-            await self.router._verify_health("e0", self.cfg.engines[0].url)
+            await verification.verify_health(self.router, "e0", self.cfg.engines[0].url)
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertEqual(self.router.scheduler.draining, {"e0", "e3"})
         self.assertTrue(self.router.lifecycle.wave_id)

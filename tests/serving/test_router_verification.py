@@ -18,10 +18,11 @@ from narwhal.engines.client import (
     ProbeLeg,
     Tokenization,
 )
+from narwhal.serving import execution, sizing, verification
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.execution import _failed_leg
-from narwhal.serving.router import TOKENIZE_BACKOFF_MAX_S
+from narwhal.serving.sizing import TOKENIZE_BACKOFF_MAX_S
 from narwhal.types import Phase, Request
 from tests.fixtures import bind_identity_profiles, fleet
 
@@ -49,8 +50,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=EngineError("tokenize", "http://engine", 400, "string required")
             ),
         ) as count:
-            self.assertEqual((await self.router.size({"prompt": list(range(512))}))[0], 512)
-            self.assertEqual((await self.router.size({"prompt": [0]}))[0], 1)
+            self.assertEqual((await sizing.size(self.router, {"prompt": list(range(512))}))[0], 512)
+            self.assertEqual((await sizing.size(self.router, {"prompt": [0]}))[0], 1)
             count.assert_not_awaited()
 
     async def test_text_chat_and_non_token_arrays_keep_strict_tokenization(self):
@@ -74,7 +75,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 ) as count,
                 self.assertRaisesRegex(EngineError, "late"),
             ):
-                await self.router.size(body)
+                await sizing.size(self.router, body)
             self.assertTrue(count.await_args.kwargs["strict"])
 
     async def test_sizing_skips_a_failed_tokenizer_until_a_count_succeeds(self):
@@ -92,20 +93,20 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             ),
         ) as count:
             with self.assertRaisesRegex(EngineError, "late"):
-                await self.router.size({"prompt": "hello"})
-            self.assertEqual((await self.router.size({"prompt": "hello"}))[0], 9)
-            self.assertEqual((await self.router.size({"prompt": "hello"}))[0], 10)
+                await sizing.size(self.router, {"prompt": "hello"})
+            self.assertEqual((await sizing.size(self.router, {"prompt": "hello"}))[0], 9)
+            self.assertEqual((await sizing.size(self.router, {"prompt": "hello"}))[0], 10)
         urls = [call.args[0] for call in count.call_args_list]
         self.assertNotEqual(urls[0], urls[1])
         self.assertEqual(urls[1], urls[2])
-        self.assertEqual(self.router.estimate_length({"prompt": [1, 2, 3]}), 3)
+        self.assertEqual(sizing.estimate_length(self.router, {"prompt": [1, 2, 3]}), 3)
         self.assertGreaterEqual(
-            self.router.estimate_length({"messages": [{"content": "hello"}]}), 1
+            sizing.estimate_length(self.router, {"messages": [{"content": "hello"}]}), 1
         )
         for iid in ("e0", "e3"):
             self.router.scheduler.eject(iid)
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
-            self.assertEqual((await self.router.size({"prompt": ""}))[0], 1)
+            self.assertEqual((await sizing.size(self.router, {"prompt": ""}))[0], 1)
             count.assert_not_awaited()
 
     async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
@@ -126,21 +127,21 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             for step in range(24):
                 now[0] += 0.1
                 try:
-                    await self.router.size({"prompt": f"hello {step}"})
+                    await sizing.size(self.router, {"prompt": f"hello {step}"})
                 except EngineError:
                     failures += 1
             self.assertEqual(failures, 2)
             now[0] += 60.0
             healed = True
             for _ in range(4):
-                await self.router.size({"prompt": "hello"})
+                await sizing.size(self.router, {"prompt": "hello"})
             now[0] += 0.1
             urls = []
             with patch.object(
                 self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)
             ) as count:
                 for _ in range(4):
-                    await self.router.size({"prompt": "hello"})
+                    await sizing.size(self.router, {"prompt": "hello"})
                 urls = [call.args[0] for call in count.call_args_list]
         self.assertIn(bad, urls)
 
@@ -162,18 +163,18 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.router.engines, "tokenize", new=AsyncMock(side_effect=tokenize)):
             for n in range(1, 8):
                 with self.assertRaises(EngineError):
-                    await self.router.size({"prompt": "hello"})
+                    await sizing.size(self.router, {"prompt": "hello"})
                 self.assertEqual(
                     self.router._tokenize_backoff[bad.iid],
                     (n, now[0] + min(2 ** (n - 1), TOKENIZE_BACKOFF_MAX_S)),
                 )
             self.assertEqual(self.router._tokenize_backoff[bad.iid][1], now[0] + 30.0)
             healed = True
-            await self.router.size({"prompt": "hello"})
+            await sizing.size(self.router, {"prompt": "hello"})
             self.assertNotIn(bad.iid, self.router._tokenize_backoff)
             healed = False
             with self.assertRaises(EngineError):
-                await self.router.size({"prompt": "hello"})
+                await sizing.size(self.router, {"prompt": "hello"})
             self.assertEqual(self.router._tokenize_backoff[bad.iid], (1, now[0] + 1.0))
 
     async def test_sustained_tokenizer_failures_keep_the_engine_error_and_the_capped_backoff(self):
@@ -190,7 +191,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         ):
             for _ in range(calls):
                 with self.assertRaisesRegex(EngineError, "late"):
-                    await self.router.size({"prompt": "hello"})
+                    await sizing.size(self.router, {"prompt": "hello"})
         backoff = [self.router._tokenize_backoff[inst.iid] for inst in live]
         self.assertEqual(sum(failures for failures, _ in backoff), calls)
         self.assertEqual({until for _, until in backoff}, {now[0] + TOKENIZE_BACKOFF_MAX_S})
@@ -205,7 +206,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.router.engines, "tokenize", new=AsyncMock(return_value=Tokenization(5, None))
         ) as count:
             for _ in range(2 * (len(live) - 1)):
-                await self.router.size({"prompt": "hello"})
+                await sizing.size(self.router, {"prompt": "hello"})
         urls = [call.args[0] for call in count.call_args_list]
         self.assertNotIn(busy.url, urls)
         self.assertEqual(set(urls), {i.url for i in live[1:]})
@@ -218,7 +219,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
                 self.subTest(answer=answer),
                 patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=answer)),
             ):
-                await self.router._verify_health("e0", self.cfg.engines[0].url)
+                await verification.verify_health(self.router, "e0", self.cfg.engines[0].url)
             self.assertEqual("e0" in self.router.scheduler.ejected, answer is False)
 
     def test_probe_resolution_defers_inconclusive_legs_and_ejects_failed_inference(self):
@@ -231,7 +232,9 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             (InferenceProbe(ProbeLeg(), ProbeLeg(failed="stream")), False),
         ):
             with self.subTest(probe=probe):
-                self.assertIs(self.router._resolve_inference_probe("e0", probe), result)
+                self.assertIs(
+                    verification.resolve_inference_probe(self.router, "e0", probe), result
+                )
         self.assertIn("e0", self.router.scheduler.ejected)
 
     async def test_inference_recovery_verifies_every_recorded_producer(self):
@@ -243,7 +246,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             "probe_inference",
             new=AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg())),
         ) as probe:
-            await self.router._verify_inference("e3", self.cfg.engines[1].url)
+            await verification.verify_inference(self.router, "e3", self.cfg.engines[1].url)
         self.assertEqual(probe.await_count, 2)
         self.assertEqual(
             [call.kwargs["prefill_url"] for call in probe.call_args_list],
@@ -256,7 +259,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         """Recovery waits for checks of newly added producers."""
         self.router._inference_sources["e3"] = {"unknown"}
         with patch.object(self.router.engines, "probe_inference", new=AsyncMock()) as probe:
-            await self.router._verify_inference("e3", self.cfg.engines[1].url)
+            await verification.verify_inference(self.router, "e3", self.cfg.engines[1].url)
             probe.assert_not_awaited()
         self.router._inference_sources["e3"] = {""}
 
@@ -265,10 +268,10 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             return InferenceProbe(ProbeLeg(), ProbeLeg())
 
         with patch.object(self.router.engines, "probe_inference", side_effect=changed):
-            await self.router._verify_inference("e3", self.cfg.engines[1].url)
+            await verification.verify_inference(self.router, "e3", self.cfg.engines[1].url)
         self.assertEqual(self.router._inference_sources["e3"], {"", "e0"})
         with patch.object(self.router.engines, "probe_inference", new=AsyncMock(return_value=None)):
-            await self.router._verify_inference("e3", self.cfg.engines[1].url)
+            await verification.verify_inference(self.router, "e3", self.cfg.engines[1].url)
         self.assertIn("e3", self.router._inference_sources)
 
     async def test_verification_task_cleanup_runs_after_failure_and_missing_engine(self):
@@ -279,38 +282,40 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             ("e3", "verify_inference"),
         ):
             self.router.scheduler.verifying.add((iid, kind))
-            method = "_verify_inference" if kind == "verify_inference" else "_verify_health"
+            method = "verify_inference" if kind == "verify_inference" else "verify_health"
             with (
                 self.subTest(iid=iid),
-                patch.object(self.router, method, side_effect=ValueError("probe failed")),
+                patch.object(verification, method, side_effect=ValueError("probe failed")),
             ):
                 if iid == "unknown":
-                    await self.router._verify_suspect(iid, kind)
+                    await verification.verify_suspect(self.router, iid, kind)
                 else:
                     with self.assertLogs("narwhal", level="ERROR"):
-                        await self.router._verify_suspect(iid, kind)
+                        await verification.verify_suspect(self.router, iid, kind)
             self.assertNotIn((iid, kind), self.router.scheduler.verifying)
             self.assertIn(iid, self.router._verification_at)
-        with patch.object(self.router, "_verify_suspect", new=AsyncMock()):
-            self.router._start_verification("e0", "verify_health")
+        with patch.object(verification, "verify_suspect", new=AsyncMock()):
+            verification.start_verification(self.router, "e0", "verify_health")
             await asyncio.gather(*self.router._verification_tasks)
             await asyncio.sleep(0)
         self.assertFalse(self.router._verification_tasks)
 
     def test_leg_failures_deduplicate_probes_and_preserve_source_identity(self):
         """Repeated stream failures start one probe and record the producer ID."""
-        with patch.object(self.router, "_start_verification") as start:
-            self.router._leg_failed(
-                "e3", httpx.ReadTimeout("decode"), prefill_iid="e0", decode_leg=True
+        with patch.object(verification, "start_verification") as start:
+            verification.leg_failed(
+                self.router, "e3", httpx.ReadTimeout("decode"), prefill_iid="e0", decode_leg=True
             )
-            self.router._leg_failed(
-                "e3", httpx.ReadTimeout("decode"), prefill_iid="e0", decode_leg=True
+            verification.leg_failed(
+                self.router, "e3", httpx.ReadTimeout("decode"), prefill_iid="e0", decode_leg=True
             )
-            start.assert_called_once_with("e3", "verify_inference")
+            start.assert_called_once_with(self.router, "e3", "verify_inference")
         self.assertEqual(self.router._inference_sources["e3"], {"e0"})
         with patch.object(self.router.scheduler, "record_failure") as failure:
-            self.router._leg_failed("e0", httpx.PoolTimeout("pool"))
-            self.router._leg_failed("e0", EngineError("prefill", "http://engine", 400, "invalid"))
+            verification.leg_failed(self.router, "e0", httpx.PoolTimeout("pool"))
+            verification.leg_failed(
+                self.router, "e0", EngineError("prefill", "http://engine", 400, "invalid")
+            )
             failure.assert_not_called()
 
     async def test_admission_rejection_and_queue_expiry_leave_one_terminal_outcome(self):
@@ -387,16 +392,16 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
 
     def test_first_token_timeouts_count_as_overload_while_the_engine_produces_output(self):
         router = self.router()
-        with patch.object(router, "_start_verification") as start:
-            router._leg_failed(
-                "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=True
+        with patch.object(verification, "start_verification") as start:
+            verification.leg_failed(
+                router, "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=True
             )
-            start.assert_called_once_with("e3", "verify_health")
+            start.assert_called_once_with(router, "e3", "verify_health")
             self.assertNotIn("e3", router.scheduler.inference_suspects)
-            router._leg_failed(
-                "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=False
+            verification.leg_failed(
+                router, "e3", self.timeout, prefill_iid="e0", decode_leg=True, progressed=False
             )
-            start.assert_called_with("e3", "verify_inference")
+            start.assert_called_with(router, "e3", "verify_inference")
         self.assertIn("e3", router.scheduler.inference_suspects)
 
     def test_failed_legs_report_output_after_the_leg_started(self):
@@ -408,7 +413,7 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", other)
         started = router._clock()
-        with patch.object(router, "_leg_failed") as leg:
+        with patch.object(execution, "leg_failed") as leg:
             _failed_leg(state, inst, self.timeout, decode=True, started=started)
             self.assertIs(leg.call_args.kwargs["progressed"], False)
             router.monitor.output_token("e3", "o")
@@ -422,15 +427,15 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", Request("stuck", 10, phase=Phase.DECODE))
-        with patch.object(router, "_start_verification") as start:
+        with patch.object(verification, "start_verification") as start:
             _failed_leg(state, inst, self.timeout, decode=True, started=router._clock())
-        start.assert_called_once_with("e3", "verify_inference")
+        start.assert_called_once_with(router, "e3", "verify_inference")
 
     def test_a_sole_role_engine_leaves_its_hold_after_a_failed_probe(self):
         router = self.router(pinned=True)
         router.scheduler.inference_suspects.add("e3")
         router.scheduler.quarantined["e3"] = math.inf
-        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertFalse(verification.resolve_inference_probe(router, "e3", self.failed))
         self.assertNotIn("e3", router.scheduler.quarantined)
         self.assertNotIn("e3", router.scheduler.ejected)
 
@@ -442,24 +447,24 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(router.scheduler.quarantine("e3", 5.0), held)
                 router.scheduler.quarantined.pop("e3", None)
                 with patch.object(router.engines, "healthy", new=AsyncMock(return_value=False)):
-                    await router._verify_health("e3", self.cfg.engines[1].url)
+                    await verification.verify_health(router, "e3", self.cfg.engines[1].url)
                 self.assertEqual("e3" in router.scheduler.ejected, held)
 
     def test_the_only_engine_for_a_pinned_role_stays_live(self):
         router = self.router(pinned=True)
-        with patch.object(router, "_start_verification"):
-            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True)
+        with patch.object(verification, "start_verification"):
+            verification.leg_failed(router, "e3", self.timeout, prefill_iid="e0", decode_leg=True)
         self.assertIn("e3", router.scheduler.inference_suspects)
         self.assertNotIn("e3", router.scheduler.quarantined)
-        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertFalse(verification.resolve_inference_probe(router, "e3", self.failed))
         self.assertNotIn("e3", router.scheduler.ejected)
 
     def test_unpinned_fleets_hold_and_eject_a_failed_engine(self):
         router = self.router()
-        with patch.object(router, "_start_verification"):
-            router._leg_failed("e3", self.timeout, prefill_iid="e0", decode_leg=True)
+        with patch.object(verification, "start_verification"):
+            verification.leg_failed(router, "e3", self.timeout, prefill_iid="e0", decode_leg=True)
         self.assertEqual(router.scheduler.quarantined["e3"], math.inf)
-        self.assertFalse(router._resolve_inference_probe("e3", self.failed))
+        self.assertFalse(verification.resolve_inference_probe(router, "e3", self.failed))
         self.assertIn("e3", router.scheduler.ejected)
 
     async def test_inference_probes_use_the_longer_first_token_or_health_budget(self):
@@ -470,14 +475,14 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             router.engines, "probe_inference", new=AsyncMock(return_value=passed)
         ) as probe:
-            await router._verify_inference("e3", self.cfg.engines[1].url)
+            await verification.verify_inference(router, "e3", self.cfg.engines[1].url)
         self.assertEqual(probe.call_args.kwargs["deadline_s"], 5.0)
 
     def test_a_failed_producer_leg_names_the_deferral(self):
         router = self.router()
         probe = InferenceProbe(ProbeLeg(failed="inference_status"), ProbeLeg(inconclusive=True))
         with self.assertLogs("narwhal", level="INFO") as logs:
-            self.assertFalse(router._resolve_inference_probe("e3", probe))
+            self.assertFalse(verification.resolve_inference_probe(router, "e3", probe))
         output = "\n".join(logs.output)
         self.assertIn("producer leg failed inference_status", output)
         self.assertNotIn("control pool", output)

@@ -11,7 +11,7 @@ from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.demand import Arrival
 from narwhal.scheduling.prefill import prefill_seconds
 from narwhal.scheduling.scoring import CACHE_RECHECK_S
-from narwhal.serving import router as router_module
+from narwhal.serving import sizing
 from narwhal.serving.app import create_app
 from narwhal.types import Request, Role
 from tests.fixtures import fleet, hold_prefix, profile, put_warm, warm
@@ -40,48 +40,57 @@ class CacheEvidenceTests(unittest.TestCase):
         self.hold(self.first, prompt[:16])
         self.hold(self.second, prompt[:8])
         self.router.residency.view(self.first).sequence = 41
-        cached, sequences, identities = self.router.prefix_cache_evidence(
-            {"prompt": prompt}, prompt
+        cached, sequences, identities = sizing.prefix_cache_evidence(
+            self.router, {"prompt": prompt}, prompt
         )
         self.assertEqual(cached, {self.first: 16, self.second: 8})
         self.assertEqual(sequences, {self.first: 41})
         self.assertEqual(identities, {BLOCK: block_identities(self.namespace, prompt[:16], BLOCK)})
         # The final prompt token is always computed.
         self.assertEqual(
-            self.router.prefix_cache_evidence({"prompt": prompt[:16]}, prompt[:16])[0][self.first],
+            sizing.prefix_cache_evidence(self.router, {"prompt": prompt[:16]}, prompt[:16])[0][
+                self.first
+            ],
             12,
         )
 
     def test_evidence_needs_the_same_namespace_text_only_and_known_residency(self):
         prompt = list(range(16))
         self.hold(self.first, prompt, salt="salt")
-        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, {}, prompt)[0], {})
         self.assertEqual(
-            self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {self.first: 12}
+            sizing.prefix_cache_evidence(self.router, {"cache_salt": "salt"}, prompt)[0],
+            {self.first: 12},
         )
         image = {
             "messages": [{"role": "user", "content": [{"type": "image_url"}]}],
             "cache_salt": "salt",
         }
-        self.assertEqual(self.router.prefix_cache_evidence(image, prompt)[0], {})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, image, prompt)[0], {})
         self.router.residency.view(self.first).known = False
-        self.assertEqual(self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {})
+        self.assertEqual(
+            sizing.prefix_cache_evidence(self.router, {"cache_salt": "salt"}, prompt)[0], {}
+        )
         self.router.cfg.engine_contract = None
         self.router.residency.view(self.first).known = True
-        self.assertEqual(self.router.prefix_cache_evidence({"cache_salt": "salt"}, prompt)[0], {})
+        self.assertEqual(
+            sizing.prefix_cache_evidence(self.router, {"cache_salt": "salt"}, prompt)[0], {}
+        )
 
     def test_fields_that_change_the_prefilled_tokens_carry_no_evidence(self):
         """Truncation and template inputs outside token counting leave the request cold."""
         prompt = list(range(16))
         self.hold(self.first, prompt)
-        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {self.first: 12})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, {}, prompt)[0], {self.first: 12})
         for field, value in (
             ("truncate_prompt_tokens", 8),
             ("documents", [{"text": "doc"}]),
             ("reasoning_effort", "low"),
         ):
             with self.subTest(field=field):
-                self.assertEqual(self.router.prefix_cache_evidence({field: value}, prompt)[0], {})
+                self.assertEqual(
+                    sizing.prefix_cache_evidence(self.router, {field: value}, prompt)[0], {}
+                )
 
     def test_a_speculative_decoding_contract_prices_cold(self):
         prompt = list(range(16))
@@ -89,7 +98,7 @@ class CacheEvidenceTests(unittest.TestCase):
         self.router.cfg.engine_contract = contract
         self.namespace = CacheNamespace(self.cfg.model, contract.fingerprint())
         self.hold(self.first, prompt)
-        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, {}, prompt)[0], {})
 
     def test_boundary_state_must_sit_at_the_reusable_prefix_end(self):
         """A block-aligned prompt reuses at most the blocks before its final token."""
@@ -102,15 +111,15 @@ class CacheEvidenceTests(unittest.TestCase):
             "0": ("full_attention", None, set(blocks)),
             "1": ("mamba", None, {blocks[1]}),
         }
-        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, {}, prompt)[0], {})
         view.groups["1"] = ("mamba", None, {blocks[0]})
-        self.assertEqual(self.router.prefix_cache_evidence({}, prompt)[0], {self.first: 4})
+        self.assertEqual(sizing.prefix_cache_evidence(self.router, {}, prompt)[0], {self.first: 4})
 
     def test_token_ids_outside_the_identity_range_carry_no_evidence(self):
         prompt = list(range(16))
         self.hold(self.first, prompt)
         self.assertEqual(
-            self.router.prefix_cache_evidence({}, [*prompt[:8], 1 << 64, *prompt[9:]]),
+            sizing.prefix_cache_evidence(self.router, {}, [*prompt[:8], 1 << 64, *prompt[9:]]),
             ({}, {}, {}),
         )
 
@@ -191,7 +200,7 @@ class PlacementRecheckTests(unittest.TestCase):
         self.blocks = hold_prefix(self.view, self.namespace, self.prompt, BLOCK, sequence=5)
 
     def sized(self):
-        cached, sequences, identities = self.router.prefix_cache_evidence({}, self.prompt)
+        cached, sequences, identities = sizing.prefix_cache_evidence(self.router, {}, self.prompt)
         return Request(
             "r",
             len(self.prompt),
@@ -359,16 +368,16 @@ class PlacementRecheckTests(unittest.TestCase):
         self.assertAlmostEqual(projection.resident_prefill_s, warm_price)
 
     def test_long_prompts_hash_in_a_worker_thread(self):
-        long = list(range(router_module.HASH_THREAD_TOKENS + 8))
+        long = list(range(sizing.HASH_THREAD_TOKENS + 8))
         hold_prefix(self.view, self.namespace, long, BLOCK)
         for prompt, threaded in ((long, True), (self.prompt, False)):
             with (
                 self.subTest(tokens=len(prompt)),
-                patch.object(router_module.asyncio, "to_thread", wraps=asyncio.to_thread) as spy,
+                patch.object(sizing.asyncio, "to_thread", wraps=asyncio.to_thread) as spy,
             ):
-                evidence = asyncio.run(self.router._cache_evidence({}, prompt))
+                evidence = asyncio.run(sizing.cache_evidence(self.router, {}, prompt))
                 self.assertEqual(spy.called, threaded)
-                self.assertEqual(evidence, self.router.prefix_cache_evidence({}, prompt))
+                self.assertEqual(evidence, sizing.prefix_cache_evidence(self.router, {}, prompt))
                 self.assertTrue(evidence[0])
 
 

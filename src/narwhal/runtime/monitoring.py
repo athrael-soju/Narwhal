@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ..serving.verification import start_verification, verify_inference
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle import ValidationOutcome
@@ -181,7 +182,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
             router._clock() - router._verification_at.get(iid, 0.0) >= after_s
         ):
             router.scheduler.verifying.add(key)
-            router._start_verification(iid, "verify_inference")
+            start_verification(router, iid, "verify_inference")
     due = router.scheduler.probe_due(after_s)
     if not due:
         return []
@@ -208,7 +209,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
         iid = engines[0]
         if router.cfg.engine_contract is None:
             if iid in router.scheduler.inference_suspects:
-                await router._verify_inference(iid, router.monitor.instances[iid].url)
+                await verify_inference(router, iid, router.monitor.instances[iid].url)
                 if iid not in router.scheduler.ejected:
                     back.append(iid)
                 continue

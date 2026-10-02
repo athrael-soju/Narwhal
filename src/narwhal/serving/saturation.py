@@ -28,6 +28,12 @@ async def measure_loop_lag(router: NarwhalRouter) -> None:
         router.loop_lag_s = max(0.0, loop.time() - started - LAG_PROBE_S)
 
 
+def saturated(router: NarwhalRouter) -> bool:
+    """Return whether loop lag or recent request sizing takes a quarter of the TTFT budget."""
+    budget = SATURATED_TTFT_SHARE * router.scheduler.slo.ttft_s
+    return router.loop_lag_s >= budget or router.sizing_delays.median() >= budget
+
+
 class RecentDelays:
     """Keep delays observed within a trailing window, in arrival and sorted order."""
 

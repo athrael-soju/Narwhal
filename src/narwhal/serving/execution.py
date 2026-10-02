@@ -22,6 +22,8 @@ from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
 from .response import RequestStreamResponse
 from .retry import leg_failure_reason
+from .sizing import size
+from .verification import leg_failed
 
 if TYPE_CHECKING:
     from .router import NarwhalRouter
@@ -93,7 +95,8 @@ def _failed_leg(
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
-    router._leg_failed(
+    leg_failed(
+        router,
         inst.iid,
         exc,
         prefill_iid=state.prefill_iid if decode else None,
@@ -281,7 +284,7 @@ async def serve_request(
                 req.cached_tokens,
                 req.cache_sequences,
                 req.cache_identities,
-            ) = await state.wait(lambda: router.size(body))
+            ) = await state.wait(lambda: size(router, body))
             req.cache_checked_at = router._clock()
         finally:
             router.sizing_delays.add(router._clock() - sizing)
