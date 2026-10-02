@@ -20,6 +20,25 @@ from narwhal.types import Instance, Request, Role
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Colour key in docs/observability/05-Dashboard.md.
+DASHBOARD_PALETTE = {
+    "prefill p50": "#1A847E",
+    "prefill": "#299E97",
+    "prefill p99": "#49B7B0",
+    "decode": "#336B9E",
+    "decode p95": "#4E86BB",
+    "decode p99": "#69A2D8",
+    "colocated": "#8C84CE",
+    "good": "#56A64B",
+    "warning": "#C8963E",
+    "serious": "#E0752D",
+    "critical": "#D44A3A",
+    "severe": "#A11D1D",
+    "pending": "#9E4AA4",
+    "neutral": "#8E9196",
+    "invalid": "#7A6813",
+}
+
 
 def dashboard():
     """Return the shipped Grafana dashboard."""
@@ -513,7 +532,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         events = spec["elements"]["panel-37"]["spec"]
         self.assertEqual(events["vizConfig"]["kind"], "state-timeline")
         query = events["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]
-        self.assertTrue(query["range"])
+        self.assertFalse(query.get("instant"))
         self.assertIn('severity="page"', query["expr"])
         self.assertIn('severity="warn"', query["expr"])
         outcomes = spec["elements"]["panel-11"]["spec"]["id"]
@@ -577,7 +596,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("narwhal_offered_total", expressions["offered"])
         self.assertTrue(all(expr.startswith("sum(rate(") for expr in expressions.values()))
         field_config = panel["vizConfig"]["spec"]["fieldConfig"]
-        self.assertEqual(field_config["defaults"]["custom"]["stacking"]["mode"], "none")
+        stacking = field_config["defaults"]["custom"].get("stacking", {"mode": "none"})
+        self.assertEqual(stacking["mode"], "none")
         self.assertFalse(
             [
                 prop
@@ -586,6 +606,49 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 if prop["id"] == "custom.stacking"
             ]
         )
+
+    def test_dashboard_colors_come_from_the_palette(self):
+        """Every panel colour is a documented palette entry, and every named series has one."""
+        spec = dashboard()["spec"]
+        allowed = set(DASHBOARD_PALETTE.values()) | {"text", "transparent"}
+
+        def colors(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    named = key in {"color", "fixedColor", "iconColor"}
+                    scheme = key == "mode" and "palette" in str(child)
+                    if isinstance(child, str) and (named or scheme):
+                        yield child
+                    else:
+                        yield from colors(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from colors(child)
+
+        annotations = [a for a in spec["annotations"] if not a["spec"].get("builtIn")]
+        panels = [
+            element["spec"]
+            for element in spec["elements"].values()
+            if element["spec"]["vizConfig"]["kind"] != "text"
+        ]
+        self.assertLessEqual(set(colors([annotations, panels])), allowed)
+        for panel in panels:
+            if panel["vizConfig"]["kind"] != "timeseries":
+                continue
+            colored = {
+                override["matcher"]["options"]
+                for override in panel["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+                if any(prop["id"] == "color" for prop in override["properties"])
+            }
+            legends = {
+                query["spec"]["query"]["spec"]["legendFormat"]
+                for query in panel["data"]["spec"]["queries"]
+            }
+            literal = {legend for legend in legends if "{{" not in legend}
+            with self.subTest(panel=panel["title"]):
+                self.assertLessEqual(literal, colored)
+                if "{{role}}" in legends:
+                    self.assertLessEqual({"prefill", "decode"}, colored)
 
     async def test_flip_metrics_outlive_history_and_reset_with_scheduler(self):
         scheduler = self.router.scheduler
