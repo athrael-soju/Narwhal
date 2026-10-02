@@ -114,7 +114,7 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget. |
 | `queue` | The prompt alone fits the TTFT budget, and the cheapest placement including queueing exceeds it. |
 | `aggregate_unpriced` | Every candidate engine carries decode work. |
-| `decode` | Peak projected decode work over the request's decode window exceeds live decode capacity, or decode load pushes the request past `slo.tpot_s`. |
+| `decode` | The request fails one of the three [decode admission checks](../configuration/02-Serving-and-Role-Control.md#decode-admission-check): slot wait, KV tokens or TPOT. |
 
 #### Attempt failures
 
@@ -174,7 +174,7 @@ Each router event row carries an `at` timestamp, in Unix wall-clock seconds for 
 | --- | --- | --- |
 | `below_floor` | Live prefill engines fall below `min_prefill`. | `live_prefill`, `min_prefill`, `ejected`, `quarantined` |
 | `below_floor_recovered` | The live prefill pool returns to `min_prefill`. | `duration_s`, `live_prefill`, `min_prefill` |
-| `controller_decision` | The role controller records an `applied`, `blocked`, `held`, or `advisory` decision. | `prefill`, `decode`, `by`, `reason`, `result`, `applied`, decision details |
+| `controller_decision` | The role controller records an `applied`, `blocked`, `held`, or `advisory` decision. | `prefill`, `decode`, `by`, `reason`, `result`, `applied`, [decision details](../http-api/05-Live-State.md#controller-decisions) |
 | `decode_floor_restored` | A role change restores `min_decode`. | `iid`, `live_decode`, `min_decode` |
 | `engine_lifecycle` | An engine lifecycle operation runs. | `action` and its operation fields |
 | `monitoring_stage_failure` | A monitoring stage fails. | `stage`, `class`, stage-local `consecutive` count |

@@ -483,6 +483,7 @@ async def monitor_loop(router: NarwhalRouter) -> None:
                 next_pass += interval
         if router.standby or router.lifecycle_blocked:
             # The primary owns standby actuation. A whole wave freezes roles.
+            router.controller.reactive.interrupt()
             continue
         if due:
             await monitor_once(router, urgent=woke)

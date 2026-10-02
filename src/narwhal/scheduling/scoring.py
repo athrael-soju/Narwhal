@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
 from ..profiling.model import Profile
@@ -104,6 +104,8 @@ class SplitSnapshot:
     waiting_decode_requests: int = 0
     # Decode residents on engines that currently hold the decode role.
     decode_role_requests: int = 0
+    # Decode-slot wait over the remaining TTFT budget, by decode engine count.
+    decode_wait_ratios: tuple[tuple[int, float], ...] = ()
 
     @property
     def decode_recovery_ratio(self) -> float:
@@ -179,12 +181,11 @@ class SplitSnapshot:
             self.profiles,
         )
         correction = self.decode_correction
-        pending_work_s = 0.0
         pending_covered = bool(profiles)
         if include_resident:
             for input_len, output_len in self.pending_decode_shapes:
                 context = input_len + output_len / 2.0
-                capacities = [
+                if not all(
                     p.decode_rps(
                         self.tpot_slo,
                         context,
@@ -192,19 +193,11 @@ class SplitSnapshot:
                         correction=correction,
                         request_cap=self.decode_concurrency,
                     )
+                    and p.covers_prefill(input_len)
+                    and p.covers_decode(1, context)
                     for p in profiles
-                ]
-                if (
-                    not capacities
-                    or not all(capacities)
-                    or not all(
-                        p.covers_prefill(input_len) and p.covers_decode(1, context)
-                        for p in profiles
-                    )
                 ):
                     pending_covered = False
-                else:
-                    pending_work_s += len(capacities) / sum(capacities)
         capacity = (
             sum(p.max_tokens(self.tpot_slo / correction, active_requests) for p in profiles)
             / len(profiles)
@@ -243,7 +236,11 @@ class SplitSnapshot:
             covered = covered and self.resident_profile_covered
         if not covered:
             tpot_ratio = float("inf")
-        decode_queue_ratio = pending_work_s / (decode * self.ttft_slo) if include_resident else 0.0
+        decode_queue_ratio = (
+            next((ratio for engines, ratio in self.decode_wait_ratios if engines == decode), 0.0)
+            if include_resident
+            else 0.0
+        )
         if include_resident:
             tpot_ratio = max(
                 tpot_ratio,
@@ -299,6 +296,37 @@ class SplitScorer:
         """Refresh the cache evidence of requests waiting for prefill placement."""
         for row in waiting:
             self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
+
+    def decode_wait_ratios(self, decodes: Iterable[int]) -> tuple[tuple[int, float], ...]:
+        """Return each decode engine count's largest slot wait over the remaining TTFT budget.
+
+        Waiting decode requests and requests in prefill take the pool's slots in handoff order,
+        as decode admission projects them. A request past its TTFT deadline at handoff adds
+        nothing.
+        """
+        queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
+        occupancy = self.scheduler.decode_occupancy(
+            round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
+            concurrency=self.scheduler.decode_concurrency,
+            expected_output=self.demand.output_estimator(),
+        )
+        if occupancy is None:
+            return ()
+        rows = []
+        for decode in decodes:
+            started, _ = occupancy.schedule(occupancy.slots * decode // len(occupancy.engines))
+            ratio = max(
+                (
+                    (start - ready) / (deadline - ready)
+                    for (ready, _, _), (start, _, _), deadline in zip(
+                        occupancy.queued, started, occupancy.deadlines, strict=True
+                    )
+                    if start > ready and deadline > ready
+                ),
+                default=0.0,
+            )
+            rows.append((decode, ratio))
+        return tuple(rows)
 
     def project_prefill(
         self,
@@ -388,10 +416,13 @@ class SplitScorer:
         correction: float | None = None,
         window_s: float | None = None,
         step_s: float | None = None,
+        resident_s: float | None = None,
+        prefills: Collection[int] | None = None,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values.
 
         Splits cover the live engines; unavailable engines add no capacity.
+        `prefills` limits role-mix pricing to those splits.
         """
         instances = tuple(self.scheduler.live_instances())
         profiles = tuple(
@@ -439,6 +470,8 @@ class SplitScorer:
         # Engines that run prefill under each split.
         prefill_iids: dict[int, set[str]] = {}
         for prefill in range(1, len(instances)):
+            if prefills is not None and prefill not in prefills:
+                continue
             roles = {inst.iid: inst.role for inst in instances}
             rows: tuple[Profile, ...]
             if abs(prefill - current_prefill) > 1:
@@ -467,6 +500,7 @@ class SplitScorer:
                         estimates=estimates,
                         correction=correction,
                         prefill_iids=prefill_iids[prefill],
+                        resident_s=resident_s,
                     ),
                 )
                 for prefill, rows in profile_options
@@ -492,6 +526,9 @@ class SplitScorer:
             decode_concurrency=self.scheduler.decode_concurrency,
             waiting_decode_requests=sum(r.phase is Phase.DECODE for r in waiting),
             decode_role_requests=sum(len(i.decode) for i in instances if i.role is Role.DECODE),
+            decode_wait_ratios=self.decode_wait_ratios(
+                len(instances) - prefill for prefill, _ in profile_options
+            ),
             pending_decode_tokens=sum(
                 input_len + output / 2.0 for input_len, output in pending_shapes
             ),
@@ -545,6 +582,7 @@ def decision_details(
         "decode_work": rounded(demand.decode_engines),
         "projected_ttft_ratio": rounded(candidate.ttft_ratio),
         "projected_tpot_ratio": rounded(candidate.tpot_ratio),
+        "projected_decode_wait_ratio": rounded(candidate.decode_queue_ratio),
         "objective": rounded(candidate.objective),
         "objective_delta": rounded(current.objective - candidate.objective),
         "decode_tokens_per_engine": rounded(candidate.decode_tokens_per_engine, 3),

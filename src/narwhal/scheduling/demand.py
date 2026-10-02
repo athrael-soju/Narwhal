@@ -199,10 +199,12 @@ class DemandModel:
         horizon_s: float | None = None,
         estimates: OutputEstimates | None = None,
         correction: float | None = None,
+        resident_s: float | None = None,
     ) -> tuple[float, float]:
         """Return prefill and decode demand in engine equivalents.
 
         `horizon_s` limits offered inputs to a trailing span and skips the `last_demand` update.
+        `resident_s` limits decode residency to a trailing span.
         """
         window = horizon_s if horizon_s is not None else window_s
         profiles = tuple(
@@ -219,6 +221,7 @@ class DemandModel:
             estimates=estimates,
             correction=correction,
             prefill_iids={inst.iid for inst in self.scheduler.live_instances(Role.PREFILL)},
+            resident_s=resident_s,
         )
         if horizon_s is None:
             self.last_demand = priced
@@ -241,6 +244,7 @@ class DemandModel:
         estimates: OutputEstimates | None = None,
         correction: float | None = None,
         prefill_iids: Collection[str] | None = None,
+        resident_s: float | None = None,
     ) -> Demand:
         """Price one window against a particular measured role-mix profile set.
 
@@ -306,7 +310,10 @@ class DemandModel:
             expected_decode += expected_row.count / (span * capacity)
         return Demand(
             prefill_engines=prefill,
-            decode_engines=max(self.resident_demand(now, window_s), expected_decode),
+            decode_engines=max(
+                self.resident_demand(now, window_s if resident_s is None else resident_s),
+                expected_decode,
+            ),
             arrivals=self.arrival_count(now - window_s),
             output_observations=self.observed_decode.count(now - 4 * window_s),
             complete=demand_complete,

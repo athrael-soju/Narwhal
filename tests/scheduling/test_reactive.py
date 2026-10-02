@@ -19,6 +19,7 @@ from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.controller import ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.reactive import Departure
 from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
@@ -173,6 +174,18 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(fleet.scheduler.pool_load(Role.PREFILL), 1.0)
         self.assertGreater(fleet.scheduler.pool_load(Role.DECODE), 1.0)
 
+    def test_open_departure_keeps_window_pricing_under_mixed_pressure(self) -> None:
+        fleet = self.fleet
+        policy = fleet.controller.reactive
+        policy.departure = Departure(1, fleet.now)
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler._last_decision
+        self.assertEqual(decision["result"], "applied")
+        self.assertEqual(decision["eligibility_rule"], "mixed_pressure")
+        self.assertEqual(decision["demand_horizon_s"], fleet.controller.window_s)
+        self.assertEqual(decision["required_confirmations"], 3)
+        self.assertFalse(policy.departure.moved)
+
     def test_candidate_uses_its_colocated_prefill_cost(self) -> None:
         """A 2P/4D proposal is priced from its own measured mix rows."""
         fleet = self.fleet
@@ -301,24 +314,6 @@ class MixedPressureTests(unittest.TestCase):
             fleet.scheduler._last_decision["reason"], "decode profile does not cover proposed work"
         )
         self.assertEqual(fleet.scheduler.flips, [])
-
-    def test_candidate_prices_pending_work_with_its_decode_curve(self) -> None:
-        fleet = self.fleet
-        self._colocated_candidate(tpot_slope=0.0, tpot_intercept=0.005, decode_max_requests=1)
-        for index in range(2):
-            rid = f"pending-{index}"
-            fleet.monitor.waiting[rid] = Request(rid, 100, wanted_len=10, phase=Phase.DECODE)
-        snapshot = fleet.controller.scorer.capture(
-            fleet.now,
-            Demand(0.0, 0.0, 0, 0),
-            utilization=0.8,
-            observed_load=(0.0, 0.0),
-            correction=1.5,
-        )
-        candidate = snapshot.score(2)
-        self.assertTrue(candidate.decode_profile_covered)
-        self.assertAlmostEqual(candidate.decode_queue_ratio, 2 * 10 * 0.005 * 1.5 / 4)
-        self.assertGreater(candidate.decode_queue_ratio, snapshot.score(1).decode_queue_ratio)
 
     def test_candidate_checks_inflight_prefill_domain(self) -> None:
         fleet = self.fleet

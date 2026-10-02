@@ -227,6 +227,7 @@ class ControllerDecisionOut(BaseModel):
     decode_work: float | None = None
     projected_ttft_ratio: float | None = None
     projected_tpot_ratio: float | None = None
+    projected_decode_wait_ratio: float | None = None
     objective: float | None = None
     objective_delta: float | None = None
     decode_tokens_per_engine: float | None = None
@@ -247,6 +248,12 @@ class ControllerDecisionOut(BaseModel):
     observed_decode_ratio: float | None = None
     recovery_decode_ratio: float | None = None
     eligibility_rule: str | None = None
+    demand_horizon_s: float | None = None
+    steady_horizon_s: float | None = None
+    steady_prefill_work: float | None = None
+    steady_decode_work: float | None = None
+    steady_demand_s: float | None = None
+    departure_age_s: float | None = None
     confirmations: int | None = None
     required_confirmations: int | None = None
     trigger_rid: str | None = None
