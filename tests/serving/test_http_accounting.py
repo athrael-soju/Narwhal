@@ -394,9 +394,12 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.post(client)).status_code, 200)
             request = replace(gate.call_args.args[0], phase=Phase.PREFILL)
             ready = scheduler.prefill_ready_s(request, prefill)
-            self.assertLess(ready, scheduler.prefill_admission_price(request, prefill))
+            priced = scheduler.prefill_admission_price(request, prefill)
+            self.assertLess(ready, priced)
         self.assertGreater(ready, 1.0)
         self.assertEqual(gate.call_args.kwargs["ready_s"], ready)
+        self.assertGreaterEqual(gate.call_args.kwargs["ttft_s"], priced)
+        self.assertEqual(gate.call_args.kwargs["ttft_margin"], self.cfg.admission_margin)
         self.assertEqual(gate.call_args.kwargs["expected_output"](request), 1)
 
     async def test_invalid_output_identity_fails_the_original_request(self):

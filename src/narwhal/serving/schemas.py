@@ -227,6 +227,7 @@ class ControllerDecisionOut(BaseModel):
     decode_work: float | None = None
     projected_ttft_ratio: float | None = None
     projected_tpot_ratio: float | None = None
+    projected_decode_wait_ratio: float | None = None
     objective: float | None = None
     objective_delta: float | None = None
     decode_tokens_per_engine: float | None = None

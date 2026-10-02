@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import cache
 from typing import TYPE_CHECKING
 
 from ..types import Instance, Role
@@ -15,10 +14,6 @@ if TYPE_CHECKING:
 
 Evaluation = tuple[SplitScore, float, float, bool, bool, bool, bool]
 
-# A departure follows a settled run of half a window and prices a quarter window.
-SETTLED_PARTS = 2
-SHORT_PARTS = 4
-
 
 def outside_tolerance(recent: float, window: float, tolerance: float) -> bool:
     """Return whether the smaller demand is more than the tolerance below the larger."""
@@ -27,7 +22,7 @@ def outside_tolerance(recent: float, window: float, tolerance: float) -> bool:
 
 @dataclass(frozen=True)
 class ShortView:
-    """Current and adjacent splits scored on demand over a quarter window."""
+    """Current and adjacent splits scored on demand over the confirmation span."""
 
     demand: Demand
     current: SplitScore
@@ -36,7 +31,7 @@ class ShortView:
 
 @dataclass(frozen=True)
 class Departure:
-    """A move away from a settled split after a quarter-window demand shift."""
+    """A move away from a settled split after a confirmation-span demand shift."""
 
     heading: int
     started_at: float
@@ -54,8 +49,10 @@ class ReactivePolicy:
         # Start of the current run of agreeing confirmation-span and window demand.
         self.balanced_since: float | None = None
         self.departure: Departure | None = None
-        # Time of the latest scored cadence evaluation.
-        self.scored_at: float | None = None
+
+    def interrupt(self) -> None:
+        """Restart the settled and steady runs while role control is paused."""
+        self.settled_since = self.balanced_since = None
 
     def step(
         self,
@@ -206,19 +203,15 @@ class ReactivePolicy:
         )
         th = controller.scheduler.th
         # The confirmation span; steady load prices both phases alike over it and the window.
-        steady_horizon_s = controller.step_s * max(
+        confirmation_s = controller.step_s * max(
             controller.confirmations_needed, th.sustained_intervals
         )
         steady_work: tuple[float, float] | None = None
         # Urgent evaluations leave the settled and steady runs and the departure unchanged.
         if not urgent_ready:
-            # A gap of more than one step past the cadence restarts both runs.
-            if self.scored_at is not None and now - self.scored_at > 2 * controller.step_s:
-                self.settled_since = self.balanced_since = None
-            self.scored_at = now
             if not recovery:
                 steady_work = controller._demand(
-                    now, horizon_s=steady_horizon_s, estimates=estimates, correction=correction
+                    now, horizon_s=confirmation_s, estimates=estimates, correction=correction
                 )
             tolerance = controller.safety.demand_rise_tolerance
             if steady_work is None or any(
@@ -260,7 +253,9 @@ class ReactivePolicy:
         short = (
             None
             if urgent_ready or recovery
-            else self._short_view(controller, now, current_p, observed_load, estimates, correction)
+            else self._short_view(
+                controller, now, current_p, confirmation_s, observed_load, estimates, correction
+            )
         )
         if not urgent_ready:
             self._track_departure(controller, now, current, adjacent, demand, short)
@@ -276,7 +271,7 @@ class ReactivePolicy:
             and candidate.prefill - current_p == -departure.heading
         }
         horizons: dict[str, object] = {
-            "steady_horizon_s": rounded(steady_horizon_s),
+            "steady_horizon_s": rounded(confirmation_s),
             "steady_prefill_work": rounded(steady_work[0]) if steady_work is not None else None,
             "steady_decode_work": rounded(steady_work[1]) if steady_work is not None else None,
             "steady_demand_s": rounded(steady_s) if steady_s is not None else None,
@@ -332,7 +327,7 @@ class ReactivePolicy:
             )
 
         window_rows = {c.prefill: evaluate(c, current) for c in adjacent}
-        # Before its move, a departure prices its heading over a quarter window.
+        # Before its move, a departure prices its heading over the confirmation span.
         # Mixed pressure keeps window pricing.
         departure_moves = {
             p: score
@@ -348,8 +343,6 @@ class ReactivePolicy:
             for p, row in window_rows.items()
         ]
 
-        slot_load = cache(controller.scorer.decode_slot_load)
-
         def rule(row: Evaluation) -> str:
             candidate, source_ratio, mixed = row[0], row[1], row[5]
             if urgent_ready:
@@ -359,12 +352,7 @@ class ReactivePolicy:
             if candidate.prefill in departure_moves:
                 return "settled_departure"
             # Steady load compares adjacent splits on the objective alone.
-            # A steady decode source also holds the projected decode peak on its candidate slots.
-            if (
-                steady
-                and th.shrink < source_ratio <= th.expand
-                and (candidate.prefill < current_p or slot_load(candidate.decode) <= th.expand)
-            ):
+            if steady and th.shrink < source_ratio <= th.expand:
                 return "steady_demand"
             return "source_shrink"
 
@@ -414,7 +402,7 @@ class ReactivePolicy:
                 details.update(evidence.details())
             details["eligibility_rule"] = rule(row)
             details["demand_horizon_s"] = rounded(
-                controller.window_s / SHORT_PARTS if departure_move else controller.window_s
+                confirmation_s if departure_move else controller.window_s
             )
             details.update(horizons)
             details["observed_prefill_ratio"] = rounded(observed_prefill)
@@ -568,15 +556,15 @@ class ReactivePolicy:
         controller: ReactiveController,
         now: float,
         current_p: int,
+        short_s: float,
         observed_load: tuple[float, float],
         estimates: OutputEstimates,
         correction: float,
     ) -> ShortView | None:
-        """Score the current and adjacent splits on demand over a quarter window.
+        """Score the current and adjacent splits on demand over `short_s` seconds.
 
         Residency covers the latest step.
         """
-        short_s = controller.window_s / SHORT_PARTS
         arrivals = controller.demand.arrival_count(now - short_s)
         if arrivals < controller.min_arrivals:
             return None
@@ -628,7 +616,7 @@ class ReactivePolicy:
         demand: Demand,
         short: ShortView | None,
     ) -> None:
-        """Track the settled run and open a departure when the quarter window leaves it."""
+        """Track the settled run and open a departure when the confirmation span leaves it."""
         margin = controller.movement_margin
         window_gain = max(
             (
@@ -644,7 +632,7 @@ class ReactivePolicy:
             best = min(short.adjacent.values(), key=lambda c: (c.objective, c.prefill))
             if short.current.objective - best.objective >= margin:
                 heading = 1 if best.prefill > current.prefill else -1
-            # Quarter-window demand outside the rise tolerance of window demand marks a shift.
+            # Confirmation-span demand outside the rise tolerance of window demand marks a shift.
             tolerance = controller.safety.demand_rise_tolerance
             shifted = any(
                 outside_tolerance(recent, window, tolerance)
@@ -664,7 +652,7 @@ class ReactivePolicy:
             and heading
             and shifted
             and self.settled_since is not None
-            and now - self.settled_since >= controller.window_s / SETTLED_PARTS
+            and now - self.settled_since >= controller.safety.evidence_span_s
         ):
             self.departure = Departure(heading, now)
         if heading or window_gain >= margin:

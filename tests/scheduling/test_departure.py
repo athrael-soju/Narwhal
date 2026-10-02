@@ -37,7 +37,7 @@ class TrackDepartureTests(unittest.TestCase):
             movement_margin=0.05,
             window_s=120.0,
             within_floors=lambda p: 0 < p < 8,
-            safety=SimpleNamespace(demand_rise_tolerance=0.25),
+            safety=SimpleNamespace(demand_rise_tolerance=0.25, evidence_span_s=60.0),
         )
         self.policy = ReactivePolicy()
         self.window = Demand(4.8, 0.2, 100, 0)
@@ -53,10 +53,19 @@ class TrackDepartureTests(unittest.TestCase):
         for now in range(0, int(until) + 1, 5):
             self.track(float(now), short_gain=0.0, short_demand=self.window)
 
-    def test_shift_after_half_a_window_settled_opens_a_departure(self):
+    def test_shift_after_one_evidence_span_settled_opens_a_departure(self):
         self.settle(60.0)
         self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertEqual(self.policy.departure, Departure(-1, 65.0))
+
+    def test_the_settled_run_lasts_one_evidence_span(self):
+        self.controller.safety.evidence_span_s = 40.0
+        for settled, departure in ((30.0, None), (40.0, Departure(-1, 45.0))):
+            with self.subTest(settled=settled):
+                self.policy = ReactivePolicy()
+                self.settle(settled)
+                self.track(settled + 5.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+                self.assertEqual(self.policy.departure, departure)
 
     def test_shorter_settled_run_opens_no_departure(self):
         self.settle(50.0)
@@ -184,13 +193,14 @@ class SustainedShiftTests(unittest.TestCase):
         first, second = moves[0], moves[1]
         self.assertLessEqual(first["at"] - 300.0, 30.0)
         self.assertEqual(first["eligibility_rule"], "settled_departure")
-        self.assertEqual(first["demand_horizon_s"], 30.0)
+        self.assertEqual(first["demand_horizon_s"], first["steady_horizon_s"])
+        self.assertEqual(first["demand_horizon_s"], 15.0)
         self.assertEqual(first["required_confirmations"], 1)
         self.assertEqual(second["eligibility_rule"], "source_shrink")
         self.assertEqual(second["demand_horizon_s"], 120.0)
 
     def test_short_burst_moves_no_engine(self):
-        _, moves = self.run_shift(burst_s=10)
+        _, moves = self.run_shift(burst_s=5)
         self.assertEqual(moves, [])
 
 
@@ -201,7 +211,7 @@ class PostMoveHoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sim = Sim(directory)
             sim.run(300, PREFILL_HEAVY)
-            sim.run(20, DECODE_LEANING)
+            sim.run(10, DECODE_LEANING)
             self.assertEqual(sim.decisions[-1]["eligibility_rule"], "settled_departure")
             self.assertEqual([flip.to for flip in sim.scheduler.flips], [Role.DECODE])
 
@@ -252,7 +262,7 @@ class AlternationTests(unittest.TestCase):
 
 
 class ShortViewTests(unittest.TestCase):
-    """The quarter-window view prices the current split and its neighbours."""
+    """The confirmation-span view prices the current split and its neighbours."""
 
     def test_short_view_scores_match_a_full_capture(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -277,6 +287,26 @@ class ShortViewTests(unittest.TestCase):
         self.assertEqual(len(full.demand_options), 7)
         for p in (3, 4, 5):
             self.assertEqual(short.score(p), full.score(p))
+
+    def test_short_view_spans_the_confirmation_span(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.controller.confirmations_needed = 4
+            sim.run(60, DECODE_LEANING)
+            scorer = sim.controller.scorer
+            spans: list[float] = []
+            capture = scorer.capture
+
+            def record(*args, **kwargs):
+                if "prefills" in kwargs:
+                    spans.append(kwargs["window_s"])
+                return capture(*args, **kwargs)
+
+            with patch.object(scorer, "capture", side_effect=record):
+                sim.run(10, DECODE_LEANING)
+            sim.close()
+        self.assertTrue(spans)
+        self.assertEqual(set(spans), {sim.controller.step_s * 4})
 
 
 class ReverseHoldTests(unittest.TestCase):

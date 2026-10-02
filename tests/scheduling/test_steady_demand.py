@@ -7,6 +7,7 @@ import itertools
 import tempfile
 import unittest
 
+from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.reactive import Departure
 from narwhal.serving.schemas import ControllerDecisionOut
 from narwhal.types import Phase, Request, Role
@@ -121,7 +122,9 @@ class SteadyDemandTests(unittest.TestCase):
             self.run_steps(1)
             self.assertIsNone(policy.departure)
 
-        self.assertGreaterEqual(fleet.now - policy.settled_since, fleet.controller.window_s / 2)
+        self.assertGreaterEqual(
+            fleet.now - policy.settled_since, fleet.controller.safety.evidence_span_s
+        )
         self.assertEqual(len(fleet.scheduler.flips), 1)
         self.assertEqual(fleet.scheduler.control_snapshot()["flip_reversals"], 0)
 
@@ -200,7 +203,7 @@ class SteadyDemandTests(unittest.TestCase):
         self.assertIs(policy.departure, departure)
         self.assertEqual((policy.settled_since, policy.balanced_since), runs)
 
-    def test_evaluation_gap_restarts_the_settled_and_steady_runs(self) -> None:
+    def test_role_freeze_restarts_the_settled_and_steady_runs(self) -> None:
         fleet = self.fleet
         policy = fleet.controller.reactive
         self.run_steps(24)
@@ -208,61 +211,127 @@ class SteadyDemandTests(unittest.TestCase):
         settled_since = policy.settled_since
         steady_s = fleet.scheduler._last_decision["steady_demand_s"]
 
-        # A cadence step one second late keeps both runs.
+        # A late cadence step keeps both runs.
         fleet.advance(6)
         fleet.controller.step()
         self.assertEqual(policy.settled_since, settled_since)
         self.assertEqual(fleet.scheduler._last_decision["steady_demand_s"], steady_s + 6.0)
 
-        # A role freeze stops evaluation for a minute.
+        # A role freeze pauses evaluation and restarts both runs.
+        policy.interrupt()
         fleet.advance(60)
         fleet.controller.step()
         self.assertEqual(policy.settled_since, fleet.now)
         self.assertEqual(fleet.scheduler._last_decision["steady_demand_s"], 0.0)
 
 
-class SlotHeadroomTests(unittest.TestCase):
-    """Steady consolidation keeps decode slots for requests reaching decode."""
+class DecodeWaitTests(unittest.TestCase):
+    """The controller prices decode-slot waiting against the TTFT budget, as admission does."""
 
-    def run_load(self, output_len: int, seconds: int) -> HandoffSim:
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.fleet = Fleet(directory.name)
+        self.addCleanup(self.fleet.telemetry.stop)
+        self.fleet.pressure = {Role.PREFILL: 0.9, Role.DECODE: 3.0}
+        # One slot per decode engine; four of the five hold a resident.
+        self.fleet.scheduler.decode_concurrency = 1
+        self.pending = Request("pending", 100, wanted_len=10, arrived_at=self.fleet.now)
+
+    def hold(self, wanted_len: int) -> None:
+        for iid in ("e2", "e3", "e4", "e5"):
+            self.fleet.monitor.dispatched(
+                iid, Request(f"{iid}-resident", 100, phase=Phase.DECODE, wanted_len=wanted_len)
+            )
+        self.fleet.monitor.dispatched("e0", self.pending)
+
+    def test_the_decode_term_matches_admission(self) -> None:
+        fleet = self.fleet
+        for wanted_len in (600, 1000):
+            with self.subTest(wanted_len=wanted_len):
+                for inst in fleet.monitor.instances.values():
+                    inst.decode.clear()
+                    inst.prefill.clear()
+                fleet.scheduler.availability.ejected.clear()
+                self.hold(wanted_len)
+                snapshot = fleet.controller.scorer.capture(
+                    fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.0, 0.0)
+                )
+                self.assertEqual(snapshot.score(1).decode_queue_ratio, 0.0)
+                ratio = snapshot.score(2).decode_queue_ratio
+                self.assertGreater(ratio, 0.0)
+
+                # Admission on four decode engines projects the same wait for the request.
+                fleet.monitor.finished("e0", self.pending.rid)
+                self.assertTrue(fleet.scheduler.eject("e1"))
+                ready = fleet.scheduler.prefill_ready_s(self.pending, fleet.monitor.instances["e0"])
+                admitted = fleet.scheduler.decode_admits(
+                    self.pending,
+                    ready_s=ready,
+                    concurrency=1,
+                    expected_output=fleet.controller.demand.output_estimator(),
+                )
+                self.assertEqual(admitted, ratio <= 1.0)
+                self.assertEqual(admitted, wanted_len == 600)
+
+    def run_steps(self, count: int) -> list[dict[str, object]]:
+        fleet = self.fleet
+        rows = []
+        for _ in range(count):
+            fleet.advance()
+            self.pending.arrived_at = fleet.now
+            fleet.controller.step()
+            rows.append(dict(fleet.scheduler._last_decision))
+        return rows
+
+    def test_a_decode_wait_beyond_the_ttft_budget_holds_steady_consolidation(self) -> None:
+        fleet = self.fleet
+        self.hold(1000)
+        rows = self.run_steps(16)
+
+        self.assertEqual(fleet.scheduler.flips, [])
+        row = rows[-1]
+        th = fleet.scheduler.th
+        self.assertEqual((row["current_prefill"], row["prefill"]), (1, 2))
+        self.assertEqual(row["reason"], "projected decode pressure blocks consolidation")
+        self.assertEqual(row["eligibility_rule"], "source_shrink")
+        self.assertGreater(row["projected_decode_wait_ratio"], th.expand)
+        self.assertGreater(row["projected_tpot_ratio"], th.shrink)
+        self.assertLessEqual(row["projected_tpot_ratio"], th.expand)
+        self.assertGreaterEqual(row["steady_demand_s"], fleet.controller.safety.evidence_span_s)
+        ControllerDecisionOut.model_validate(row)
+
+    def test_a_decode_wait_within_the_ttft_budget_allows_steady_consolidation(self) -> None:
+        fleet = self.fleet
+        self.hold(600)
+        rows = self.run_steps(16)
+
+        applied = [row for row in rows if row["result"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        row = applied[0]
+        self.assertEqual((row["current_prefill"], row["prefill"]), (1, 2))
+        self.assertEqual(row["eligibility_rule"], "steady_demand")
+        self.assertGreater(row["projected_decode_wait_ratio"], fleet.scheduler.th.shrink)
+        self.assertLessEqual(row["projected_decode_wait_ratio"], fleet.scheduler.th.expand)
+        ControllerDecisionOut.model_validate(row)
+
+    def test_prefill_bound_load_consolidates_while_decode_waits_fit_the_budget(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         sim = HandoffSim(directory.name)
         self.addCleanup(sim.close)
-        sim.run(seconds, (8192, output_len, 15.0))
-        return sim
+        sim.run(150, (8192, 64, 15.0))
 
-    def test_requests_in_prefill_count_within_one_decode_residency(self) -> None:
-        # 5 requests finish prefill at 0.355 s.
-        # 64 tokens decode for 0.83 s, the last 24 for 0.31 s and 8 tokens for 0.1 s.
-        cases = ((64, 0, 12, 17), (64, 40, 12, 12), (8, 0, 2, 2))
-        for output_len, delivered, residents, peak in cases:
-            with self.subTest(output_len=output_len, delivered=delivered):
-                sim = self.run_load(output_len, 20)
-                for inst in sim.monitor.instances.values():
-                    for request in inst.decode.values():
-                        request.output_len = delivered
-                snapshot = sim.controller.scorer.capture(
-                    sim.now, sim.controller.last_demand, utilization=0.8, observed_load=(0.0, 0.0)
-                )
-                self.assertEqual(snapshot.decode_role_requests, residents)
-                self.assertEqual(snapshot.pending_decode_requests, 5)
-                self.assertEqual(sim.controller.scorer.decode_peak_requests(), peak)
-
-    def test_prefill_bound_load_holds_when_slot_load_exceeds_one_decode_engine(self) -> None:
-        sim = self.run_load(64, 150)
+        applied = [row for row in sim.decisions if row["result"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        row = applied[0]
         th = sim.scheduler.th
-
-        self.assertEqual(sim.scheduler.flips, [])
-        row = sim.decisions[-1]
-        self.assertEqual((row["current_prefill"], row["prefill"], row["result"]), (6, 7, "held"))
-        self.assertEqual(row["reason"], "projected decode pressure blocks consolidation")
-        self.assertEqual(row["eligibility_rule"], "source_shrink")
-        self.assertEqual(row["evidence_blocked_gate"], "none")
-        self.assertGreaterEqual(row["steady_demand_s"], sim.controller.safety.evidence_span_s)
+        self.assertEqual((row["current_prefill"], row["prefill"]), (6, 7))
+        self.assertEqual(row["eligibility_rule"], "steady_demand")
+        self.assertLessEqual(row["projected_decode_wait_ratio"], th.expand)
         self.assertGreater(row["projected_tpot_ratio"], th.shrink)
         self.assertLessEqual(row["projected_tpot_ratio"], th.expand)
-        self.assertGreaterEqual(row["objective_delta"], sim.controller.movement_margin)
+        self.assertEqual(sim.scheduler.control_snapshot()["flip_reversals"], 0)
 
 
 if __name__ == "__main__":

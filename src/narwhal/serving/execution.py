@@ -168,6 +168,8 @@ async def _prepare_once(
         if not router.scheduler.decode_admits(
             req,
             ready_s=router.scheduler.prefill_ready_s(req, prefill),
+            ttft_s=priced,
+            ttft_margin=router.cfg.admission_margin,
             concurrency=router.cfg.serving.decode_concurrency,
             expected_output=router.controller.demand.output_estimator(),
         ):

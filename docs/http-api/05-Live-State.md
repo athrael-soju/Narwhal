@@ -252,6 +252,7 @@ Optional fields, by evaluation stage:
 | `demand_complete`                                 | Whether demand history is complete enough to price the decision                                                                                               |
 | `projected_ttft_ratio`                            | Demand model's projected TTFT ratio to its target for the candidate split                                                                                     |
 | `projected_tpot_ratio`                            | Demand model's projected TPOT ratio to its target for the candidate split                                                                                     |
+| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions)                                         |
 | `objective`                                       | Candidate split's objective                                                                                                                                   |
 | `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                                                                                      |
 | `decode_request_limit`                            | Applied decode request limit                                                                                                                                  |
@@ -286,7 +287,7 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                  |
 | `mixed_pressure`          | Observed prefill recovery exceeds the decode shrink threshold                                                         |
-| `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) move, priced on quarter-window demand |
+| `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) move, priced on confirmation-span demand |
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with source pressure between `shrink` and `expand` |
 | `source_shrink`           | Ordinary consolidation                                                                                                |
 
@@ -297,7 +298,7 @@ Decode-to-prefill decisions add `risk_kind`, `risk_age_s`, and the [`demand_evid
 | Decision                         | `demand_horizon_s`                          | `prefill_work`, `arrivals`                  | `decode_work`                                                                                                                         |
 | -------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Hold before scoring              |                                             | `controller.reactive.window_s`              | `controller.reactive.window_s`                                                                                                        |
-| A departure's move               | A quarter of `controller.reactive.window_s` | A quarter of `controller.reactive.window_s` | Larger of residency over the latest `controller.reactive.step_s` and expected decode over a quarter of `controller.reactive.window_s` |
+| A departure's move               | [Confirmation span](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) | Confirmation span                           | Larger of residency over the latest `controller.reactive.step_s` and expected decode over the confirmation span                       |
 | Other decode-to-prefill proposal | `controller.reactive.window_s`              | `controller.reactive.window_s`              | Larger of the `controller.reactive.evidence_span_s` and `controller.reactive.window_s` estimates                                      |
 | Every other scored decision      | `controller.reactive.window_s`              | `controller.reactive.window_s`              | `controller.reactive.window_s`                                                                                                        |
 

@@ -173,8 +173,50 @@ class DecodeAdmissionTests(unittest.TestCase):
 
     def test_residents_that_finish_before_ready_time_hold_no_slot(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2)
-        self.assertFalse(self.scheduler.decode_admits(self.request))
-        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=10.0))
+        budget = self.scheduler.slo.ttft_s
+        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=budget))
+        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=10.0, ttft_s=budget))
+
+    def first_free_slot(self):
+        occupancy = self.scheduler.decode_occupancy(self.request.input_len)
+        return min(last for _, last, _ in occupancy.residents)
+
+    def test_a_request_waits_for_a_slot_within_its_ttft_budget(self):
+        self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
+        wait = self.first_free_slot()
+        budget = self.scheduler.slo.ttft_s
+        self.assertGreater(wait, 0.0)
+        self.assertTrue(self.scheduler.decode_admits(self.request, ttft_s=budget - 2 * wait))
+        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=budget - wait / 2))
+
+    def test_the_admission_margin_widens_the_budget_for_a_decode_wait(self):
+        self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
+        wait = self.first_free_slot()
+        budget = self.scheduler.slo.ttft_s
+        priced = budget - wait / 2
+        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=priced))
+        margin = wait / budget
+        self.assertTrue(
+            self.scheduler.decode_admits(self.request, ttft_s=priced, ttft_margin=margin)
+        )
+
+    def test_the_kv_limit_refuses_a_request_whose_wait_fits_its_budget(self):
+        for index in range(4):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"r{index}", 500, phase=Phase.DECODE, wanted_len=20_000)
+            )
+        request = Request("new", 500, wanted_len=20_000)
+        self.assertFalse(self.scheduler.decode_admits(request, ttft_s=0.0))
+        occupancy = self.scheduler.decode_occupancy(request.input_len)
+        self.assertLess(len(occupancy.residents), occupancy.slots)
+
+    def test_a_hold_ending_as_the_request_starts_frees_its_kv(self):
+        for index in range(2):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"r{index}", 45_000, phase=Phase.DECODE, wanted_len=1)
+            )
+        request = Request("new", 45_000, wanted_len=1)
+        self.assertTrue(self.scheduler.decode_admits(request, concurrency=2))
 
     def test_a_burst_admits_up_to_projected_decode_capacity(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1, wanted_len=2_000)
@@ -235,13 +277,16 @@ class DecodeAdmissionTests(unittest.TestCase):
             request.output_len = 0
         self.assertFalse(self.scheduler.decode_admits(self.request, ready_s=1.0))
 
-    def test_requests_reaching_decode_during_the_window_count_at_their_peak(self):
+    def test_requests_in_prefill_take_slots_in_handoff_order(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
-        self.prefilling(limit, wanted_len=2_000, input_len=1_000)
-        request = Request("new", 10, wanted_len=2_000)
-        self.assertFalse(self.scheduler.decode_admits(request, ready_s=0.0))
-        short = Request("short", 10, wanted_len=1)
-        self.assertTrue(self.scheduler.decode_admits(short, ready_s=0.0))
+        self.fill(limit - 1, wanted_len=200)
+        self.prefilling(1, wanted_len=200, input_len=1_000)
+        budget = self.scheduler.slo.ttft_s
+        request = Request("new", 10, wanted_len=200)
+        self.assertTrue(self.scheduler.decode_admits(request, ready_s=0.0, ttft_s=budget))
+        ready = self.ready(request)
+        self.assertFalse(self.scheduler.decode_admits(request, ready_s=ready, ttft_s=budget))
+        self.assertTrue(self.scheduler.decode_admits(request, ready_s=ready, ttft_s=ready))
 
     def test_the_tpot_check_admits_on_any_engine_with_room(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE

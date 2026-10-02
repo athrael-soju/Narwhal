@@ -23,16 +23,25 @@ Measure sustained healthy inflight load before increasing `serving.max_connectio
 
 #### Decode admission check
 
-The decode check covers the request's decode window, from its predicted prefill completion to its projected last token. The check admits the request when the fleet has zero live decode engines, or when a live decode engine's profile or profiled `decode_max_requests` is unset.
+The decode check projects the slot each request holds in the decode pool.
 
-Each request holds decode over this interval:
+The check admits the request when the fleet has zero live decode engines, or when a live decode engine's profile or profiled `decode_max_requests` is unset.
 
-| Request                           | Holds decode                                                         |
-| --------------------------------- | -------------------------------------------------------------------- |
-| The checked request               | From its predicted prefill completion                                |
-| Request waiting for a decode slot | From now through the whole window                                    |
-| Request resident in decode        | From now until its projected last token                              |
-| Request in prefill                | From its predicted prefill completion until its projected last token |
+The decode pool has one slot per request, up to the sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive.
+
+| Request                                    | Reaches decode                      | Holds a slot                                                                       |
+| ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- |
+| Request resident in decode                 |                                     | From now until its projected last token                                            |
+| Request waiting for a decode slot          | Now                                 | From the earliest free slot until its projected last token                         |
+| Request in prefill, and the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token |
+
+Free slots go to requests in the order they reach decode.
+
+| Term           | Meaning                                                                               |
+| -------------- | ------------------------------------------------------------------------------------- |
+| Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot |
+| Projected TTFT | Time since arrival plus the prefill placement price, including queueing               |
+| Request KV     | Key-value (KV) tokens for the prompt plus delivered and remaining output              |
 
 A request's output cap is `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset. Its bucket is its power-of-two prompt and output-cap sizes.
 
@@ -40,19 +49,20 @@ A capped request with three or more finished requests in its bucket expects its 
 
 Below the expected output, remaining output is the expected output minus delivered output. At or past the expected output, remaining output is the output cap minus delivered output, or unknown for an uncapped request.
 
-When the checked request's remaining output is unknown, its window is the instant of its predicted prefill completion. Every other request with unknown remaining output holds decode indefinitely.
+Unknown remaining output sets these holds:
 
-A request resident in decode generates at its decode engine's token interval. Every other request generates at the fleet mean of the engine intervals. An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode key-value (KV) token bound, times the [decode correction](#71-load-definitions).
+- the checked request holds its slot for the instant the slot starts
+- every other request holds its slot indefinitely
 
-The capacity check applies when peak projected work over the window exceeds 1 slot. It passes when that peak fits both budgets:
+A request resident in decode generates at its decode engine's token interval. Every other request generates at the fleet mean of the engine intervals. An engine's interval is its profiled token interval for a full batch at the current mean context, within the decode KV token bound, times the [decode correction](#71-load-definitions).
 
-- slots, at 1 per request, against the sum of `decode_max_requests`, each capped by `serving.decode_concurrency` when positive
-- KV tokens, at the prompt plus delivered and remaining output per request, against the sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile)
+The check admits the request when all three checks pass:
 
-The time per output token (TPOT) check passes in either case:
-
-- a live decode engine meets `slo.tpot_s` with the request and its residents generating at the request's prefill completion
-- the request misses `slo.tpot_s` on every idle decode engine
+| Check     | Passes when                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) |
+| KV tokens | Peak request KV over the checked request's hold fits the sum of each engine's [decode KV token bound](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request holds decode alone |
+| TPOT      | A live decode engine meets `slo.tpot_s` with the request and the residents generating when its slot starts, or the request misses `slo.tpot_s` on every idle decode engine |
 
 ### 4.2 Waiting, phase concurrency, and retries
 
@@ -333,13 +343,30 @@ Enable advisory mode:
 
 An adjacent split moves one engine between prefill and decode.
 
+The worst projected SLO ratio of a split is the largest of its projected TTFT, TPOT and decode queueing ratios.
+
+| Move              | Projected source load                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Prefill-to-decode | The candidate's projected TTFT ratio                             |
+| Decode-to-prefill | The larger of the candidate's TPOT and decode queueing ratios    |
+
+The decode queueing ratio projects the slots of the [decode admission check](#decode-admission-check) onto the split's decode engines:
+
+```text
+max over waiting decode requests and requests in prefill:
+  slot wait / (slo.ttft_s - time since arrival - time until the request reaches decode)
+```
+
+The split's decode pool has the live mean decode slots per engine times its decode engine count.
+
+A request at or past its TTFT deadline when it reaches decode contributes zero.
+
 Adjacent-split decisions use these spans:
 
 | Span              | Length                                                                                                                   | Default |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------ | :-----: |
 | Window            | `controller.reactive.window_s`                                                                                           |  120 s  |
-| Settled run       | Half of `controller.reactive.window_s`                                                                                   |   60 s  |
-| Quarter window    | A quarter of `controller.reactive.window_s`                                                                              |   30 s  |
+| Settled run       | `controller.reactive.evidence_span_s`                                                                                    |   60 s  |
 | Confirmation span | `controller.reactive.step_s` times max(`controller.reactive.confirmations`, `controller.thresholds.sustained_intervals`) |   15 s  |
 
 Each scored decision names one rule in `eligibility_rule`, the first match in this order:
@@ -363,11 +390,11 @@ The `mixed_pressure` rule moves one decode engine to prefill when projected deco
 
 The role controller opens a departure when all of these hold:
 
-- for the settled run, every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on quarter-window demand
-- quarter-window demand for either phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate
-- an adjacent split improves the quarter-window worst projected SLO ratio by at least `controller.reactive.movement_margin`
+- for the settled run, every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on confirmation-span demand
+- confirmation-span demand for either phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate
+- an adjacent split improves the confirmation-span worst projected SLO ratio by at least `controller.reactive.movement_margin`
 
-The `settled_departure` rule moves one engine toward that split when both hold on quarter-window demand:
+The `settled_departure` rule moves one engine toward that split when both hold on confirmation-span demand:
 
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
@@ -378,7 +405,7 @@ The departure holds the reverse move until `controller.reactive.window_s` has el
 
 When `mixed_pressure` applies to the departure's split on window demand, that split keeps window demand and the `mixed_pressure` rule.
 
-A departure closes before its move when the best quarter-window adjacent split changes direction or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
+A departure closes before its move when the best confirmation-span adjacent split changes direction or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
 
 Demand is steady when both hold:
 
@@ -390,25 +417,9 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 - projected source load above `controller.thresholds.shrink` and at or below `controller.thresholds.expand`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-With a positive `serving.decode_concurrency`, a decode-to-prefill move under `steady_demand` also requires both:
-
-- a profiled `decode_max_requests` for every live decode engine
-- decode slot load at or below `controller.thresholds.expand`
-
-Decode slot load is:
-
-```text
-peak decode requests over the next decode residency
-  / (serving.decode_concurrency * candidate decode engines)
-```
-
-Peak decode requests is the largest number of requests that hold decode at one time, over the waiting, resident and in-prefill holds of the [decode admission check](#decode-admission-check).
-
-The next decode residency starts now and lasts the mean decode hold of the requests in prefill.
-
 Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s` and an open departure unchanged.
 
-A regular evaluation more than twice `controller.reactive.step_s` after the previous regular evaluation restarts the settled run and `steady_demand_s`.
+A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 
 One confirmation is enough in three cases:
 
@@ -476,14 +487,14 @@ These fields tune demand estimation, move confirmation, the arrival-evidence win
 
 | Field                                               | Default | Meaning                                                                                                                                              | Values                                                   |
 | --------------------------------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `controller.reactive.window_s`                      | `120.0` | Demand-estimation window and the base of the settled-run and quarter-window spans.                                                                   | Positive                                                 |
+| `controller.reactive.window_s`                      | `120.0` | Demand-estimation window and the length of a departure's reverse-move hold.                                                                          | Positive                                                 |
 | `controller.reactive.confirmations`                 | `2`     | Required consecutive identical adjacent proposals for moves that need confirmation, and a factor of the confirmation span.                           | At least 1                                               |
 | `controller.reactive.utilization`                   | `0.8`   | Fraction of each engine treated as usable capacity.                                                                                                  | Greater than 0, at most 1                                |
 | `controller.reactive.min_arrivals`                  | `10`    | Minimum arrival count required for a decision.                                                                                                       | At least 1                                               |
 | `controller.reactive.demand_floor`                  | `0.5`   | Minimum accepted demand signal.                                                                                                                      | Positive                                                 |
 | `controller.reactive.movement_margin`               | `0.05`  | Required reduction in worst projected SLO ratio before movement.                                                                                     | `[0, 1)`                                                 |
 | `controller.reactive.step_s`                        | `5.0`   | Minimum interval between scheduled adjacent-split evaluations and the unit of the confirmation span.                                                 | Positive                                                 |
-| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span for decode-to-prefill consolidation and the duration of matching demand that makes demand steady.                        | Positive, at most `evidence_max_span_s`                  |
+| `controller.reactive.evidence_span_s`               | `60.0`  | Minimum recent-arrival span for decode-to-prefill consolidation, the duration of matching demand that makes demand steady, and the settled-run length. | Positive, at most `evidence_max_span_s`                  |
 | `controller.reactive.evidence_max_span_s`           | `120.0` | Maximum evidence duration under sparse traffic.                                                                                                      | Positive, at least `evidence_span_s`, at most `window_s` |
 | `controller.reactive.evidence_min_arrivals`         | `10`    | Minimum samples within the evidence span before decode-to-prefill consolidation.                                                                     | At least 1                                               |
 | `controller.reactive.demand_rise_tolerance`         | `0.25`  | Maximum accepted short-horizon rise over long-horizon decode demand, and the fraction of the larger estimate within which two demand horizons match. | Zero or greater                                          |

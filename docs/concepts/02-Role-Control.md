@@ -8,6 +8,8 @@ description: How the Narwhal role controller moves engines between prefill and d
 
 The role controller runs at most one regular evaluation per `controller.reactive.step_s`. Each evaluation considers every adjacent prefill/decode split, one engine move away from the current split. It prices each split by the worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
 
+The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) is the largest projected decode-slot wait over the time left to `slo.ttft_s` after prefill, among requests waiting for decode or in prefill.
+
 The evaluation prices splits from measured window demand. Decode-to-prefill candidates use the larger of the short- and long-horizon decode estimates. Role floors and engine eligibility limit the available moves, and floor restoration moves one engine per monitor pass while a phase sits below its configured floor.
 
 ### Prefill queue projections
@@ -37,17 +39,19 @@ The [controller decision](../http-api/05-Live-State.md#controller-decisions) fie
 
 ### Departures from a settled split
 
-A departure moves one engine toward a demand shift on quarter-window demand, a quarter of `controller.reactive.window_s`.
+The confirmation span is `controller.reactive.step_s` times the sustained confirmation count, the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`.
+
+A departure moves one engine toward a demand shift on confirmation-span demand.
 
 The role controller opens a departure when all of these hold:
 
-- A settled run has lasted half of `controller.reactive.window_s`: every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on quarter-window demand.
-- Quarter-window demand for a phase differs from window demand by more than a `controller.reactive.demand_rise_tolerance` fraction of the larger estimate.
-- On quarter-window demand, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
+- A settled run has lasted `controller.reactive.evidence_span_s`: every adjacent split has improved the worst projected SLO ratio by less than `controller.reactive.movement_margin` on window demand and on confirmation-span demand.
+- Confirmation-span demand for a phase differs from window demand by more than a `controller.reactive.demand_rise_tolerance` fraction of the larger estimate.
+- On confirmation-span demand, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
 
 The departure's move to that split requires:
 
-- source load at or below `controller.thresholds.shrink` on quarter-window demand
+- source load at or below `controller.thresholds.shrink` on confirmation-span demand
 - one confirmation
 
 Moves that follow the departure's move use window demand.
@@ -55,8 +59,6 @@ Moves that follow the departure's move use window demand.
 The departure holds the reverse move for `controller.reactive.window_s` after it opens, or until a window-demand move continues in its direction.
 
 ### Steady demand
-
-The confirmation span is `controller.reactive.step_s` times the sustained confirmation count, the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`.
 
 Demand is steady when both hold:
 
@@ -66,7 +68,6 @@ Demand is steady when both hold:
 Under steady demand, a consolidation move with source load above `controller.thresholds.shrink` requires:
 
 - source load at or below `controller.thresholds.expand`
-- for a decode-to-prefill move, [decode slot load](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) at or below `controller.thresholds.expand`
 - a reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 - the sustained confirmation count
 

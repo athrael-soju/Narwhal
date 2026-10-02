@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import heapq
 import logging
+import math
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -44,6 +46,29 @@ def decode_span(
     return start, start + left * token_s, held + left
 
 
+def peak_holds(
+    spans: Iterable[DecodeSpan], start: float, end: float, *, held: int = 0, held_kv: float = 0.0
+) -> tuple[int, float]:
+    """Return peak holds and KV tokens from `start` to `end` above `held` and `held_kv`.
+
+    A hold covers `[first, last)`, so a hold ending at an instant frees its slot for a hold
+    starting then.
+    """
+    events = sorted(
+        (t, order, kv)
+        for first, last, kv in spans
+        if (first <= start or first < end) and last > start
+        for t, order in ((max(first, start), 1), (min(last, end), 0))
+    )
+    peak, peak_kv = held, held_kv
+    for _, order, kv in events:
+        held += 1 if order else -1
+        held_kv += kv if order else -kv
+        if order:
+            peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
+    return peak, peak_kv
+
+
 @dataclass(frozen=True)
 class DecodeOccupancy:
     """Decode holds projected from now across the live decode engines."""
@@ -53,30 +78,44 @@ class DecodeOccupancy:
     tokens: float
     # Fleet mean full-slot token interval.
     step: float
-    # Waiting decode requests, residents and requests in prefill.
-    spans: tuple[DecodeSpan, ...]
-    # Requests in prefill, from their predicted prefill completion.
+    # Residents hold their slots from now.
+    residents: tuple[DecodeSpan, ...]
+    # Holds that take slots in handoff order: waiting decode requests from now,
+    # then requests in prefill from their predicted prefill completion.
     queued: tuple[DecodeSpan, ...]
+    # Seconds from now to each queued request's TTFT deadline.
+    deadlines: tuple[float, ...]
     # Projected last token of each resident, by engine and request ID.
     ends: dict[tuple[str, str], float]
 
-    def peak(
-        self, start: float, end: float, *, held: int = 0, held_kv: float = 0.0
-    ) -> tuple[int, float]:
-        """Return peak requests and KV tokens over `[start, end]` above `held` and `held_kv`."""
-        events = sorted(
-            (t, order, kv)
-            for first, last, kv in self.spans
-            if first <= end and last >= start
-            for t, order in ((max(first, start), 0), (min(last, end), 1))
-        )
-        peak, peak_kv = held, held_kv
-        for _, order, kv in events:
-            held += 1 if order == 0 else -1
-            held_kv += kv if order == 0 else -kv
-            if order == 0:
-                peak, peak_kv = max(peak, held), max(peak_kv, held_kv)
-        return peak, peak_kv
+    def schedule(
+        self, slots: int, joins: tuple[DecodeSpan, ...] = ()
+    ) -> tuple[tuple[DecodeSpan, ...], tuple[DecodeSpan, ...]]:
+        """Start the queued holds and `joins` on `slots` slots as residents leave.
+
+        Each hold takes the earliest free slot at or after its handoff. A joining hold
+        follows the queued holds that reach decode no later. `joins` are in handoff order.
+        """
+        ends = sorted(last for _, last, _ in self.residents)
+        # Residents beyond the slot count free no slot.
+        free = [0.0] * (slots - len(ends)) + ends[-slots:] if slots > 0 else [math.inf]
+
+        def take(hold: DecodeSpan) -> DecodeSpan:
+            first, last, kv = hold
+            start = max(first, free[0])
+            end = start + (last - first)
+            if slots > 0:
+                heapq.heapreplace(free, end)
+            return start, end, kv
+
+        started: list[DecodeSpan] = []
+        joined: list[DecodeSpan] = []
+        for hold in self.queued:
+            while len(joined) < len(joins) and joins[len(joined)][0] < hold[0]:
+                joined.append(take(joins[len(joined)]))
+            started.append(take(hold))
+        joined += [take(hold) for hold in joins[len(joined) :]]
+        return tuple(started), tuple(joined)
 
 
 class GlobalScheduler:
@@ -452,27 +491,36 @@ class GlobalScheduler:
                 inst.iid
             )
         step = sum(steps.values()) / len(steps)
-        spans = [
-            (0.0, float("inf"), decode_span(r, 0.0, step, estimate)[2])
-            for r in self.monitor.waiting.values()
-            if r.phase is Phase.DECODE
-        ]
+        residents: list[DecodeSpan] = []
         ends: dict[tuple[str, str], float] = {}
         for inst in engines:
             for rid, r in inst.decode.items():
                 resident = decode_span(r, 0.0, steps[inst.iid], estimate)
-                spans.append(resident)
+                residents.append(resident)
                 ends[inst.iid, rid] = resident[1]
-        queued: list[DecodeSpan] = []
+        handoffs = [(0.0, r) for r in self.monitor.waiting.values() if r.phase is Phase.DECODE]
+        prefilling: list[tuple[float, Request]] = []
         for inst in self.monitor.instances.values():
             prefill_profile = self.profiles.get(inst.iid)
             done = 0.0
             for r in inst.prefill.values():
                 if prefill_profile is not None:
                     done += prefill_seconds(prefill_profile, r)
-                queued.append(decode_span(r, done, step, estimate))
+                prefilling.append((done, r))
+        handoffs += sorted(prefilling, key=lambda row: row[0])
+        now = self._clock()
         return DecodeOccupancy(
-            engines, slots, tokens, step, tuple(spans + queued), tuple(queued), ends
+            engines,
+            slots,
+            tokens,
+            step,
+            tuple(residents),
+            tuple(decode_span(r, ready, step, estimate) for ready, r in handoffs),
+            tuple(
+                self.slo.ttft_s - (now - r.arrived_at if r.arrived_at is not None else 0.0)
+                for _, r in handoffs
+            ),
+            ends,
         )
 
     def decode_admits(
@@ -480,13 +528,17 @@ class GlobalScheduler:
         request: Request,
         *,
         ready_s: float = 0.0,
+        ttft_s: float | None = None,
+        ttft_margin: float = 0.0,
         concurrency: int = 0,
         expected_output: Callable[[Request], int] | None = None,
     ) -> bool:
-        """Return whether live decode engines hold `request`'s decode window.
+        """Return whether `request` starts decode within its TTFT budget and fits decode.
 
-        Peak slots and KV tokens over the window must fit the fleet, and some engine must
-        meet the TPOT budget unless every idle engine misses it.
+        `ttft_s` is the projected TTFT at prefill completion `ready_s`, `ready_s` by default.
+        The request takes a free slot behind earlier handoffs, and `ttft_margin` widens the
+        budget for its wait. Peak KV tokens over its hold must fit the fleet, and some engine
+        must meet the TPOT budget unless every idle engine misses it.
         """
         estimate = expected_output or (lambda r: r.wanted_len)
         occupancy = self.decode_occupancy(
@@ -494,15 +546,26 @@ class GlobalScheduler:
         )
         if occupancy is None:
             return True
-        _, end, request_kv = decode_span(request, ready_s, occupancy.step, estimate)
-        end = ready_s if end == float("inf") else end
-        peak, peak_kv = occupancy.peak(ready_s, end, held=1, held_kv=request_kv)
-        if peak > 1 and (peak > occupancy.slots or peak_kv > occupancy.tokens):
+        started, ((start, end, request_kv),) = occupancy.schedule(
+            occupancy.slots, (decode_span(request, ready_s, occupancy.step, estimate),)
+        )
+        wait = start - ready_s
+        if wait > 0 and not self.meets_slo(
+            replace(request, phase=Phase.PREFILL),
+            (0.0, (ready_s if ttft_s is None else ttft_s) + wait),
+            ttft_margin=ttft_margin,
+        ):
+            return False
+        end = start if end == math.inf else end
+        peak, peak_kv = peak_holds(
+            (*occupancy.residents, *started), start, end, held=1, held_kv=request_kv
+        )
+        if peak > 1 and peak_kv > occupancy.tokens:
             return False
         decode = replace(request, phase=Phase.DECODE)
         generating = {
             inst.iid: {
-                rid: r for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] >= ready_s
+                rid: r for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] > start
             }
             for inst in occupancy.engines
         }

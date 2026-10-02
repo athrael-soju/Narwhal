@@ -81,7 +81,7 @@ Demand is the measured window demand, using the larger of the short- and long-ho
 
 The controller moves to the adjacent split that improves the score by at least the configured margin:
 
-- After a settled period, a demand shift moves one engine on quarter-window demand.
+- After a settled period of `controller.reactive.evidence_span_s`, a demand shift over the confirmation span moves one engine.
 - Under steady demand, the score chooses between adjacent splits after the evidence window closes.
 - A decode-to-prefill move requires a closed evidence window and stable decode demand.
 - A prefill-to-decode move with prefill load at or below `controller.thresholds.shrink` proceeds with the window open.
