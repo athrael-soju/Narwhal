@@ -185,6 +185,7 @@ Module responsibilities break down as follows:
 
 - `profiling/fitting.py` implements numerical fitting and cross-validation, `model.py` implements profile validation and capacity calculations, and `store.py` implements persistence and fleet queries.
 - `profiling/engine_io.py` reads engine metrics and builds prompts and request bodies. `prefill.py`, `decode.py` and `warm.py` hold the probes, `neighbour.py` the colocated load, `sweep.py` the sweep grids, `live.py` the per-engine and fleet runs, `offline.py` the refit and merge, and `cli.py` the `narwhal-profile` entry point.
+- `diagnostics/check.py` runs the preflight and the `narwhal-check` entry point. `gates.py` holds the engine gates, `transfer.py` the directed KV transfer gates and evidence, `profile_gates.py` the profile gates, and `report.py` the gate outcome report.
 - `engines/stream.py` decodes server-sent events (SSE) and validates token identity for serving and profiling.
 - `engines/client.py` holds HTTP deadlines.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.

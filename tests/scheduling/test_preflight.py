@@ -14,24 +14,22 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.diagnostics import check
-from narwhal.diagnostics.check import (
-    Report,
-    gate_consume,
+from narwhal.diagnostics import check, gates, profile_gates, transfer
+from narwhal.diagnostics.gates import (
     gate_contract,
     gate_model,
     gate_pace,
-    gate_produce,
-    gate_profile,
     gate_reach,
-    gate_slo,
     gate_tokenize,
 )
+from narwhal.diagnostics.profile_gates import gate_profile, gate_slo
+from narwhal.diagnostics.report import Report
+from narwhal.diagnostics.transfer import gate_consume, gate_produce
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
-from narwhal.engines.validation import pairs_of
+from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
@@ -56,7 +54,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_colocated_kv_engines_warn_about_individual_restarts(self):
         """A host peer without attested release or another producer keeps the warning."""
-        self.assertEqual(await check.colocated_restart_risk(self.cfg), "")
+        self.assertEqual(await gates.colocated_restart_risk(self.cfg), "")
         third = replace(self.cfg.engines[0], iid="e9")
         released: dict[int, bool] = {}
 
@@ -81,30 +79,30 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         pair = list(colocate(self.cfg.engines))
         self.cfg.engines = pair
         released[8300] = False
-        risk = await check.colocated_restart_risk(self.cfg, attested)
+        risk = await gates.colocated_restart_risk(self.cfg, attested)
         self.assertIn("engines e3 share a host with a KV consumer without attested peer", risk)
         self.assertIn("e0, e3 share a host with a KV consumer that has no other producer", risk)
         self.assertIn("whole-wave restart", risk)
         released[8300] = True
-        risk = await check.colocated_restart_risk(self.cfg, attested)
+        risk = await gates.colocated_restart_risk(self.cfg, attested)
         self.assertNotIn("without attested peer release", risk)
         self.assertIn("e0, e3 share a host with a KV consumer that has no other producer", risk)
         self.cfg.engines = list(colocate([*pair, third]))
-        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
+        self.assertEqual(await gates.colocated_restart_risk(self.cfg, attested), "")
         released[8301] = False
-        risk = await check.colocated_restart_risk(self.cfg, attested)
+        risk = await gates.colocated_restart_risk(self.cfg, attested)
         self.assertIn("engines e0, e9 share a host with a KV consumer without attested peer", risk)
         released[8301] = True
         pinned = [replace(spec, pin=True) for spec in self.cfg.engines]
         pinned[2] = replace(pinned[2], role=Role.DECODE)
         self.cfg.engines = pinned
-        risk = await check.colocated_restart_risk(self.cfg, attested)
+        risk = await gates.colocated_restart_risk(self.cfg, attested)
         self.assertIn("engines e0 share a host with a KV consumer that has no other producer", risk)
         self.cfg.engines = list(colocate([*pair, third]))
-        risk = await check.colocated_restart_risk(self.cfg, httpx.MockTransport(unreachable))
+        risk = await gates.colocated_restart_risk(self.cfg, httpx.MockTransport(unreachable))
         self.assertIn("engines e0, e3, e9 share a host with a KV consumer without attested", risk)
         self.cfg.engine_restart_policy = "whole_wave"
-        self.assertEqual(await check.colocated_restart_risk(self.cfg, attested), "")
+        self.assertEqual(await gates.colocated_restart_risk(self.cfg, attested), "")
 
     async def test_reach_and_tokenize_account_for_unreachable_engines(self):
         """Failed health checks remove engines from subsequent exact-count probes."""
@@ -206,7 +204,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         clock = SimpleNamespace(time=lambda: next(ticks))
         body = {"usage": {"prompt_tokens": 100}} if payload is None else payload
         report = Report()
-        with patch.object(check, "asyncio", SimpleNamespace(get_event_loop=lambda: clock)):
+        with patch.object(gates, "asyncio", SimpleNamespace(get_event_loop=lambda: clock)):
             slow = await gate_pace(
                 self.cfg,
                 {spec.iid for spec in self.cfg.engines} if live is None else live,
@@ -246,7 +244,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bodies), 3 * len(self.cfg.engines))
         salts = {body["cache_salt"] for body in bodies}
         self.assertEqual(len(salts), len(bodies))
-        self.assertEqual({body["prompt"] for body in bodies}, {check.PACE_PROMPT})
+        self.assertEqual({body["prompt"] for body in bodies}, {gates.PACE_PROMPT})
 
     async def test_pace_small_fleets_require_individual_evidence(self):
         """The pace check skips a two-engine fleet with missing profiles."""
@@ -492,7 +490,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 starts["e3"] = 101.0 if relaunched else 100.0
                 report = Report()
                 with redirect_stdout(io.StringIO()) as output:
-                    await check.gate_calibration(self.cfg, report, transport)
+                    await gates.gate_calibration(self.cfg, report, transport)
                 self.assertEqual(output.getvalue().splitlines(), ["calibration", f"  ok    {line}"])
                 self.assertEqual((report.failed, report.warnings), ([], []))
                 self.assertEqual(
@@ -509,7 +507,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_calibration_gate_warns_without_a_path(self):
         """A fleet without a calibration path warns and reports uncalibrated."""
         report = Report()
-        await check.gate_calibration(self.cfg, report)
+        await gates.gate_calibration(self.cfg, report)
         self.assertEqual(report.warnings, [UNCALIBRATED])
         self.assertEqual(report.failed, [])
         self.assertEqual(
@@ -529,7 +527,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         launches["e3"] = {"args": ["--max-num-seqs", "32"]}
         starts["e3"] = 101.0
         report = Report()
-        await check.gate_calibration(self.cfg, report, transport)
+        await gates.gate_calibration(self.cfg, report, transport)
         self.assertEqual(report.failed, ["e3 process differs from first-token calibration"])
         self.assertEqual(
             report.calibration,
@@ -637,7 +635,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
         pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
-        with patch.object(check, "validation_pairs", return_value=pair):
+        with patch.object(transfer, "validation_pairs", return_value=pair):
             report = Report()
             await gate_consume(
                 self.cfg, set(pair[0]), dict.fromkeys(pair[0], result), client, report, True, 3
@@ -686,10 +684,10 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
         src, dst = pair[0]
         with (
-            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(transfer, "validation_pairs", return_value=pair),
             patch.object(
-                check,
-                "_pair_snapshot",
+                transfer,
+                "pair_snapshot",
                 new=AsyncMock(
                     side_effect=[
                         snapshot(src),
@@ -717,10 +715,10 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)
 
         with (
-            patch.object(check, "validation_pairs", return_value=pair),
+            patch.object(transfer, "validation_pairs", return_value=pair),
             patch.object(
-                check,
-                "_pair_snapshot",
+                transfer,
+                "pair_snapshot",
                 new=AsyncMock(
                     side_effect=[
                         snapshot(src),
@@ -778,9 +776,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
         try:
             with (
-                patch.object(check, "validation_pairs", return_value=[(src, dst)]),
+                patch.object(transfer, "validation_pairs", return_value=[(src, dst)]),
                 patch.object(
-                    check, "_pair_snapshot", new=AsyncMock(return_value={"iid": src})
+                    transfer, "pair_snapshot", new=AsyncMock(return_value={"iid": src})
                 ) as snapshot,
             ):
                 report = Report()
@@ -822,8 +820,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
             client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=failed)
             with (
-                patch.object(check, "validation_pairs", return_value=[(src, dst)]),
-                patch.object(check, "_pair_snapshot", new=AsyncMock(return_value={"iid": src})),
+                patch.object(transfer, "validation_pairs", return_value=[(src, dst)]),
+                patch.object(transfer, "pair_snapshot", new=AsyncMock(return_value={"iid": src})),
             ):
                 report = Report()
                 await gate_consume(
@@ -851,7 +849,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 "attestation_digest": "sha256:attested",
             }
 
-        pairs = check.validation_pairs(self.cfg.engines, mesh=True)
+        pairs = validation_pairs(self.cfg.engines, mesh=True)
         rows = [
             {
                 "producer": src,
@@ -885,17 +883,19 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with patch.object(
-            check, "_pair_snapshot", new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid))
+            transfer, "pair_snapshot", new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid))
         ):
             self.assertEqual(
-                await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path), []
+                await transfer.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path), []
             )
         with patch.object(
-            check,
-            "_pair_snapshot",
+            transfer,
+            "pair_snapshot",
             new=AsyncMock(side_effect=lambda cfg, iid: snapshot(iid, start=101.0)),
         ):
-            failures = await check.verify_directed_kv_evidence(self.cfg, fleet_path, evidence_path)
+            failures = await transfer.verify_directed_kv_evidence(
+                self.cfg, fleet_path, evidence_path
+            )
         self.assertTrue(any("changed since KV qualification" in failure for failure in failures))
 
     async def test_directed_qualification_binds_the_full_mesh_and_profiles(self):
@@ -972,14 +972,14 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         )
                     stack.enter_context(
                         patch.object(
-                            check,
+                            profile_gates,
                             "read_generation",
                             new=AsyncMock(return_value=GenerationEvidence(digest, {}, 100.0)),
                         )
                     )
-                    stack.enter_context(
-                        patch.object(check, "_pair_snapshot", new=AsyncMock(side_effect=snapshot))
-                    )
+                    pair_snapshot = AsyncMock(side_effect=snapshot)
+                    stack.enter_context(patch.object(check, "pair_snapshot", new=pair_snapshot))
+                    stack.enter_context(patch.object(transfer, "pair_snapshot", new=pair_snapshot))
                     code = await check.run(
                         self.cfg,
                         mesh=True,
@@ -994,7 +994,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(code, 0, report.failed)
                         self.assertEqual(saved["status"], "passed")
                         self.assertEqual(
-                            await check.verify_directed_kv_evidence(
+                            await transfer.verify_directed_kv_evidence(
                                 self.cfg, fleet_path, evidence_path
                             ),
                             [],
@@ -1061,12 +1061,12 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with patch.object(
-            check,
+            profile_gates,
             "read_generation",
             new=AsyncMock(return_value=GenerationEvidence(live_digest, {}, 100.0)),
         ):
             report = Report()
-            unsafe = await check.gate_profile_generation(self.cfg, store, {"e0"}, report)
+            unsafe = await profile_gates.gate_profile_generation(self.cfg, store, {"e0"}, report)
         self.assertEqual(unsafe, {"e0"})
         self.assertTrue(any("profile generation differs" in failure for failure in report.failed))
 

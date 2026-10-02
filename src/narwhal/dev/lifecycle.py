@@ -23,7 +23,7 @@ from narwhal.deployment import cache_capture_hook, native_engine, stages
 from narwhal.deployment.attestation_contract import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import digest, gpu_memory, prepare
-from narwhal.diagnostics.check import verify_directed_kv_evidence
+from narwhal.diagnostics.transfer import verify_directed_kv_evidence
 
 from .template import _check_free_ports, _port_layout, _sha256, check_plugin
 
