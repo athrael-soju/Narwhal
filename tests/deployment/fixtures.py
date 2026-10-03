@@ -12,11 +12,28 @@ import tempfile
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+from narwhal.deployment.launch_engine import captures as launch_captures
+from narwhal.deployment.launch_engine import check as launch_check
+from narwhal.deployment.launch_engine import docker as launch_docker
+from narwhal.deployment.launch_engine import start as launch_start
+from narwhal.deployment.launch_engine.runtime import digest
 from tools.deployment.engine_launch import selected_launch
-from tools.deployment.launch_engine import digest
 
 ROOT = Path(__file__).resolve().parents[2]
+# Launcher modules whose functions call `docker`.
+DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start)
+
+
+@contextlib.contextmanager
+def patched_docker(**kwargs):
+    """Patch `docker` in every launcher module that calls it; yield the shared mock."""
+    mock = MagicMock(**kwargs)
+    with contextlib.ExitStack() as stack:
+        for module in DOCKER_CALLERS:
+            stack.enter_context(patch.object(module, "docker", mock))
+        yield mock
 
 
 def cache_settings_line(plan, *, prefix_caching=True):

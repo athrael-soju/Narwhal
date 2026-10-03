@@ -10,6 +10,7 @@ from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
 from .prefill import prefill_seconds, resident_prefill_seconds
+from .scheduler.occupancy import decode_occupancy
 
 # Projections reuse a waiting request's cache evidence checked within this many seconds.
 CACHE_RECHECK_S = 0.25
@@ -297,7 +298,8 @@ class SplitScorer:
         nothing.
         """
         queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
-        occupancy = self.scheduler.decode_occupancy(
+        occupancy = decode_occupancy(
+            self.scheduler,
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
             concurrency=self.scheduler.decode_concurrency,
             expected_output=self.demand.output_estimator(),
@@ -467,7 +469,7 @@ class SplitScorer:
             else:
                 if prefill != current_prefill:
                     target = Role.PREFILL if prefill > current_prefill else Role.DECODE
-                    donor, _ = self.scheduler.planned_donor(target)
+                    donor, _ = self.scheduler.roles.planned_donor(target)
                     if donor is not None:
                         roles[donor.iid] = target
                 rows = self.scheduler.profiles.profiles_for_split(

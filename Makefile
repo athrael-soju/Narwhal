@@ -100,4 +100,4 @@ docs-build: $(BOOTSTRAP)
 
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
-	$(VENV_PYTHON) -m tools.observability.start
+	$(VENV_PYTHON) -m tools.observability.start.cli

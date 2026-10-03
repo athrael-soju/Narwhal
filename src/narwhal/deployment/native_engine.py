@@ -19,15 +19,9 @@ from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.runtime.listeners import check_engine_bind, check_http_bind
 
 from . import stages
-from .launch_engine import (
-    digest,
-    gpu_memory,
-    kv_events_directory,
-    read_env,
-    remove_kv_events_directory,
-    validate_shared_runs,
-    write_private,
-)
+from .launch_engine.plan import kv_events_directory, read_env, remove_kv_events_directory
+from .launch_engine.runtime import digest, write_private
+from .launch_engine.start import gpu_memory, validate_shared_runs
 
 
 def process_identity(pid: int) -> dict[str, int | str]:

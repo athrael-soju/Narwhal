@@ -183,8 +183,7 @@ In every engine-role shell, prepare the launch plan:
 umask 077
 mkdir -p runs
 export ENGINE_RUN="runs/engine-launch-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-test "$(sha256sum "$NARWHAL_ENGINE_LAUNCHER" | cut -d' ' -f1)" = "$NARWHAL_ENGINE_LAUNCHER_SHA256" &&
-python3 "$NARWHAL_ENGINE_LAUNCHER" prepare --out "$ENGINE_RUN"
+narwhal-engine prepare --out "$ENGINE_RUN"
 python3 -m json.tool "$ENGINE_RUN/launch.json"
 ```
 
@@ -204,7 +203,7 @@ Keep `container.env` private.
 Validate the image and plan:
 
 ```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" check --run "$ENGINE_RUN"
+narwhal-engine check --run "$ENGINE_RUN"
 ```
 
 A passing check confirms:
@@ -234,7 +233,7 @@ Start the engines:
 2. Start each engine and follow its log:
 
     ```bash
-    python3 "$NARWHAL_ENGINE_LAUNCHER" start --run "$ENGINE_RUN"
+    narwhal-engine start --run "$ENGINE_RUN"
     export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
     docker logs --follow "$ENGINE_CONTAINER"
     ```
@@ -326,7 +325,7 @@ If the probe reports another API version, compare the container that serves the 
 In each engine-role shell, capture the cache layout and create the fabric run directory:
 
 ```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" capture-cache --run "$ENGINE_RUN"
+narwhal-engine capture-cache --run "$ENGINE_RUN"
 umask 077
 mkdir -p runs
 export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"

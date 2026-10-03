@@ -11,8 +11,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment import launch_engine as launcher
 from narwhal.deployment import stages
+from narwhal.deployment.launch_engine import cli as engine_cli
+from narwhal.deployment.launch_engine.plan import append_private, load
+from narwhal.deployment.launch_engine.runtime import digest
 from tests.deployment.fixtures import cache_settings_line, launcher_inputs
 
 
@@ -63,7 +65,9 @@ class RuntimeCheckCliTests(unittest.TestCase):
         env["NARWHAL_MODEL_REVISION"] = "a" * 40
         run = root / "launch"
         with patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(launcher.main(["prepare", "--backend", backend, "--out", str(run)]), 0)
+            self.assertEqual(
+                engine_cli.main(["prepare", "--backend", backend, "--out", str(run)]), 0
+            )
         return run, env
 
     def failed_cli(self, arguments):
@@ -71,7 +75,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()) as stderr,
             self.assertRaises(SystemExit) as raised,
         ):
-            launcher.main(arguments)
+            engine_cli.main(arguments)
         self.assertEqual(raised.exception.code, 1)
         return stderr.getvalue()
 
@@ -87,7 +91,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
     def check_repeats(self, root, backend, failure):
         run, env = self.prepare(root, backend)
         plan_bytes = (run / "launch.json").read_bytes()
-        plan_hash = launcher.digest(run / "launch.json")
+        plan_hash = digest(run / "launch.json")
         env_path = run / ("engine.env" if backend == "native" else "container.env")
         env_bytes = env_path.read_bytes()
         attempt = 0
@@ -122,7 +126,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
 
         def stage(command, **kwargs):
             result = inspect(command)
-            launcher.append_private(
+            append_private(
                 kwargs["log"],
                 json.dumps({"exit": result.returncode})
                 + "\n"
@@ -139,10 +143,10 @@ class RuntimeCheckCliTests(unittest.TestCase):
         ):
             arguments = ["check", "--run", str(run)]
             attempt = 1
-            self.assertEqual(launcher.main(arguments), 0)
+            self.assertEqual(engine_cli.main(arguments), 0)
             evidence = (run / "checked.json").read_bytes()
             attempt = 2
-            self.assertEqual(launcher.main(arguments), 0)
+            self.assertEqual(engine_cli.main(arguments), 0)
             self.assertEqual((run / "checked.json").read_bytes(), evidence)
             attempt = 3
             diagnostic = self.failed_cli(arguments)
@@ -180,8 +184,8 @@ class RuntimeCheckCliTests(unittest.TestCase):
         for backend in ("native", "container"):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
                 run, _ = self.prepare(Path(folder), backend)
-                plan = launcher.load(run)
-                evidence = {"plan_sha256": launcher.digest(run / "launch.json")}
+                plan = load(run)
+                evidence = {"plan_sha256": digest(run / "launch.json")}
                 (run / "checked.json").write_text(json.dumps(evidence))
                 original = (run / "checked.json").read_bytes()
                 plan["args"].append("--language-model-only")
@@ -200,11 +204,11 @@ class RuntimeCheckCliTests(unittest.TestCase):
             self.assertIn("prepare: artifact already exists:", diagnostic)
             self.assertIn(str(run), diagnostic)
 
-            plan = launcher.load(run)
+            plan = load(run)
             (run / "checked.json").write_text(
                 json.dumps(
                     {
-                        "plan_sha256": launcher.digest(run / "launch.json"),
+                        "plan_sha256": digest(run / "launch.json"),
                         "backend": "native",
                         "python_executable": plan["python_executable"],
                         "expected_packages": plan["expected_packages"],

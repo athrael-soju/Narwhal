@@ -25,7 +25,9 @@ from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
 from .generation import read_generation
-from .probe import device_key, engine_context_limit, make_prompt
+from .probe.engine import engine_context_limit, make_prompt
+from .probe.fleet import device_key
+from .tasks import cancel_tasks
 
 SCHEMA = "narwhal.first-token-calibration"
 RECALIBRATE = "recalibrate with narwhal-check --calibrate-first-token"
@@ -359,9 +361,7 @@ async def _together(coroutines: list[Coroutine[Any, Any, T]]) -> list[T]:
     try:
         return await asyncio.gather(*tasks)
     except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await cancel_tasks(tasks)
         raise
 
 

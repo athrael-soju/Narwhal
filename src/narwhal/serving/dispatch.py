@@ -9,7 +9,7 @@ from ..types import Instance, Phase, Request, Role
 from .admission import AdmissionQueue
 
 if TYPE_CHECKING:
-    from .router import NarwhalRouter
+    from .router.routing import NarwhalRouter
 
 
 class Dispatcher:

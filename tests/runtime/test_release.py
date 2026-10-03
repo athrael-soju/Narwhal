@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from narwhal.config import FleetConfig
 from narwhal.engines.client import InferenceProbe, ProbeLeg
-from narwhal.runtime.lifecycle import DrainRecord
+from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.monitoring import monitor_once
 from narwhal.runtime.release import (
     RELEASE_AFTER_S,
@@ -67,7 +67,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
 
     def test_first_round_follows_the_launcher_engine_ttl(self):
-        from narwhal.deployment.launch_engine import ENGINE_TTL_S
+        from narwhal.deployment.launch_engine.plan import ENGINE_TTL_S
 
         self.assertGreater(RELEASE_AFTER_S[0], ENGINE_TTL_S)
         self.assertGreater(RELEASE_AFTER_S[-1], 3600.0)

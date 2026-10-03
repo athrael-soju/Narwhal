@@ -15,6 +15,7 @@ from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
+from ..scheduling.scheduler.occupancy import decode_admits
 from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
@@ -24,7 +25,7 @@ from .response import RequestStreamResponse
 from .retry import leg_failure_reason
 
 if TYPE_CHECKING:
-    from .router import NarwhalRouter
+    from .router.routing import NarwhalRouter
 
 
 class NoEngine(Exception):
@@ -93,7 +94,7 @@ def _failed_leg(
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
-    router._leg_failed(
+    router.verifier.leg_failed(
         inst.iid,
         exc,
         prefill_iid=state.prefill_iid if decode else None,
@@ -165,7 +166,8 @@ async def _prepare_once(
             req, (0.0, priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced)
-        if not router.scheduler.decode_admits(
+        if not decode_admits(
+            router.scheduler,
             req,
             ready_s=router.scheduler.prefill_ready_s(req, prefill),
             ttft_s=priced,
@@ -281,7 +283,7 @@ async def serve_request(
                 req.cached_tokens,
                 req.cache_sequences,
                 req.cache_identities,
-            ) = await state.wait(lambda: router.size(body))
+            ) = await state.wait(lambda: router.sizer.size(body))
             req.cache_checked_at = router._clock()
         finally:
             router.sizing_delays.add(router._clock() - sizing)

@@ -10,7 +10,8 @@ from contextlib import redirect_stdout, suppress
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment import launch_engine
+from narwhal.deployment.launch_engine import cli as engine_cli
+from narwhal.deployment.launch_engine import runtime as launch_runtime
 from tests.fixtures import ROOT
 
 REFERENCES = {
@@ -85,24 +86,24 @@ class CliReferenceTests(unittest.TestCase):
     def test_internal_engine_actions_are_hidden_and_still_dispatch(self):
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as exit_status:
-            launch_engine.main(["--help"])
+            engine_cli.main(["--help"])
         self.assertEqual(exit_status.exception.code, 0)
         for internal in ("_cache-probe", "_model-dimensions", "==SUPPRESS=="):
             self.assertNotIn(internal, output.getvalue())
 
-        with patch.object(launch_engine, "runtime_cache_probe") as probe:
-            with patch.object(launch_engine.os, "umask"):
-                self.assertEqual(launch_engine.main(["_cache-probe", "--plan", "plan.json"]), 0)
+        with patch.object(launch_runtime, "runtime_cache_probe") as probe:
+            with patch.object(launch_runtime.os, "umask"):
+                self.assertEqual(launch_runtime.main(["_cache-probe", "--plan", "plan.json"]), 0)
             probe.assert_called_once_with(Path("plan.json"))
         output = io.StringIO()
         with (
             patch.object(
-                launch_engine, "runtime_model_dimensions", return_value={"ranks": 1}
+                launch_runtime, "runtime_model_dimensions", return_value={"ranks": 1}
             ) as dimensions,
-            patch.object(launch_engine.os, "umask"),
+            patch.object(launch_runtime.os, "umask"),
             redirect_stdout(output),
         ):
-            self.assertEqual(launch_engine.main(["_model-dimensions", "--plan", "plan.json"]), 0)
+            self.assertEqual(launch_runtime.main(["_model-dimensions", "--plan", "plan.json"]), 0)
         dimensions.assert_called_once_with(Path("plan.json"))
         self.assertEqual(output.getvalue(), 'NARWHAL_MODEL_DIMENSIONS={"ranks": 1}\n')
 

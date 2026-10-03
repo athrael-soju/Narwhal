@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.runtime import monitoring
-from narwhal.runtime.lifecycle import ValidationOutcome
+from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.runtime.monitoring import MonitoringLedger, monitor_once, readmit, sweep_liveness
 from narwhal.serving.app import create_app
 from tests.fixtures import bind_identity_profiles, fleet
@@ -91,7 +91,9 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(self.router.controller, "sample", side_effect=ValueError("sample")),
             patch.object(
-                self.router.scheduler, "settle_drains", wraps=self.router.scheduler.settle_drains
+                self.router.scheduler.roles,
+                "settle_drains",
+                wraps=self.router.scheduler.roles.settle_drains,
             ) as drains,
             self.assertLogs("narwhal.monitoring_loop", level="ERROR"),
         ):
@@ -183,7 +185,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         """Monitoring recovers on the first clean pass after a stage failure."""
         for stage, owner, name in (
             ("health", self.router.scheduler, "health_pass"),
-            ("drains", self.router.scheduler, "settle_drains"),
+            ("drains", self.router.scheduler.roles, "settle_drains"),
             ("rollover", self.router.monitor, "roll_interval"),
             ("readmission", monitoring, "readmit"),
             ("liveness", monitoring, "sweep_liveness"),

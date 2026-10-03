@@ -8,7 +8,7 @@ import math
 import re
 from pathlib import Path
 
-from narwhal.deployment.launch_engine import validate_runtime
+from narwhal.deployment.launch_engine.plan import validate_runtime
 
 
 def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:

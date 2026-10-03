@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document
-from narwhal.diagnostics import check
+from narwhal.diagnostics.check import cli as check_cli
 from narwhal.serving.policy import ServingPolicy
 from tests.fixtures import ROOT
 
@@ -393,8 +393,8 @@ class ConfigTests(unittest.TestCase):
 
     def test_check_cli_uses_native_fleet_config(self):
         """Preflight loads the native fleet document and rejects retired source selectors."""
-        with patch.object(check, "run", new=AsyncMock(return_value=0)) as run:
-            self.assertEqual(check.main(["--fleet", str(ROOT / "tests/data/fleet.json")]), 0)
+        with patch.object(check_cli, "run", new=AsyncMock(return_value=0)) as run:
+            self.assertEqual(check_cli.main(["--fleet", str(ROOT / "tests/data/fleet.json")]), 0)
         self.assertEqual(run.await_args.args[0].model, "test-model")
 
         for option in ("--preset", "--from-fleet-json", "--write"):
@@ -403,5 +403,5 @@ class ConfigTests(unittest.TestCase):
                 redirect_stderr(io.StringIO()),
                 self.assertRaises(SystemExit) as caught,
             ):
-                check.main([option, "fixture"])
+                check_cli.main([option, "fixture"])
             self.assertEqual(caught.exception.code, 2)

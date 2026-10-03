@@ -20,18 +20,14 @@ from fastapi.responses import JSONResponse, Response
 from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
-from ..observability.metrics import render
+from ..observability.metrics.render import render
 from ..profiling.calibration import verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
-from ..runtime.lifecycle import (
-    LifecycleError,
-    ValidationOutcome,
-    capture_process_identities,
-    check_process_identities,
-    validate_readmission,
-)
+from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
+from ..runtime.lifecycle.readmission import validate_readmission
+from ..runtime.lifecycle.records import LifecycleError, ValidationOutcome
 from ..runtime.monitoring import monitor_loop, residency_loop
 from ..runtime.standby import (
     MAX_HANDOFF_AGE_S,
@@ -45,7 +41,7 @@ from ..runtime.standby import (
 )
 from .completion import completion_body_error
 from .ingress import BodyTooLarge, ServingIngress, bounded_body, serve_connected
-from .router import NarwhalRouter
+from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
 
@@ -245,7 +241,7 @@ def create_app(
                 lease_watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await lease_watch
-            probes = [*router._verification_tasks, *router.peer_release.tasks]
+            probes = [*router.verifier.tasks, *router.peer_release.tasks]
             for probe in probes:
                 probe.cancel()
             await asyncio.gather(*probes, return_exceptions=True)

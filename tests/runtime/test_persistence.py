@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from narwhal.observability.journal import RunJournal
 from narwhal.runtime import state
-from narwhal.runtime.lifecycle import LifecycleError
+from narwhal.runtime.lifecycle.records import LifecycleError
 from narwhal.serving.app import create_app
 from narwhal.types import Role
 from tests.fixtures import fleet
@@ -90,7 +90,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             (30, 2, 8, 7, 3, 1, 2, 4, 5, 6),
         )
         self.assertIn("e3", self.router.scheduler.ejected)
-        self.assertEqual(self.router._inference_sources["e3"], {"e0"})
+        self.assertEqual(self.router.verifier.sources["e3"], {"e0"})
 
     def test_a_restored_suspect_stays_live_while_it_alone_serves_its_role(self):
         for pinned, ejected in ((True, False), (False, True)):
@@ -104,7 +104,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
                     self.addAsyncCleanup(router.engines.aclose)
                     router.lifecycle.process_starts = {"e0": 100, "e3": 100}
                 source.scheduler.inference_suspects.add("e3")
-                source._inference_sources["e3"] = {"e0"}
+                source.verifier.sources["e3"] = {"e0"}
                 doc = state.snapshot(source)
                 self.assertEqual(doc["ejected"], [])
                 self.assertTrue(state.apply(target, doc).applied)

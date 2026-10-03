@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .router import NarwhalRouter
+    from .router.routing import NarwhalRouter
 
 LAG_PROBE_S = 0.05
 SIZING_WINDOW_S = 2.0
@@ -26,6 +26,12 @@ async def measure_loop_lag(router: NarwhalRouter) -> None:
         started = loop.time()
         await asyncio.sleep(LAG_PROBE_S)
         router.loop_lag_s = max(0.0, loop.time() - started - LAG_PROBE_S)
+
+
+def saturated(router: NarwhalRouter) -> bool:
+    """Return whether loop lag or recent request sizing takes a quarter of the TTFT budget."""
+    budget = SATURATED_TTFT_SHARE * router.scheduler.slo.ttft_s
+    return router.loop_lag_s >= budget or router.sizing_delays.median() >= budget
 
 
 class RecentDelays:

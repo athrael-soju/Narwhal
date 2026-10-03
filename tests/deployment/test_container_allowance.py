@@ -9,8 +9,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from narwhal.deployment import stages
-from narwhal.deployment.launch_engine import check, load, prepare, start_shared
-from tests.deployment.fixtures import cache_settings_line, launcher_inputs
+from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.plan import load, prepare
+from narwhal.deployment.launch_engine.start import start_shared
+from tests.deployment.fixtures import cache_settings_line, launcher_inputs, patched_docker
 
 
 class ContainerAllowanceTests(unittest.TestCase):
@@ -88,9 +90,9 @@ class ContainerAllowanceTests(unittest.TestCase):
             response = MagicMock()
             response.__enter__.return_value.status = 200
             with (
-                patch("narwhal.deployment.launch_engine.docker", side_effect=docker),
-                patch("narwhal.deployment.launch_engine.gpu_memory", side_effect=gpu_memory),
-                patch("narwhal.deployment.launch_engine.urlopen", return_value=response),
+                patched_docker(side_effect=docker),
+                patch("narwhal.deployment.launch_engine.start.gpu_memory", side_effect=gpu_memory),
+                patch("narwhal.deployment.launch_engine.start.urlopen", return_value=response),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 for number in (1, 2):
