@@ -170,8 +170,49 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.router.sizing_delays), 1)
         self.assert_released()
 
+    async def test_a_saturation_rejection_leaves_demand_priced(self):
+        client = self.client()
+        self.router.loop_lag_s = self.router.scheduler.slo.ttft_s
+        self.assertEqual((await self.post(client)).status_code, 429)
+        self.router.loop_lag_s = 0.0
+        self.assertEqual((await self.post(client)).status_code, 200)
+        controller = self.router.controller
+        controller._demand(self.router._clock())
+        self.assertTrue(controller.last_demand.complete)
+        self.assertEqual(controller.last_demand.unsized_offers, 1)
+        self.assert_released()
+
+    async def test_a_refused_prompt_above_the_sweep_stays_in_complete_demand(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        profiles = self.router.scheduler.profiles
+        for iid in self.router.monitor.instances:
+            profiles.put(replace(profiles.get(iid), prefill_max_tokens=50))
+        with (
+            patch.object(self.router.scheduler, "prefill_admission_price", return_value=20),
+            patch.object(self.router.scheduler, "cheapest_own_prefill", return_value=1),
+        ):
+            response = await client.post(
+                "/v1/completions",
+                json={"model": self.cfg.model, "prompt": "x" * 400, "max_tokens": 1},
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(self.terminal_rows()[-1]["refused_cause"], "queue")
+        controller = self.router.controller
+        controller._demand(self.router._clock())
+        demand = controller.last_demand
+        self.assertTrue(demand.complete)
+        self.assertGreater(demand.prefill_engines, 0.0)
+        self.assertEqual(demand.arrivals_beyond_profile, 1)
+        controller._last_step -= controller.step_s
+        controller.step()
+        decision = self.router.scheduler._last_decision
+        self.assertTrue(decision["demand_complete"])
+        self.assertEqual(decision["arrivals_beyond_profile"], 1)
+        self.assert_released()
+
     async def test_a_refusal_on_a_retry_returns_the_refusal(self):
-        """A retry that admission refuses answers 429 with its Retry-After, streamed or not."""
+        """Streamed and non-streamed retries that admission refuses return 429 with Retry-After."""
         self.cfg.serving = replace(self.cfg.serving, max_attempts=2, handoff_timeout_s=5.0)
         client = self.client()
         real = execution.prepare_attempt
@@ -235,7 +276,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assert_released()
 
     async def test_client_credentials_stop_at_ingress_and_correlation_is_preserved(self):
-        """Engine legs receive router correlation IDs and deployment-owned credentials."""
+        """Engine legs receive router correlation IDs and the deployment's credentials."""
         client = self.client()
         response = await self.post(
             client,
@@ -276,7 +317,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assert_released()
 
     async def test_completed_requests_meet_the_slo_only_within_both_targets(self):
-        """A completion counts toward the SLO only when TTFT and TPOT stay within it."""
+        """A completion counts toward the SLO only when both TTFT and TPOT meet their targets."""
         client = self.client()
         slo = self.router.cfg.slo
         self.assertEqual((await self.post(client)).status_code, 200)
@@ -299,7 +340,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("narwhal_slo_met_total 1", metrics.text)
 
     async def test_invalid_and_oversized_bodies_settle_before_dispatch(self):
-        """Malformed JSON and streamed body limits each produce one terminal record."""
+        """Malformed JSON and an over-limit streamed body each produce one terminal record."""
         self.cfg.serving = replace(self.cfg.serving, max_request_bytes=64)
         client = self.client()
         bad = await client.post(
@@ -327,7 +368,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.terminal_rows()), 1)
 
     async def test_original_deadline_cancels_blocked_prefill(self):
-        """The original request deadline expires while the producer remains blocked."""
+        """The original request deadline cancels a prefill whose producer stays blocked."""
         self.cfg.request_timeout_s = 0.02
         self.blocked = asyncio.Event()
         client = self.client()
@@ -422,7 +463,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                 self.assert_released()
 
     async def test_exhausted_retry_budget_settles_the_first_attempt(self):
-        """A zero-credit router records the producer failure after one attempt."""
+        """With a zero retry budget, the router records the producer failure after one attempt."""
         self.cfg.serving = ServingPolicy(max_attempts=2, handoff_timeout_s=5, retry_budget=0)
         self.prefill_statuses = [503]
         client = self.client()

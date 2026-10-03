@@ -1,4 +1,4 @@
-"""Offered-work, output-length and decode-residency accounting."""
+"""Accounting for offered work, output lengths and decode residency."""
 
 from __future__ import annotations
 
@@ -28,6 +28,10 @@ class Demand:
     arrivals: int
     output_observations: int
     complete: bool = True
+    # Arrivals with a prompt longer than some profile's prefill sweep.
+    arrivals_beyond_profile: int = 0
+    # Offers turned away before sizing, or still being read, in the span.
+    unsized_offers: int = 0
 
 
 @dataclass(frozen=True)
@@ -130,7 +134,7 @@ class DemandModel:
         at: float,
         cached_tokens: dict[str, int] | None = None,
     ) -> Cohort[Arrival] | None:
-        """Replace one local estimate with the admitted request's count and cache evidence.
+        """Replace a local estimate with the admitted request's token counts and cache evidence.
 
         Return the arrival's cohort.
         """
@@ -228,7 +232,7 @@ class DemandModel:
         return priced.prefill_engines, priced.decode_engines
 
     def resident_demand(self, now: float, window_s: float) -> float:
-        """Return the observed decode occupancy in engine equivalents."""
+        """Return the observed decode residency in engine equivalents."""
         residents = list(self.residency.rows(now - window_s))
         count = sum(row.count for row in residents)
         return sum(row.value * row.count for row in residents) / count if count else 0.0
@@ -246,26 +250,34 @@ class DemandModel:
         prefill_iids: Collection[str] | None = None,
         resident_s: float | None = None,
     ) -> Demand:
-        """Price one window against a particular measured role-mix profile set.
+        """Price one demand window with the profiles measured for one role mix.
 
-        Cached arrivals take warm prices from engines in `prefill_iids`, or every engine.
+        Cached arrivals take warm prices from engines in `prefill_iids`, or from every engine
+        when `prefill_iids` is None.
+        Unsized offers take the mean price of the span's parsed offers.
         """
         window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
         h0 = now - window
+        parsed = self.arrivals.count(h0)
+        unsized = self.unsized.count(h0) + self.unsized_pending
+        demand_complete = bool(profiles) and (parsed > 0 or not unsized)
         prefill = 0.0
-        demand_complete = bool(profiles) and not self.unsized_pending and not self.unsized.count(h0)
-        # Price per arrival shape; None marks a length outside a profile's domain.
-        prices: dict[tuple[int, tuple[tuple[str, int], ...]], float | None] = {}
-        for row in self.arrivals.rows(h0):
-            shape = (row.value.input_len, row.value.cached)
-            if shape not in prices:
-                prices[shape] = self._arrival_price(profiles, *shape, prefill_iids)
-            cost = prices[shape]
-            if cost is None:
-                demand_complete = False
-            else:
+        beyond = 0
+        # Price per arrival shape, and whether the prompt is longer than some profile's sweep.
+        prices: dict[tuple[int, tuple[tuple[str, int], ...]], tuple[float, bool]] = {}
+        if profiles:
+            for row in self.arrivals.rows(h0):
+                shape = (row.value.input_len, row.value.cached)
+                if shape not in prices:
+                    prices[shape] = (
+                        self._arrival_price(profiles, *shape, prefill_iids),
+                        not all(p.covers_prefill(shape[0]) for p in profiles),
+                    )
+                cost, outside = prices[shape]
                 prefill += cost * row.count / span
+                if outside:
+                    beyond += row.count
         expected_decode = 0.0
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
@@ -308,15 +320,18 @@ class DemandModel:
                 demand_complete = False
                 continue
             expected_decode += expected_row.count / (span * capacity)
+        scale = (parsed + unsized) / parsed if parsed else 1.0
         return Demand(
-            prefill_engines=prefill,
+            prefill_engines=prefill * scale,
             decode_engines=max(
                 self.resident_demand(now, window_s if resident_s is None else resident_s),
-                expected_decode,
+                expected_decode * scale,
             ),
             arrivals=self.arrival_count(now - window_s),
             output_observations=self.observed_decode.count(now - 4 * window_s),
             complete=demand_complete,
+            arrivals_beyond_profile=beyond,
+            unsized_offers=unsized,
         )
 
     def _shape_capacity(
@@ -343,10 +358,8 @@ class DemandModel:
         length: int,
         cached: tuple[tuple[str, int], ...],
         prefill_iids: Collection[str] | None,
-    ) -> float | None:
-        """Return the mean cold prefill price, or the cheapest warm price, for one arrival."""
-        if not profiles or not all(p.covers_prefill(length) for p in profiles):
-            return None
+    ) -> float:
+        """Price one arrival at the lower of the mean cold and cheapest warm prefill prices."""
         cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
         tokens = dict(cached)
         warm = (
