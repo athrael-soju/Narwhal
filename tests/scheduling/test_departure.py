@@ -38,6 +38,7 @@ class TrackDepartureTests(unittest.TestCase):
         self.controller = SimpleNamespace(
             movement_margin=0.05,
             window_s=120.0,
+            step_s=5.0,
             within_floors=lambda p: 0 < p < 8,
             safety=SimpleNamespace(demand_rise_tolerance=0.25, evidence_span_s=60.0),
         )
@@ -98,6 +99,21 @@ class TrackDepartureTests(unittest.TestCase):
         self.track(65.0, short_gain=0.5, short_demand=Demand(4.8, 0.28, 100, 0))
         self.assertEqual(self.policy.departure, Departure(-1, 65.0))
 
+    def test_one_unsettled_evaluation_keeps_the_settled_run(self):
+        self.settle(55.0)
+        self.track(57.0, short_gain=0.5, short_demand=self.window)
+        self.track(60.0, short_gain=0.0, short_demand=self.window)
+        self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0))
+
+    def test_unsettled_evaluations_for_one_step_restart_the_settled_run(self):
+        self.settle(45.0)
+        self.track(50.0, short_gain=0.5, short_demand=self.window)
+        self.track(55.0, short_gain=0.5, short_demand=self.window)
+        self.track(60.0, short_gain=0.0, short_demand=self.window)
+        self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertIsNone(self.policy.departure)
+
     def test_departure_closes_when_the_short_view_turns(self):
         self.settle(60.0)
         self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
@@ -114,10 +130,16 @@ class TrackDepartureTests(unittest.TestCase):
         self.track(70.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
 
-    def test_moved_departure_stops_leading_when_the_shift_ends(self):
+    def test_moved_departure_leads_through_one_evaluation_without_the_shift(self):
         self.moved()
         self.track(70.0, short_gain=0.5, short_demand=self.window)
         self.track(75.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
+
+    def test_moved_departure_stops_leading_when_the_shift_ends_for_one_step(self):
+        self.moved()
+        self.track(70.0, short_gain=0.5, short_demand=self.window)
+        self.track(75.0, short_gain=0.5, short_demand=self.window)
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
 
     def test_moved_departure_leads_through_an_evaluation_below_the_margin(self):
@@ -126,11 +148,19 @@ class TrackDepartureTests(unittest.TestCase):
         self.track(75.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6)
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
 
-    def test_moved_departure_stops_leading_when_the_short_view_points_back(self):
+    def test_moved_departure_leads_through_one_evaluation_pointing_back(self):
         self.moved()
         self.track(
             70.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6, toward=7
         )
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
+
+    def test_moved_departure_stops_leading_when_the_short_view_points_back_for_one_step(self):
+        self.moved()
+        for now in (70.0, 75.0):
+            self.track(
+                now, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6, toward=7
+            )
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
 
     def test_moved_departure_closes_one_window_after_it_opens(self):

@@ -453,7 +453,11 @@ The `mixed_pressure` rule moves one decode engine to prefill when all of these h
 - every engine has a profile
 - the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
 
-A settled run is a period in which, on both window and confirmation-span demand, every adjacent split improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`.
+The settled run is the time the current split has held without a better adjacent split. It restarts when any of these happens:
+
+- the role controller attempts a move
+- an evaluation stops before scoring splits
+- for `controller.reactive.step_s`, an adjacent split improves the worst projected SLO ratio by at least `controller.reactive.movement_margin` on window or confirmation-span demand
 
 The role controller opens a departure when all of these hold:
 
@@ -466,7 +470,7 @@ The `settled_departure` rule moves one engine toward that split when both hold o
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-After its first move, a departure leads until the first regular evaluation where either of these holds:
+After its first move, a departure leads until either of these has held for `controller.reactive.step_s`:
 
 - on confirmation-span demand, the best adjacent split lies opposite the departure's direction and improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`
 - confirmation-span demand for each phase is within `controller.reactive.demand_rise_tolerance` times the larger estimate of window demand
