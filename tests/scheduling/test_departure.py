@@ -44,9 +44,18 @@ class TrackDepartureTests(unittest.TestCase):
         self.policy = ReactivePolicy()
         self.window = Demand(4.8, 0.2, 100, 0)
 
-    def track(self, now: float, *, short_gain: float, short_demand: Demand) -> None:
-        current = score(7, 1.0)
-        short = ShortView(short_demand, current, {6: score(6, 1.0 - short_gain)})
+    def track(
+        self,
+        now: float,
+        *,
+        short_gain: float,
+        short_demand: Demand,
+        current_p: int = 7,
+        toward: int | None = None,
+    ) -> None:
+        current = score(current_p, 1.0)
+        best = current_p - 1 if toward is None else toward
+        short = ShortView(short_demand, current, {best: score(best, 1.0 - short_gain)})
         self.policy._track_departure(
             self.controller, now, current, [score(6, 1.1)], self.window, short
         )
@@ -111,9 +120,17 @@ class TrackDepartureTests(unittest.TestCase):
         self.track(75.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
 
-    def test_moved_departure_stops_leading_when_the_short_view_turns(self):
+    def test_moved_departure_leads_through_an_evaluation_below_the_margin(self):
         self.moved()
-        self.track(70.0, short_gain=0.0, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.track(70.0, short_gain=0.0, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6)
+        self.track(75.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6)
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
+
+    def test_moved_departure_stops_leading_when_the_short_view_points_back(self):
+        self.moved()
+        self.track(
+            70.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0), current_p=6, toward=7
+        )
         self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
 
     def test_moved_departure_closes_one_window_after_it_opens(self):

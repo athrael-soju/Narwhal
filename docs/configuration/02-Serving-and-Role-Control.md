@@ -466,12 +466,10 @@ The `settled_departure` rule moves one engine toward that split when both hold o
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-After its first move, a departure keeps leading while both of these hold at every regular evaluation:
+After its first move, a departure leads until the first regular evaluation where either of these holds:
 
-- on confirmation-span demand, the best adjacent split lies in the departure's direction and improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`
-- confirmation-span demand for either phase differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger estimate
-
-The lead ends at the first regular evaluation where either condition fails.
+- on confirmation-span demand, the best adjacent split lies opposite the departure's direction and improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`
+- confirmation-span demand for each phase is within `controller.reactive.demand_rise_tolerance` times the larger estimate of window demand
 
 The departure's later moves use this demand and rule:
 

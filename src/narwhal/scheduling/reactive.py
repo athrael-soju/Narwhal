@@ -36,7 +36,7 @@ class Departure:
     heading: int
     started_at: float
     moved: bool = False
-    # True until the shift ends or turns after the first move.
+    # True until the shift ends or points back after the first move.
     leading: bool = True
 
 
@@ -620,7 +620,7 @@ class ReactivePolicy:
     ) -> None:
         """Track the settled run, open a departure when demand shifts, and end its lead.
 
-        The lead ends when the shift ends or the best split turns after the first move.
+        After the first move, the lead ends when the shift ends or the best split points back.
         """
         margin = controller.movement_margin
         window_gain = max(
@@ -656,7 +656,7 @@ class ReactivePolicy:
             departure is not None
             and departure.moved
             and departure.leading
-            and (heading != departure.heading or not shifted)
+            and (heading == -departure.heading or not shifted)
         ):
             self.departure = replace(departure, leading=False)
         if (
