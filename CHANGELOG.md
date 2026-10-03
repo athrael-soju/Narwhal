@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/athrael-soju/Narwhal/compare/v0.4.1...v0.5.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* concurrent first-token calibration with measured and reused reporting ([#242](https://github.com/athrael-soju/Narwhal/issues/242))
+
+### Features
+
+* concurrent first-token calibration with measured and reused reporting ([#242](https://github.com/athrael-soju/Narwhal/issues/242)) ([683b83b](https://github.com/athrael-soju/Narwhal/commit/683b83baaf29e0cb41207f415b57fc92ae488964))
+* enhance reactive policy to manage unsettled evaluations and departure leads ([#251](https://github.com/athrael-soju/Narwhal/issues/251)) ([4712899](https://github.com/athrael-soju/Narwhal/commit/47128997188aada12829831c81e360af2f605eb2))
+* faster role changes and slot-aware decode admission ([#234](https://github.com/athrael-soju/Narwhal/issues/234)) ([55f7854](https://github.com/athrael-soju/Narwhal/commit/55f78541ca2766e7969641be5ddd8051ad2eedea))
+
+
+### Fixes
+
+* keep a departure leading through one evaluation below the margin ([#250](https://github.com/athrael-soju/Narwhal/issues/250)) ([551fa2f](https://github.com/athrael-soju/Narwhal/commit/551fa2f0070f80a8ca6087dc491d2b08b1692e33))
+
 ## [0.4.1](https://github.com/athrael-soju/Narwhal/compare/v0.4.0...v0.4.1) (2026-10-02)
 
 
