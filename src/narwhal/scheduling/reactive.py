@@ -51,6 +51,10 @@ class ReactivePolicy:
         # Start of the current run in which confirmation-span demand agrees with window demand.
         self.balanced_since: float | None = None
         self.departure: Departure | None = None
+        # Start of the current run of evaluations that would restart the settled run.
+        self.unsettled_since: float | None = None
+        # Start of the current run of evaluations that would end the departure's lead.
+        self.lead_break_since: float | None = None
 
     def interrupt(self) -> None:
         """Restart the settled and steady runs while role control is paused."""
@@ -620,7 +624,8 @@ class ReactivePolicy:
     ) -> None:
         """Track the settled run, open a departure when demand shifts, and end its lead.
 
-        After the first move, the lead ends when the shift ends or the best split points back.
+        After the first move, the lead ends when the shift ends or the best split points back
+        for one controller step.
         """
         margin = controller.movement_margin
         window_gain = max(
@@ -647,6 +652,17 @@ class ReactivePolicy:
                 )
             )
         departure = self.departure
+        breaks_lead = (
+            departure is not None
+            and departure.moved
+            and departure.leading
+            and (heading == -departure.heading or not shifted)
+        )
+        # A lead ends, and a settled run restarts, only after its condition lasts one step.
+        if not breaks_lead:
+            self.lead_break_since = None
+        elif self.lead_break_since is None:
+            self.lead_break_since = now
         if departure is not None and (
             now - departure.started_at >= controller.window_s
             or (not departure.moved and heading != departure.heading)
@@ -654,9 +670,8 @@ class ReactivePolicy:
             self.departure = None
         elif (
             departure is not None
-            and departure.moved
-            and departure.leading
-            and (heading == -departure.heading or not shifted)
+            and self.lead_break_since is not None
+            and now - self.lead_break_since >= controller.step_s
         ):
             self.departure = replace(departure, leading=False)
         if (
@@ -668,6 +683,11 @@ class ReactivePolicy:
         ):
             self.departure = Departure(heading, now)
         if heading or window_gain >= margin:
-            self.settled_since = None
-        elif self.settled_since is None:
-            self.settled_since = now
+            if self.unsettled_since is None:
+                self.unsettled_since = now
+            if now - self.unsettled_since >= controller.step_s:
+                self.settled_since = None
+        else:
+            self.unsettled_since = None
+            if self.settled_since is None:
+                self.settled_since = now
