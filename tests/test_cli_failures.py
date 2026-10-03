@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal import cli
-from narwhal.deployment import launch_engine
-from narwhal.diagnostics import check
+from narwhal.deployment.launch_engine import cli as engine_cli
+from narwhal.diagnostics.check import cli as check_cli
 from narwhal.engines import attestation
-from narwhal.profiling import probe
+from narwhal.profiling.probe import cli as profile_cli
 
 
 class CliFailureTests(unittest.TestCase):
@@ -27,8 +27,8 @@ class CliFailureTests(unittest.TestCase):
             paths[2].write_text("[]")
             for command, invoke in (
                 ("narwhal-serve", cli.serve),
-                ("narwhal-check", check.main),
-                ("narwhal-profile", probe.main),
+                ("narwhal-check", check_cli.main),
+                ("narwhal-profile", profile_cli.main),
             ):
                 for path in paths:
                     with (
@@ -60,7 +60,7 @@ class CliFailureTests(unittest.TestCase):
     def test_http_failures_report_the_request_and_operation(self):
         request = httpx.Request("GET", "http://127.0.0.1:1/health")
         error = httpx.ConnectError("connection refused", request=request)
-        for command, module in (("narwhal-check", check), ("narwhal-profile", probe)):
+        for command, module in (("narwhal-check", check_cli), ("narwhal-profile", profile_cli)):
             with (
                 tempfile.TemporaryDirectory() as folder,
                 self.subTest(command=command),
@@ -109,15 +109,15 @@ class CliFailureTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()) as stderr,
                     self.assertRaises(SystemExit) as raised,
                 ):
-                    launch_engine.main(args)
+                    engine_cli.main(args)
                 self.assertEqual(raised.exception.code, 2)
                 self.assertIn(expected, stderr.getvalue())
                 self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_unexpected_programming_error_retains_its_traceback(self):
         with (
-            patch.object(check.FleetConfig, "load"),
-            patch.object(check, "run", AsyncMock(side_effect=AttributeError("implementation"))),
+            patch.object(check_cli.FleetConfig, "load"),
+            patch.object(check_cli, "run", AsyncMock(side_effect=AttributeError("implementation"))),
             self.assertRaisesRegex(AttributeError, "implementation"),
         ):
-            check.main(["--fleet", "fixture.json"])
+            check_cli.main(["--fleet", "fixture.json"])

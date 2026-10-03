@@ -177,7 +177,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 self.assertEqual(log.read_bytes(), original)
 
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
-        from tools.deployment.attestation_contract import NIXL_CAPTURE, NIXL_CAPTURE_TAG
+        from narwhal.deployment.attestation_contract.capture import NIXL_CAPTURE, NIXL_CAPTURE_TAG
 
         for version in (17, 0, "1.4.1", True):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
@@ -193,7 +193,9 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                     if version == 17:
                         exec(
                             compile(
-                                NIXL_CAPTURE, "tools/deployment/attestation_contract.py", "exec"
+                                NIXL_CAPTURE,
+                                "src/narwhal/deployment/attestation_contract/capture.py",
+                                "exec",
                             ),
                             {},
                         )
@@ -201,7 +203,9 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "positive integer"):
                             exec(
                                 compile(
-                                    NIXL_CAPTURE, "tools/deployment/attestation_contract.py", "exec"
+                                    NIXL_CAPTURE,
+                                    "src/narwhal/deployment/attestation_contract/capture.py",
+                                    "exec",
                                 ),
                                 {},
                             )

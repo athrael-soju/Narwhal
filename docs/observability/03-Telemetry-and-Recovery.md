@@ -58,7 +58,7 @@ docker compose -f tools/observability/compose.yml logs prometheus grafana
 
 ### Mount permission failures
 
-1. Confirm `tools/observability/start.py` and `tools/observability/compose.yml` share one checkout.
+1. Confirm `tools/observability/start/` and `tools/observability/compose.yml` share one checkout.
 2. Rerun `make observe` from that deployed checkout.
 3. Read the [staged mount permissions](01-Start-and-Verify.md#staged-monitoring-files) and container logs.
 4. Save the failure output in the private deployment record.

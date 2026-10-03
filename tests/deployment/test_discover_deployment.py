@@ -12,6 +12,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.deployment.launch_engine.plan import build, ds_conv_state_layout_required
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -23,7 +24,6 @@ from tools.deployment.discover_deployment import (
 )
 from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, load_hosts
-from tools.deployment.launch_engine import build, ds_conv_state_layout_required
 from tools.deployment.prepare_host_env import select_values
 
 ROOT = Path(__file__).resolve().parents[2]

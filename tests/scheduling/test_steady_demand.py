@@ -9,6 +9,7 @@ import unittest
 
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.reactive import Departure
+from narwhal.scheduling.scheduler.occupancy import decode_admits
 from narwhal.serving.schemas import ControllerDecisionOut
 from narwhal.types import Phase, Request, Role
 from tests.scheduling.test_departure import Sim
@@ -87,7 +88,7 @@ class SteadyDemandTests(unittest.TestCase):
         rows = []
         for _ in range(count):
             self.fleet.step()
-            rows.append(dict(self.fleet.scheduler._last_decision))
+            rows.append(dict(self.fleet.scheduler.roles._last_decision))
         return rows
 
     def test_steady_light_decode_consolidates_above_shrink(self) -> None:
@@ -95,7 +96,7 @@ class SteadyDemandTests(unittest.TestCase):
         rows = self.run_steps(12)
         self.assertEqual(rows[0]["reason"], "projected decode pressure blocks consolidation")
         self.assertEqual(rows[0]["eligibility_rule"], "source_shrink")
-        self.assertEqual(fleet.scheduler.flips, [])
+        self.assertEqual(fleet.scheduler.roles.flips, [])
 
         rows += self.run_steps(4)
 
@@ -125,8 +126,8 @@ class SteadyDemandTests(unittest.TestCase):
         self.assertGreaterEqual(
             fleet.now - policy.settled_since, fleet.controller.safety.evidence_span_s
         )
-        self.assertEqual(len(fleet.scheduler.flips), 1)
-        self.assertEqual(fleet.scheduler.control_snapshot()["flip_reversals"], 0)
+        self.assertEqual(len(fleet.scheduler.roles.flips), 1)
+        self.assertEqual(fleet.scheduler.roles.control_snapshot()["flip_reversals"], 0)
 
     def test_decode_source_above_expand_holds(self) -> None:
         fleet = self.fleet
@@ -134,7 +135,7 @@ class SteadyDemandTests(unittest.TestCase):
 
         rows = self.run_steps(24)
 
-        self.assertEqual(fleet.scheduler.flips, [])
+        self.assertEqual(fleet.scheduler.roles.flips, [])
         self.assertEqual(rows[-1]["reason"], "projected decode pressure blocks consolidation")
         self.assertGreater(rows[-1]["projected_tpot_ratio"], fleet.scheduler.th.expand)
         self.assertGreaterEqual(rows[-1]["steady_demand_s"], 60.0)
@@ -146,7 +147,7 @@ class SteadyDemandTests(unittest.TestCase):
             fleet.controller.saw_arrival(135, wanted_len=10, at=fleet.now)
             fleet.now += 1.0
             fleet.controller.step()
-        row = fleet.scheduler._last_decision
+        row = fleet.scheduler.roles._last_decision
         self.assertGreater(row["steady_prefill_work"], 1.25 * row["prefill_work"])
         self.assertEqual(row["steady_demand_s"], before + 15.0)
 
@@ -157,11 +158,11 @@ class SteadyDemandTests(unittest.TestCase):
             fleet.controller.saw_arrival(4000, wanted_len=10, at=fleet.now)
             fleet.now += 1.0
             fleet.controller.step()
-        self.assertIsNone(fleet.scheduler._last_decision["steady_demand_s"])
+        self.assertIsNone(fleet.scheduler.roles._last_decision["steady_demand_s"])
 
         rows = self.run_steps(10)
 
-        self.assertEqual(fleet.scheduler.flips, [])
+        self.assertEqual(fleet.scheduler.roles.flips, [])
         self.assertTrue(all(row["eligibility_rule"] == "source_shrink" for row in rows))
         ControllerDecisionOut.model_validate(rows[-1])
 
@@ -172,7 +173,7 @@ class SteadyDemandTests(unittest.TestCase):
         self.assertTrue(fleet.controller.note_prefill_risk(request))
         fleet.controller.step(urgent=True)
         fleet.monitor.waiting.pop(request.rid)
-        return dict(fleet.scheduler._last_decision)
+        return dict(fleet.scheduler.roles._last_decision)
 
     def test_held_urgent_wake_keeps_the_steady_span(self) -> None:
         rows = self.run_steps(10)
@@ -207,22 +208,22 @@ class SteadyDemandTests(unittest.TestCase):
         fleet = self.fleet
         policy = fleet.controller.reactive
         self.run_steps(24)
-        self.assertEqual(len(fleet.scheduler.flips), 1)
+        self.assertEqual(len(fleet.scheduler.roles.flips), 1)
         settled_since = policy.settled_since
-        steady_s = fleet.scheduler._last_decision["steady_demand_s"]
+        steady_s = fleet.scheduler.roles._last_decision["steady_demand_s"]
 
         # A late cadence step keeps both runs.
         fleet.advance(6)
         fleet.controller.step()
         self.assertEqual(policy.settled_since, settled_since)
-        self.assertEqual(fleet.scheduler._last_decision["steady_demand_s"], steady_s + 6.0)
+        self.assertEqual(fleet.scheduler.roles._last_decision["steady_demand_s"], steady_s + 6.0)
 
         # A role freeze pauses evaluation and restarts both runs.
         policy.interrupt()
         fleet.advance(60)
         fleet.controller.step()
         self.assertEqual(policy.settled_since, fleet.now)
-        self.assertEqual(fleet.scheduler._last_decision["steady_demand_s"], 0.0)
+        self.assertEqual(fleet.scheduler.roles._last_decision["steady_demand_s"], 0.0)
 
 
 class DecodeWaitTests(unittest.TestCase):
@@ -265,7 +266,8 @@ class DecodeWaitTests(unittest.TestCase):
                 fleet.monitor.finished("e0", self.pending.rid)
                 self.assertTrue(fleet.scheduler.eject("e1"))
                 ready = fleet.scheduler.prefill_ready_s(self.pending, fleet.monitor.instances["e0"])
-                admitted = fleet.scheduler.decode_admits(
+                admitted = decode_admits(
+                    fleet.scheduler,
                     self.pending,
                     ready_s=ready,
                     concurrency=1,
@@ -281,7 +283,7 @@ class DecodeWaitTests(unittest.TestCase):
             fleet.advance()
             self.pending.arrived_at = fleet.now
             fleet.controller.step()
-            rows.append(dict(fleet.scheduler._last_decision))
+            rows.append(dict(fleet.scheduler.roles._last_decision))
         return rows
 
     def test_a_decode_wait_beyond_the_ttft_budget_holds_steady_consolidation(self) -> None:
@@ -289,7 +291,7 @@ class DecodeWaitTests(unittest.TestCase):
         self.hold(1000)
         rows = self.run_steps(16)
 
-        self.assertEqual(fleet.scheduler.flips, [])
+        self.assertEqual(fleet.scheduler.roles.flips, [])
         row = rows[-1]
         th = fleet.scheduler.th
         self.assertEqual((row["current_prefill"], row["prefill"]), (1, 2))
@@ -331,7 +333,7 @@ class DecodeWaitTests(unittest.TestCase):
         self.assertLessEqual(row["projected_decode_wait_ratio"], th.expand)
         self.assertGreater(row["projected_tpot_ratio"], th.shrink)
         self.assertLessEqual(row["projected_tpot_ratio"], th.expand)
-        self.assertEqual(sim.scheduler.control_snapshot()["flip_reversals"], 0)
+        self.assertEqual(sim.scheduler.roles.control_snapshot()["flip_reversals"], 0)
 
 
 if __name__ == "__main__":

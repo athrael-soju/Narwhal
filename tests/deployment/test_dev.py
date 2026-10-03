@@ -20,7 +20,7 @@ from narwhal.config import FleetConfig
 from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
-from narwhal.profiling.probe import Sweep, bounded_sweep
+from narwhal.profiling.probe.sweep import Sweep, bounded_sweep
 
 from .fixtures import process_group_with_worker
 

@@ -15,10 +15,12 @@ from unittest.mock import AsyncMock, patch
 from narwhal import command_results as results
 from narwhal.config import FleetConfig
 from narwhal.contracts import COMMAND_RESULT, ContractVersionError, manifest, validate_document
-from narwhal.deployment import launch_engine, stages
+from narwhal.deployment import stages
+from narwhal.deployment.launch_engine import cli as engine_cli
 from narwhal.dev import cli as dev
-from narwhal.diagnostics import check
-from narwhal.profiling import probe
+from narwhal.diagnostics.check import cli as check_cli
+from narwhal.diagnostics.check import preflight
+from narwhal.profiling.probe import cli as profile_cli
 from tests.deployment.fixtures import launcher_inputs
 from tests.fixtures import ROOT
 
@@ -35,7 +37,7 @@ def call(command, arguments):
 
 class CommandResultTests(unittest.TestCase):
     def test_schema_is_advertised_and_future_versions_are_rejected(self):
-        document, stderr = call(check.main, ["--print-contract-versions"])
+        document, stderr = call(check_cli.main, ["--print-contract-versions"])
         self.assertEqual(document["status"], "success")
         self.assertEqual(document["operation"], "print-contract-versions")
         self.assertEqual(document["data"], manifest())
@@ -46,9 +48,9 @@ class CommandResultTests(unittest.TestCase):
 
     def test_each_parser_failure_produces_one_result(self):
         for command, arguments in (
-            (check.main, ["--unknown-option"]),
-            (probe.main, []),
-            (launch_engine.main, ["start"]),
+            (check_cli.main, ["--unknown-option"]),
+            (profile_cli.main, []),
+            (engine_cli.main, ["start"]),
             (dev.main, ["dev", "up", "--unknown-option"]),
         ):
             with self.subTest(command=command.__module__):
@@ -68,9 +70,9 @@ class CommandResultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             missing = str(Path(folder) / "missing")
             for command, arguments in (
-                (check.main, ["--fleet", missing]),
-                (probe.main, ["--fleet", missing]),
-                (launch_engine.main, ["check", "--run", missing]),
+                (check_cli.main, ["--fleet", missing]),
+                (profile_cli.main, ["--fleet", missing]),
+                (engine_cli.main, ["check", "--run", missing]),
                 (dev.main, ["dev", "status", "--instance", missing]),
             ):
                 with self.subTest(command=command.__module__):
@@ -130,7 +132,7 @@ class CommandResultTests(unittest.TestCase):
             _, environment = launcher_inputs(root)
             run = root / "launch"
             with patch.dict(os.environ, environment):
-                document, stderr = call(launch_engine.main, ["prepare", "--out", str(run)])
+                document, stderr = call(engine_cli.main, ["prepare", "--out", str(run)])
             self.assertEqual(document["status"], "success")
             self.assertEqual(document["operation"], "prepare")
             plan = next(row for row in document["artifacts"] if row["kind"] == "launch")
@@ -149,11 +151,11 @@ class CommandResultTests(unittest.TestCase):
                 raise RuntimeError("e1 stream ended early")
 
             with (
-                patch.object(probe.FleetConfig, "load", return_value=cfg),
-                patch.object(probe, "run", side_effect=fail),
+                patch.object(profile_cli.FleetConfig, "load", return_value=cfg),
+                patch.object(profile_cli, "run", side_effect=fail),
             ):
                 document, stderr = call(
-                    probe.main, ["--fleet", str(ROOT / "tests/data/fleet.json")]
+                    profile_cli.main, ["--fleet", str(ROOT / "tests/data/fleet.json")]
                 )
             self.assertEqual(document["status"], "error")
             self.assertEqual(document["exit_code"], 4)
@@ -172,18 +174,18 @@ class CommandResultTests(unittest.TestCase):
                 return object()
 
             with (
-                patch.object(check.FleetConfig, "load", return_value=cfg),
-                patch.object(check, "gate_reach", AsyncMock(return_value={"e0", "e1"})),
-                patch.object(check, "gate_contract", AsyncMock(return_value=set())),
-                patch.object(check, "gate_profile", side_effect=profile_gate),
-                patch.object(check, "gate_profile_generation", AsyncMock(return_value=set())),
-                patch.object(check, "gate_model", AsyncMock(return_value=set())),
-                patch.object(check, "gate_pace", AsyncMock(return_value=set())),
-                patch.object(check, "gate_tokenize", AsyncMock()),
-                patch.object(check, "gate_slo"),
+                patch.object(check_cli.FleetConfig, "load", return_value=cfg),
+                patch.object(preflight, "gate_reach", AsyncMock(return_value={"e0", "e1"})),
+                patch.object(preflight, "gate_contract", AsyncMock(return_value=set())),
+                patch.object(preflight, "gate_profile", side_effect=profile_gate),
+                patch.object(preflight, "gate_profile_generation", AsyncMock(return_value=set())),
+                patch.object(preflight, "gate_model", AsyncMock(return_value=set())),
+                patch.object(preflight, "gate_pace", AsyncMock(return_value=set())),
+                patch.object(preflight, "gate_tokenize", AsyncMock()),
+                patch.object(preflight, "gate_slo"),
             ):
                 document, _ = call(
-                    check.main, ["--fleet", str(ROOT / "tests/data/fleet.json"), "--no-kv"]
+                    check_cli.main, ["--fleet", str(ROOT / "tests/data/fleet.json"), "--no-kv"]
                 )
             self.assertEqual(document["status"], "failed_gate" if failed else "degraded")
             self.assertEqual(document["exit_code"], 1 if failed else 3)
@@ -253,10 +255,14 @@ class CommandResultTests(unittest.TestCase):
         cfg.engine_api_key_env = "FLEET_AUTH"
         with (
             patch.dict(os.environ, {"FLEET_AUTH": "custom-credential"}),
-            patch.object(probe.FleetConfig, "load", return_value=cfg),
-            patch.object(probe, "run", AsyncMock(side_effect=RuntimeError("custom-credential"))),
+            patch.object(profile_cli.FleetConfig, "load", return_value=cfg),
+            patch.object(
+                profile_cli, "run", AsyncMock(side_effect=RuntimeError("custom-credential"))
+            ),
         ):
-            document, stderr = call(probe.main, ["--fleet", str(ROOT / "tests/data/fleet.json")])
+            document, stderr = call(
+                profile_cli.main, ["--fleet", str(ROOT / "tests/data/fleet.json")]
+            )
         self.assertNotIn("custom-credential", json.dumps(document) + stderr)
 
     def test_inherited_subprocess_stdout_becomes_redacted_diagnostics(self):
@@ -296,6 +302,6 @@ class CommandResultTests(unittest.TestCase):
         self.assertEqual(error["context"]["budget_seconds"], 0.1)
 
     def test_json_help_completes_one_result_and_preserves_readable_help(self):
-        document, stderr = call(probe.main, ["--help"])
+        document, stderr = call(profile_cli.main, ["--help"])
         self.assertEqual(document["status"], "success")
         self.assertIn("--format", stderr)

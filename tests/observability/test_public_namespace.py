@@ -11,11 +11,11 @@ import httpx
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
-from narwhal.runtime.lifecycle import DrainRecord
+from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.release import PeerRelease
-from narwhal.scheduling.scheduler import GlobalScheduler
+from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
-from narwhal.serving.router import NarwhalRouter
+from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -239,7 +239,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "arrivals_beyond_profile": 3,
             "unsized_offers": 2,
         }
-        self.router.scheduler.record_decision(
+        self.router.scheduler.roles.record_decision(
             prefill=1,
             decode=1,
             by="reactive",
@@ -654,7 +654,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_flip_metrics_outlive_history_and_reset_with_scheduler(self):
         scheduler = self.router.scheduler
-        scheduler._flip_history = 2
+        scheduler.roles._flip_history = 2
         self.router.monitor.add(Instance("p2", "http://prefill2", Role.PREFILL))
         self.router.monitor.add(Instance("d2", "http://decode2", Role.DECODE))
         engine = self.router.monitor.instances["p"]
@@ -664,7 +664,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for index in range(12):
             target = Role.DECODE if index % 2 == 0 else Role.PREFILL
             self.assertIs(
-                scheduler.flip(
+                scheduler.roles.flip(
                     target,
                     by="test:controller",
                     candidate=engine,
@@ -679,7 +679,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 f'narwhal_flip_inflight_total{{phase="decode"}} {2 * (index + 1)}\n',
                 response.text,
             )
-        self.assertEqual(len(scheduler.flips), 2)
+        self.assertEqual(len(scheduler.roles.flips), 2)
         for target in ("prefill", "decode"):
             self.assertIn(
                 f'narwhal_flips_total{{to="{target}",by="test:controller"}} 6\n',
@@ -700,13 +700,13 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_flip_refusals_outlive_the_twenty_record_state_window(self):
         for count in range(1, 31):
             # The source floor refuses moving the only decode engine.
-            self.assertIsNone(self.router.scheduler.flip(Role.PREFILL))
+            self.assertIsNone(self.router.scheduler.roles.flip(Role.PREFILL))
             response = await self.client.get("/metrics")
             self.assertIn(f"narwhal_flips_refused_total {count}\n", response.text)
         state = (await self.client.get("/narwhal/state")).json()
         self.assertEqual(len(state["flips_refused"]), 20)
         self.assertEqual(state["control"]["flips_refused"], 30)
-        self.router.scheduler.flips_refused.clear()
+        self.router.scheduler.roles.flips_refused.clear()
         response = await self.client.get("/metrics")
         self.assertIn("narwhal_flips_refused_total 30\n", response.text)
 
@@ -715,24 +715,24 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.router.monitor.add(Instance("d2", "http://decode2", Role.DECODE))
         scheduler = self.router.scheduler
         # Opening cooldown.
-        self.assertIsNone(scheduler.flip(Role.DECODE))
-        self.assertEqual(scheduler.control_snapshot()["flips_refused"], 1)
+        self.assertIsNone(scheduler.roles.flip(Role.DECODE))
+        self.assertEqual(scheduler.roles.control_snapshot()["flips_refused"], 1)
         # flip() counts the nested decode-floor refusal once.
         scheduler.min_decode = 2
-        self.assertIsNone(scheduler.flip(Role.PREFILL))
-        self.assertEqual(scheduler.control_snapshot()["flips_refused"], 2)
+        self.assertIsNone(scheduler.roles.flip(Role.PREFILL))
+        self.assertEqual(scheduler.roles.control_snapshot()["flips_refused"], 2)
         scheduler.min_decode = 1
         scheduler.pinned = frozenset({"d", "d2"})
-        self.assertIsNone(scheduler.flip(Role.PREFILL))
-        self.assertEqual(scheduler.control_snapshot()["flips_refused"], 3)
+        self.assertIsNone(scheduler.roles.flip(Role.PREFILL))
+        self.assertEqual(scheduler.roles.control_snapshot()["flips_refused"], 3)
         scheduler.pinned = frozenset()
         scheduler.th.dwell_s = 60
-        scheduler._last_flip = {iid: scheduler._clock() for iid in ("d", "d2")}
-        self.assertIsNone(scheduler.flip(Role.PREFILL))
-        self.assertEqual(scheduler.control_snapshot()["flips_refused"], 4)
+        scheduler.roles._last_flip = {iid: scheduler._clock() for iid in ("d", "d2")}
+        self.assertIsNone(scheduler.roles.flip(Role.PREFILL))
+        self.assertEqual(scheduler.roles.control_snapshot()["flips_refused"], 4)
         scheduler.advisory = True
-        self.assertIsNone(scheduler.flip(Role.PREFILL, bypass_dwell=True))
-        state = scheduler.control_snapshot()
+        self.assertIsNone(scheduler.roles.flip(Role.PREFILL, bypass_dwell=True))
+        state = scheduler.roles.control_snapshot()
         self.assertEqual(state["flips_refused"], 5)
         self.assertEqual(state["flips"], {})
         self.assertEqual(state["last_decision"]["result"], "advisory")

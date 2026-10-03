@@ -169,7 +169,7 @@ Fill in the fleet contract:
 2. Run `finalize-fleet` in the router shell:
 
     ```bash
-    .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
+    .venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
     ```
 
 When the sidecar contracts are complete and identical, `finalize-fleet` writes the `engine_contract` into the `--fleet` file. When they are incomplete or differ, `finalize-fleet` exits with status 1.

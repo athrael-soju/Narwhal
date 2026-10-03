@@ -36,7 +36,7 @@ The prepared run holds these files at mode 0600:
 | `<host-id>/engine-launch.engine-<n>.json`                                 | The selected launch record for each engine role                          |
 | `<host-id>/fleet.local.json`                                              | The fleet configuration from discovery, on the router host               |
 | `<host-id>/profiling-limits.json`                                         | Profiling limits from each engine's `--max-num-seqs`, on the router host |
-| `<host-id>/fabric_budget.py`, `launch_engine.py`, `cache_capture_hook.py` | Helper snapshots, on engine hosts                                        |
+| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper snapshots, on engine hosts                                        |
 | `manifest.json`                                                           | The private manifest                                                     |
 
 The manifest records:
@@ -52,7 +52,6 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | Helper snapshot                          | Path variable                | SHA-256 variable                    |
 | ---------------------------------------- | ---------------------------- | ----------------------------------- |
 | `tools/deployment/fabric_budget.py`      | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256`      |
-| `tools/deployment/launch_engine.py`      | `NARWHAL_ENGINE_LAUNCHER`    | `NARWHAL_ENGINE_LAUNCHER_SHA256`    |
 | `tools/deployment/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
 ## Installing engine 1 and the remaining hosts

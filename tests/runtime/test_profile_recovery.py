@@ -13,7 +13,7 @@ from narwhal.engines.client import InferenceProbe, ProbeLeg
 from narwhal.profiling.generation import identity_generation
 from narwhal.runtime import state
 from narwhal.runtime.lease import FileLease
-from narwhal.runtime.lifecycle import allow_profile_recovery
+from narwhal.runtime.lifecycle.identity import allow_profile_recovery
 from narwhal.runtime.monitoring import readmit, sweep_liveness
 from narwhal.runtime.standby import ready, standby_loop
 from narwhal.serving.app import create_app
@@ -76,20 +76,20 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_successful_inference_probe_does_not_bypass_binding(self):
         self.router.scheduler.eject("e3")
         self.router.scheduler.inference_suspects.add("e3")
-        self.router._inference_sources["e3"] = {"e0"}
+        self.router.verifier.sources["e3"] = {"e0"}
         self.starts["e3"] += 1
         self.assertEqual(await readmit(self.router, 0), [])
         self.assertIn("e3", self.router.scheduler.ejected)
         self.assertIn("e3", self.router.scheduler.inference_suspects)
-        self.assertEqual(self.router._inference_sources["e3"], {"e0"})
+        self.assertEqual(self.router.verifier.sources["e3"], {"e0"})
         self.refresh_profile("e3")
         self.assertEqual(await readmit(self.router, 0), ["e3"])
         self.assertNotIn("e3", self.router.scheduler.inference_suspects)
-        self.assertNotIn("e3", self.router._inference_sources)
+        self.assertNotIn("e3", self.router.verifier.sources)
 
     async def test_health_verification_and_liveness_cannot_clear_stale_quarantine(self):
         self.starts["e0"] += 1
-        for action in (self.router._verify_health, sweep_liveness):
+        for action in (self.router.verifier._verify_health, sweep_liveness):
             with self.subTest(action=action.__name__):
                 self.router.scheduler.ejected.clear()
                 self.router.scheduler.quarantined["e0"] = self.router._clock() + 100
@@ -111,7 +111,9 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.router.scheduler.draining.add("e0")
                 self.router.lifecycle_blocked = "wave hold" if hold == "wave" else ""
                 self.router.standby = hold == "standby"
-                with patch("narwhal.runtime.lifecycle.read_generation", new=AsyncMock()) as read:
+                with patch(
+                    "narwhal.runtime.lifecycle.identity.read_generation", new=AsyncMock()
+                ) as read:
                     self.assertFalse(await allow_profile_recovery(self.router, "e0"))
                 read.assert_not_awaited()
                 self.assertIn("e0", self.router.scheduler.ejected)
@@ -123,12 +125,12 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.router.standby = True
             return identity_generation(EngineIdentity("fixture", self.starts["e0"]))
 
-        with patch("narwhal.runtime.lifecycle.read_generation", side_effect=fenced):
+        with patch("narwhal.runtime.lifecycle.identity.read_generation", side_effect=fenced):
             self.assertEqual(await readmit(self.router, 0), [])
         self.assertIn("e0", self.router.scheduler.ejected)
 
     async def test_ordinary_liveness_does_not_add_identity_requests(self):
-        with patch("narwhal.runtime.lifecycle.read_generation", new=AsyncMock()) as read:
+        with patch("narwhal.runtime.lifecycle.identity.read_generation", new=AsyncMock()) as read:
             self.assertEqual(await sweep_liveness(self.router), [])
         read.assert_not_awaited()
 
@@ -143,8 +145,8 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.router.scheduler.eject("e0")
             return identity_generation(EngineIdentity("fixture", self.starts["e0"]))
 
-        with patch("narwhal.runtime.lifecycle.read_generation", side_effect=excluded):
-            await self.router._verify_health("e0", self.cfg.engines[0].url)
+        with patch("narwhal.runtime.lifecycle.identity.read_generation", side_effect=excluded):
+            await self.router.verifier._verify_health("e0", self.cfg.engines[0].url)
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertEqual(self.router.scheduler.draining, {"e0", "e3"})
         self.assertTrue(self.router.lifecycle.wave_id)

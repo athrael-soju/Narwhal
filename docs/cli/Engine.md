@@ -70,7 +70,7 @@ Native shared-GPU example:
 narwhal-engine prepare --backend native --out runs/engine-1
 narwhal-engine check --run runs/engine-1
 narwhal-engine start-shared --backend native --run runs/engine-1 --run runs/engine-2
-python -m narwhal.deployment.attestation_contract native-capture --run runs/engine-1
+python -m narwhal.deployment.attestation_contract.cli native-capture --run runs/engine-1
 narwhal-engine stop-native --run runs/engine-1
 ```
 
@@ -113,6 +113,6 @@ Native port checks read the engine HTTP endpoint address from `launch.json`, the
 Serve the process-bound attestation that `native-capture` writes from the recorded engine environment:
 
 1. Set `NARWHAL_NODE_<n>_ATTESTATION_URL`.
-2. Run `python -m narwhal.deployment.attestation_contract serve --run runs/engine-<n>`.
+2. Run `python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>`.
 
 When starting engines through Windows OpenSSH, keep a WSL terminal open for the fleet's lifetime.

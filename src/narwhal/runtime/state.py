@@ -17,7 +17,7 @@ from ..contracts import HANDOFF, validate_document, versioned
 from ..types import Role
 
 if TYPE_CHECKING:
-    from ..serving.router import NarwhalRouter
+    from ..serving.router.routing import NarwhalRouter
 
 
 log = logging.getLogger("narwhal.state")
@@ -66,7 +66,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "roles": {iid: i.role.value for iid, i in router.monitor.instances.items()},
         "ejected": sorted(router.scheduler.ejected),
         "inference_sources": {
-            iid: sorted(router._inference_sources.get(iid, {""}))
+            iid: sorted(router.verifier.sources.get(iid, {""}))
             for iid in sorted(router.scheduler.inference_suspects)
         },
         "counters": {
@@ -218,7 +218,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
         router.scheduler.ejected[iid] = now - 1e9
     for iid, peers in doc.get("inference_sources", {}).items():
         router.scheduler.inference_suspects.add(iid)
-        router._inference_sources[iid] = set(peers)
+        router.verifier.sources[iid] = set(peers)
         # A suspect resolves through a readmission probe while another engine covers its role.
         if iid not in router.scheduler.ejected and router.scheduler.role_covered_without(iid):
             router.scheduler.ejected[iid] = now - 1e9

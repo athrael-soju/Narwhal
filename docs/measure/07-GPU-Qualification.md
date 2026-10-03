@@ -53,7 +53,7 @@ Full preflight against the same engine containers and profiled process generatio
 7. Finalize the fleet on the router host:
 
     ```bash
-    .venv/bin/python tools/deployment/attestation_contract.py finalize-fleet \
+    .venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet \
       --fleet runs/deployment/fleet.json
     ```
 

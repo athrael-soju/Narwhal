@@ -16,7 +16,7 @@ from ..engines.validation import can_consume, can_produce
 from ..types import LEG_CONNECTION
 
 if TYPE_CHECKING:
-    from ..serving.router import NarwhalRouter
+    from ..serving.router.routing import NarwhalRouter
 
 log = logging.getLogger("narwhal.peer_release")
 

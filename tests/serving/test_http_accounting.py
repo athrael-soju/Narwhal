@@ -12,12 +12,13 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.prefix import CacheNamespace
+from narwhal.scheduling.scheduler.occupancy import decode_admits
 from narwhal.serving import execution
 from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
-from narwhal.serving.router import NarwhalRouter
+from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.serving.saturation import SIZING_MIN_SAMPLES, RecentDelays
 from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, hold_prefix, invalid_token_choices, put_warm
@@ -206,7 +207,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(demand.arrivals_beyond_profile, 1)
         controller._last_step -= controller.step_s
         controller.step()
-        decision = self.router.scheduler._last_decision
+        decision = self.router.scheduler.roles._last_decision
         self.assertTrue(decision["demand_complete"])
         self.assertEqual(decision["arrivals_beyond_profile"], 1)
         self.assert_released()
@@ -429,11 +430,11 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
         self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
         with (
-            patch.object(scheduler, "decode_admits", wraps=scheduler.decode_admits) as gate,
+            patch.object(execution, "decode_admits", wraps=decode_admits) as gate,
             patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
         ):
             self.assertEqual((await self.post(client)).status_code, 200)
-            request = replace(gate.call_args.args[0], phase=Phase.PREFILL)
+            request = replace(gate.call_args.args[1], phase=Phase.PREFILL)
             ready = scheduler.prefill_ready_s(request, prefill)
             priced = scheduler.prefill_admission_price(request, prefill)
             self.assertLess(ready, priced)

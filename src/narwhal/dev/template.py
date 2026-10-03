@@ -18,7 +18,9 @@ from typing import Any
 
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine import gpu_memory, validate_runtime, write_private
+from narwhal.deployment.launch_engine.plan import validate_runtime
+from narwhal.deployment.launch_engine.runtime import write_private
+from narwhal.deployment.launch_engine.start import gpu_memory
 
 
 def reference() -> dict:

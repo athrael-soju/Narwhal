@@ -13,17 +13,14 @@ import httpx
 
 from ..types import Instance, Role
 from . import state as handoff_state
-from .lifecycle import (
-    ValidationOutcome,
-    allow_profile_recovery,
-    check_process_identities,
-    validate_readmission,
-)
+from .lifecycle.identity import allow_profile_recovery, check_process_identities
+from .lifecycle.readmission import validate_readmission
+from .lifecycle.records import ValidationOutcome
 from .release import release_peers
 from .standby import controls_fleet
 
 if TYPE_CHECKING:
-    from ..serving.router import NarwhalRouter
+    from ..serving.router.routing import NarwhalRouter
 
 log = logging.getLogger("narwhal.monitoring_loop")
 
@@ -182,10 +179,10 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
             continue
         key = (iid, "verify_inference")
         if key not in router.scheduler.verifying and (
-            router._clock() - router._verification_at.get(iid, 0.0) >= after_s
+            router._clock() - router.verifier.verified_at.get(iid, 0.0) >= after_s
         ):
             router.scheduler.verifying.add(key)
-            router._start_verification(iid, "verify_inference")
+            router.verifier.start(iid, "verify_inference")
     due = router.scheduler.probe_due(after_s)
     if not due:
         return []
@@ -212,7 +209,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
         iid = engines[0]
         if router.cfg.engine_contract is None:
             if iid in router.scheduler.inference_suspects:
-                await router._verify_inference(iid, router.monitor.instances[iid].url)
+                await router.verifier.verify_inference(iid, router.monitor.instances[iid].url)
                 if iid not in router.scheduler.ejected:
                     back.append(iid)
                 continue
@@ -339,7 +336,7 @@ def run_controller(
     below_floor = router.scheduler.decode_live() < router.scheduler.min_decode
     out: Instance | None = None
     if below_floor:
-        out = router.scheduler.restore_decode_floor()
+        out = router.scheduler.roles.restore_decode_floor()
     if out is not None:
         # Decode-floor recovery starts a fresh consolidation evidence window.
         router.controller.safety.note_risk_event("p_to_d_recovery")
@@ -389,7 +386,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.monitoring.ok("controller")
     for stage, body in (
         ("health", router.scheduler.health_pass),
-        ("drains", router.scheduler.settle_drains),
+        ("drains", router.scheduler.roles.settle_drains),
         ("rollover", router.monitor.roll_interval),
     ):
         try:

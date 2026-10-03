@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.runtime.lifecycle import ValidationOutcome
+from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.serving import app as serving_app
 from tests.fixtures import fleet
 

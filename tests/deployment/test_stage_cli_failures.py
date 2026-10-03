@@ -10,7 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from narwhal.deployment import launch_engine, native_engine, stages
+from narwhal.deployment import native_engine, stages
+from narwhal.deployment.launch_engine import cli as engine_cli
+from narwhal.deployment.launch_engine import start as launch_start
 
 
 def failure(exception, root):
@@ -31,7 +33,7 @@ def invoke(runs, backend):
     for run in runs:
         argv.extend(["--run", str(run)])
     with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-        code = launch_engine.main(argv)
+        code = engine_cli.main(argv)
     result = json.loads(stdout.getvalue())
     assert result["exit_code"] == code
     return result
@@ -57,13 +59,13 @@ class SharedStageFailureTests(unittest.TestCase):
                 }
                 error = failure(exception, run)
                 with (
-                    patch.object(launch_engine, "validate_shared_runs", return_value=[(run, plan)]),
+                    patch.object(launch_start, "validate_shared_runs", return_value=[(run, plan)]),
                     patch.object(
-                        launch_engine,
+                        launch_start,
                         "gpu_memory",
                         return_value={"total_mib": 10000, "used_mib": 1000},
                     ),
-                    patch.object(launch_engine, "_create_container", side_effect=error),
+                    patch.object(launch_start, "_create_container", side_effect=error),
                 ):
                     result = invoke([run], "container")
                 self.assertEqual(result["exit_code"], code)

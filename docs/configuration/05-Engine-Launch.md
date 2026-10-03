@@ -128,7 +128,7 @@ When preparation reports an error in an `.env` input or a remote prerequisite:
 
 ## 16. Runtime launch records and image verification
 
-Every generated engine record contains a `runtime` object that `launch_engine.py` reads.
+Every generated engine record contains a `runtime` object that `narwhal-engine` reads.
 
 Discovery fills the `runtime` object with package pins and supported runtime-environment fields from the selected image, the model dtype from the model config, and the launch policy from the [environment launch policy](../deploy/01-Discover.md#confirming-the-launch-policy).
 

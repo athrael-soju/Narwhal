@@ -20,10 +20,12 @@ import httpx
 
 from narwhal.config import FleetConfig
 from narwhal.deployment import cache_capture_hook, native_engine, stages
-from narwhal.deployment.attestation_contract import finalize_fleet
+from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine import digest, gpu_memory, prepare
-from narwhal.diagnostics.check import verify_directed_kv_evidence
+from narwhal.deployment.launch_engine.plan import prepare
+from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.start import gpu_memory
+from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
 from .template import _check_free_ports, _port_layout, _sha256, check_plugin
 
@@ -261,7 +263,7 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         print(
             f"profiling {prefill} prefill / {count - prefill} decode", file=sys.stderr, flush=True
         )
-        _run(run, "narwhal.profiling.probe", args, f"profile-{prefill}p{count - prefill}d")
+        _run(run, "narwhal.profiling.probe.cli", args, f"profile-{prefill}p{count - prefill}d")
         sources.append(profile)
     if len(sources) == 1:
         (run / "profiles.json").write_bytes(sources[0].read_bytes())
@@ -269,7 +271,7 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         args = ["--fleet", str(run / "fleet.json"), "--out", str(run / "profiles.json")]
         for source in sources:
             args.extend(["--merge", str(source)])
-        _run(run, "narwhal.profiling.probe", args, "profile-merge")
+        _run(run, "narwhal.profiling.probe.cli", args, "profile-merge")
 
 
 def _helper_records(run: Path) -> list[tuple[Path, dict]]:
@@ -401,11 +403,11 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
         engine_run = run / name
         with contextlib.redirect_stdout(sys.stderr):
             prepare(engine_run, env, backend="native")
-        _run(run, "narwhal.deployment.launch_engine", ["check", "--run", str(engine_run)], name)
+        _run(run, "narwhal.deployment.launch_engine.cli", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
     _run(
         run,
-        "narwhal.deployment.launch_engine",
+        "narwhal.deployment.launch_engine.cli",
         [
             "start-shared",
             "--backend",
@@ -417,7 +419,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
     for index, engine_run in enumerate(runs):
         _run(
             run,
-            "narwhal.deployment.attestation_contract",
+            "narwhal.deployment.attestation_contract.cli",
             ["native-capture", "--run", str(engine_run)],
             f"attest-{index + 1}",
         )
@@ -425,7 +427,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
         record = _spawn(
             root,
             state,
-            "narwhal.deployment.attestation_contract",
+            "narwhal.deployment.attestation_contract.cli",
             ["serve", "--run", str(engine_run)],
             f"sidecar-{index + 1}",
             {**os.environ, f"NARWHAL_NODE_{index + 1}_ATTESTATION_URL": url},
@@ -473,7 +475,7 @@ def verify(root: Path) -> dict:
             with memory_samples(run, config["gpu_uuid"], "verify"):
                 _run(
                     evidence,
-                    "narwhal.diagnostics.check",
+                    "narwhal.diagnostics.check.cli",
                     [
                         "--fleet",
                         str(run / "fleet.json"),
