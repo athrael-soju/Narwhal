@@ -113,7 +113,7 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
             raise ValueError(f"{where}: {name} must be nonnegative")
     if values["tpot_slope"] < 0:
         raise ValueError(f"{where}: tpot_slope must be nonnegative")
-    # A measured flat decode plane is safe only inside an explicit request/KV domain.
+    # A measured flat decode plane is safe only inside explicit request and KV bounds.
     if values["tpot_slope"] == 0 and not all(
         name in values for name in ("decode_max_requests", "decode_max_kv_tokens")
     ):
@@ -217,9 +217,11 @@ class Profile:
         _check({f.name: getattr(self, f.name) for f in fields(self)}, label)
 
     def prefill_time(self, input_len: int) -> float:
-        """Predict prefill time for an input length, adding `ttft_split` when it splits.
+        """Predict prefill time for an input length.
 
-        A prompt below the measured sweep is priced at the sweep's shortest length.
+        A prompt that ends inside a block past the first adds `ttft_split`. A prompt
+        shorter than the measured sweep is priced at the sweep's shortest length, and one
+        longer than the sweep is priced by extending the fit.
         """
         tokens = max(input_len, self.prefill_min_tokens or 0)
         x = float(tokens)
@@ -262,15 +264,15 @@ class Profile:
         )
 
     def covers_prefill(self, input_len: int) -> bool:
-        """Return whether a prompt length is at most the measured prefill sweep's longest."""
+        """Return whether a prompt is no longer than the longest prompt in the measured sweep."""
         return self.prefill_max_tokens is None or input_len <= self.prefill_max_tokens
 
     def covers_output(self, output_len: float) -> bool:
-        """Return whether an output length reaches the measured decode sweep's minimum."""
+        """Return whether an output is at least as long as the shortest measured decode output."""
         return self.decode_min_output_tokens is None or output_len >= self.decode_min_output_tokens
 
     def token_interval(self, batch_tokens: float, batch_requests: float = 0.0) -> float:
-        """Predict one decode iteration from active requests and their KV tokens."""
+        """Predict the decode token interval for active requests and their KV tokens."""
         return max(
             0.0,
             self.tpot_slope * float(batch_tokens)
@@ -295,14 +297,14 @@ class Profile:
         return capacity
 
     def covers_decode(self, batch_requests: float, batch_tokens: float) -> bool:
-        """Return whether a decode point is at most the measured profile domain's largest."""
+        """Return whether a decode point is within the measured request and KV token maxima."""
         requests = self.decode_max_requests is None or batch_requests <= self.decode_max_requests
         tokens = self.decode_max_kv_tokens is None or batch_tokens <= self.decode_max_kv_tokens
         return requests and tokens
 
     @property
     def decode_token_limit(self) -> int | None:
-        """Return the decode KV token bound: measured domain and physical capacity."""
+        """Return the smaller of the measured decode KV domain and the physical KV capacity."""
         bounds = [b for b in (self.kv_capacity_tokens, self.decode_max_kv_tokens) if b is not None]
         return min(bounds) if bounds else None
 
@@ -331,7 +333,7 @@ class Profile:
         correction: float = 1.0,
         request_cap: int = 0,
     ) -> float:
-        """Return measured-domain request capacity for one decode engine.
+        """Return one decode engine's request capacity inside its measured domain.
 
         A batch below the smallest measured batch takes that batch's token interval.
         """
@@ -383,10 +385,10 @@ def decode_evidence_problems(
     max_fit_mape: float,
     max_cv_mape: float,
 ) -> list[str]:
-    """Name a profile's validation failures, returning an empty list when it passes.
+    """Return a profile's validation failures, or an empty list when it passes.
 
-    Every row needs a measured domain spanning both axes and fit and
-    cross-validation errors inside the given limits.
+    A passing row has a measured domain that spans both axes, and fit and
+    cross-validation errors within the given limits.
     """
     iid = profile.iid
     problems = []

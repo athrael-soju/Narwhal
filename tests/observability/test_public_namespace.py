@@ -236,6 +236,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "steady_decode_work": 0.45,
             "steady_demand_s": 75.0,
             "departure_age_s": 25.0,
+            "arrivals_beyond_profile": 3,
+            "unsized_offers": 2,
         }
         self.router.scheduler.record_decision(
             prefill=1,
@@ -715,7 +717,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         # Opening cooldown.
         self.assertIsNone(scheduler.flip(Role.DECODE))
         self.assertEqual(scheduler.control_snapshot()["flips_refused"], 1)
-        # The nested decode-floor guard must not be double-counted by flip().
+        # flip() counts the nested decode-floor refusal once.
         scheduler.min_decode = 2
         self.assertIsNone(scheduler.flip(Role.PREFILL))
         self.assertEqual(scheduler.control_snapshot()["flips_refused"], 2)

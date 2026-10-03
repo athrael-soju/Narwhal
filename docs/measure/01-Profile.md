@@ -6,11 +6,12 @@ description: Define the TTFT and TPOT measurement contract and build a validated
 
 ## 1. Defining the measurement contract
 
-Record time to first token (TTFT) and time per output token (TPOT) separately for each source.
+Record time to first token (TTFT) and time per output token (TPOT) separately for each source:
 
-The router journal measures TTFT from router arrival to prefill completion. It measures TPOT from prefill completion to the final decode token, divided by `output_len - 1`.
-
-The deployment client measures TTFT from HTTP request start to the first identified output token. It measures TPOT from the first identified output token to the last identified output token, divided by `output_len - 1`.
+| Source | TTFT | TPOT |
+| --- | --- | --- |
+| Router journal | Router arrival to prefill completion | Prefill completion to the final decode token, divided by `output_len - 1` |
+| Deployment client | HTTP request start to the first identified output token | First identified output token to the last identified output token, divided by `output_len - 1` |
 
 Router TTFT covers token counting, placement wait, prefill queueing, and prefill execution. For a completed request, `first_byte_s - ttft_s` covers KV transfer and decode queueing before the first visible token.
 
@@ -33,7 +34,7 @@ Record the [journal contract](../telemetry/01-Journal.md#diagnosing-a-request-fr
 
 A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while each engine's process generation stays the same.
 
-Profile each engine whose process generation changed before you select deployment SLOs:
+Before you select deployment SLOs, profile each engine whose process generation changed:
 
 1. Retain a passing preflight for the fleet configuration under test.
 2. Reserve the production engine shape.
@@ -50,11 +51,19 @@ Profile each engine whose process generation changed before you select deploymen
 
 ### Prefill sweep
 
-- Select at least three prefill lengths spanning the production range, including its longest inputs.
-- The effective sweep is each prefill length whose input plus one output token fits the live `max_model_len` from `/tokenize`.
+- Select at least three prefill lengths that span the production range, including its longest inputs.
+- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len` from `/tokenize`.
 - Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
+- The router prices a prompt longer than the longest swept length with the [fit extended past the sweep](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile).
 
-The prefill fit is `a*n*n + b*n + c + ttft_split*s`. In it, `n` is the prompt token count, and `s` is 1 for a prompt that ends inside a cache block past the first, otherwise 0. The cache block size comes from `vllm:cache_config_info`.
+The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
+
+| Term | Value |
+| --- | --- |
+| `n` | Prompt token count |
+| `s` | 1 for a prompt that ends inside a cache block past the first, otherwise 0 |
+
+The cache block size comes from `vllm:cache_config_info`.
 
 The profiler sets `ttft_split` when all of these hold:
 
@@ -67,18 +76,18 @@ Otherwise `ttft_split` is `null`.
 
 ### Decode sweep
 
-A decode cell is one decode input length and concurrency pair.
+A decode cell is one combination of decode input length and concurrency.
 
 - Use at least two decode input lengths and two concurrency values.
-- For production calibration, use at least three concurrency points, including one stream and the intended operating range.
+- For production calibration, use at least three concurrency values, including one stream and the intended operating range.
 - Use a broader sweep for long-context deployments.
-- Each decode input plus its requested output must fit the live context limit.
+- Each decode input plus its requested output must fit the live `max_model_len`.
 - When fewer than two decode input lengths fit, choose shorter inputs.
 - When a cold sweep fails on a rise in `vllm:prefix_cache_hits_total`, rerun the sweep with the engine reserved for profiling.
 
 ### Warm prefill with a cached prefix
 
-The warm sweep measures prefill for a prompt whose prefix sits in the engine's prefix cache.
+The warm sweep measures prefill for a prompt whose prefix is in the engine's prefix cache.
 
 A warm case is one `--cached-prefix-lens` and `--cached-suffix-lens` pair whose prefix, suffix, and one output token fit the live `max_model_len`.
 
@@ -97,14 +106,14 @@ The warm fit is `c + b*S + d*P + a*(2*P*S + S*S) + ttft_split*s` over the median
 | `P` | Cached prefix tokens |
 | `S` | Uncached suffix tokens |
 | `s` | 1 for a suffix that ends inside a cache block past its first, otherwise 0 |
-| `d*P` | Cached-prefix read |
-| `a*2*P*S` | Suffix attention to the prefix |
+| `d*P` | Reading the cached prefix |
+| `a*2*P*S` | Attention from the suffix to the prefix |
 
 The profiler reports four errors:
 
 | Error | `cached_prefill` field |
 | --- | --- |
-| Leave-one-case-out error of the warm fit | `cv_mape` |
+| Held-out (leave-one-case-out) error of the warm fit | `cv_mape` |
 | Suffix priced on the cold curve | `suffix_on_cold_curve_mape` |
 | Full prompt priced on the cold curve | `full_prompt_cold_mape` |
 | Cold curve against the measured cold controls | `cold_control_curve_mape` |
@@ -160,11 +169,13 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
     - `null` when `vllm:prefix_cache_hits_total` is absent from engine metrics or decreases
 - the attestation response or process identity per fit
 
-When the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and fit error. When a later engine fails, it keeps the data from completed engines. With `--overwrite`, `narwhal-profile` writes a new output pair for the selected engines.
+If the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and the fit error. If a later engine fails, the sidecar keeps the data from the engines that completed.
+
+With `--overwrite`, `narwhal-profile` writes a new output pair for the selected engines.
 
 ### KV capacity source
 
-When vLLM `cache_config_info` reports `kv_cache_size_tokens`, the KV capacity source is the physical KV constraint. When it omits `kv_cache_size_tokens`, the source is the TPOT-derived limit.
+The KV capacity source is the physical KV constraint when vLLM `cache_config_info` reports `kv_cache_size_tokens`, and the TPOT-derived limit when it omits `kv_cache_size_tokens`.
 
 ## 4. Validating the profile before using it
 
@@ -172,11 +183,11 @@ When vLLM `cache_config_info` reports `kv_cache_size_tokens`, the KV capacity so
 
 Measured prefill latency covers the HTTP round trip plus one generated token.
 
-The profiler rejects a TTFT curve over the per-length medians when its mean error exceeds 20% or its worst-point error exceeds 50%.
+The profiler fits the TTFT curve to the per-length medians and rejects it when its mean error exceeds 20% or its worst-point error exceeds 50%.
 
 ### Refitting saved profile samples
 
-When the sample sidecar holds saved samples and profile snapshots bound to a process generation for every engine, refit with `--refit-samples`. For any other sidecar, run a fresh sweep against the current engine processes.
+When the sample sidecar holds saved samples and profile snapshots bound to a process generation for every engine, refit with `--refit-samples`. Otherwise, run a fresh sweep against the current engine processes.
 
 Refit from the saved sample sidecar:
 
@@ -187,10 +198,7 @@ narwhal-profile \
   --out runs/profiles-refit.json
 ```
 
-The refit writes a new pair holding:
-
-- refitted cold and warm prefill curves
-- copied decode coefficients
+The refit writes a new pair with refitted cold and warm prefill curves and copies the decode coefficients.
 
 An engine whose saved warm evidence records a `reason` keeps cold pricing with that reason.
 
@@ -202,25 +210,21 @@ Activate the refitted pair:
 
 ### Decode fit
 
-Near scheduler saturation, compare these profiler measurements with the engine's request and inter-token metrics:
-
-- client-side active-request count
-- resident KV memory
+Near scheduler saturation, compare the profiler's client-side active-request count and resident KV memory with the engine's request and inter-token metrics.
 
 The leave-one-cell-out error measures interpolation between cells within one run. Repeated sweeps measure run-to-run stability and tail behavior.
 
 Fill gaps between cells with intermediate cells that match the production workload.
 
-Set the decode error limits from measurements covering the expected decode domain. `profiles.max_decode_fit_mape` caps the in-sample fit error and defaults to `0.05`. `profiles.max_decode_cv_mape` caps the leave-one-cell-out cross-validation error and defaults to `0.13`.
+Set the decode error limits from measurements that cover the expected decode domain:
+
+| Setting | Caps | Default |
+| --- | --- | :---: |
+| `profiles.max_decode_fit_mape` | In-sample fit error | `0.05` |
+| `profiles.max_decode_cv_mape` | Leave-one-cell-out cross-validation error | `0.13` |
 
 Fleet validation requires `profiles.max_decode_fit_mape` at or below `controller.reactive.movement_margin`.
 
-The `narwhal-check` `profile` gate requires:
+The `narwhal-check` `profile` gate requires two measured points on each decode axis and both decode errors within their limits.
 
-- two measured points on each decode axis
-- both decode errors within their limits
-
-Reactive control needs:
-
-- the current profile schema
-- a decode sweep that passed the `profile` gate
+Reactive control needs the current profile schema and a decode sweep that passed the `profile` gate.

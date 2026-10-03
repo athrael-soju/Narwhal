@@ -33,8 +33,8 @@ class ModelsOut(BaseModel):
 class AdmissionOut(BaseModel):
     """Admission occupancy and refusal counts.
 
-    `rejected` is pool exhaustion, `refused` is the cost model pricing every
-    landing over the TTFT budget before the request dispatches.
+    `rejected` counts pool-exhaustion rejections. `refused` counts requests that the
+    cost model prices over the TTFT budget on every landing, before dispatch.
     """
 
     inflight: int
@@ -51,7 +51,7 @@ class AdmissionOut(BaseModel):
 
 
 class ServingOut(BaseModel):
-    """HTTP retention and physical attempt accounting across original requests."""
+    """Accounting for HTTP retention and physical attempts across original requests."""
 
     http_retained: int = 0
     http_retained_limit: int = 0
@@ -67,7 +67,7 @@ class ServingOut(BaseModel):
 
 
 class HttpPoolsOut(BaseModel):
-    """Engine HTTP pool policy: bounded data legs, reserved control probes.
+    """Engine HTTP pools: a bounded pool for data legs and a reserved pool for control probes.
 
     `pool_timeout_s` is the maximum wait for a connection slot on either pool.
     """
@@ -242,6 +242,8 @@ class ControllerDecisionOut(BaseModel):
     arrivals: int | None = None
     output_observations: int | None = None
     demand_complete: bool | None = None
+    arrivals_beyond_profile: int | None = None
+    unsized_offers: int | None = None
     decision_basis: str | None = None
     observed_prefill_ratio: float | None = None
     recovery_prefill_ratio: float | None = None
@@ -379,10 +381,10 @@ class LifecycleViewOut(BaseModel):
 
 
 class HealthEngineOut(BaseModel):
-    """Per-engine drift-window evidence accounting."""
+    """Drift-window evidence accounting for one engine."""
 
     scored: int = 0
-    # Windows closed after dropping gathered evidence too sparse to score.
+    # Windows closed with evidence too sparse to score; that evidence was dropped.
     undersampled: int = 0
     # Seconds since the last scored window; null until one scores.
     last_scored_s_ago: float | None = None

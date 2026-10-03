@@ -14,7 +14,7 @@ from tests.fixtures import profile
 
 
 class ProfileStoreTests(unittest.TestCase):
-    """A shared measured profile supplies the valid row for each mutation."""
+    """Each mutation starts from the valid measured row of the shared `profile` fixture."""
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -24,13 +24,15 @@ class ProfileStoreTests(unittest.TestCase):
     def test_round_trip_scope_and_engine_set_difference(self):
         """Scoped means use each requested engine once and exclude stale rows."""
         store = ProfileStore(self.path)
-        self.assertIsNone(store.mean_prefill_time(10))
-        store.put(profile("a", ttft_b=1))
-        store.put(profile("b", ttft_b=3))
+        self.assertIsNone(store.mean_token_interval(10))
+        store.put(profile("a", tpot_intercept=0.001))
+        store.put(profile("b", tpot_intercept=0.003))
         restored = ProfileStore(self.path)
         self.assertEqual(restored.engine_set_diff(["a", "c"]), (["c"], ["b"]))
-        self.assertAlmostEqual(restored.mean_prefill_time(10), 20.01)
-        self.assertAlmostEqual(restored.mean_prefill_time(10, ["a", "a", "missing"]), 10.01)
+        self.assertAlmostEqual(restored.mean_token_interval(10), 0.00201)
+        self.assertAlmostEqual(
+            restored.mean_token_interval(10, iids=["a", "a", "missing"]), 0.00101
+        )
         self.assertIsNone(restored.mean_token_interval(10, iids=["missing"]))
         self.assertFalse(restored.covers_decode(1, 1, ["missing"]))
         self.assertEqual(restored.get("a"), store.get("a"))
@@ -114,9 +116,10 @@ class ProfileStoreTests(unittest.TestCase):
         restored = ProfileStore(self.path)
         restored.bind_role_mix({row.iid: "gpu-0"}, lambda group: (2, 1), lambda iid: Role.PREFILL)
         self.assertEqual(restored.get(row.iid), row)
-        self.assertEqual(restored.mean_prefill_time(64), restored.mean_prefill_time(128))
-        self.assertLess(restored.mean_prefill_time(128), restored.mean_prefill_time(256))
-        self.assertIsNone(restored.mean_prefill_time(2048))
+        self.assertEqual(row.prefill_time(64), row.prefill_time(128))
+        self.assertLess(row.prefill_time(128), row.prefill_time(256))
+        self.assertFalse(row.covers_prefill(2048))
+        self.assertGreater(row.prefill_time(2048), row.prefill_time(1024))
         self.assertGreater(row.decode_rps(1, 256, 32), 0)
         self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
         self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)

@@ -1,4 +1,4 @@
-"""Adjacent-split reactive policy and its sustained-demand confirmation state."""
+"""Reactive policy for adjacent splits, with the state that confirms sustained demand."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ Evaluation = tuple[SplitScore, float, float, bool, bool, bool, bool]
 
 
 def outside_tolerance(recent: float, window: float, tolerance: float) -> bool:
-    """Return whether the smaller demand is more than the tolerance below the larger."""
+    """Return whether two demands differ by more than `tolerance` times the larger."""
     return abs(recent - window) > tolerance * max(recent, window)
 
 
@@ -31,11 +31,13 @@ class ShortView:
 
 @dataclass(frozen=True)
 class Departure:
-    """A move away from a settled split after a confirmation-span demand shift."""
+    """A move away from a settled split after demand shifts over the confirmation span."""
 
     heading: int
     started_at: float
     moved: bool = False
+    # True until the shift ends or turns after the first move.
+    leading: bool = True
 
 
 class ReactivePolicy:
@@ -46,7 +48,7 @@ class ReactivePolicy:
         self.confirmations = 0
         # Start of the current run of evaluations in which no adjacent split scores better.
         self.settled_since: float | None = None
-        # Start of the current run of agreeing confirmation-span and window demand.
+        # Start of the current run in which confirmation-span demand agrees with window demand.
         self.balanced_since: float | None = None
         self.departure: Departure | None = None
 
@@ -79,7 +81,7 @@ class ReactivePolicy:
             controller._last_step = now
 
         # Resident requests keep their serving engine after reassignment.
-        # Splits cover the live engines; a role left without one holds control.
+        # Splits cover the live engines; control holds while a role has engines but none live.
         if any(
             controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
             for role in (Role.PREFILL, Role.DECODE)
@@ -112,12 +114,10 @@ class ReactivePolicy:
         estimates = controller.demand.refresh_output_estimates()
         correction = controller.demand._decode_correction()
         prefill, decode = controller._demand(now, estimates=estimates, correction=correction)
-        demand = Demand(
-            prefill,
-            decode,
-            controller.demand.arrival_count(),
-            controller.demand.observed_decode.count(),
-            controller.last_demand.complete,
+        demand = replace(
+            controller.last_demand,
+            arrivals=controller.demand.arrival_count(),
+            output_observations=controller.demand.observed_decode.count(),
         )
         controller.last_demand = demand
         snapshot = controller.scorer.capture(
@@ -161,6 +161,8 @@ class ReactivePolicy:
                 "arrivals": demand.arrivals,
                 "output_observations": demand.output_observations,
                 "demand_complete": demand.complete,
+                "arrivals_beyond_profile": demand.arrivals_beyond_profile,
+                "unsized_offers": demand.unsized_offers,
                 "observed_prefill_ratio": rounded(observed_prefill),
                 "recovery_prefill_ratio": rounded(recovery_prefill),
                 "queued_prefill_s": rounded(snapshot.queued_prefill_s),
@@ -194,15 +196,9 @@ class ReactivePolicy:
 
         # D-to-P candidates price decode at the larger of the short-horizon and window estimates.
         evidence = controller.safety.capture(now, estimates=estimates, correction=correction)
-        envelope_demand = Demand(
-            demand.prefill_engines,
-            evidence.envelope_decode_engines,
-            demand.arrivals,
-            demand.output_observations,
-            demand.complete,
-        )
+        envelope_demand = replace(demand, decode_engines=evidence.envelope_decode_engines)
         th = controller.scheduler.th
-        # The confirmation span; steady load prices both phases alike over it and the window.
+        # Load is steady when both phases price alike over the confirmation span and the window.
         confirmation_s = controller.step_s * max(
             controller.confirmations_needed, th.sustained_intervals
         )
@@ -262,7 +258,7 @@ class ReactivePolicy:
         departure = self.departure
         short_current = short.current if short is not None else current
         short_demand = short.demand if short is not None else demand
-        # After its move, a departure holds the reverse until the window covers it.
+        # After its first move, an open departure holds the reverse move.
         held_reverse = {
             candidate.prefill
             for candidate in adjacent
@@ -327,13 +323,17 @@ class ReactivePolicy:
             )
 
         window_rows = {c.prefill: evaluate(c, current) for c in adjacent}
-        # Before its move, a departure prices its heading over the confirmation span.
-        # Mixed pressure keeps window pricing.
+        # A departure prices its first move on the confirmation span, and later moves once it
+        # is one evidence span old and still leading. Mixed pressure keeps window pricing.
         departure_moves = {
             p: score
             for p, score in (short.adjacent.items() if short is not None else ())
             if departure is not None
-            and not departure.moved
+            and departure.leading
+            and (
+                not departure.moved
+                or now - departure.started_at >= controller.safety.evidence_span_s
+            )
             and p - current_p == departure.heading
             and p in window_rows
             and not window_rows[p][5]
@@ -350,7 +350,11 @@ class ReactivePolicy:
             if mixed:
                 return "mixed_pressure"
             if candidate.prefill in departure_moves:
-                return "settled_departure"
+                return (
+                    "source_shrink"
+                    if departure is not None and departure.moved
+                    else "settled_departure"
+                )
             # Steady load compares adjacent splits on the objective alone.
             if steady and th.shrink < source_ratio <= th.expand:
                 return "steady_demand"
@@ -541,7 +545,6 @@ class ReactivePolicy:
         moved = controller.scheduler.flip(target, "reactive", decision_details=details)
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
-                # A departure moves one engine; the window paces the rest.
                 self.departure = replace(departure, moved=True)
             elif departure.moved and direction == departure.heading:
                 # A window move along the heading ends the reverse hold.
@@ -577,12 +580,11 @@ class ReactivePolicy:
             correction=correction,
             resident_s=controller.step_s,
         )
-        demand = Demand(
-            prefill,
-            decode,
-            arrivals,
-            controller.last_demand.output_observations,
-            controller.last_demand.complete,
+        demand = replace(
+            controller.last_demand,
+            prefill_engines=prefill,
+            decode_engines=decode,
+            arrivals=arrivals,
         )
         snapshot = controller.scorer.capture(
             now,
@@ -616,7 +618,10 @@ class ReactivePolicy:
         demand: Demand,
         short: ShortView | None,
     ) -> None:
-        """Track the settled run and open a departure when the confirmation span leaves it."""
+        """Track the settled run, open a departure when demand shifts, and end its lead.
+
+        The lead ends when the shift ends or the best split turns after the first move.
+        """
         margin = controller.movement_margin
         window_gain = max(
             (
@@ -647,6 +652,13 @@ class ReactivePolicy:
             or (not departure.moved and heading != departure.heading)
         ):
             self.departure = None
+        elif (
+            departure is not None
+            and departure.moved
+            and departure.leading
+            and (heading != departure.heading or not shifted)
+        ):
+            self.departure = replace(departure, leading=False)
         if (
             self.departure is None
             and heading

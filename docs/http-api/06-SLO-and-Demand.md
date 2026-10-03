@@ -18,7 +18,9 @@ description: SLO attainment per time bucket and demand accounting in the Narwhal
 | `pruned_buckets`  | Buckets aged out of retention                                           |
 | `pruned_outcomes` | Requests in pruned buckets                                              |
 
-Each bucket counts completed, failed, expired, and predictively refused requests as TTFT-met, TPOT-met, and total counts. A window query includes the whole boundary bucket.
+Each bucket keeps three counts over completed, failed, expired, and predictively refused requests: TTFT met, TPOT met, and total.
+
+A query over a window counts the bucket at the window's start in full.
 
 ## Demand accounting
 
@@ -28,61 +30,77 @@ One demand window is `controller.reactive.window_s` seconds long.
 
 `demand_history.unsized` reports two counts:
 
-- `pending`: request bodies being read.
-- `observations`: retained offers that terminated before workload sizing.
+| Field          | Meaning                                           |
+| -------------- | ------------------------------------------------- |
+| `pending`      | Request bodies the router is reading              |
+| `observations` | Retained offers that ended before workload sizing |
+
+Each unsized offer takes the mean price of the parsed offers in the same span.
+
+### Demand completeness
+
+Demand in a span is [incomplete](../concepts/02-Role-Control.md#incomplete-demand) when any of these is true:
+
+- The fleet has zero engine profiles.
+- The span has unsized offers and zero parsed offers.
+- An uncapped offer's prompt bucket has zero delivered outputs to estimate its output from.
+- An overflow cohort's output cap is zero.
+- An expected decode shape has zero capacity at both its bucketed and exact length.
+
+The demand estimate includes prompts longer than the profile's measured range, `prefill_max_tokens`. The router prices these prompts by extending the [prefill fit](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile) to their length.
 
 ### Input-size repricing
 
-Demand history records a parsed offer at entry with its local input-size estimate. When the offer is tokenized after admission, demand history records the tokenization result at the original arrival timestamp. An offer rejected before tokenization keeps the local input-size estimate.
+Demand history records each parsed offer at its arrival timestamp, with this input size:
+
+| Offer                        | Recorded input size                         |
+| ---------------------------- | ------------------------------------------- |
+| On entry                     | Local input-size estimate                   |
+| Tokenized after admission    | Tokenization result, replacing the estimate |
+| Rejected before tokenization | Local input-size estimate                   |
 
 ### Bucketing and retention
 
-Demand history buckets and retains its evidence with these properties:
+Demand history buckets and retains its evidence as follows:
 
 | Property                      | Value                                                                      |
 | ----------------------------- | -------------------------------------------------------------------------- |
 | Bucket width                  | Smallest of one second, the controller step, and the minimum evidence span |
 | Exact request shapes          | Up to 128 per bucket                                                       |
 | Overflow cohort               | One per bucket                                                             |
-| Unsized offers                | One shape per time bucket                                                  |
+| Unsized offers                | One shape per bucket                                                       |
 | Arrival and residency data    | Kept for one demand window                                                 |
 | Completed output observations | Kept for four demand windows                                               |
 | Pruning                       | On each evidence write                                                     |
 
-`demand_history` holds one object per history: `unsized`, `arrivals`, `expected_decode`, `observed_decode`, and `residency`.
+`demand_history` holds one object for each history (`unsized`, `arrivals`, `expected_decode`, `observed_decode`, and `residency`), each with these fields:
 
-| Field                   | Meaning                  | Metric, labelled by `window`                   |
-| ----------------------- | ------------------------ | ---------------------------------------------- |
-| `bucket_s`              | Bucket width             |                                                |
-| `retained_s`            | Retention span           |                                                |
-| `cells`                 | Retained cells           | `narwhal_demand_history_cells`                 |
-| `cell_limit`            | Cell limit               | `narwhal_demand_history_cell_limit`            |
-| `observations`          | Counted observations     | `narwhal_demand_history_observations`          |
-| `overflow_observations` | Observations in overflow | `narwhal_demand_history_overflow_observations` |
+| Field                   | Meaning                          | Metric, labelled by `window`                   |
+| ----------------------- | -------------------------------- | ---------------------------------------------- |
+| `bucket_s`              | Bucket width                     |                                                |
+| `retained_s`            | Retention span                   |                                                |
+| `cells`                 | Retained cells                   | `narwhal_demand_history_cells`                 |
+| `cell_limit`            | Cell limit                       | `narwhal_demand_history_cell_limit`            |
+| `observations`          | Counted observations             | `narwhal_demand_history_observations`          |
+| `overflow_observations` | Observations in overflow cohorts | `narwhal_demand_history_overflow_observations` |
 
 ### Overflow
 
 An overflow cohort:
 
 - keeps every request count
-- is priced from its largest input length and requested output length
+- takes its price from its largest input length and requested output length
 - marks decode demand incomplete when its requested output length is zero
 - keeps the output estimates learned before the overflow until every overflow cohort leaves output history
 - contributes its full count when it crosses a window boundary
 
 ### Decision snapshots
 
-A reactive decision snapshot contains:
-
-- profile coefficients
-- demand
-- phase pressure
-- output estimates
-- resident work
+A reactive decision snapshot contains profile coefficients, demand, phase pressure, output estimates, and resident work.
 
 ### Prefill recovery ratio
 
-The prefill recovery ratio is computed as follows when `queued_prefill_s > 0` and at least one engine has the prefill role:
+When `queued_prefill_s > 0` and at least one engine has the prefill role, the prefill recovery ratio is:
 
 ```text
 recovery_prefill_ratio = max(
@@ -94,13 +112,9 @@ recovery_prefill_ratio = max(
 
 Otherwise, `recovery_prefill_ratio` equals the observed prefill pressure.
 
-Incomplete-demand decisions expose:
+Decisions made with incomplete demand report both observed phase ratios, `recovery_prefill_ratio`, and `queued_prefill_s`.
 
-- both observed phase ratios
-- `recovery_prefill_ratio`
-- `queued_prefill_s`
-
-`decision_basis` in incomplete-demand decisions is one of:
+In those decisions, `decision_basis` is one of:
 
 ```text
 prefill_pressure_recovery
@@ -113,7 +127,7 @@ Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gate
 
 ### Decode recovery ratio
 
-The decode recovery ratio is computed as follows when `serving.decode_concurrency` is positive and at least one engine has the decode role:
+When `serving.decode_concurrency` is positive and at least one engine has the decode role, the decode recovery ratio is:
 
 ```text
 recovery_decode_ratio = max(
@@ -125,7 +139,7 @@ recovery_decode_ratio = max(
 
 Otherwise, `recovery_decode_ratio` equals the observed decode pressure.
 
-Decisions held for demand history or fleet profiles before candidate scoring report `recovery_decode_ratio`.
+Decisions held before candidate scoring, while they wait for demand history or fleet profiles, report `recovery_decode_ratio`.
 
 ### Consolidation evidence
 
@@ -133,7 +147,7 @@ Decisions held for demand history or fleet profiles before candidate scoring rep
 
 | Field                     | Meaning                                                                                       |
 | ------------------------- | --------------------------------------------------------------------------------------------- |
-| `span_s`                  | Elapsed span of the counted arrival evidence                                                  |
+| `span_s`                  | Time span of the counted arrivals                                                             |
 | `arrivals`                | Arrivals since the later of the latest risk event and `max_span_s` seconds ago                |
 | `required_span_s`         | Span that closes the window, `controller.reactive.evidence_span_s`                            |
 | `required_arrivals`       | Arrival count that closes the window, `controller.reactive.evidence_min_arrivals`             |

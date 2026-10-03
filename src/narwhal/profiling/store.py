@@ -142,7 +142,7 @@ class ProfileStore:
     ) -> tuple[Profile, ...]:
         """Return each selected engine's profile for a candidate mix, or () when any is unmeasured.
 
-        A global split identifies a device mix only when the selected fleet has
+        A fleet-wide split identifies a device mix only when the selected engines are in
         one shared-device group.
         """
         selected = tuple(dict.fromkeys(iids))
@@ -189,24 +189,19 @@ class ProfileStore:
         return tuple(profile for profile in self.all_profiles() if profile.iid == iid)
 
     def engine_set_diff(self, iids: Iterable[str]) -> tuple[list[str], list[str]]:
-        """Return (missing, extra) sorted ids between the configured engine set and the store."""
+        """Return sorted (missing, extra) engine ids.
+
+        `missing` ids are configured but not stored; `extra` ids are stored but not configured.
+        """
         fleet = set(iids)
         stored = set(self._by_id) | {key[0] for key in self._by_mix}
         return sorted(fleet - stored), sorted(stored - fleet)
 
     def _rows_for(self, iids: Iterable[str] | None) -> list[Profile]:
-        """Return stored profiles for `iids`, or every row when unscoped."""
+        """Return stored profiles for `iids`, or for every stored engine when `iids` is None."""
         if iids is None:
             iids = set(self._by_id) | {key[0] for key in self._by_mix}
         return [profile for iid in dict.fromkeys(iids) if (profile := self.get(iid)) is not None]
-
-    def mean_prefill_time(self, input_len: int, iids: Iterable[str] | None = None) -> float | None:
-        """Return mean predicted prefill time for the engines selected by `iids`."""
-        profiles = self._rows_for(iids)
-        if not profiles or not all(p.covers_prefill(input_len) for p in profiles):
-            return None
-        times = [p.prefill_time(input_len) for p in profiles]
-        return sum(times) / len(times)
 
     def mean_max_tokens(
         self, tpot_slo_s: float, batch_requests: float = 0.0, iids: Iterable[str] | None = None

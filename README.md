@@ -24,7 +24,7 @@
 
 ## What is Narwhal?
 
-Narwhal is an adaptive, disaggregated inference framework that automatically hot-swaps prefill and decode roles, without having to reload model weights. It scales from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [distributed multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
+Narwhal is an adaptive, disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, and without having to reload model weights. It can scale from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
 <table width="100%" align="center">
   <thead>
@@ -42,7 +42,7 @@ Narwhal is an adaptive, disaggregated inference framework that automatically hot
     </tr>
     <tr>
       <td>Serving</td>
-      <td>Serves streaming and buffered completion and chat requests with latency-aware admission</td>
+      <td>Serves completion and chat requests, streamed or buffered, with latency-aware admission</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/HTTP-API/"><img src="https://img.shields.io/badge/docs-HTTP%20API%20reference-0f766e" alt="HTTP API reference documentation"></a></td>
     </tr>
     <tr>
@@ -52,7 +52,7 @@ Narwhal is an adaptive, disaggregated inference framework that automatically hot
     </tr>
     <tr>
       <td>Measurement</td>
-      <td>Profiles engines and runs ordered benchmark points with retained evidence</td>
+      <td>Profiles engines, runs ordered benchmark points, and keeps the evidence from each point</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measuring%20a%20fleet-0f766e" alt="Measuring a fleet documentation"></a></td>
     </tr>
     <tr>
@@ -75,18 +75,15 @@ Narwhal is an adaptive, disaggregated inference framework that automatically hot
 
 ## How engines change roles
 
-The role controller scores the current role split and each adjacent split, one engine move away. It works from measured engine profiles, offered demand, and resident work. The score is the worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
+The role controller scores the current role split and each adjacent split, one engine move away. It projects each split from measured engine profiles, offered demand, and resident work. A split's score is its worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
 
-Demand is the measured window demand, using the larger of the short- and long-horizon decode estimates for decode-to-prefill candidates. The evidence window closes after `controller.reactive.evidence_span_s` and the minimum arrivals, or after `controller.reactive.evidence_max_span_s` under sparse traffic.
+Projections use measured window demand. A decode-to-prefill candidate takes its decode demand from the larger of the short- and long-horizon estimates.
 
-The controller moves to the adjacent split that improves the score by at least the configured margin:
+The controller moves to an adjacent split that improves the score by at least the configured margin. A decode-to-prefill move also needs stable decode demand and a closed arrival-evidence window. The window closes after `controller.reactive.evidence_span_s` with the minimum number of arrivals, or after `controller.reactive.evidence_max_span_s` under sparse traffic. A prefill-to-decode move with prefill load at or below `controller.thresholds.shrink` can proceed while the window is open.
 
-- After a settled run of `controller.reactive.evidence_span_s`, a demand shift over the confirmation span moves one engine.
-- Under steady demand, the score chooses between adjacent splits after the evidence window closes.
-- A decode-to-prefill move requires a closed evidence window and stable decode demand.
-- A prefill-to-decode move with prefill load at or below `controller.thresholds.shrink` proceeds with the window open.
+When demand over the confirmation span shifts after a settled run of `controller.reactive.evidence_span_s`, the controller moves one engine. If the shift lasts beyond `controller.reactive.evidence_span_s`, it keeps moving engines in that direction on confirmation-span demand. Under steady demand, the score chooses between adjacent splits once the arrival-evidence window has closed.
 
-Each move passes the guards for pinned engines, role floors, cooldown, dwell time, the resident-stream ceiling on decode donors, and engine lifecycle holds. Floor repair moves one engine per monitor pass while a phase sits below its configured floor.
+Every move passes guards for pinned engines, role floors, cooldown, dwell time, the resident-stream cap on decode donors, and engine lifecycle holds. While a role is below its configured floor, floor repair moves one engine per monitor pass.
 
 New requests follow the revised split, and resident requests finish on their assigned engines.
 
@@ -147,7 +144,7 @@ The wheel installs these commands:
 
 ## Trying it on one GPU
 
-Narwhal dev runs a local NVIDIA CUDA fleet on Ubuntu or Ubuntu under WSL2.
+Narwhal dev runs a local NVIDIA CUDA fleet on Ubuntu, either directly or under WSL2.
 
 ```bash
 narwhal dev init

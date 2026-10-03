@@ -1,9 +1,11 @@
-"""Departures from a settled split after a sustained demand shift."""
+"""Check departures from a settled split after a sustained demand shift."""
 
 from __future__ import annotations
 
+import random
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,7 +32,7 @@ def score(prefill: int, objective: float) -> SplitScore:
 
 
 class TrackDepartureTests(unittest.TestCase):
-    """The settled run and the demand shift gate a departure."""
+    """A departure opens only after a settled run and a demand shift."""
 
     def setUp(self) -> None:
         self.controller = SimpleNamespace(
@@ -91,6 +93,34 @@ class TrackDepartureTests(unittest.TestCase):
         self.settle(60.0)
         self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.track(70.0, short_gain=0.0, short_demand=Demand(4.8, 0.2, 100, 0))
+        self.assertIsNone(self.policy.departure)
+
+    def moved(self) -> None:
+        self.settle(60.0)
+        self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.policy.departure = replace(self.policy.departure, moved=True)
+
+    def test_moved_departure_leads_while_the_shift_lasts(self):
+        self.moved()
+        self.track(70.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=True))
+
+    def test_moved_departure_stops_leading_when_the_shift_ends(self):
+        self.moved()
+        self.track(70.0, short_gain=0.5, short_demand=self.window)
+        self.track(75.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
+
+    def test_moved_departure_stops_leading_when_the_short_view_turns(self):
+        self.moved()
+        self.track(70.0, short_gain=0.0, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, moved=True, leading=False))
+
+    def test_moved_departure_closes_one_window_after_it_opens(self):
+        self.moved()
+        self.track(180.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure.started_at, 65.0)
+        self.track(185.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertIsNone(self.policy.departure)
 
 
@@ -197,15 +227,22 @@ class SustainedShiftTests(unittest.TestCase):
         self.assertEqual(first["demand_horizon_s"], 15.0)
         self.assertEqual(first["required_confirmations"], 1)
         self.assertEqual(second["eligibility_rule"], "source_shrink")
-        self.assertEqual(second["demand_horizon_s"], 120.0)
+        self.assertEqual(second["demand_horizon_s"], 15.0)
+        self.assertGreaterEqual(second["departure_age_s"], 60.0)
 
     def test_short_burst_moves_no_engine(self):
         _, moves = self.run_shift(burst_s=5)
         self.assertEqual(moves, [])
 
+    def test_burst_shorter_than_one_evidence_span_moves_one_engine(self):
+        for burst_s in (20, 30, 45):
+            with self.subTest(burst_s=burst_s):
+                _, moves = self.run_shift(burst_s=burst_s)
+                self.assertEqual([d["eligibility_rule"] for d in moves], ["settled_departure"])
+
 
 class PostMoveHoldTests(unittest.TestCase):
-    """A departure toward decode re-arms the consolidation evidence hold."""
+    """A departure toward decode restarts the evidence hold on decode consolidation."""
 
     def test_evidence_hold_outlasts_the_departure_hold(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -244,7 +281,7 @@ class PostMoveHoldTests(unittest.TestCase):
 
 
 class AlternationTests(unittest.TestCase):
-    """Alternation shorter than the window keeps window pricing."""
+    """Demand that alternates within one window keeps window pricing."""
 
     def test_alternation_above_the_calibrated_load_opens_no_departure(self):
         for period, intensity in ((60, 1.1), (60, 1.3), (90, 1.1), (90, 1.3)):
@@ -262,7 +299,7 @@ class AlternationTests(unittest.TestCase):
 
 
 class ShortViewTests(unittest.TestCase):
-    """The confirmation-span view prices the current split and its neighbours."""
+    """The short view prices the current split and its neighbours over the confirmation span."""
 
     def test_short_view_scores_match_a_full_capture(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -316,18 +353,214 @@ class ReverseHoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sim = Sim(directory)
             sim.run(300, PREFILL_HEAVY)
-            sim.run(30, DECODE_HEAVY)
+            sim.run(15, DECODE_HEAVY)
             policy = sim.controller.reactive
             self.assertEqual([flip.to for flip in sim.scheduler.flips], [Role.DECODE])
             departure = policy.departure
             self.assertEqual((departure.heading, departure.moved), (-1, True))
+            # A departure whose shift has ended leaves later moves to the window.
+            policy.departure = replace(departure, leading=False)
 
-            sim.run(60, DECODE_HEAVY)
+            sim.run(75, DECODE_HEAVY)
             sim.close()
-        self.assertGreaterEqual(len(sim.scheduler.flips), 2)
+        moves = [d for d in sim.decisions if d["result"] == "applied"]
+        self.assertGreaterEqual(len(moves), 2)
+        self.assertEqual(moves[1]["demand_horizon_s"], sim.controller.window_s)
         self.assertEqual({flip.to for flip in sim.scheduler.flips}, {Role.DECODE})
         self.assertLess(sim.now - departure.started_at, sim.controller.window_s)
         self.assertIsNone(policy.departure)
+
+    def test_window_move_before_one_evidence_span_closes_the_departure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.run(300, DECODE_LEANING)
+            sim.run(120, PREFILL_HEAVY)
+            sim.close()
+        moves = [d for d in sim.decisions if d["result"] == "applied" and d["at"] > 300.0]
+        self.assertEqual(moves[0]["eligibility_rule"], "settled_departure")
+        self.assertEqual(moves[1]["demand_horizon_s"], sim.controller.window_s)
+        self.assertLess(moves[1]["departure_age_s"], 60.0)
+        self.assertEqual(moves[2]["demand_horizon_s"], sim.controller.window_s)
+
+
+class LeadingDepartureTests(unittest.TestCase):
+    """After one evidence span, a leading departure moves on demand over the confirmation span."""
+
+    def walk(self, start: int, settle, shift) -> list[dict[str, object]]:
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=start)
+            sim.run(300, settle)
+            sim.run(120, shift)
+            sim.close()
+        return [d for d in sim.decisions if d["result"] == "applied" and d["at"] > 300.0]
+
+    def test_departure_walks_to_the_far_split_within_115_s(self):
+        for start, settle, shift, end in (
+            (7, PREFILL_HEAVY, DECODE_HEAVY, 1),
+            (1, DECODE_HEAVY, PREFILL_HEAVY, 7),
+        ):
+            with self.subTest(start=start, end=end):
+                moves = self.walk(start, settle, shift)
+                self.assertEqual(moves[0]["eligibility_rule"], "settled_departure")
+                self.assertEqual(moves[-1]["prefill"], end)
+                self.assertLessEqual(moves[-1]["at"] - 300.0, 115.0)
+                self.assertEqual(len(moves), abs(end - start))
+                self.assertGreaterEqual(moves[1]["departure_age_s"], 60.0)
+                for move in moves[1:]:
+                    self.assertEqual(move["eligibility_rule"], "source_shrink")
+                    self.assertEqual(move["demand_horizon_s"], move["steady_horizon_s"])
+                    self.assertLess(move["departure_age_s"], 120.0)
+
+
+class PendingBodyTests(unittest.TestCase):
+    """A request body being read keeps demand complete and the settled run open."""
+
+    def first_moves(self, pending: bool) -> list[dict[str, object]]:
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory)
+            sim.run(279, PREFILL_HEAVY)
+            demand = sim.controller.demand
+            if pending:
+                demand.unsized_pending += 1
+            sim.run(1, PREFILL_HEAVY)
+            if pending:
+                demand.resolve_unsized(at=sim.now, retain=False)
+            sim.run(20, PREFILL_HEAVY)
+            sim.run(120, DECODE_HEAVY)
+            sim.close()
+        self.assertTrue(all(d["demand_complete"] for d in sim.decisions))
+        if pending:
+            self.assertEqual(
+                next(d for d in sim.decisions if d["at"] == 280.0)["unsized_offers"], 1
+            )
+        return [d for d in sim.decisions if d["result"] == "applied"]
+
+    def test_pending_body_leaves_settled_run_and_departure_unchanged(self):
+        moves = self.first_moves(pending=True)
+        self.assertTrue(all(d["at"] > 300.0 for d in moves))
+        first = moves[0]
+        self.assertLessEqual(first["at"] - 300.0, 30.0)
+        self.assertEqual(first["eligibility_rule"], "settled_departure")
+        self.assertEqual(first["at"], self.first_moves(pending=False)[0]["at"])
+
+
+def bound_prefill(sim: Sim, max_tokens: int = 16300) -> None:
+    """End every engine's measured prefill sweep at `max_tokens`."""
+    for iid in list(sim.monitor.instances):
+        row = sim.scheduler.profiles.get(iid)
+        sim.scheduler.profiles.put(
+            replace(row, prefill_min_tokens=256, prefill_max_tokens=max_tokens)
+        )
+
+
+class BeyondProfileShiftTests(unittest.TestCase):
+    """Role control keeps moving engines with prompts beyond the prefill sweep or unsized offers."""
+
+    def shift(self, documents: tuple[int, int, float], *, unsized: int = 0) -> list[dict]:
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=1)
+            bound_prefill(sim)
+            sim.run(270, DECODE_HEAVY)
+            demand = sim.controller.demand
+            for k in range(unsized):
+                demand.unsized_pending += 1
+                demand.resolve_unsized(at=sim.now - 1.0 + k * 0.3, retain=True)
+            sim.run(30, DECODE_HEAVY)
+            sim.run(60, documents)
+            sim.close()
+        return [
+            d
+            for d in sim.decisions
+            if d["at"] > 300.0 and d["result"] == "applied" and d["prefill"] > d["current_prefill"]
+        ]
+
+    def test_prompts_above_the_sweep_move_an_engine_to_prefill_within_30_s(self):
+        first = self.shift((18_000, 150, 2.0))[0]
+        self.assertLessEqual(first["at"] - 300.0, 30.0)
+        self.assertEqual(first["eligibility_rule"], "settled_departure")
+        self.assertTrue(first["demand_complete"])
+        self.assertGreater(first["arrivals_beyond_profile"], 0)
+        ControllerDecisionOut.model_validate({k: v for k, v in first.items() if k != "event"})
+
+    def test_unsized_offers_leave_the_shift_priced(self):
+        first = self.shift((12_000, 150, 2.0), unsized=3)[0]
+        self.assertLessEqual(first["at"] - 300.0, 30.0)
+        self.assertEqual(first["eligibility_rule"], "settled_departure")
+        self.assertTrue(first["demand_complete"])
+        self.assertEqual(first["unsized_offers"], 3)
+        ControllerDecisionOut.model_validate({k: v for k, v in first.items() if k != "event"})
+
+
+class PhaseTraceTests(unittest.TestCase):
+    """Each long-document phase walks to prefill after a generation phase with unsized offers."""
+
+    DOC = (6.0, (16_000, 20_000), (100, 200))
+    GEN = (7.1, (200, 400), (2_000, 3_000))
+    CHAT = (0.5, (300, 800), (500, 1_500))
+    PHASE_S = 180
+
+    def test_document_phases_walk_to_prefill_with_complete_demand(self):
+        rng = random.Random(7)
+        carry: dict[str, float] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=1)
+            bound_prefill(sim)
+            sim.scheduler.decode_concurrency = 48
+            for iid in list(sim.monitor.instances):
+                row = sim.scheduler.profiles.get(iid)
+                sim.scheduler.profiles.put(
+                    replace(row, tpot_request_slope=0.00015, decode_max_requests=48)
+                )
+            demand = sim.controller.demand
+            splits = []
+            for phase in ("gen", "doc", "gen", "doc"):
+                for _ in range(self.PHASE_S):
+                    rows = []
+                    for name, (rate, inputs, outputs) in (
+                        (phase, self.DOC if phase == "doc" else self.GEN),
+                        ("chat", self.CHAT),
+                    ):
+                        carry[name] = carry.get(name, 0.0) + rate
+                        count = int(carry[name])
+                        carry[name] -= count
+                        rows += [
+                            (
+                                sim.now + (k + 1) / (count + 1),
+                                rng.randint(*inputs),
+                                rng.randint(*outputs),
+                            )
+                            for k in range(count)
+                        ]
+                    for at, input_len, output_len in sorted(rows):
+                        if phase == "gen" and rng.random() < 0.1:
+                            demand.unsized_pending += 1
+                            demand.resolve_unsized(at=at, retain=True)
+                        else:
+                            sim.controller.saw_arrival(input_len, wanted_len=output_len, at=at)
+                    sim.now += 1.0
+                    sim.controller.sample()
+                    sim.controller.step()
+                    splits.append(len(sim.monitor.pool(Role.PREFILL)))
+            sim.close()
+        decisions = sim.decisions
+        self.assertTrue(all(d["demand_complete"] for d in decisions))
+        self.assertTrue(any(d.get("unsized_offers") for d in decisions))
+        for start in (180, 540):
+            with self.subTest(phase_start=start):
+                toward = [
+                    d
+                    for d in decisions
+                    if start < d["at"] <= start + self.PHASE_S
+                    and d["result"] == "applied"
+                    and d["prefill"] > d["current_prefill"]
+                ]
+                self.assertLessEqual(toward[0]["at"] - start, 30.0)
+                self.assertEqual(toward[0]["eligibility_rule"], "settled_departure")
+                self.assertGreater(toward[0]["arrivals_beyond_profile"], 0)
+                self.assertEqual(toward[1]["demand_horizon_s"], toward[1]["steady_horizon_s"])
+                self.assertGreaterEqual(toward[1]["departure_age_s"], 60.0)
+                reached = next(t for t in range(start, start + self.PHASE_S) if splits[t] >= 6)
+                self.assertLessEqual(reached + 1 - start, 95)
 
 
 if __name__ == "__main__":

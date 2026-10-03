@@ -1,4 +1,4 @@
-"""Deterministic CPU regressions for adjacent reactive role changes."""
+"""Check adjacent reactive role changes with deterministic CPU tests."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from narwhal.scheduling.scheduler import GlobalScheduler
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
 from narwhal.serving.router import NarwhalRouter
+from narwhal.serving.schemas import ControllerDecisionOut
 from narwhal.types import Instance, Phase, Request, Role
 
 
@@ -187,7 +188,7 @@ class MixedPressureTests(unittest.TestCase):
         self.assertFalse(policy.departure.moved)
 
     def test_candidate_uses_its_colocated_prefill_cost(self) -> None:
-        """A 2P/4D proposal is priced from its own measured mix rows."""
+        """A 2P/4D candidate is priced from the profile rows measured at 2P/4D."""
         fleet = self.fleet
         for iid in fleet.monitor.instances:
             base = fleet.profiles.get(iid)
@@ -227,7 +228,8 @@ class MixedPressureTests(unittest.TestCase):
             snapshot.score(2).ttft_ratio,
             snapshot.score(1).ttft_ratio,
         )
-        too_narrow = replace(
+        # Offered prompts beyond the candidate's prefill sweep leave its decode coverage intact.
+        narrow_prefill = replace(
             snapshot,
             profile_options=(
                 (
@@ -237,9 +239,8 @@ class MixedPressureTests(unittest.TestCase):
                     ),
                 ),
             ),
-            offered_inputs=(100,),
         )
-        self.assertFalse(too_narrow.score(2).decode_profile_covered)
+        self.assertTrue(narrow_prefill.score(2).decode_profile_covered)
 
     def test_donor_selection_requires_the_measured_destination_roles(self) -> None:
         fleet = self.fleet
@@ -315,7 +316,7 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(fleet.scheduler.flips, [])
 
-    def test_candidate_checks_inflight_prefill_domain(self) -> None:
+    def test_candidate_checks_inflight_decode_domain(self) -> None:
         fleet = self.fleet
         self._colocated_candidate()
         fleet.monitor.dispatched("e0", Request("pending", 100, wanted_len=10))
@@ -325,12 +326,11 @@ class MixedPressureTests(unittest.TestCase):
             utilization=0.8,
             observed_load=(0.0, 0.0),
         )
-        self.assertEqual(snapshot.offered_inputs, ())
         self.assertEqual(snapshot.offered_outputs, ())
         candidates = dict(snapshot.profile_options)[2]
         for bounds, covered in (
             ({"decode_max_kv_tokens": 50}, False),
-            ({"prefill_max_tokens": 50}, False),
+            ({"prefill_max_tokens": 50}, True),
             ({"decode_min_kv_tokens": 200, "prefill_min_tokens": 200}, True),
         ):
             with self.subTest(bounds=bounds):
@@ -365,7 +365,7 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_incomplete_demand_requires_observed_pressure(self) -> None:
         fleet = self.fleet
-        fleet.controller.demand.unsized_pending = 1
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         fleet.pressure = {Role.PREFILL: 0.9, Role.DECODE: 0.9}
         self.assertIsNone(fleet.confirm())
         self.assertIn("incomplete demand requires", fleet.scheduler._last_decision["reason"])
@@ -375,6 +375,45 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(
             fleet.scheduler._last_decision["decision_basis"], "prefill_pressure_recovery"
         )
+
+    def test_prompts_beyond_every_profile_keep_demand_complete(self) -> None:
+        fleet = self.fleet
+        for row in fleet.profiles.all_profiles():
+            fleet.profiles.put(replace(row, prefill_max_tokens=50))
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler._last_decision
+        self.assertTrue(decision["demand_complete"])
+        self.assertEqual(decision["decision_basis"], "demand_projection")
+        self.assertGreater(decision["arrivals_beyond_profile"], 0)
+        ControllerDecisionOut.model_validate(decision)
+
+    def test_retained_unsized_offer_with_parsed_arrivals_prices_complete_demand(self) -> None:
+        fleet = self.fleet
+        demand = fleet.controller.demand
+        demand.unsized_pending += 1
+        demand.resolve_unsized(at=fleet.now, retain=True)
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler._last_decision
+        self.assertTrue(decision["demand_complete"])
+        self.assertEqual(decision["decision_basis"], "demand_projection")
+        self.assertEqual(decision["unsized_offers"], 1)
+        ControllerDecisionOut.model_validate(decision)
+
+    def test_held_decisions_report_beyond_profile_and_unsized_counts(self) -> None:
+        fleet = self.fleet
+        for row in fleet.profiles.all_profiles():
+            fleet.profiles.put(replace(row, prefill_max_tokens=50))
+        demand = fleet.controller.demand
+        demand.unsized_pending += 1
+        demand.resolve_unsized(at=fleet.now, retain=True)
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
+        fleet.pressure = {Role.PREFILL: 0.9, Role.DECODE: 0.9}
+        self.assertIsNone(fleet.step())
+        decision = fleet.scheduler._last_decision
+        self.assertIn("incomplete demand requires", decision["reason"])
+        self.assertGreater(decision["arrivals_beyond_profile"], 0)
+        self.assertEqual(decision["unsized_offers"], 1)
+        ControllerDecisionOut.model_validate(decision)
 
     def test_demand_prices_outputs_past_the_profiled_decode_length(self) -> None:
         fleet = self.fleet
@@ -458,7 +497,7 @@ class MixedPressureTests(unittest.TestCase):
         for iid in ("e1", "e2"):
             fleet.monitor.instances[iid].role = Role.PREFILL
         fleet.scheduler.decode_concurrency = 2
-        fleet.controller.demand.unsized_pending = 1
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         fleet.pressure = {Role.PREFILL: 0.1, Role.DECODE: 0.1}
         for iid in ("e3", "e4", "e5"):
             for index in range(2):
@@ -476,10 +515,11 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertAlmostEqual(snapshot.decode_recovery_ratio, (6 + 4) / (3 * 2))
         self.assertIsNotNone(fleet.confirm())
+        self.assertFalse(fleet.scheduler._last_decision["demand_complete"])
         self.assertEqual(sum(i.role is Role.PREFILL for i in fleet.monitor.instances.values()), 2)
 
     def test_streams_draining_on_a_former_decode_engine_leave_decode_slots(self) -> None:
-        """Only decode-role residents and waiting decode work fill the capped slots."""
+        """Only residents of decode-role engines and waiting decode work fill the capped slots."""
         fleet = self.fleet
         for iid in ("e1", "e2"):
             fleet.monitor.instances[iid].role = Role.PREFILL
@@ -506,7 +546,8 @@ class MixedPressureTests(unittest.TestCase):
 
     def queued_prefill(self) -> None:
         fleet = self.fleet
-        fleet.controller.demand.unsized_pending = 1
+        # An uncapped prompt leaves demand incomplete while no output has been delivered.
+        fleet.controller.saw_arrival(100, wanted_len=0, at=fleet.now)
         for index in range(4):
             fleet.monitor.dispatched("e0", Request(f"active{index}", 100, wanted_len=10))
         for index in range(20):
@@ -540,6 +581,7 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNone(fleet.step())
         self.assertIsNone(fleet.step())
         self.assertIsNotNone(fleet.step())
+        self.assertFalse(fleet.scheduler._last_decision["demand_complete"])
 
     def test_backlog_does_not_bypass_decode_capacity(self) -> None:
         fleet = self.fleet
@@ -548,6 +590,7 @@ class MixedPressureTests(unittest.TestCase):
         fleet.pressure = {Role.PREFILL: 0.8, Role.DECODE: 0.4}
         self.assertIsNone(fleet.confirm())
         self.assertEqual(fleet.scheduler.flips, [])
+        self.assertFalse(fleet.scheduler._last_decision["demand_complete"])
         self.assertGreater(
             fleet.scheduler._last_decision["pending_decode_tokens"],
             fleet.scheduler._last_decision["decode_kv_capacity_tokens"],
@@ -560,6 +603,7 @@ class MixedPressureTests(unittest.TestCase):
             request.phase = Phase.DECODE
         fleet.pressure = {Role.PREFILL: 0.8, Role.DECODE: 0.4}
         self.assertIsNone(fleet.confirm())
+        self.assertFalse(fleet.scheduler._last_decision["demand_complete"])
         self.assertEqual(fleet.scheduler._last_decision["queued_prefill_s"], 0)
         self.assertEqual(fleet.scheduler.flips, [])
 
@@ -742,7 +786,7 @@ class MixedPressureTests(unittest.TestCase):
 
 
 class ProjectedTTFTRecoveryTests(unittest.TestCase):
-    """Incoming prefill risk wakes one guarded adjacent D-to-P evaluation."""
+    """An offer's projected TTFT breach wakes one guarded evaluation of the adjacent D-to-P move."""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -781,6 +825,19 @@ class ProjectedTTFTRecoveryTests(unittest.TestCase):
         self.assertLess(decision["event_to_evaluation_s"], 0.8)
         self.assertGreater(decision["projected_ttft_s"], fleet.scheduler.slo.ttft_s)
         self.assertGreater(decision["projected_ttft_improvement_s"], 0)
+
+    def test_prompts_beyond_the_profile_leave_fleet_profiles_complete(self) -> None:
+        fleet = self.fleet
+        for row in fleet.profiles.all_profiles():
+            fleet.profiles.put(replace(row, prefill_max_tokens=50))
+        fleet.monitor.dispatched("e0", Request("resident", 100, wanted_len=10))
+        requests = self.queue(11)
+        fleet.now += 0.1
+        self.assertTrue(fleet.controller.note_prefill_risk(requests[-1]))
+        self.assertIsNotNone(fleet.controller.step(urgent=True))
+        decision = fleet.scheduler._last_decision
+        self.assertEqual(decision["eligibility_rule"], "projected_ttft_recovery")
+        self.assertEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
 
     def test_concurrent_risky_offers_coalesce_into_one_evaluation(self) -> None:
         fleet = self.fleet
@@ -911,7 +968,7 @@ class ProjectedTTFTRecoveryTests(unittest.TestCase):
         self.assertIn("flip_resident_guard", fleet.scheduler._last_decision["reason"])
 
     def test_urgent_move_uses_a_live_donor_while_an_engine_is_unavailable(self) -> None:
-        """Projected-TTFT recovery keeps moving and never flips the unavailable engine."""
+        """With one engine unavailable, projected-TTFT recovery flips another engine to prefill."""
         fleet = self.fleet
         requests = self.queue(11)
         fleet.scheduler.drain("e5")
