@@ -134,7 +134,16 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
             "# HELP simulated_engine_late_ticks_total Pacing ticks that started one tick period "
             "or more after their scheduled time.\n"
             "# TYPE simulated_engine_late_ticks_total counter\n"
-            "simulated_engine_late_ticks_total 0\n",
+            "simulated_engine_late_ticks_total 0\n"
+            "# HELP simulated_engine_active_streams Prefill and decode requests in progress.\n"
+            "# TYPE simulated_engine_active_streams gauge\n"
+            'simulated_engine_active_streams{phase="prefill"} 0\n'
+            'simulated_engine_active_streams{phase="decode"} 0\n'
+            "# HELP simulated_engine_peak_streams Most prefill and decode requests in progress "
+            "at once.\n"
+            "# TYPE simulated_engine_peak_streams gauge\n"
+            'simulated_engine_peak_streams{phase="prefill"} 0\n'
+            'simulated_engine_peak_streams{phase="decode"} 0\n',
         )
 
     async def test_tokenize_counts_characters_ids_and_message_contents(self):

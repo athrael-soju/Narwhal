@@ -25,6 +25,7 @@ from .client import run_client
 from .comparison import compare
 from .cpus import allocate, parse_cpu_list, thread_siblings
 from .run import Run
+from .scale import ScaleRun, allocate_scale
 
 FLEET_DEFAULTS = {item.name: item.default for item in fields(FleetConfig)}
 LABEL = re.compile(r"[A-Za-z0-9._-]+")
@@ -65,6 +66,12 @@ def parser_for() -> argparse.ArgumentParser:
     compare.add_argument("--base-label", default="base")
     compare.add_argument("--branch-label", default="branch")
     compare.add_argument("--runs", type=int, default=3)
+    scale = commands.add_parser(
+        "scale", parents=[shared], help="several routers without a lease on shared engines"
+    )
+    scale.add_argument("--router-src", required=True, type=Path)
+    scale.add_argument("--routers", type=int, required=True)
+    scale.add_argument("--label", default="scale")
     offer = commands.add_parser("client", help="one load client process")
     offer.add_argument("--base", required=True)
     offer.add_argument("--input-tokens", type=int, required=True)
@@ -119,11 +126,13 @@ def check(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
         parser.error("--rates and --duration must offer at least one request per rate")
     if args.out.exists():
         parser.error("--out must name a new directory")
-    labels = [args.label] if args.command == "run" else [args.base_label, args.branch_label]
+    labels = [args.base_label, args.branch_label] if args.command == "compare" else [args.label]
     if any(LABEL.fullmatch(label) is None for label in labels) or len(set(labels)) != len(labels):
         parser.error("labels must be distinct and use letters, digits, '.', '_' or '-'")
     if args.command == "compare" and args.runs < 1:
         parser.error("--runs must be at least 1")
+    if args.command == "scale" and args.routers < 1:
+        parser.error("--routers must be at least 1")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,10 +143,21 @@ def main(argv: list[str] | None = None) -> int:
     check(parser, args)
     args.out = args.out.resolve()
     try:
-        allocation = allocate(args.cpus, thread_siblings(args.cpus[0]), args.clients, args.engines)
+        if args.command == "scale":
+            siblings = {cpu: thread_siblings(cpu) for cpu in args.cpus[: args.routers]}
+            scaled = allocate_scale(args.cpus, siblings, args.routers, args.clients, args.engines)
+        else:
+            allocation = allocate(
+                args.cpus, thread_siblings(args.cpus[0]), args.clients, args.engines
+            )
     except (OSError, ValueError) as error:
         parser.error(str(error))
     try:
+        if args.command == "scale":
+            os.sched_setaffinity(0, {scaled.driver})
+            _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+            return asyncio.run(ScaleRun(args, args.out, scaled).execute())
         os.sched_setaffinity(0, {allocation.driver})
         _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))

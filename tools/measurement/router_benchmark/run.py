@@ -18,7 +18,7 @@ import httpx
 from tools.measurement import load_trial as trial
 from tools.measurement.simulated_engine import SIMULATED_VERSION
 
-from .client import sleep_until
+from .client import client_argv, sleep_until
 from .cpus import Allocation
 from .files import open_private, write_private
 from .fleet import Shape, engine_roles, write_fleet
@@ -294,30 +294,7 @@ class Run:
         requests = round(rate * duration)
         self.children.clients = {}
         for index, cpu in enumerate(self.allocation.clients):
-            argv = [
-                args.python,
-                "-m",
-                "tools.measurement.router_benchmark.cli",
-                "client",
-                "--base",
-                self.base,
-                "--input-tokens",
-                str(args.input_tokens),
-                "--output-tokens",
-                str(args.output_tokens),
-                "--rate",
-                repr(rate),
-                "--requests",
-                str(requests),
-                "--clients",
-                str(args.clients),
-                "--index",
-                str(index),
-                "--timeout",
-                repr(args.timeout),
-                "--out",
-                str(directory / f"client-{index}.jsonl"),
-            ]
+            argv = client_argv(args, self.base, rate, requests, index, directory)
             with open(directory / f"client-{index}.log", "xb") as log:
                 self.children.clients[str(index)] = self.children.spawn(
                     argv,

@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 import time
+from pathlib import Path
 
 import httpx
 import uvloop
@@ -80,3 +81,33 @@ def run_client(args: argparse.Namespace) -> int:
         args.input_tokens, args.output_tokens, args.requests, args.clients, args.index
     )
     return uvloop.run(offer_requests(args, bodies))
+
+
+def client_argv(
+    args: argparse.Namespace, base: str, rate: float, requests: int, index: int, directory: Path
+) -> list[str]:
+    """Command line of load client `index` for one offered rate against `base`."""
+    return [
+        args.python,
+        "-m",
+        "tools.measurement.router_benchmark.cli",
+        "client",
+        "--base",
+        base,
+        "--input-tokens",
+        str(args.input_tokens),
+        "--output-tokens",
+        str(args.output_tokens),
+        "--rate",
+        repr(rate),
+        "--requests",
+        str(requests),
+        "--clients",
+        str(args.clients),
+        "--index",
+        str(index),
+        "--timeout",
+        repr(args.timeout),
+        "--out",
+        str(directory / f"client-{index}.jsonl"),
+    ]
