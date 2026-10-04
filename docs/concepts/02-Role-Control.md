@@ -38,13 +38,31 @@ A departure is a change away from a split that has been stable, made when demand
 
 The confirmation span is `controller.reactive.step_s` multiplied by the sustained confirmation count. That count is the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`. By default, the span is 15 s.
 
+A departure reverses the role controller's recent moves when all of these are true as it starts:
+
+- The role controller moved at least one engine in the preceding `controller.reactive.window_s` plus `controller.reactive.evidence_span_s`.
+- Each of those moves went opposite the departure's direction.
+- The latest of those moves is at least `controller.reactive.evidence_span_s` old.
+
 The role controller starts a departure when all of these are true:
 
-- The split has been settled for at least `controller.reactive.evidence_span_s`.
+- The split has been settled for at least `controller.reactive.evidence_span_s`, or for one confirmation span less when the departure reverses the role controller's recent moves.
 - For prefill or decode, confirmation-span demand differs from window demand by more than `controller.reactive.demand_rise_tolerance` times whichever of the two is larger.
 - Based on confirmation-span demand, a split one engine away improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
 
-The first move toward that split needs one confirmation, and the source load must be at or below `controller.thresholds.shrink` based on confirmation-span demand. If the shift lasts longer than `controller.reactive.evidence_span_s`, the departure can keep moving engines in the same direction, still based on confirmation-span demand. All other moves are based on window demand.
+The role controller makes the first move toward that split only if both of these are true:
+
+- The move has one confirmation.
+- Based on confirmation-span demand, the source load is at or below `controller.thresholds.shrink`.
+
+While the shift lasts, a departure can keep moving engines in its direction based on confirmation-span demand:
+
+| Departure | Starting at                                           |
+| --------- | ----------------------------------------------------- |
+| Reversing | Its first move                                        |
+| Other     | `controller.reactive.evidence_span_s` after it starts |
+
+All other moves are based on window demand.
 
 Once a departure has moved an engine, the role controller blocks moves in the opposite direction until [the departure closes](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions), which is at most `controller.reactive.window_s` after it started.
 
