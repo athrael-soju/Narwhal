@@ -95,18 +95,19 @@ class NarwhalRouter:
             if spec.shared_device is not None
         }
         if shared_groups:
+            members: dict[str, list[str]] = {}
+            for iid, group in shared_groups.items():
+                members.setdefault(group, []).append(iid)
             self.profiles.bind_role_mix(
                 shared_groups,
                 lambda group: (
                     sum(
-                        inst.role is Role.PREFILL
-                        for iid, inst in self.monitor.instances.items()
-                        if shared_groups.get(iid) == group
+                        self.monitor.instances[iid].role is Role.PREFILL
+                        for iid in members.get(group, ())
                     ),
                     sum(
-                        inst.role is Role.DECODE
-                        for iid, inst in self.monitor.instances.items()
-                        if shared_groups.get(iid) == group
+                        self.monitor.instances[iid].role is Role.DECODE
+                        for iid in members.get(group, ())
                     ),
                 ),
                 lambda iid: self.monitor.instances[iid].role,

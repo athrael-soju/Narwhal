@@ -134,7 +134,13 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(events[1], RemovedBlocks((b"h1",), 0, "GPU"))
         self.assertIsInstance(events[2], CacheCleared)
         self.assertIsNone(events[3])
-        for payload in (b"\xc1", msgpack.packb({"events": []}), batch({"type": "BlockStored"})):
+        for payload in (
+            b"\xc1",
+            msgpack.packb({"events": []}),
+            batch({"type": "BlockStored"}),
+            batch(stored([b"h0"], [1, 2, 3, 4], lora_name=["adapter"])),
+            batch(stored([b"h0"], [1, 2, 3, 4], lora_name={"name": "adapter"})),
+        ):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 decode_batch(payload)
 

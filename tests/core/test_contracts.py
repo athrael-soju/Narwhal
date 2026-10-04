@@ -40,6 +40,18 @@ class ContractTests(unittest.TestCase):
         for field in ("schema", "schema_version"):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 versioned(JOURNAL, {field: 1})
+        with self.assertRaisesRegex(
+            ValueError, r"^journal body cannot replace schema, schema_version$"
+        ):
+            versioned(JOURNAL, {"schema_version": 1, "kind": "x", "schema": 1})
+        with self.assertRaisesRegex(ValueError, "cannot replace schema$"):
+            versioned("unknown", {"schema": 1})
+        with self.assertRaisesRegex(ValueError, "unknown interface contract"):
+            versioned("unknown", {"kind": "x"})
+        self.assertEqual(
+            list(versioned(JOURNAL, {"run": "r", "kind": "x"}).items()),
+            [("schema", "narwhal.journal"), ("schema_version", 1), ("run", "r"), ("kind", "x")],
+        )
         with self.assertRaises(ValueError):
             validate_any_document({}, ())
 

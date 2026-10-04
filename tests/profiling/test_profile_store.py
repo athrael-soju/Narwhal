@@ -1,16 +1,33 @@
 """Check persisted profile contracts, scoped aggregation and measured-domain limits."""
 
 import json
+import random
 import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from narwhal.config.model import SharedDeviceAllocation
 from narwhal.contracts import PROFILES, versioned
+from narwhal.observability.journal import RunJournal
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
+from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
-from tests.fixtures import profile
+from tests.fixtures import fleet, profile
+
+
+def colocated(iid: str, group: str, mix: tuple[int, int], role: str, **changes) -> Profile:
+    """Return a role-mix variant of the shared fixture row."""
+    return replace(
+        profile(iid, **changes),
+        colocated_group=group,
+        colocated_target_role=role,
+        colocated_prefill_engines=mix[0],
+        colocated_decode_engines=mix[1],
+        colocated_prefill_rps=1.0,
+        colocated_decode_rps=1.0,
+    )
 
 
 class ProfileStoreTests(unittest.TestCase):
@@ -157,3 +174,89 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual(restored.profiles_for_split(["e0"], 3, 0), ())
         mix = (2, 1)
         self.assertEqual(restored.get("e0"), two_prefill)
+
+    def test_role_mix_engine_index_keeps_engine_sets_and_their_order(self):
+        """Engine sets derived from role-mix rows keep their members and iteration order."""
+        rng = random.Random(11)
+        store = ProfileStore(self.path)
+        groups = {f"e{index}": f"gpu-{index % 3}" for index in range(40)}
+        # e0 and e1 keep only standalone rows in two different groups.
+        store.put(profile("e0"))
+        store.put(profile("e1", tpot_intercept=0.002))
+        for _ in range(160):
+            iid = rng.choice(list(groups)[2:])
+            cost = {"tpot_intercept": rng.uniform(0.001, 0.003)}
+            if rng.random() < 0.3:
+                store.put(profile(iid, **cost))
+            else:
+                mix = rng.choice(((1, 1), (2, 1)))
+                role = rng.choice(("prefill", "decode"))
+                store.put(colocated(iid, groups[iid], mix, role, **cost))
+        for loaded in (store, ProfileStore(self.path)):
+            loaded.bind_role_mix(groups, lambda group: (1, 1), lambda iid: Role.PREFILL)
+            rebuilt = {key[0] for key in loaded._by_mix}
+            self.assertEqual(list(loaded._mix_iids), list(rebuilt))
+            stored = set(loaded._by_id) | rebuilt
+            self.assertEqual(list(set(loaded._by_id) | loaded._mix_iids), list(stored))
+            self.assertEqual(len(loaded), len(stored))
+            configured = {f"e{index}" for index in range(0, 50, 2)}
+            self.assertEqual(
+                loaded.engine_set_diff(configured),
+                (sorted(configured - stored), sorted(stored - configured)),
+            )
+            rows = [row for iid in dict.fromkeys(stored) if (row := loaded.get(iid)) is not None]
+            self.assertEqual(loaded._rows_for(None), rows)
+            self.assertGreater(len(rows), 1)
+            self.assertEqual(
+                loaded.mean_token_interval(10),
+                sum(row.token_interval(10) for row in rows) / len(rows),
+            )
+            mixed = sorted(rebuilt, key=lambda iid: groups[iid])
+            self.assertEqual(loaded.profiles_for_split([mixed[0], mixed[-1], "e0"], 1, 1), ())
+            self.assertEqual(
+                loaded.profiles_for_split(["e0", "e1"], 1, 1),
+                (loaded._by_id["e0"], loaded._by_id["e1"]),
+            )
+
+
+class RoleMixBindingTests(unittest.IsolatedAsyncioTestCase):
+    """The router reports each shared-device group's live role mix to the profile store."""
+
+    async def test_role_mix_counts_each_group_from_live_engine_roles(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder), engines=("e0", "e1", "e2", "e3", "e4", "e5"))
+            devices = {"e0": "gpu-0", "e3": "gpu-0", "e4": "gpu-0", "e1": "gpu-1", "e5": "gpu-1"}
+            cfg.engines = [
+                replace(
+                    spec,
+                    shared_device=SharedDeviceAllocation(
+                        devices[spec.iid], f"uuid-{devices[spec.iid]}", 0.3, 0.3
+                    ),
+                )
+                if spec.iid in devices
+                else spec
+                for spec in cfg.engines
+            ]
+            router = NarwhalRouter(cfg, RunJournal(Path(folder) / "journal.jsonl"))
+            self.addAsyncCleanup(router.engines.aclose)
+        mix_for_group = router.profiles._mix_for_group
+        assert mix_for_group is not None
+
+        def counted(group: str) -> tuple[int, int]:
+            members = [
+                inst for iid, inst in router.monitor.instances.items() if devices.get(iid) == group
+            ]
+            return (
+                sum(inst.role is Role.PREFILL for inst in members),
+                sum(inst.role is Role.DECODE for inst in members),
+            )
+
+        self.assertEqual(
+            [mix_for_group(group) for group in ("gpu-0", "gpu-1", "gpu-x")],
+            [(1, 2), (1, 1), (0, 0)],
+        )
+        for iid, role in (("e3", Role.PREFILL), ("e1", Role.DECODE), ("e2", Role.DECODE)):
+            router.monitor.instances[iid].role = role
+            for group in ("gpu-0", "gpu-1", "gpu-x"):
+                self.assertEqual(mix_for_group(group), counted(group))
+        self.assertEqual([mix_for_group("gpu-0"), mix_for_group("gpu-1")], [(2, 1), (0, 2)])

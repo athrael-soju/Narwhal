@@ -58,7 +58,9 @@ def resident(narwhal: NarwhalRouter, count: int, *, tag: str) -> list[tuple[str,
     placed = []
     for index in range(count):
         inst = decode[index % len(decode)]
-        request = Request(f"{tag}{index}", 512, phase=Phase.DECODE, output_len=index % 256)
+        request = Request(
+            f"{tag}{index}", 512, phase=Phase.DECODE, output_len=index % 256, wanted_len=256
+        )
         narwhal.monitor.dispatched(inst.iid, request)
         placed.append((inst.iid, request.rid))
     return placed
@@ -117,9 +119,15 @@ def measure(out: Path, calls: int, rounds: int) -> list[dict]:
 
     for engines in (8, 32):
         narwhal = router(out / f"place-{engines}", engines, engines // 4)
-        request = Request("q", 512)
+        scheduler = narwhal.scheduler
+        # Every engine has drift history, and the request carries cache evidence.
+        for iid in narwhal.monitor.instances:
+            scheduler.health.note(iid, 1.0)
+        scheduler.recheck_cache_evidence = None
+        prefill = [i.iid for i in narwhal.monitor.instances.values() if i.role.value == "prefill"]
+        request = Request("q", 512, cached_tokens=dict.fromkeys(prefill, 256))
         value = per_call_us(
-            partial(narwhal.scheduler.schedule, request), calls=max(1, calls // 50), rounds=rounds
+            partial(scheduler.schedule, request), calls=max(1, calls // 50), rounds=rounds
         )
         row("schedule (prefill)", f"{engines} engines", value)
     return rows
