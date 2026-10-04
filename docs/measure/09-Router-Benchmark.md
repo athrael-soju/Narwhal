@@ -1,10 +1,10 @@
 ---
-description: Measure relayed frames per router CPU-second for one Narwhal router process against simulated engines.
+description: Measure relayed frames per router CPU-second for Narwhal router processes against simulated engines.
 ---
 
 # Benchmarking the router
 
-The router benchmark measures streamed frames relayed per CPU-second of one router process, with simulated engines serving the fleet.
+The router benchmark measures streamed frames relayed per CPU-second of one router process, with simulated engines serving the fleet. The `scale` command runs several router processes against one set of simulated engines.
 
 A relayed frame is a token-bearing `data:` event a client receives, counted as [`token_events`](04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) in each client row.
 
@@ -16,7 +16,7 @@ Router CPU seconds are the router process's user and system time from `/proc/<pi
 | --- | --- |
 | Host | Linux with `/proc` and `/sys/devices/system/cpu` |
 | Python environment | `make setup`, which installs `uvloop`, `httptools` and `httpx` |
-| CPUs | `2 + --clients + --engines`, plus the router CPU's SMT siblings listed in `--cpus` |
+| CPUs | `2 + --clients + --engines` for `run` and `compare`, or `1 + --routers + --clients + --engines` for `scale`, plus the router CPUs' SMT siblings listed in `--cpus` |
 | Router source | A directory holding the `narwhal` package, such as `src` |
 | Open files | The driver raises its soft open-file limit to the hard limit |
 
@@ -30,7 +30,7 @@ Each engine answers these routes:
 | --- | --- |
 | `GET /health` | HTTP 200 with an empty body |
 | `GET /version` | `{"version":"simulated"}` |
-| `GET /metrics` | `process_start_time_seconds` and `simulated_engine_late_ticks_total` |
+| `GET /metrics` | The metrics in [Engine metrics](#engine-metrics) |
 | `POST /tokenize` | `count`, `max_model_len`, `tokens` and `token_strs` |
 | `POST /v1/completions` with `stream: false` | One completion after `--prefill-seconds`, with `kv_transfer_params` for a remote-decode request |
 | `POST /v1/completions` with `stream: true` | Paced server-sent events for `max_tokens` tokens |
@@ -60,6 +60,16 @@ These settings pace each stream:
 | `--frames-per-write` | Token frames per socket write, one HTTP chunk per frame |
 | Tick period | `--frames-per-write` × `--token-interval` |
 | Late tick | A tick that starts one tick period or more after its scheduled time, counted in `simulated_engine_late_ticks_total` |
+
+### Engine metrics
+
+| Metric | Type | Value |
+| --- | --- | --- |
+| `process_start_time_seconds` | Gauge | Engine start time in Unix seconds |
+| `simulated_engine_late_ticks_total` | Counter | Late ticks |
+| `simulated_engine_active_streams{phase="prefill"}` | Gauge | Prefill requests in progress |
+| `simulated_engine_active_streams{phase="decode"}` | Gauge | Decode streams in progress |
+| `simulated_engine_peak_streams{phase="prefill"}`, `simulated_engine_peak_streams{phase="decode"}` | Gauge | Most requests of the phase in progress at once since the engine started |
 
 ### Running one engine
 
@@ -160,12 +170,99 @@ Runs alternate base and branch for `--runs` rounds, each with fresh processes.
 
 `compare` ends at the first run that exits with `1`.
 
+## Running several routers
+
+`scale` starts `--routers` router processes against one set of simulated engines. Each router runs its own role controller from its own state file.
+
+1. Replace `CPU_LIST` in the next command with CPUs reserved for the benchmark, in the count given in [Requirements](#requirements).
+2. Run a sweep into a new `--out` directory:
+
+    ```bash
+    .venv/bin/python -m tools.measurement.router_benchmark.cli scale \
+      --router-src src \
+      --routers 2 \
+      --cpus CPU_LIST \
+      --engines 16 \
+      --prefill-engines 4 \
+      --clients 16 \
+      --rates 80,100,120 \
+      --out runs/router-benchmark/scale-2
+    ```
+
+3. Read `runs/router-benchmark/scale-2/report.txt`.
+
+To compare router counts, run `scale` once per `--routers` value with the same engines, clients and CPU list.
+
+| Setting | Value |
+| --- | --- |
+| Router `i` | CPU `i` in `--cpus`, its own port, `fleet-<i>.json`, `journal-<i>.jsonl` and `state-<i>.json` as `recovery.state_path` |
+| `controller.advisory` | `false` in each `fleet-<i>.json` |
+| Client `i` | Sends its offers to router `i` mod `--routers` |
+| First measured rate | The first entry in `--rates` |
+
+### Measuring each scale rate
+
+For each rate:
+
+1. Each client builds its requests and reports ready.
+2. The driver reads each router's CPU time, `/metrics` and `admission` counters.
+3. Each client sends its offers as in [Measuring each rate](#measuring-each-rate).
+4. From `start + --output-tokens × --token-interval` to `start + --duration`, the driver samples about once per second:
+    - each router's `pools` and `resident` from [`/narwhal/state`](../http-api/05-Live-State.md#pool-and-slo-fields)
+    - each engine's `simulated_engine_active_streams`
+5. The driver reads each router's CPU time and `/metrics` at the start and end of that window.
+6. The driver waits for each router to drain.
+7. The driver reads each router's `admission` counters again.
+
+The sweep ends after the first rate that meets one of these stop conditions:
+
+| Condition | `stopped_by` |
+| --- | --- |
+| A client process exits with a failure status | `client_failed` |
+| `saturation_rejections` above 0 | `saturation` |
+
+### Scale report fields
+
+`report.json` holds these fields:
+
+| Field | Contents |
+| --- | --- |
+| `kind`, `version` | `narwhal-router-scale` and `1` |
+| `label` | `--label` |
+| `routers` | `--routers` |
+| `router_source` | `meta.source` from the routers' journals |
+| `settings` | Run options |
+| `allocation` | CPUs of `routers`, `router_siblings`, `clients`, `engines` and `driver` |
+| `rates` | One row per measured rate |
+| `stopped_by` | Stop condition code of the last measured rate, otherwise `null` |
+| `point` | `offered_rps`, `relayed_frames_per_s`, `requests_per_s` and `role_disagreement_s` of the highest rate with zero `saturation_rejections`, otherwise `null` |
+
+Each rate row holds these fields:
+
+| Field | Definition |
+| --- | --- |
+| `offered_rps`, `offered`, `completed`, `outcomes` | As in [Report fields](#report-fields) |
+| `relayed_frames`, `span_s`, `relayed_frames_per_s`, `requests_per_s` | As in [Report fields](#report-fields), over all routers |
+| `saturation_rejections` | Sum over routers of the change in `admission.rejected` from the read before the first offer to the read after the drain |
+| `refused` | Sum over routers of the change in `admission.refused` over the same reads |
+| `routers` | Each router's `index`, steady-window `cpu_s`, `busy_share`, `saturation_rejections` and `refused` |
+| `residents` | Over the samples, the mean of the routers' summed `resident.<iid>.decode` (`mean_router_decode`), the mean of the engines' decode streams (`mean_engine_decode`), and the mean over engines of the absolute difference between the two (`mean_abs_gap`) |
+| `mean_engine_decode_streams` | Mean over samples of the engines' summed decode streams |
+| `max_engine_decode_streams` | Largest decode-stream count of one engine in any sample |
+| `role_disagreement_s` | Samples in which the routers' `pools` differ |
+| `samples` | Samples taken in the steady window |
+
+`busy_share` is the router's steady-window rate of `narwhal_event_loop_busy_seconds_total` when the router exports it, otherwise `null`.
+
+`scale` writes `fleet-<i>.json`, `journal-<i>.jsonl`, `state-<i>.json` and `router-<i>.log` for each router. Other files follow [Output files](#output-files).
+
 ## Options
 
 | Flag | Default | Meaning |
 | --- | :---: | --- |
-| `--router-src` | required for `run` | Directory holding the router's `narwhal` package |
-| `--label` | `router` | Version label in the report |
+| `--router-src` | required for `run` and `scale` | Directory holding the router's `narwhal` package |
+| `--label` | `router`, or `scale` for `scale` | Version label in the report |
+| `--routers` | required for `scale` | Router processes |
 | `--out` | required | New output directory |
 | `--python` | the driver's interpreter | Interpreter for the router, engines and clients |
 | `--cpus` | required | CPU list |
@@ -178,7 +275,7 @@ Runs alternate base and branch for `--runs` rounds, each with fresh processes.
 | `--prefill-seconds` | `0.005` | Prefill time per request in seconds |
 | `--rates` | required | Ascending offered rates in requests per second |
 | `--duration` | `60` | Offer window per rate in seconds |
-| `--warmup` | `10` | Warmup seconds at the first rate |
+| `--warmup` | `10` | Warmup seconds at the first rate of `run` and `compare` |
 | `--clients` | `8` | Client processes |
 | `--ttft-slo` | `2.0` | Fleet TTFT target in seconds |
 | `--tpot-slo` | `0.1` | Fleet TPOT target in seconds |
@@ -194,7 +291,7 @@ Accepted values:
 | --- | --- |
 | `--token-interval`, `--duration`, `--warmup`, `--ttft-slo`, `--tpot-slo`, `--timeout`, `--drain-timeout` | Positive finite numbers |
 | `--prefill-seconds` | `0` or more, finite |
-| `--input-tokens`, `--output-tokens`, `--frames-per-write`, `--clients`, `--runs` | `1` or more |
+| `--input-tokens`, `--output-tokens`, `--frames-per-write`, `--clients`, `--runs`, `--routers` | `1` or more |
 | `--tpot-slo` | Above 2 × `--token-interval` |
 | `--frames-per-write` × `--token-interval` | Below 2.5 s |
 | `--duration` | Above `--output-tokens` × `--token-interval` |
@@ -395,6 +492,8 @@ The driver assigns the `--cpus` entries in this order:
 | 3 | Clients, on the next `--clients` CPUs |
 | 4 | Simulated engines, on the next `--engines` CPUs |
 | 5 | Driver, on the last remaining CPU in `--cpus` |
+
+`scale` places its routers on the first `--routers` CPUs in `--cpus` and assigns the other processes in the same order.
 
 ## Exit codes
 

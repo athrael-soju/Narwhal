@@ -20,6 +20,8 @@ import httptools
 
 SIMULATED_VERSION = "simulated"
 LATE_TICKS_METRIC = "simulated_engine_late_ticks_total"
+ACTIVE_METRIC = "simulated_engine_active_streams"
+PEAK_METRIC = "simulated_engine_peak_streams"
 MAX_MODEL_LEN = 131072
 BLOCK_TOKENS = 16
 LAST_CHUNK = b"0\r\n\r\n"
@@ -166,6 +168,8 @@ class SimulatedEngine:
         self.prefill_s = prefill_s
         self.process_start_time_seconds = time.time()
         self.late_ticks = 0
+        self.prefilling = 0
+        self.peak = {"prefill": 0, "decode": 0}
         self.next_tick = 0.0
         self.url = ""
         self.port = 0
@@ -236,7 +240,12 @@ class SimulatedEngine:
         )
 
     async def prefill(self, rid: str, payload: dict[str, Any]) -> Reply:
-        await asyncio.sleep(self.prefill_s)
+        self.prefilling += 1
+        self.peak["prefill"] = max(self.peak["prefill"], self.prefilling)
+        try:
+            await asyncio.sleep(self.prefill_s)
+        finally:
+            self.prefilling -= 1
         prompt = len(tokenize(payload))
         reply: dict[str, Any] = {
             "id": f"cmpl-{rid}",
@@ -280,10 +289,19 @@ class SimulatedEngine:
             "after their scheduled time.\n"
             f"# TYPE {LATE_TICKS_METRIC} counter\n"
             f"{LATE_TICKS_METRIC} {self.late_ticks}\n"
+            f"# HELP {ACTIVE_METRIC} Prefill and decode requests in progress.\n"
+            f"# TYPE {ACTIVE_METRIC} gauge\n"
+            f'{ACTIVE_METRIC}{{phase="prefill"}} {self.prefilling}\n'
+            f'{ACTIVE_METRIC}{{phase="decode"}} {len(self.streams)}\n'
+            f"# HELP {PEAK_METRIC} Most prefill and decode requests in progress at once.\n"
+            f"# TYPE {PEAK_METRIC} gauge\n"
+            f'{PEAK_METRIC}{{phase="prefill"}} {self.peak["prefill"]}\n'
+            f'{PEAK_METRIC}{{phase="decode"}} {self.peak["decode"]}\n'
         ).encode()
 
     def attach(self, stream: DecodeStream, transport: asyncio.WriteTransport) -> None:
         self.streams[stream] = transport
+        self.peak["decode"] = max(self.peak["decode"], len(self.streams))
 
     def drop(self, stream: DecodeStream) -> None:
         self.streams.pop(stream, None)
