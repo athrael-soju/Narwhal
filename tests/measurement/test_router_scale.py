@@ -1,9 +1,14 @@
 """Check the multi-router scale run's allocation, sampling summaries and report."""
 
 import io
+import json
+import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from tools.measurement.router_benchmark import cli as bench_cli
 from tools.measurement.router_benchmark import scale
@@ -154,6 +159,53 @@ class SummaryTests(unittest.TestCase):
         text = scale.scale_text(doc)
         self.assertIn("5 5.0 0.50 0 1 0.25,0.25 0", text)
         self.assertIn("point: 5 rps, 5.0 frames/s, 0.50 requests/s", text)
+
+
+class SweepStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_failed_router_sample_stops_the_sweep_and_keeps_the_report(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        out = Path(directory.name) / "scale"
+        args = bench_cli.parser_for().parse_args(
+            [
+                *("scale", "--router-src", "src", "--routers", "2", "--cpus", "0-40"),
+                *("--rates", "5,10", "--out", str(out)),
+            ]
+        )
+        allocation = scale.allocate_scale(list(range(41)), {}, 2, 8, 8)
+        row = {
+            "offered_rps": 5.0,
+            "relayed_frames_per_s": 5.0,
+            "requests_per_s": 0.5,
+            "saturation_rejections": 0,
+            "refused": 0,
+            "routers": [],
+            "role_disagreement_s": 0,
+        }
+
+        async def offer(self, http, rate, path):
+            path.mkdir(parents=True)
+            if rate == 10.0:
+                raise httpx.ReadTimeout("")
+            return [], [], {}, {"0": 0}, 1.0
+
+        run = scale.ScaleRun(args, out, allocation)
+        with (
+            patch.object(run.engines_run, "start_engines", new=AsyncMock()),
+            patch.object(scale.ScaleRun, "start_routers", new=AsyncMock(return_value="sha")),
+            patch.object(scale.ScaleRun, "offer", new=offer),
+            patch.object(scale, "write_fleet"),
+            patch.object(scale, "scale_row", return_value=row),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(await run.execute(), 0)
+        report = json.loads((out / "report.json").read_text())
+        self.assertEqual(
+            (report["stopped_by"], report["stop_detail"]), ("sample_failed", "ReadTimeout")
+        )
+        self.assertEqual([r["offered_rps"] for r in report["rates"]], [5.0])
+        self.assertEqual(report["point"]["offered_rps"], 5.0)
+        self.assertIn("stopped_by: sample_failed (ReadTimeout)\n", scale.scale_text(report))
 
 
 class OptionTests(unittest.TestCase):

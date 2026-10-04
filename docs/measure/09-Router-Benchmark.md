@@ -220,6 +220,7 @@ The sweep ends after the first rate that meets one of these stop conditions:
 | --- | --- |
 | A client process exits with a failure status | `client_failed` |
 | `saturation_rejections` above 0 | `saturation` |
+| A driver request for router state or metrics fails during the rate | `sample_failed` |
 
 ### Scale report fields
 
@@ -235,6 +236,7 @@ The sweep ends after the first rate that meets one of these stop conditions:
 | `allocation` | CPUs of `routers`, `router_siblings`, `clients`, `engines` and `driver` |
 | `rates` | One row per measured rate |
 | `stopped_by` | Stop condition code of the last measured rate, otherwise `null` |
+| `stop_detail` | Exception name and message for `sample_failed`, otherwise `null` |
 | `point` | `offered_rps`, `relayed_frames_per_s`, `requests_per_s` and `role_disagreement_s` of the highest rate with zero `saturation_rejections`, otherwise `null` |
 
 Each rate row holds these fields:

@@ -185,7 +185,8 @@ def scale_text(doc: dict) -> str:
         else f"point: {point['offered_rps']:g} rps, {point['relayed_frames_per_s']:.1f} frames/s, "
         f"{point['requests_per_s']:.2f} requests/s"
     )
-    lines.append(f"stopped_by: {doc['stopped_by'] or '-'}")
+    detail = f" ({doc['stop_detail']})" if doc.get("stop_detail") else ""
+    lines.append(f"stopped_by: {doc['stopped_by'] or '-'}{detail}")
     return "\n".join(lines) + "\n"
 
 
@@ -228,6 +229,7 @@ class ScaleRun:
         )
         rows: list[dict] = []
         stopped_by = None
+        stop_detail = None
         router_source = None
         async with httpx.AsyncClient(trust_env=False, timeout=10.0) as http:
             try:
@@ -236,7 +238,13 @@ class ScaleRun:
                 router_source = await self.start_routers(http, fleet)
                 for rate in args.rates:
                     directory = out / "rates" / format(rate, "g")
-                    rows_, samples, edges, exits, window = await self.offer(http, rate, directory)
+                    try:
+                        offered = await self.offer(http, rate, directory)
+                    except httpx.HTTPError as error:
+                        stopped_by = "sample_failed"
+                        stop_detail = f"{type(error).__name__}: {error}".rstrip(": ")
+                        break
+                    rows_, samples, edges, exits, window = offered
                     row = scale_row(
                         rate, round(rate * args.duration), rows_, samples, edges, window
                     )
@@ -261,6 +269,7 @@ class ScaleRun:
             "allocation": asdict(self.allocation),
             "rates": rows,
             "stopped_by": stopped_by,
+            "stop_detail": stop_detail,
             "point": select_scale_point(rows),
         }
         trial.private_json(out / "report.json", report)
