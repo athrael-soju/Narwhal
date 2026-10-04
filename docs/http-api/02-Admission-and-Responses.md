@@ -55,6 +55,18 @@ The router keeps these admission counters:
 
 Streaming deltas use the engine's response shape under the [token-ID rules](#token-identity-and-output-accounting).
 
+The router relays the engine stream with these rules:
+
+| Engine stream                         | Client stream                                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Line ends                             | CRLF, CR and LF each end an SSE line                                                                 |
+| `data:` event                         | One client event in compact JSON, with token fields removed unless the client set `return_token_ids` |
+| Malformed `data:` payload             | Relayed as received, counted as zero tokens                                                          |
+| `data:` events before the first token | Held until the first token, up to 64 events and `serving.max_response_bytes`                         |
+| Other lines before the first token    | Dropped                                                                                              |
+| Other lines after the first token     | Relayed, each as its own event                                                                       |
+| One transport read                    | One client write holding that read's events                                                          |
+
 ### Non-streaming assembly
 
 Non-streaming responses assemble the engine stream as follows:

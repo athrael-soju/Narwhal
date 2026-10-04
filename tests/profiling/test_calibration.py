@@ -17,6 +17,7 @@ import httpx
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
@@ -88,8 +89,8 @@ class RecordingClient:
             await asyncio.sleep(self.delay("decode", handoff.url, url))
             if (error := self.fail(handoff.url, url)) is not None:
                 raise error
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
         finally:
             self.flight["decode"][slot] -= 1
 
@@ -334,8 +335,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_written_calibration_validates_and_labels_engines(self):
         async def decode(*args, **kwargs):
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
 
         code, document = await self._run_with_decode(decode, samples=100)
         self.assertEqual((code, document["status"]), (0, "complete"))
@@ -517,8 +518,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 raise
 
         async def decode(*args, **kwargs):
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
 
         async with asyncio.timeout(2):
             with self.assertRaises(KeyError):
@@ -542,8 +543,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 except asyncio.CancelledError:
                     cancelled.append(url)
                     raise
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
 
         async with asyncio.timeout(2):
             with self.assertRaises(KeyError):
@@ -557,8 +558,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         async def decode(url, endpoint, body, *args, **kwargs):
             bodies.append(body)
             await asyncio.sleep(0.03)
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
 
         code, document = await self._run_with_decode(decode)
         self.assertEqual(code, 1)  # Fewer than 100 samples cannot qualify a fleet.
@@ -575,8 +576,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_relaunch_during_calibration_marks_the_generation_changed(self):
         async def decode(*args, **kwargs):
-            yield TOKEN
-            yield "data: [DONE]"
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
 
         starts = {"e0": (100.0, 101.0), "e3": (200.0, 201.0)}
         before = [
@@ -596,7 +597,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stalled_handoff_is_kept_out_of_timing_samples(self):
         async def decode(*args, **kwargs):
             raise EngineError("decode", "http://decode", 504, FIRST_OUTPUT_DETAIL)
-            yield ""
+            yield []
 
         code, document = await self._run_with_decode(decode)
         self.assertEqual(code, 1)
@@ -608,7 +609,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.decode_read_timeout_s = 0
 
         async def decode(*args, **kwargs):
-            yield TOKEN
+            yield [parse_event(TOKEN)]
             await asyncio.Event().wait()
 
         async with asyncio.timeout(2):

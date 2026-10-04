@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from typing import Any, TypeGuard
 from uuid import uuid4
@@ -21,7 +21,7 @@ from ..types import (
 )
 from .connector import KvConnector, NixlConnector, PrefillResult
 from .dialect import EngineDialect, VllmDialect
-from .stream import sse_error, sse_token_bearing
+from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
 
 
 class EngineError(RuntimeError):
@@ -391,8 +391,8 @@ class EngineClient:
         headers: dict[str, str],
         kv_params: PrefillResult | None,
         first_token_timeout_s: float | None = None,
-    ) -> AsyncGenerator[str, None]:
-        """Stream raw SSE lines from the decode leg.
+    ) -> AsyncGenerator[list[SseEvent], None]:
+        """Stream the decode leg's SSE events, one batch per transport read.
 
         The first-token deadline covers opening the stream; the read timeout
         bounds chunk gaps after the first token.
@@ -432,19 +432,18 @@ class EngineClient:
                 first = False  # Error bodies retain the ordinary transport-gap bound.
                 detail = (await r.aread()).decode("utf-8", "replace")
                 raise EngineError("decode", url, r.status_code, detail)
-            lines = r.aiter_lines()
+            batches = await stack.enter_async_context(aclosing(sse_batches(r.aiter_bytes())))
             metadata = 0  # pre-token frames that carried no token
-            done = False
             while True:
                 try:
                     if first and deadline is not None:
                         remaining = deadline - asyncio.get_running_loop().time()
                         if remaining <= 0:
                             raise TimeoutError
-                        line = await asyncio.wait_for(anext(lines), timeout=remaining)
+                        batch = await asyncio.wait_for(anext(batches), timeout=remaining)
                     else:
                         try:
-                            line = await anext(lines)
+                            batch = await anext(batches)
                         except httpx.ReadTimeout as exc:
                             if first:
                                 raise
@@ -456,8 +455,6 @@ class EngineClient:
                                 )
                             raise EngineError("decode", url, 504, detail) from exc
                 except StopAsyncIteration:
-                    if done:
-                        return
                     raise EngineError("decode", url, 502, STREAM_UNTERMINATED_DETAIL) from None
                 except TimeoutError as exc:
                     raise EngineError(
@@ -466,23 +463,29 @@ class EngineClient:
                         504,
                         _first_token_detail(budget_s, metadata),
                     ) from exc
-                if line:
-                    upstream_error = sse_error(line)
+                relayed: list[SseEvent] = []
+                for event in batch:
+                    upstream_error = sse_error(event)
                     if upstream_error is not None:
+                        if relayed:
+                            yield relayed
                         status, detail = upstream_error
                         raise EngineError("decode", url, status, detail)
-                    if line.startswith("data:") and line[5:].strip() == "[DONE]":
+                    if event.done:
                         if first:
+                            if relayed:
+                                yield relayed
                             raise EngineError("decode", url, 502, STREAM_EMPTY_DETAIL)
-                        done = True
-                    elif first:
-                        if sse_token_bearing(line, self.dialect):
+                        relayed.append(event)
+                        yield relayed
+                        return
+                    if first:
+                        if sse_token_bearing(event, self.dialect):
                             first = False
                         else:
                             metadata += 1
-                    yield line
-                    if done:
-                        return
+                    relayed.append(event)
+                yield relayed
 
     async def probe_inference(
         self, url: str, *, prefill_url: str | None = None, deadline_s: float | None = None
@@ -573,12 +576,13 @@ class EngineClient:
                 r.stream = _GapBoundStream(
                     r.stream, lambda: None if not bearing else self._read_timeout
                 )
-                async for line in r.aiter_lines():
-                    if not bearing and sse_token_bearing(line, self.dialect):
-                        bearing = True
-                    if line.startswith("data:") and line[5:].strip() == "[DONE]":
-                        # The terminal marker is evidence only after output arrived.
-                        return ProbeLeg() if bearing else ProbeLeg(failed=LEG_STREAM)
+                async with aclosing(sse_events(r.aiter_bytes())) as events:
+                    async for event in events:
+                        if not bearing and sse_token_bearing(event, self.dialect):
+                            bearing = True
+                        if event.done:
+                            # The terminal marker is evidence only after output arrived.
+                            return ProbeLeg() if bearing else ProbeLeg(failed=LEG_STREAM)
                 return ProbeLeg(failed=LEG_STREAM)
         except httpx.PoolTimeout:
             return ProbeLeg(inconclusive=True)

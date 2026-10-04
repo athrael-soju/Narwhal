@@ -98,7 +98,7 @@ async def gate_consume(
                 prefill_seconds = time.monotonic() - started
                 started = decode_started = time.monotonic()
                 tokens = 0
-                async for line in client.decode(
+                async for batch in client.decode(
                     by_id[dst].url,
                     "/v1/completions",
                     attempt,
@@ -106,10 +106,13 @@ async def gate_consume(
                     params,
                     first_token_timeout_s=cfg.first_token_timeout_s,
                 ):
-                    count = sse_token_count(line)
-                    tokens += count
-                    if first_token_seconds is None and (count or sse_token_bearing(line, dialect)):
-                        first_token_seconds = time.monotonic() - started
+                    for event in batch:
+                        count = sse_token_count(event)
+                        tokens += count
+                        if first_token_seconds is None and (
+                            count or sse_token_bearing(event, dialect)
+                        ):
+                            first_token_seconds = time.monotonic() - started
                 decode_seconds = time.monotonic() - started
             record["first_token_seconds"] = first_token_seconds
             if evidence is not None:
