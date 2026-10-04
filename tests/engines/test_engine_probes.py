@@ -15,7 +15,7 @@ from narwhal.engines.client import (
     ProbeLeg,
     leg_failure_class,
 )
-from narwhal.engines.stream import sse_error
+from narwhal.engines.stream import parse_event, sse_error
 from narwhal.types import (
     LEG_CONNECTION,
     LEG_INFERENCE_STATUS,
@@ -276,7 +276,8 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(payload=payload):
                 self.assertEqual(
-                    sse_error("data: " + json.dumps({"error": payload})), (status, text)
+                    sse_error(parse_event("data: " + json.dumps({"error": payload}))),
+                    (status, text),
                 )
         self.responses["decode"] = httpx.Response(503, text="unavailable")
         with self.assertRaises(EngineError) as caught:

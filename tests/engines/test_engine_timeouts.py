@@ -72,8 +72,8 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def consume(self, budget=0.4):
         return [
-            line
-            async for line in self.client.decode(
+            event.line
+            async for batch in self.client.decode(
                 self.url,
                 "/v1/completions",
                 {"model": "stub", "prompt": "x"},
@@ -81,6 +81,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 first_token_timeout_s=budget,
             )
+            for event in batch
         ]
 
     async def test_first_token_budget_covers_response_headers(self):

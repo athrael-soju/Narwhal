@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
-from ..engines.stream import rewrite_sse, sse_token_bearing, sse_token_ids
+from ..engines.stream import SseEvent, rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
 from ..scheduling.scheduler.occupancy import decode_admits
 from ..types import Instance, Phase, Role
@@ -21,7 +21,7 @@ from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
 from .lifecycle import RequestExpired, RequestLifecycle
 from .records import forward_headers, refuse_request
-from .response import RequestStreamResponse
+from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
 
 if TYPE_CHECKING:
@@ -314,11 +314,11 @@ async def serve_request(
             await stream.aclose()
             return _failure_response(state)
         return RequestStreamResponse(stream, state, first=first)
-    chunks = [line async for line in stream]
+    events = [event async for batch in stream for event in batch.events]
     if state.outcome["error"] is not None:
         return _failure_response(state)
     try:
-        out = reassemble(chunks, endpoint=endpoint)
+        out = reassemble(events, endpoint=endpoint)
     except ValueError as exc:
         return _terminal_failure(state, exc)
     state.finish("completed")
@@ -341,7 +341,7 @@ async def _decode_attempt(
     endpoint: str,
     body: dict[str, Any],
     headers: dict[str, str],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[RelayBatch, None]:
     router = state.router
     # A lost router lease fences new prefills; a dispatched original may still decode.
     if router.cfg.engine_restart_policy == "whole_wave" and router.lifecycle_blocked:
@@ -351,8 +351,10 @@ async def _decode_attempt(
     state.phase = "decode"
     state.decode_attempts += 1
     router.decode_attempts += 1
+    dialect = router.engines.dialect
+    expose_token_ids = bool(body.get("return_token_ids"))
     engine_body = body
-    if router.engines.dialect.token_ids:
+    if dialect.token_ids:
         engine_body = {**body, "return_token_ids": True, "stream_interval": 1}
     upstream = router.engines.decode(
         prepared.decode.url,
@@ -363,53 +365,68 @@ async def _decode_attempt(
         first_token_timeout_s=router.cfg.first_token_timeout_s,
     )
     metadata: list[str] = []
+    held: list[SseEvent] = []
     metadata_bytes = 0
     began = router._clock()
     try:
         while True:
             try:
-                line = await state.wait(lambda: anext(upstream))
+                batch = await state.wait(lambda: anext(upstream))
             except StopAsyncIteration:
                 break
-            exact = router.engines.dialect.token_ids
-            ids = sse_token_ids(line) if exact else None
-            if exact and ids is None:
-                raise EngineError(
-                    "decode", prepared.decode.url, 502, "decode output lacks valid token_ids"
-                )
-            n = len(ids) if ids is not None else 0
-            progress = sse_token_bearing(line, router.engines.dialect)
-            if progress:
-                now = router._clock()
-                if state.first_at is None:
-                    state.first_at = now
-                state.last_at = now
-            for _ in range(n):
-                router.monitor.output_token(prepared.decode.iid, state.rid)
-            state.tokens += n
-            state.decode_tokens_observed += n
-            router.decode_tokens_observed += n
-            frame = rewrite_sse(line, expose_token_ids=bool(body.get("return_token_ids"))) + "\n\n"
-            if state.first_at is None:
-                # Before output commits the attempt, metadata buffers and keepalives drop.
-                if line.startswith("data:"):
-                    metadata_bytes += len(frame.encode())
-                    # Prompt token IDs can exceed 64 KiB; buffered metadata counts
-                    # against max_response_bytes.
-                    if (
-                        len(metadata) >= 64
-                        or metadata_bytes > router.cfg.serving.max_response_bytes
-                    ):
-                        raise ResponseLimitExceeded(
-                            "pre-output metadata exceeds serving.max_response_bytes "
-                            "or the 64-frame limit"
+            frames: list[str] = []
+            events: list[SseEvent] = []
+            try:
+                for event in batch:
+                    ids = sse_token_ids(event) if dialect.token_ids else None
+                    if dialect.token_ids and ids is None:
+                        raise EngineError(
+                            "decode",
+                            prepared.decode.url,
+                            502,
+                            "decode output lacks valid token_ids",
                         )
-                    metadata.append(frame)
-                continue
-            for prior in metadata:
-                yield prior
-            metadata.clear()
-            yield frame
+                    n = len(ids) if ids is not None else 0
+                    if sse_token_bearing(event, dialect):
+                        now = router._clock()
+                        if state.first_at is None:
+                            state.first_at = now
+                        state.last_at = now
+                    for _ in range(n):
+                        router.monitor.output_token(prepared.decode.iid, state.rid)
+                    state.tokens += n
+                    state.decode_tokens_observed += n
+                    router.decode_tokens_observed += n
+                    frame = rewrite_sse(event, expose_token_ids=expose_token_ids) + "\n\n"
+                    if state.first_at is None:
+                        # Before output commits the attempt, metadata buffers and keepalives drop.
+                        if event.line.startswith("data:"):
+                            metadata_bytes += len(frame.encode())
+                            # Prompt token IDs can exceed 64 KiB; buffered metadata counts
+                            # against max_response_bytes.
+                            if (
+                                len(metadata) >= 64
+                                or metadata_bytes > router.cfg.serving.max_response_bytes
+                            ):
+                                raise ResponseLimitExceeded(
+                                    "pre-output metadata exceeds serving.max_response_bytes "
+                                    "or the 64-frame limit"
+                                )
+                            metadata.append(frame)
+                            held.append(event)
+                        continue
+                    frames.extend(metadata)
+                    events.extend(held)
+                    metadata.clear()
+                    held.clear()
+                    frames.append(frame)
+                    events.append(event)
+            except Exception:
+                if frames:
+                    yield RelayBatch("".join(frames), events)
+                raise
+            if frames:
+                yield RelayBatch("".join(frames), events)
         router.scheduler.record_answer(prepared.decode.iid, "decode")
     except Exception as exc:
         _failed_leg(state, prepared.decode, exc, decode=True, started=began)
@@ -429,26 +446,26 @@ async def run_decode(
     headers: dict[str, str],
     *,
     streaming: bool = False,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[RelayBatch, None]:
     """Retry complete attempts until output commits; settle the original once."""
     try:
         while True:
-            chunks: list[str] = []
+            buffered: list[RelayBatch] = []
             size = 0
             attempt = _decode_attempt(state, prepared, endpoint, body, headers)
             try:
-                async for frame in attempt:
+                async for batch in attempt:
                     if streaming:
                         state.output_started = True
                         state.request.cache_identities = {}
-                        yield frame
+                        yield batch
                     else:
-                        size += len(frame.encode())
+                        size += len(batch.text.encode())
                         if size > state.router.cfg.serving.max_response_bytes:
                             raise ResponseLimitExceeded(
                                 "response exceeds serving.max_response_bytes"
                             )
-                        chunks.append(frame)
+                        buffered.append(batch)
             except Exception as exc:
                 state.release()
                 if not await state.retry(exc):
@@ -458,8 +475,8 @@ async def run_decode(
             finally:
                 await attempt.aclose()
             if not streaming:
-                for frame in chunks:
-                    yield frame
+                for batch in buffered:
+                    yield batch
             # A buffered response succeeds only after endpoint-aware assembly.
             if streaming:
                 state.finish("completed")
@@ -470,7 +487,7 @@ async def run_decode(
     except Exception as exc:
         _terminal_failure(state, exc)
         if streaming:
-            yield (
+            yield RelayBatch(
                 "data: "
                 + json.dumps(
                     {

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from ..engines.stream import SseEvent
 
 _INTEGER_FIELDS = ("n", "best_of", "max_tokens", "max_completion_tokens")
 # Request fields that change the prefilled tokens outside the counted render.
@@ -144,10 +145,10 @@ def _chat_delta(
             _strings(tool["function"], function, ("name", "arguments"))
 
 
-def reassemble(lines: list[str], *, endpoint: str) -> dict[str, Any]:
+def reassemble(events: list[SseEvent], *, endpoint: str) -> dict[str, Any]:
     """Fold validated SSE into the response shape of the requested endpoint.
 
-    Token IDs left in the client-filtered chunks survive the merge.
+    Token IDs left in the client-filtered events survive the merge.
     """
     chat = endpoint == "/v1/chat/completions"
     merged: dict[str, Any] = {"index": 0, "finish_reason": "stop"}
@@ -156,16 +157,12 @@ def reassemble(lines: list[str], *, endpoint: str) -> dict[str, Any]:
     text: list[str] = []
     token_ids: list[int] = []
     out: dict[str, Any] = {}
-    for line in lines:
-        raw = line.strip()
-        if not raw.startswith("data:"):
-            continue
-        payload = raw[5:].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        obj = json.loads(payload)
-        if not isinstance(obj, dict):
+    for event in events:
+        if event.malformed:
             raise ValueError("non-streaming SSE data must be an object")
+        obj = event.data
+        if obj is None:
+            continue
         out.update(
             {k: v for k, v in obj.items() if k not in ("choices", "object") and v is not None}
         )

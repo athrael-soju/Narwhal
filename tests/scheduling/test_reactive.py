@@ -1040,8 +1040,15 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         fleet.profiles.put(replace(fleet.profiles.get("e1"), tpot_intercept=0.0001))
         for index in range(5):
             response = await request(f"old{index}")
-            frame = await anext(response.body_iterator)
-            self.assertEqual(json.loads(frame.removeprefix("data: "))["choices"][0]["text"], "0")
+            # The engine's one transport read reaches the client as one write.
+            frames = [
+                frame for frame in (await anext(response.body_iterator)).split("\n\n") if frame
+            ]
+            self.assertEqual(frames[-1], "data: [DONE]")
+            texts = [
+                json.loads(f.removeprefix("data: "))["choices"][0]["text"] for f in frames[:-1]
+            ]
+            self.assertEqual(texts, ["0", "1", "2"])
         first, cancelled = streams[0], streams[1]
         self.assertEqual(first.lifecycle.decode_iid, "e1")
         self.assertEqual(cancelled.lifecycle.decode_iid, "e1")
@@ -1064,8 +1071,6 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fresh.lifecycle.prefill_iid, "e1")
         self.assertNotEqual(fresh.lifecycle.decode_iid, "e1")
         self.assertEqual(len(fleet.scheduler.roles.flips), 1)
-        frame = await anext(first.body_iterator)
-        self.assertEqual(json.loads(frame.removeprefix("data: "))["choices"][0]["text"], "1")
         self.assertEqual(first.lifecycle.decode_iid, "e1")
         fleet.scheduler.roles.settle_drains()
         self.assertIsNone(flip.drained_s)
@@ -1080,7 +1085,8 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         for response in streams:
             if response is not cancelled:
                 remaining = [chunk async for chunk in response.body_iterator]
-                self.assertEqual(sum("[DONE]" in chunk for chunk in remaining), 1)
+                done = sum("[DONE]" in chunk for chunk in remaining)
+                self.assertEqual(done, 1 if response is fresh else 0)
                 await response.aclose()
                 self.assertEqual(response.lifecycle.tokens, 3)
         fleet.monitor.finished("e0", "busy")
