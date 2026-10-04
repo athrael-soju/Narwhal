@@ -80,7 +80,27 @@ The collector reconciles each point with these comparisons and raises the listed
 | Client offers against journal terminals, joined on `client_rid` | Points where both sides supply IDs | `client_journal_ids` |
 | Terminal classes against router counter deltas | Each `journal_run`, from that process's baseline and final sample | `counter_mismatch` |
 
-At process start, `narwhal_offered_total`, `narwhal_expired_total`, and `narwhal_invalid_requests_total` reset. The served, failed, refused, rejected, and cancelled counters restore from the saved handoff state.
+`counter_deltas_by_run` in `evidence.json` holds each `journal_run`'s deltas of these counters:
+
+```text
+narwhal_offered_total
+narwhal_served_total
+narwhal_failed_total
+narwhal_refused_total
+narwhal_rejected_total
+narwhal_expired_total
+narwhal_invalid_requests_total
+narwhal_cancelled_total
+narwhal_flips_total
+narwhal_event_loop_busy_seconds_total
+```
+
+Router counters at process start:
+
+| Counter | At process start |
+| --- | --- |
+| `narwhal_offered_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_flips_total`, `narwhal_event_loop_busy_seconds_total` | Resets to `0` |
+| `narwhal_served_total`, `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Restores from the saved handoff state |
 
 The collector also raises these diagnostics:
 
@@ -91,7 +111,7 @@ The collector also raises these diagnostics:
 | `role_history_gap` | Bounded state history lost a flip that `narwhal_flips_total` counts | Point |
 | `scrape_error` | A scrape fails | Point, time, and targets |
 | `scrape_interval_gap` | An interval between samples exceeds 2.5 times `sample_interval_s` | Point and time window |
-| `counter_missing` | A counter is absent from the first or last sample of a `journal_run` | Run and metric |
+| `counter_missing` | A counter appears in only one of the first and last samples of a `journal_run` | Run and metric |
 | `counter_reset` | A counter delta is negative | Run and metric |
 | `input_changed` | The fleet or profile file digest changed during the point | Point and input |
 | `journal_replaced` | The journal file's device or inode changed during the point | Start and end cursors |

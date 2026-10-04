@@ -197,6 +197,7 @@ class MonitoringOut(BaseModel):
     core_failures: int = 0
     event_loop_lag_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     event_loop_lag_high_water_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    event_loop_busy_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     stages: dict[str, MonitoringStageOut] = Field(default_factory=dict)
 
 

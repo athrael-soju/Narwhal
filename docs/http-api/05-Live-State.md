@@ -92,6 +92,21 @@ After a resume or takeover, the new router process restores `offered`, `unsized_
 
 </div>
 
+### `monitoring`
+
+The `monitoring` object reports the engine monitoring loop:
+
+| Field                         | Meaning                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `degraded`                    | `true` while the router holds new admissions after `controller.monitor_failure_limit` consecutive failed passes                      |
+| `reason`                      | First failure of the streak that set `degraded`, as `<class>:<stage>`, otherwise `null`                                              |
+| `core_consecutive`            | Consecutive monitoring passes with a failed stage                                                                                    |
+| `core_failures`               | Monitoring passes with a failed stage since process start                                                                            |
+| `event_loop_lag_s`            | Delay beyond the latest scheduled monitoring deadline, in seconds                                                                    |
+| `event_loop_lag_high_water_s` | Largest monitoring-deadline delay since process start, in seconds                                                                    |
+| `event_loop_busy_s`           | Event-loop thread CPU seconds since the monitoring loop started                                                                      |
+| `stages`                      | Each monitoring stage's `failures`, `consecutive`, `last_class` and `last_at` (router monotonic-clock seconds of the latest failure) |
+
 ### `health`
 
 Each engine's `health` entry tracks its drift windows:

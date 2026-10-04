@@ -6,7 +6,7 @@ description: Metrics for engine monitoring degradation and engine breaker state 
 
 ## Engine monitoring degradation
 
-These metrics track failed monitoring passes and monitoring-deadline delay:
+These metrics track failed monitoring passes, monitoring-deadline delay and event-loop CPU time:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
@@ -17,6 +17,11 @@ These metrics track failed monitoring passes and monitoring-deadline delay:
 | `narwhal_monitoring_stage_consecutive_failures` | gauge | `stage` | Consecutive failures for a monitoring stage. |
 | `narwhal_event_loop_lag_seconds` | gauge | | Delay beyond the latest scheduled monitoring deadline. |
 | `narwhal_event_loop_lag_high_water_seconds` | gauge | | Largest monitoring-deadline delay since router start. |
+| `narwhal_event_loop_busy_seconds_total` | counter | | CPU seconds the router's event-loop thread used since the monitoring loop started. |
+
+`rate(narwhal_event_loop_busy_seconds_total[5m])` is the share of wall time the event-loop thread spends on CPU, from `0` to `1`.
+
+The router updates the counter each time the monitoring loop wakes, at a scheduled monitoring deadline or on an urgent control wake.
 
 `stage` values:
 
