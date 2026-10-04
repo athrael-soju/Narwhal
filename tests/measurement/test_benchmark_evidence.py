@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tools.measurement import benchmark_runner
-from tools.measurement.benchmark_evidence import counter_deltas
+from tools.measurement.benchmark_evidence import counter_deltas, metric_values
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request
@@ -55,6 +55,33 @@ class CounterDeltaTests(unittest.TestCase):
             ]
         )
         self.assertEqual(deltas["run-a"]["narwhal_offered_total"], 1)
+        self.assertEqual(diagnostics, [])
+
+    def test_event_loop_busy_counter_reports_a_float_delta(self):
+        busy = "narwhal_event_loop_busy_seconds_total"
+        self.assertEqual(metric_values(f"{busy} 1.5\n")[busy], 1.5)
+        deltas, diagnostics = counter_deltas(
+            [
+                {"at": "t0", "state": {"journal_run": "run-a"}, "router_metrics": f"{busy} 1.5\n"},
+                {"at": "t1", "state": {"journal_run": "run-a"}, "router_metrics": f"{busy} 4.25\n"},
+            ]
+        )
+        self.assertEqual(deltas["run-a"][busy], 2.75)
+        self.assertIsInstance(deltas["run-a"][busy], float)
+        self.assertEqual(diagnostics, [])
+
+    def test_a_counter_absent_from_every_sample_raises_no_diagnostic(self):
+        deltas, diagnostics = counter_deltas(
+            [
+                {
+                    "at": t,
+                    "state": {"journal_run": "run-a"},
+                    "router_metrics": f"narwhal_offered_total {n}\n",
+                }
+                for t, n in (("t0", 0), ("t1", 2))
+            ]
+        )
+        self.assertNotIn("narwhal_event_loop_busy_seconds_total", deltas["run-a"])
         self.assertEqual(diagnostics, [])
 
 

@@ -90,6 +90,7 @@ nav:
           - Benchmark evidence bundle: measure/06-Benchmark-Evidence.md
           - GPU benchmark qualification: measure/07-GPU-Qualification.md
           - Cache-aware placement trial: measure/08-Cache-Aware-Trial.md
+          - Benchmarking the router: measure/09-Router-Benchmark.md
       - Setting up observability:
           - Overview: Observability.md
           - Starting and verifying monitoring: observability/01-Start-and-Verify.md

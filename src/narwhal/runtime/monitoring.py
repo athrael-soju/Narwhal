@@ -75,6 +75,7 @@ class MonitoringLedger:
         self._pass_failures: list[tuple[str, str]] = []
         self.event_loop_lag_s = 0.0
         self.event_loop_lag_high_water_s = 0.0
+        self.event_loop_busy_s = 0.0
 
     def observe_event_loop_lag(self, lag_s: float) -> None:
         """Record delay beyond one scheduled monitoring deadline."""
@@ -82,6 +83,10 @@ class MonitoringLedger:
         self.event_loop_lag_high_water_s = max(
             self.event_loop_lag_high_water_s, self.event_loop_lag_s
         )
+
+    def observe_event_loop_busy(self, busy_s: float) -> None:
+        """Record event-loop thread CPU seconds since monitoring started."""
+        self.event_loop_busy_s = busy_s
 
     def _event(self, row: dict[str, Any]) -> None:
         if self._on_event is None:
@@ -152,6 +157,7 @@ class MonitoringLedger:
             "core_failures": self.core_failures,
             "event_loop_lag_s": self.event_loop_lag_s,
             "event_loop_lag_high_water_s": self.event_loop_lag_high_water_s,
+            "event_loop_busy_s": self.event_loop_busy_s,
             "stages": {
                 name: {
                     "failures": record.failures,
@@ -464,6 +470,7 @@ async def monitor_loop(router: NarwhalRouter) -> None:
     loop = asyncio.get_running_loop()
     interval = router.cfg.monitor_interval_s
     next_pass = loop.time() + interval
+    busy_from = time.thread_time()
     while True:
         timeout = max(0.0, next_pass - loop.time())
         try:
@@ -473,6 +480,7 @@ async def monitor_loop(router: NarwhalRouter) -> None:
             woke = False
         if woke:
             router.control_wakeup.clear()
+        router.monitoring.observe_event_loop_busy(time.thread_time() - busy_from)
         due = loop.time() >= next_pass
         if due:
             router.monitoring.observe_event_loop_lag(loop.time() - next_pass)
