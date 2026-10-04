@@ -7,14 +7,15 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...engines.client import EngineError
-from ...engines.prefix import CacheNamespace, block_identities
+from ...engines.prefix import CacheNamespace, non_negative_ints, prefix_identities
 from ...types import Instance, Request
 from ..completion import cacheable_render
 
 if TYPE_CHECKING:
+    from ...config.model import EngineContract
     from .routing import NarwhalRouter
 
-# Prompts at least this long hash their block identities in a worker thread.
+# Prompts longer than this hash their block identities in a worker thread.
 HASH_THREAD_TOKENS = 8192
 # First and longest skip of an engine after a failed exact count; each failure doubles it.
 TOKENIZE_BACKOFF_S = 1.0
@@ -22,13 +23,16 @@ TOKENIZE_BACKOFF_MAX_S = 30.0
 
 
 def _hash_prompt(
-    namespace: CacheNamespace | None, reusable: Sequence[int], sizes: set[int]
+    namespace: CacheNamespace | None, token_ids: Sequence[int], sizes: set[int]
 ) -> dict[int, list[bytes]]:
-    """Return the prompt's block identities per block size; empty for invalid token IDs."""
+    """Return the block identities of the prompt minus its final token per block size.
+
+    Invalid token IDs give an empty result.
+    """
     if namespace is None:
         return {}
     try:
-        return {size: block_identities(namespace, reusable, size) for size in sizes}
+        return prefix_identities(namespace, token_ids, len(token_ids) - 1, sizes)
     except ValueError:
         return {}
 
@@ -41,6 +45,9 @@ class RequestSizer:
         self._turn = 0
         # Engine ID to consecutive failed exact counts and the time it may count again.
         self.backoff: dict[str, tuple[int, float]] = {}
+        # The engine contract last fingerprinted and its fingerprint.
+        self._contract: EngineContract | None = None
+        self._fingerprint = ""
 
     async def size(
         self, body: dict[str, Any]
@@ -54,7 +61,7 @@ class RequestSizer:
             "messages" not in body
             and isinstance(prompt, list)
             and prompt
-            and all(type(token) is int and token >= 0 for token in prompt)
+            and non_negative_ints(prompt)
         ):
             return len(prompt), *(await self._cache_evidence(body, prompt))
         if self.router.cfg.tokenize:
@@ -103,7 +110,7 @@ class RequestSizer:
     ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         """`prefix_cache_evidence`, hashing a long prompt in a worker thread."""
         inputs = self._evidence_inputs(body, token_ids)
-        if len(inputs[1]) >= HASH_THREAD_TOKENS:
+        if len(inputs[1]) > HASH_THREAD_TOKENS:
             by_size = await asyncio.to_thread(_hash_prompt, *inputs)
         else:
             by_size = _hash_prompt(*inputs)
@@ -113,22 +120,26 @@ class RequestSizer:
         self, body: dict[str, Any], token_ids: Sequence[int]
     ) -> tuple[CacheNamespace | None, Sequence[int], set[int]]:
         contract = self.router.cfg.engine_contract
+        sizes = self.router.residency.block_sizes()
         if (
             contract is None
+            or not sizes
             or len(token_ids) < 2
             or not cacheable_render(body)
             # Speculative decoding shortens vLLM's prefix hits by a block.
             or contract.speculative_config not in ("", "disabled")
         ):
             return None, (), set()
+        if contract is not self._contract:
+            self._contract, self._fingerprint = contract, contract.fingerprint()
         salt = body.get("cache_salt")
         namespace = CacheNamespace(
             self.router.cfg.model,
-            contract.fingerprint(),
+            self._fingerprint,
             None,
             salt if isinstance(salt, str) else None,
         )
-        return namespace, token_ids[:-1], self.router.residency.block_sizes()
+        return namespace, token_ids, sizes
 
     def recheck_cache_evidence(self, request: Request, fresh_s: float = 0.0) -> None:
         """Refresh the request's cache evidence from current residency.

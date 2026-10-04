@@ -72,6 +72,8 @@ class DemandModel:
         self._clock = clock
         self.window_s = window_s
         self._estimates: tuple[float, OutputEstimates, int] | None = None
+        # Expected output by input and requested length under `_estimates`.
+        self._estimated: dict[tuple[int, int], int] = {}
         # Output estimates from the last history without shape overflow.
         self._learned: OutputEstimates = ({}, {})
         self.started_at = clock()
@@ -433,6 +435,7 @@ class DemandModel:
             else 0
         )
         self._estimates = (self._clock(), estimates, fleet)
+        self._estimated = {}
         return self._estimates
 
     def output_estimator(self) -> Callable[[Request], int]:
@@ -441,7 +444,17 @@ class DemandModel:
         A request without a shape estimate takes the fleet-wide delivered-output median.
         """
         _, estimates, fleet = self._current_snapshot()
-        return lambda r: self._expected_output(r.input_len, r.wanted_len, estimates) or fleet
+        estimated = self._estimated
+
+        def estimate(r: Request) -> int:
+            shape = (r.input_len, r.wanted_len)
+            expected = estimated.get(shape)
+            if expected is None:
+                expected = self._expected_output(*shape, estimates) or fleet
+                estimated[shape] = expected
+            return expected
+
+        return estimate
 
     def current_estimates(self) -> OutputEstimates:
         """Return the controller's output estimates, rebuilt when older than the demand window."""

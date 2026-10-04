@@ -6,6 +6,7 @@ import heapq
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 from ...types import Instance, Phase, Request, Role
@@ -78,6 +79,12 @@ class DecodeOccupancy:
     deadlines: tuple[float, ...]
     # Projected last token of each resident, by engine and request ID.
     ends: dict[tuple[str, str], float]
+    # Resident KV tokens on each engine.
+    held: dict[str, int]
+
+    @cached_property
+    def _sorted_ends(self) -> list[float]:
+        return sorted(last for _, last, _ in self.residents)
 
     def schedule(
         self, slots: int, joins: tuple[DecodeSpan, ...] = ()
@@ -87,9 +94,18 @@ class DecodeOccupancy:
         Each hold takes the earliest free slot at or after its handoff. A joining hold
         follows the queued holds that reach decode no later. `joins` are in handoff order.
         """
-        ends = sorted(last for _, last, _ in self.residents)
-        # Residents beyond the slot count free no slot.
-        free = [0.0] * (slots - len(ends)) + ends[-slots:] if slots > 0 else [math.inf]
+        if slots > 0:
+            # Idle slots free now, then the latest `slots` resident ends. The holds take
+            # only the earliest free slots, one per hold.
+            holds = len(self.queued) + len(joins)
+            idle = max(0, slots - len(self.residents))
+            if idle >= holds:
+                free = [0.0] * holds
+            else:
+                first = max(0, len(self.residents) - slots)
+                free = [0.0] * idle + self._sorted_ends[first : first + holds - idle]
+        else:
+            free = [math.inf]
 
         def take(hold: DecodeSpan) -> DecodeSpan:
             first, last, kv = hold
@@ -124,7 +140,7 @@ def decode_occupancy(
     if not engines:
         return None
     estimate = expected_output or (lambda r: r.wanted_len)
-    slots, tokens, steps = 0, 0.0, {}
+    slots, tokens, steps, held = 0, 0.0, {}, {}
     for inst in engines:
         profile = scheduler.profiles.get(inst.iid)
         if profile is None or profile.decode_max_requests is None:
@@ -134,7 +150,8 @@ def decode_occupancy(
         token_limit = profile.decode_token_limit
         slots += limit
         tokens += float("inf") if token_limit is None else token_limit
-        context = (inst.decode_tokens() + input_len) / (len(inst.decode) + 1)
+        held[inst.iid] = inst.decode_tokens()
+        context = (held[inst.iid] + input_len) / (len(inst.decode) + 1)
         batch = limit * context if token_limit is None else min(limit * context, token_limit)
         steps[inst.iid] = profile.token_interval(
             batch, limit
@@ -170,6 +187,7 @@ def decode_occupancy(
             for _, r in handoffs
         ),
         ends,
+        held,
     )
 
 
@@ -206,27 +224,38 @@ def decode_admits(
         ttft_margin=ttft_margin,
     ):
         return False
+    # A hold ending as it starts adds no peak, and KV that fits with every hold fits every peak.
     end = start if end == math.inf else end
-    peak, peak_kv = peak_holds(
-        (*occupancy.residents, *started), start, end, held=1, held_kv=request_kv
-    )
-    if peak > 1 and peak_kv > occupancy.tokens:
-        return False
-    decode = replace(request, phase=Phase.DECODE)
-    generating = {
-        inst.iid: {
-            rid: r for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] > start
-        }
-        for inst in occupancy.engines
-    }
-    if any(
-        scheduler.meets_slo(
-            decode, scheduler.cost(decode, replace(inst, decode=generating[inst.iid]))
+    if (
+        end != start
+        and request_kv
+        + sum(kv for _, _, kv in occupancy.residents)
+        + sum(kv for _, _, kv in started)
+        > occupancy.tokens
+    ):
+        peak, peak_kv = peak_holds(
+            (*occupancy.residents, *started), start, end, held=1, held_kv=request_kv
         )
-        for inst in occupancy.engines
+        if peak > 1 and peak_kv > occupancy.tokens:
+            return False
+    decode = replace(request, phase=Phase.DECODE)
+    health = scheduler.health
+    probation = health.probation_set() if health is not None else None
+
+    def fits(iid: str, requests: int, tokens: int) -> bool:
+        price = scheduler.decode_price(decode, iid, requests, tokens, probation=probation)
+        return scheduler.meets_slo(decode, (0.0, price))
+
+    # Fewer residents never raise the price, so an engine that fits all its residents
+    # fits those generating at `start`.
+    if any(
+        fits(inst.iid, len(inst.decode), occupancy.held[inst.iid]) for inst in occupancy.engines
     ):
         return True
-    return not any(
-        scheduler.meets_slo(decode, scheduler.cost(decode, replace(inst, prefill={}, decode={})))
-        for inst in occupancy.engines
-    )
+    for inst in occupancy.engines:
+        generating = [
+            r.length for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] > start
+        ]
+        if len(generating) < len(inst.decode) and fits(inst.iid, len(generating), sum(generating)):
+            return True
+    return not any(fits(inst.iid, 0, 0) for inst in occupancy.engines)

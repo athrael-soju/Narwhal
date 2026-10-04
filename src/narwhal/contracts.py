@@ -60,12 +60,16 @@ def current(name: str) -> int:
 
 def versioned(name: str, body: Mapping[str, Any]) -> dict[str, Any]:
     """Prefix a document or row with its schema identity and current version."""
-    overlap = {"schema", "schema_version"} & set(body)
-    if overlap:
-        fields = ", ".join(sorted(overlap))
-        raise ValueError(f"{name} body cannot replace {fields}")
-    spec = _contract(name)
+    spec = writer_contract(name, body)
     return {"schema": spec.schema, "schema_version": spec.current, **body}
+
+
+def writer_contract(name: str, body: Mapping[str, Any]) -> Contract:
+    """Return the contract `name` writes `body` under; the body cannot set schema fields."""
+    if "schema" in body or "schema_version" in body:
+        fields = ", ".join(sorted({"schema", "schema_version"} & set(body)))
+        raise ValueError(f"{name} body cannot replace {fields}")
+    return _contract(name)
 
 
 def canonical_digest(value: Any) -> str:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
+from ..profiling.model import Profile
 from ..profiling.store import ProfileStore
 from ..types import Instance, Phase, Request
 from .health import DriftTracker
@@ -26,19 +28,15 @@ def cost(
     slo: SLO,
     health: DriftTracker | None,
     warm: bool = True,
+    probation: Collection[str] | None = None,
 ) -> Cost:
     """Return the lexicographic placement cost from Arrow §5.3 (arxiv.org/abs/2505.11916).
 
-    `warm=False` prices prefill without cache evidence.
+    `warm=False` prices prefill without cache evidence. `probation` is the health
+    tracker's probation set, read from `health` when None.
     """
-    profile = profiles.get(inst.iid)
-    if profile is None:
-        raise KeyError(f"no profile for instance {inst.iid}; profile before scheduling")
-
-    # Probation penalty in seconds; the decode cost converts it to tokens.
-    penalty = 0.0
-    if health is not None and inst.iid in health.probation_set():
-        penalty = health.penalty_s
+    profile = _profile(profiles, inst.iid)
+    penalty = _penalty(inst.iid, health, probation)
 
     if request.phase is Phase.PREFILL:
 
@@ -52,15 +50,73 @@ def cost(
         )
         return (float(inst.decode_tokens()), resident + price(request) + penalty)
 
-    correction = monitor.decode_correction(inst.iid)
-    headroom = profile.max_tokens(
-        slo.tpot_s / correction,
-        len(inst.decode) + 1,
-    )
     return (
         float(inst.prefill_tokens()),
-        float(inst.decode_tokens() + request.length) - headroom + penalty / slo.tpot_s,
+        _decode_price(
+            profile,
+            request,
+            len(inst.decode),
+            inst.decode_tokens(),
+            correction=monitor.decode_correction(inst.iid),
+            slo=slo,
+            penalty=penalty,
+        ),
     )
+
+
+def decode_price(
+    request: Request,
+    iid: str,
+    requests: int,
+    tokens: int,
+    *,
+    monitor: InstanceMonitor,
+    profiles: ProfileStore,
+    slo: SLO,
+    health: DriftTracker | None,
+    probation: Collection[str] | None = None,
+) -> float:
+    """Return the decode placement price on `iid` beside `requests` residents of `tokens` tokens.
+
+    The price equals the second cost element for an engine holding those residents.
+    """
+    return _decode_price(
+        _profile(profiles, iid),
+        request,
+        requests,
+        tokens,
+        correction=monitor.decode_correction(iid),
+        slo=slo,
+        penalty=_penalty(iid, health, probation),
+    )
+
+
+def _profile(profiles: ProfileStore, iid: str) -> Profile:
+    profile = profiles.get(iid)
+    if profile is None:
+        raise KeyError(f"no profile for instance {iid}; profile before scheduling")
+    return profile
+
+
+def _penalty(iid: str, health: DriftTracker | None, probation: Collection[str] | None) -> float:
+    """Return the probation penalty in seconds; the decode price converts it to tokens."""
+    if health is not None and iid in (health.probation_set() if probation is None else probation):
+        return health.penalty_s
+    return 0.0
+
+
+def _decode_price(
+    profile: Profile,
+    request: Request,
+    requests: int,
+    tokens: int,
+    *,
+    correction: float,
+    slo: SLO,
+    penalty: float,
+) -> float:
+    headroom = profile.max_tokens(slo.tpot_s / correction, requests + 1)
+    return float(tokens + request.length) - headroom + penalty / slo.tpot_s
 
 
 def meets_slo(request: Request, cost: Cost, *, slo: SLO, ttft_margin: float = 0.0) -> bool:
