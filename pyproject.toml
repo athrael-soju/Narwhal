@@ -62,11 +62,11 @@ docs = [
 
 [project.scripts]
 narwhal = "narwhal.dev.cli:main"
-narwhal-engine = "narwhal.deployment.launch_engine:main"
-narwhal-check = "narwhal.diagnostics.check:main"
+narwhal-engine = "narwhal.deployment.launch_engine.cli:main"
+narwhal-check = "narwhal.diagnostics.check.cli:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
-narwhal-profile = "narwhal.profiling.probe:main"
+narwhal-profile = "narwhal.profiling.probe.cli:main"
 
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"

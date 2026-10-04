@@ -12,9 +12,15 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.profiling import probe
+from narwhal.engines.dialect import VllmDialect
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
-from narwhal.profiling.model import Profile
+from narwhal.profiling.model import CACHED_PROFILE_FIELDS, Profile
+from narwhal.profiling.probe import warm as warm_probe
+from narwhal.profiling.probe.engine import parse_cache_block_tokens
+from narwhal.profiling.probe.instance import profile_instance
+from narwhal.profiling.probe.offline import refit_saved_prefill
+from narwhal.profiling.probe.sweep import PREFILL_LENS, Sweep, bounded_sweep, warm_cases
+from narwhal.profiling.probe.warm import apply_cached_fit, probe_cached_prefill
 from tests.fixtures import profile
 from tests.profiling.fixtures import patched_profile_sweeps
 
@@ -86,7 +92,7 @@ class CachedPrefillFitTests(unittest.TestCase):
 
     def test_warm_estimate_stays_inside_its_measured_domain(self):
         cold = profile("e0", ttft_a=1e-9, ttft_b=2e-5, ttft_c=0.08)
-        fitted, fit = probe.apply_cached_fit(cold, warm_samples())
+        fitted, fit = apply_cached_fit(cold, warm_samples())
         self.assertAlmostEqual(fitted.cached_prefill_time(2048, 1024), warm_time(2048, 1024))
         self.assertIsNone(fitted.cached_prefill_time(8192, 1024))
         self.assertIsNone(fitted.cached_prefill_time(2048, 4096))
@@ -117,7 +123,7 @@ class CachedPrefillFitTests(unittest.TestCase):
         for sample in samples:
             if sample["state"] == "warm" and splits_prefill(sample["suffix_tokens"], block):
                 sample["seconds"] += split
-        fitted, fit = probe.apply_cached_fit(cold, samples)
+        fitted, fit = apply_cached_fit(cold, samples)
         self.assertLess(fit["cv_mape"], 1e-6)
         self.assertAlmostEqual(fitted.cached_prefill_time(8192, 224), warm_time(8192, 224))
         self.assertAlmostEqual(fitted.cached_prefill_time(8192, 600), warm_time(8192, 600) + split)
@@ -130,10 +136,10 @@ class CachedPrefillFitTests(unittest.TestCase):
             if sample["state"] == "warm":
                 sample["prefix_tokens"] += 16 * (index % 2)
         with self.assertRaisesRegex(ValueError, "five cases"):
-            probe.apply_cached_fit(cold, grid)
+            apply_cached_fit(cold, grid)
         wild = warm_samples(noise=lambda p, s: 3.0 if (p, s) == (2048, 1024) else 1.0)
         with self.assertRaisesRegex(ValueError, "held-out error"):
-            probe.apply_cached_fit(cold, wild)
+            apply_cached_fit(cold, wild)
 
 
 class ColdSplitStepTests(unittest.TestCase):
@@ -165,7 +171,7 @@ class ColdSplitStepTests(unittest.TestCase):
 
         # The short point sits off the curve.
         for offset in (0.95, 1.05):
-            samples = [(n, cold(n) * (offset if n == 256 else 1.0)) for n in probe.PREFILL_LENS]
+            samples = [(n, cold(n) * (offset if n == 256 else 1.0)) for n in PREFILL_LENS]
             for block in (16, 512):
                 with self.subTest(offset=offset, block=block):
                     (a, b, c, split), _, _ = fit_prefill_samples(samples, block)
@@ -177,10 +183,10 @@ class ColdSplitStepTests(unittest.TestCase):
     def test_default_lengths_measure_both_regimes_for_common_block_sizes(self):
         for block in (16, 512):
             with self.subTest(block=block):
-                one_step = [n for n in probe.PREFILL_LENS if not splits_prefill(n, block)]
+                one_step = [n for n in PREFILL_LENS if not splits_prefill(n, block)]
                 self.assertGreaterEqual(len(one_step), 2)
-        self.assertEqual(list(probe.PREFILL_LENS), sorted(probe.PREFILL_LENS))
-        short = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
+        self.assertEqual(list(PREFILL_LENS), sorted(PREFILL_LENS))
+        short = bounded_sweep(replace(Sweep(), decode_input_lens=(512, 1024)), 4096)
         for block in (16, 512):
             with self.subTest(block=block, context=4096):
                 one_step = [n for n in short.prefill_lens if not splits_prefill(n, block)]
@@ -188,19 +194,19 @@ class ColdSplitStepTests(unittest.TestCase):
 
     def test_block_size_comes_from_the_engine_cache_metric(self):
         metrics = 'vllm:cache_config_info{block_size="512",engine="0"} 1.0\n'
-        self.assertEqual(probe.parse_cache_block_tokens(metrics), 512)
-        self.assertIsNone(probe.parse_cache_block_tokens("vllm:num_requests_running 0\n"))
+        self.assertEqual(parse_cache_block_tokens(metrics), 512)
+        self.assertIsNone(parse_cache_block_tokens("vllm:num_requests_running 0\n"))
 
 
 class WarmSweepBoundsTests(unittest.TestCase):
     def test_bounded_sweep_trims_warm_lengths_and_accepts_empty_lists(self):
-        empty = replace(probe.Sweep(), cached_prefix_lens=(), cached_suffix_lens=())
-        bounded = probe.bounded_sweep(empty, 16384)
+        empty = replace(Sweep(), cached_prefix_lens=(), cached_suffix_lens=())
+        bounded = bounded_sweep(empty, 16384)
         self.assertEqual((bounded.cached_prefix_lens, bounded.cached_suffix_lens), ((), ()))
-        trimmed = probe.bounded_sweep(replace(probe.Sweep(), decode_input_lens=(512, 1024)), 4096)
+        trimmed = bounded_sweep(replace(Sweep(), decode_input_lens=(512, 1024)), 4096)
         self.assertEqual(trimmed.cached_prefix_lens, (2048,))
-        self.assertEqual(probe.warm_cases(trimmed, 4096), [(2048, 700), (2048, 1300)])
-        self.assertEqual(len(probe.warm_cases(probe.Sweep())), 9)
+        self.assertEqual(warm_cases(trimmed, 4096), [(2048, 700), (2048, 1300)])
+        self.assertEqual(len(warm_cases(Sweep())), 9)
 
 
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
@@ -252,7 +258,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_probe(self, transport, prefix_lens=(100, 400), short=0, **kwargs):
         sweep = replace(
-            probe.Sweep(),
+            Sweep(),
             cached_prefix_lens=prefix_lens,
             cached_suffix_lens=(20, 60),
             cached_repeats=2,
@@ -264,11 +270,11 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
         async with httpx.AsyncClient(transport=transport) as client:
             with (
-                patch.object(probe, "make_prompt", AsyncMock(side_effect=prompt)),
+                patch.object(warm_probe, "make_prompt", AsyncMock(side_effect=prompt)),
                 redirect_stdout(io.StringIO()),
             ):
-                return await probe.probe_cached_prefill(
-                    client, "http://e", "stub", sweep, probe.VllmDialect(), **kwargs
+                return await probe_cached_prefill(
+                    client, "http://e", "stub", sweep, VllmDialect(), **kwargs
                 )
 
     async def test_samples_record_observed_cache_state_and_cold_controls(self):
@@ -346,7 +352,7 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
         with patched_profile_sweeps(
             prefill, decode, hits=7, block=block, warm=sweep_result
         ) as sweep:
-            row = await probe.profile_instance(
+            row = await profile_instance(
                 None, "e0", "http://e", "stub", evidence=evidence, **kwargs
             )
         self.warm_sweeps = sweep.await_count
@@ -372,9 +378,9 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_too_few_warm_cases_keep_cold_pricing_before_the_sweep(self):
         for sweep, limit in (
-            (replace(probe.Sweep(), cached_prefix_lens=(2048,)), None),
-            (replace(probe.Sweep(), cached_prefix_lens=(), cached_suffix_lens=()), None),
-            (probe.Sweep(), 4096),
+            (replace(Sweep(), cached_prefix_lens=(2048,)), None),
+            (replace(Sweep(), cached_prefix_lens=(), cached_suffix_lens=()), None),
+            (Sweep(), 4096),
         ):
             with self.subTest(sweep=sweep.cached_prefix_lens, limit=limit):
                 row, evidence = await self.profile_with(
@@ -422,7 +428,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
             )
             out = Path(folder) / "refit.json"
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(probe.refit_saved_prefill(source, out, {"e0"}), 0)
+                self.assertEqual(refit_saved_prefill(source, out, {"e0"}), 0)
             sidecar = json.loads(out.with_suffix(".samples.json").read_text())
             return json.loads(out.read_text())["profiles"][0], sidecar["engines"]["e0"]
 
@@ -431,7 +437,7 @@ class CachedPrefillRefitTests(unittest.TestCase):
         return replace(row, generation_digest="sha256:" + "a" * 64)
 
     def test_saved_samples_reproduce_the_warm_fit_offline(self):
-        fitted, fit = probe.apply_cached_fit(self.base(), warm_samples())
+        fitted, fit = apply_cached_fit(self.base(), warm_samples())
         # The saved profile has no warm fit.
         row, evidence = self.refit({"samples": warm_samples(), **fit}, self.base())
         for name in (
@@ -484,10 +490,10 @@ class CachedPrefillRefitTests(unittest.TestCase):
         self.assertEqual(evidence["cached_prefill"], {"samples": warm_samples(), "reason": reason})
 
     def test_refit_clears_a_warm_fit_its_samples_no_longer_form(self):
-        fitted, _ = probe.apply_cached_fit(self.base(), warm_samples())
+        fitted, _ = apply_cached_fit(self.base(), warm_samples())
         grid = warm_samples(prefixes=(2048,), suffixes=(256, 1024, 2048))
         row, evidence = self.refit({"samples": grid}, fitted)
-        for name in probe.CACHED_PROFILE_FIELDS:
+        for name in CACHED_PROFILE_FIELDS:
             self.assertIsNone(row[name], name)
         self.assertIn("five cases", evidence["cached_prefill"]["reason"])
 

@@ -36,7 +36,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 ### 2. Capturing the NIXL connector version
 
 ```bash
-.venv/bin/python tools/deployment/attestation_contract.py capture-nixl --run "$ENGINE_RUN"
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-nixl --run "$ENGINE_RUN"
 ```
 
 `contract.nixl_connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `nixl_version` records the pinned NIXL package.
@@ -45,7 +45,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
 ```bash
 umask 077
-.venv/bin/python tools/deployment/attestation_contract.py capture-model-dimensions --run "$ENGINE_RUN"
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-model-dimensions --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
@@ -65,7 +65,7 @@ The capture requires the live container's plan and launcher hashes to match `lau
 From the startup log:
 
 ```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
+narwhal-engine cache-registration \
   --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
 cat "$ENGINE_RUN/cache-registration.json"
 ```
@@ -73,7 +73,7 @@ cat "$ENGINE_RUN/cache-registration.json"
 From the resolved layout in `cache-layout.json`:
 
 ```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" cache-registration \
+narwhal-engine cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
@@ -160,7 +160,7 @@ Confirm that the serving startup log names the connector class recorded in step 
 ### 8. Capturing handshake enforcement
 
 ```bash
-python3 "$NARWHAL_ENGINE_LAUNCHER" handshake-policy --run "$ENGINE_RUN"
+narwhal-engine handshake-policy --run "$ENGINE_RUN"
 cat "$ENGINE_RUN/handshake-policy.json"
 ```
 
@@ -182,7 +182,7 @@ When the capture fails:
 ### 1. Generating the document
 
 ```bash
-.venv/bin/python tools/deployment/attestation_contract.py generate \
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli generate \
   --run "$ENGINE_RUN" --startup-log "$ENGINE_STARTUP_LOG"
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
@@ -197,7 +197,7 @@ export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 Run it as the engine's user, or as root for container engines.
 
 ```bash
-.venv/bin/python tools/deployment/attestation_contract.py serve --run "$ENGINE_RUN"
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli serve --run "$ENGINE_RUN"
 ```
 
 When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
@@ -264,7 +264,7 @@ Run the capture, generate, and serve steps for each engine.
 Run once from the router shell after every sidecar passes:
 
 ```bash
-.venv/bin/python tools/deployment/attestation_contract.py finalize-fleet --fleet runs/deployment/fleet.json
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
 ```
 
 `finalize-fleet` requires:

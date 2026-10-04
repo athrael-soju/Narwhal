@@ -16,7 +16,7 @@ from narwhal.scheduling.controller import ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
 from narwhal.scheduling.reactive import Departure, ReactivePolicy, ShortView
-from narwhal.scheduling.scheduler import GlobalScheduler
+from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.scheduling.scoring import SplitScore
 from narwhal.serving.schemas import ControllerDecisionOut
 from narwhal.types import Instance, Role
@@ -297,7 +297,7 @@ class PostMoveHoldTests(unittest.TestCase):
             sim.run(300, PREFILL_HEAVY)
             sim.run(10, DECODE_LEANING)
             self.assertEqual(sim.decisions[-1]["eligibility_rule"], "settled_departure")
-            self.assertEqual([flip.to for flip in sim.scheduler.flips], [Role.DECODE])
+            self.assertEqual([flip.to for flip in sim.scheduler.roles.flips], [Role.DECODE])
 
             sim.run(5, PREFILL_HEAVY)
             row = sim.decisions[-1]
@@ -317,7 +317,7 @@ class PostMoveHoldTests(unittest.TestCase):
             self.assertIsNone(sim.controller.reactive.departure)
             self.assertEqual(row["evidence_blocked_gate"], "risk")
             self.assertTrue(row["reason"].startswith("p to d recovery"))
-            self.assertEqual(len(sim.scheduler.flips), 1)
+            self.assertEqual(len(sim.scheduler.roles.flips), 1)
 
             sim.run(30, PREFILL_HEAVY)
             sim.close()
@@ -342,7 +342,7 @@ class AlternationTests(unittest.TestCase):
                 rules = {d.get("eligibility_rule") for d in sim.decisions}
                 self.assertFalse(rules & {"settled_departure", "steady_demand"})
                 self.assertFalse([d for d in sim.decisions if "departure_age_s" in d])
-                self.assertEqual(sim.scheduler.control_snapshot()["flip_reversals"], 0)
+                self.assertEqual(sim.scheduler.roles.control_snapshot()["flip_reversals"], 0)
 
 
 class ShortViewTests(unittest.TestCase):
@@ -402,7 +402,7 @@ class ReverseHoldTests(unittest.TestCase):
             sim.run(300, PREFILL_HEAVY)
             sim.run(15, DECODE_HEAVY)
             policy = sim.controller.reactive
-            self.assertEqual([flip.to for flip in sim.scheduler.flips], [Role.DECODE])
+            self.assertEqual([flip.to for flip in sim.scheduler.roles.flips], [Role.DECODE])
             departure = policy.departure
             self.assertEqual((departure.heading, departure.moved), (-1, True))
             # A departure whose shift has ended leaves later moves to the window.
@@ -413,7 +413,7 @@ class ReverseHoldTests(unittest.TestCase):
         moves = [d for d in sim.decisions if d["result"] == "applied"]
         self.assertGreaterEqual(len(moves), 2)
         self.assertEqual(moves[1]["demand_horizon_s"], sim.controller.window_s)
-        self.assertEqual({flip.to for flip in sim.scheduler.flips}, {Role.DECODE})
+        self.assertEqual({flip.to for flip in sim.scheduler.roles.flips}, {Role.DECODE})
         self.assertLess(sim.now - departure.started_at, sim.controller.window_s)
         self.assertIsNone(policy.departure)
 

@@ -31,7 +31,7 @@ To compute the budget:
 1. Capture each engine's `cache-layout.json` in its engine-role shell:
 
     ```bash
-    python3 "$NARWHAL_ENGINE_LAUNCHER" capture-cache --run "$ENGINE_RUN"
+    narwhal-engine capture-cache --run "$ENGINE_RUN"
     ```
 
 2. Run `calculate` in the shell of each representative engine role:

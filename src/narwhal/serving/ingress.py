@@ -14,9 +14,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .lifecycle import RequestLifecycle
 from .records import overloaded_response
 from .response import RequestStreamResponse
+from .saturation import saturated
 
 if TYPE_CHECKING:
-    from .router import NarwhalRouter
+    from .router.routing import NarwhalRouter
 
 LIFECYCLE = "narwhal.lifecycle"
 COMPLETION_PATHS = frozenset(("/v1/completions", "/v1/chat/completions"))
@@ -59,7 +60,7 @@ class ServingIngress:
         if router.ingress_inflight >= limit:
             await _overloaded(state, "HTTP retention limit reached", scope, receive, send)
             return
-        if router.saturated():
+        if saturated(router):
             message = (
                 f"router saturated: loop lag {router.loop_lag_s:.2f}s, "
                 f"request sizing {router.sizing_delays.median():.2f}s"

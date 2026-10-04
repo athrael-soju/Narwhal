@@ -14,7 +14,12 @@ from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
-from tools.observability import start as observe
+from tools.observability.make_targets import TargetContract
+from tools.observability.start import cli as observe_cli
+from tools.observability.start import listeners as observe_listeners
+from tools.observability.start import readiness as observe_readiness
+from tools.observability.start import services as observe_services
+from tools.observability.start import stack as observe_stack
 
 
 def _container(
@@ -24,23 +29,23 @@ def _container(
     status: str = "running",
     restarting: bool = False,
     listener: str | None = None,
-) -> observe.Container:
+) -> observe_services.Container:
     if listener is None:
         listener = "127.0.0.1:9090" if image.startswith("prom/") else "127.0.0.1:3000"
-    return observe.Container(cid, image, status, restarting, listener)
+    return observe_services.Container(cid, image, status, restarting, listener)
 
 
 class FakeStack:
     """Return scripted container states for each Compose service."""
 
-    def __init__(self, states: dict[str, list[observe.Container | None]]) -> None:
+    def __init__(self, states: dict[str, list[observe_services.Container | None]]) -> None:
         self.states = {name: list(values) for name, values in states.items()}
         self.up_calls = 0
 
     def up(self) -> None:
         self.up_calls += 1
 
-    def container(self, service: str) -> observe.Container | None:
+    def container(self, service: str) -> observe_services.Container | None:
         values = self.states.get(service, [None])
         if len(values) > 1:
             return values.pop(0)
@@ -52,12 +57,12 @@ def _healthy_get(url: str, timeout_s: float) -> tuple[int, str]:
     if url.endswith("/-/ready"):
         return 200, "Prometheus Server is Ready."
     if url.endswith("/api/v1/status/buildinfo"):
-        return 200, json.dumps({"data": {"version": observe.PROMETHEUS_VERSION}})
+        return 200, json.dumps({"data": {"version": observe_services.PROMETHEUS_VERSION}})
     if url.endswith("/api/health"):
-        return 200, json.dumps({"database": "ok", "version": observe.GRAFANA_VERSION})
+        return 200, json.dumps({"database": "ok", "version": observe_services.GRAFANA_VERSION})
     if url.endswith("/api/datasources/name/Prometheus"):
         return 200, json.dumps({"type": "prometheus", "url": "http://127.0.0.1:9090"})
-    if url.endswith(observe.DASHBOARD_PATH):
+    if url.endswith(observe_readiness.DASHBOARD_PATH):
         return 200, json.dumps(_dashboard())
     raise AssertionError(url)
 
@@ -109,61 +114,61 @@ def _dashboard() -> dict[str, object]:
 class ListenerTests(unittest.TestCase):
     def test_prometheus_listener_parses_ipv4_and_ipv6(self) -> None:
         self.assertEqual(
-            observe.parse_prometheus_listener("127.0.0.2:19090"),
-            observe.Listener("127.0.0.2", 19090),
+            observe_services.parse_prometheus_listener("127.0.0.2:19090"),
+            observe_services.Listener("127.0.0.2", 19090),
         )
         self.assertEqual(
-            observe.parse_prometheus_listener("[::1]:19090"),
-            observe.Listener("::1", 19090),
+            observe_services.parse_prometheus_listener("[::1]:19090"),
+            observe_services.Listener("::1", 19090),
         )
 
     def test_invalid_prometheus_listener_reports_the_value(self) -> None:
-        with self.assertRaisesRegex(observe.StartupError, "requires address:port"):
-            observe.parse_prometheus_listener("127.0.0.1")
+        with self.assertRaisesRegex(observe_services.StartupError, "requires address:port"):
+            observe_services.parse_prometheus_listener("127.0.0.1")
 
     def test_expected_running_project_may_reuse_its_listener(self) -> None:
-        service = observe.Service(
+        service = observe_services.Service(
             "grafana",
             "Grafana",
-            observe.Listener("127.0.0.1", 3000),
-            observe.GRAFANA_IMAGE,
-            observe.GRAFANA_VERSION,
+            observe_services.Listener("127.0.0.1", 3000),
+            observe_services.GRAFANA_IMAGE,
+            observe_services.GRAFANA_VERSION,
         )
-        stack = FakeStack({"grafana": [_container("g" * 64, observe.GRAFANA_IMAGE)]})
-        observe.check_listeners([service], stack, available=lambda listener: False)
+        stack = FakeStack({"grafana": [_container("g" * 64, observe_services.GRAFANA_IMAGE)]})
+        observe_listeners.check_listeners([service], stack, available=lambda listener: False)
 
     def test_current_project_image_upgrade_may_reuse_its_listener(self) -> None:
-        service = observe.Service(
+        service = observe_services.Service(
             "grafana",
             "Grafana",
-            observe.Listener("127.0.0.1", 3000),
-            observe.GRAFANA_IMAGE,
-            observe.GRAFANA_VERSION,
+            observe_services.Listener("127.0.0.1", 3000),
+            observe_services.GRAFANA_IMAGE,
+            observe_services.GRAFANA_VERSION,
         )
         stack = FakeStack({"grafana": [_container("g" * 64, "grafana/grafana:12.0.0")]})
-        observe.check_listeners([service], stack, available=lambda listener: False)
+        observe_listeners.check_listeners([service], stack, available=lambda listener: False)
 
     def test_current_project_on_another_address_cannot_claim_the_listener(self) -> None:
-        service = observe.Service(
+        service = observe_services.Service(
             "grafana",
             "Grafana",
-            observe.Listener("127.0.0.2", 3000),
-            observe.GRAFANA_IMAGE,
-            observe.GRAFANA_VERSION,
+            observe_services.Listener("127.0.0.2", 3000),
+            observe_services.GRAFANA_IMAGE,
+            observe_services.GRAFANA_VERSION,
         )
         stack = FakeStack(
             {
                 "grafana": [
                     _container(
                         "g" * 64,
-                        observe.GRAFANA_IMAGE,
+                        observe_services.GRAFANA_IMAGE,
                         listener="127.0.0.1:3000",
                     )
                 ]
             }
         )
-        with self.assertRaisesRegex(observe.StartupError, "occupied by external process"):
-            observe.check_listeners(
+        with self.assertRaisesRegex(observe_services.StartupError, "occupied by external process"):
+            observe_listeners.check_listeners(
                 [service],
                 stack,
                 available=lambda listener: False,
@@ -181,12 +186,14 @@ class ListenerTests(unittest.TestCase):
                 output = ""
             return CompletedProcess(command, 0, output, "")
 
-        owner = observe.listener_owner(observe.Listener("127.0.0.1", 3000), runner)
+        owner = observe_listeners.listener_owner(
+            observe_services.Listener("127.0.0.1", 3000), runner
+        )
         self.assertEqual(owner, "socket unit narwhal-grafana.socket")
 
     def test_owner_uses_the_complete_listener_address(self) -> None:
         def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
-            self.assertEqual(kwargs["timeout"], observe.COMMAND_TIMEOUT_S)
+            self.assertEqual(kwargs["timeout"], observe_services.COMMAND_TIMEOUT_S)
             if command[:2] == ["ss", "-H"]:
                 output = (
                     'LISTEN 0 4096 127.0.0.2:3000 0.0.0.0:* users:(("wrong",pid=111))\n'
@@ -198,20 +205,26 @@ class ListenerTests(unittest.TestCase):
                 output = ""
             return CompletedProcess(command, 0, output, "")
 
-        owner = observe.listener_owner(observe.Listener("127.0.0.1", 3000), runner)
+        owner = observe_listeners.listener_owner(
+            observe_services.Listener("127.0.0.1", 3000), runner
+        )
         self.assertEqual(owner, "222 right right --listener 127.0.0.1:3000")
 
     def test_socket_unit_match_rejects_a_port_prefix(self) -> None:
-        listener = observe.Listener("127.0.0.1", 3000)
-        self.assertFalse(observe._line_mentions_listener("127.0.0.1:30000 other.socket", listener))
-        self.assertTrue(observe._line_mentions_listener("127.0.0.1:3000 owner.socket", listener))
+        listener = observe_services.Listener("127.0.0.1", 3000)
+        self.assertFalse(
+            observe_listeners._line_mentions_listener("127.0.0.1:30000 other.socket", listener)
+        )
+        self.assertTrue(
+            observe_listeners._line_mentions_listener("127.0.0.1:3000 owner.socket", listener)
+        )
 
     def test_owner_falls_back_to_host_network_container(self) -> None:
         document = {
             "Id": "abc123" * 11,
             "Name": "/observability-prometheus-1",
             "Config": {
-                "Image": observe.PROMETHEUS_IMAGE,
+                "Image": observe_services.PROMETHEUS_IMAGE,
                 "Cmd": ["--web.listen-address=127.0.0.1:9090"],
                 "Env": [],
             },
@@ -230,19 +243,22 @@ class ListenerTests(unittest.TestCase):
                 output = ""
             return CompletedProcess(command, 0, output, "")
 
-        owner = observe.listener_owner(observe.Listener("127.0.0.1", 9090), runner)
+        owner = observe_listeners.listener_owner(
+            observe_services.Listener("127.0.0.1", 9090), runner
+        )
         self.assertEqual(
             owner,
-            f"container observability-prometheus-1 ({observe.PROMETHEUS_IMAGE}, abc123abc123)",
+            "container observability-prometheus-1 "
+            f"({observe_services.PROMETHEUS_IMAGE}, abc123abc123)",
         )
 
 
 class ReadinessTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.services = observe.configured_services({})
-        self.prometheus = _container("p" * 64, observe.PROMETHEUS_IMAGE)
-        self.grafana = _container("g" * 64, observe.GRAFANA_IMAGE)
-        self.contract = observe.TargetContract(
+        self.services = observe_services.configured_services({})
+        self.prometheus = _container("p" * 64, observe_services.PROMETHEUS_IMAGE)
+        self.grafana = _container("g" * 64, observe_services.GRAFANA_IMAGE)
+        self.contract = TargetContract(
             "router:8000",
             (("e0", "engine-a:8002"), ("e1", "engine-b:8002")),
         )
@@ -298,7 +314,7 @@ class ReadinessTests(unittest.TestCase):
                 "grafana": [self.grafana],
             }
         )
-        launched = observe.wait_ready(self.services, stack, get=_healthy_get)
+        launched = observe_readiness.wait_ready(self.services, stack, get=_healthy_get)
         self.assertEqual(launched["prometheus"].cid, self.prometheus.cid)
         self.assertEqual(launched["grafana"].cid, self.grafana.cid)
 
@@ -309,23 +325,27 @@ class ReadinessTests(unittest.TestCase):
                 "grafana": [self.grafana],
             }
         )
-        with self.assertRaisesRegex(observe.StartupError, "expected prom/prometheus:v3.14.0"):
-            observe.wait_ready(self.services, stack, get=_healthy_get)
+        with self.assertRaisesRegex(
+            observe_services.StartupError, "expected prom/prometheus:v3.14.0"
+        ):
+            observe_readiness.wait_ready(self.services, stack, get=_healthy_get)
 
     def test_collection_requires_the_complete_healthy_target_set(self) -> None:
-        observe._verify_targets(self.services[0], self.contract, self._collection_get())
+        observe_readiness._verify_targets(self.services[0], self.contract, self._collection_get())
 
     def test_collection_rejects_a_failed_engine_scrape(self) -> None:
-        with self.assertRaisesRegex(observe.StartupError, "e0 reports down: engine scrape failed"):
-            observe._verify_targets(
+        with self.assertRaisesRegex(
+            observe_services.StartupError, "e0 reports down: engine scrape failed"
+        ):
+            observe_readiness._verify_targets(
                 self.services[0],
                 self.contract,
                 self._collection_get(engine_health="down"),
             )
 
     def test_collection_rejects_a_missing_router_metric(self) -> None:
-        with self.assertRaisesRegex(observe.StartupError, "returned 0 series"):
-            observe._verify_targets(
+        with self.assertRaisesRegex(observe_services.StartupError, "returned 0 series"):
+            observe_readiness._verify_targets(
                 self.services[0],
                 self.contract,
                 self._collection_get(readiness=[]),
@@ -336,17 +356,19 @@ class ReadinessTests(unittest.TestCase):
         router = document["spec"]["variables"][0]["spec"]  # type: ignore[index]
         router["includeAll"] = False
         router["current"] = {"text": "", "value": ""}
-        with self.assertRaisesRegex(observe.StartupError, "default to every configured target"):
-            observe.verify_dashboard_contract(document)
+        with self.assertRaisesRegex(
+            observe_services.StartupError, "default to every configured target"
+        ):
+            observe_readiness.verify_dashboard_contract(document)
 
     def test_shipped_dashboard_passes_the_readiness_contract(self) -> None:
-        dashboard = json.loads((observe.BASE / "grafana-narwhal.json").read_text())
-        observe.verify_dashboard_contract(
+        dashboard = json.loads((observe_stack.BASE / "grafana-narwhal.json").read_text())
+        observe_readiness.verify_dashboard_contract(
             {"metadata": dashboard["metadata"], "spec": dashboard["spec"]}
         )
 
     def test_shipped_dashboard_defaults_to_the_discovered_router(self) -> None:
-        dashboard = json.loads((observe.BASE / "grafana-narwhal.json").read_text())
+        dashboard = json.loads((observe_stack.BASE / "grafana-narwhal.json").read_text())
         variables = dashboard["spec"]["variables"]
         router = next(
             variable["spec"] for variable in variables if variable["spec"]["name"] == "router"
@@ -354,31 +376,31 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(router["includeAll"])
         self.assertEqual(router["allValue"], ".*")
         self.assertEqual(router["current"], {"text": "All", "value": "$__all"})
-        expressions = observe._expressions(dashboard)
+        expressions = observe_readiness._expressions(dashboard)
         self.assertFalse(any('instance="$router"' in expression for expression in expressions))
         self.assertTrue(any('instance=~"$router"' in expression for expression in expressions))
 
     def test_shipped_prometheus_config_discovers_both_target_groups(self) -> None:
-        config = (observe.BASE / "prometheus.yml").read_text()
+        config = (observe_stack.BASE / "prometheus.yml").read_text()
         self.assertIn("/etc/prometheus/targets/router.json", config)
         self.assertIn("/etc/prometheus/targets/engines.json", config)
         self.assertNotIn("static_configs:", config)
 
     def test_start_writes_targets_after_listener_ownership_check(self) -> None:
         calls: list[str] = []
-        stack = mock.Mock(spec=observe.Stack)
+        stack = mock.Mock(spec=observe_stack.Stack)
         stack.up.side_effect = lambda: calls.append("up")
         launched = {"prometheus": self.prometheus, "grafana": self.grafana}
         with (
             mock.patch.object(
-                observe,
+                observe_cli,
                 "check_listeners",
                 side_effect=lambda services, candidate: calls.append("listeners"),
             ),
-            mock.patch.object(observe, "wait_ready", return_value=launched),
-            mock.patch.object(observe, "wait_collection"),
+            mock.patch.object(observe_cli, "wait_ready", return_value=launched),
+            mock.patch.object(observe_cli, "wait_collection"),
         ):
-            observe.start(
+            observe_cli.start(
                 {},
                 stack,
                 self.contract,
@@ -408,8 +430,8 @@ class ReadinessTests(unittest.TestCase):
             nonlocal now
             now += seconds
 
-        with self.assertRaisesRegex(observe.StartupError, "Grafana datasource uses"):
-            observe.wait_ready(
+        with self.assertRaisesRegex(observe_services.StartupError, "Grafana datasource uses"):
+            observe_readiness.wait_ready(
                 self.services,
                 stack,
                 get=wrong_datasource,
@@ -420,11 +442,13 @@ class ReadinessTests(unittest.TestCase):
             )
 
     def test_provisioning_binds_grafana_to_the_selected_prometheus_listener(self) -> None:
-        compose = (observe.BASE / "compose.yml").read_text()
-        datasource = (observe.BASE / "grafana/provisioning/datasources/prometheus.yml").read_text()
-        self.assertIn(f"image: {observe.PROMETHEUS_IMAGE}", compose)
-        self.assertIn(f"image: {observe.GRAFANA_IMAGE}", compose)
-        self.assertIn(f"image: {observe.RENDERER_IMAGE}", compose)
+        compose = (observe_stack.BASE / "compose.yml").read_text()
+        datasource = (
+            observe_stack.BASE / "grafana/provisioning/datasources/prometheus.yml"
+        ).read_text()
+        self.assertIn(f"image: {observe_services.PROMETHEUS_IMAGE}", compose)
+        self.assertIn(f"image: {observe_services.GRAFANA_IMAGE}", compose)
+        self.assertIn(f"image: {observe_services.RENDERER_IMAGE}", compose)
         self.assertIn('GF_RENDERING_CALLBACK_URL: "${NARWHAL_GRAFANA_URL', compose)
         self.assertIn(
             'NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL',
@@ -449,7 +473,7 @@ class ReadinessTests(unittest.TestCase):
                     return CompletedProcess(command, 0, "", "")
 
                 env = {"NARWHAL_PROMETHEUS_LISTEN_ADDRESS": bind}
-                observe.ComposeStack(runner, env, self._token()).up()
+                observe_stack.ComposeStack(runner, env, self._token()).up()
                 self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_URL"], expected)
                 self.assertEqual(calls[0]["NARWHAL_PROMETHEUS_LISTEN_ADDRESS"], bind)
 
@@ -459,7 +483,9 @@ class ReadinessTests(unittest.TestCase):
                     return _healthy_get(url, timeout_s)
 
                 stack = FakeStack({"prometheus": [self.prometheus], "grafana": [self.grafana]})
-                observe.wait_ready(observe.configured_services(env), stack, get=get)
+                observe_readiness.wait_ready(
+                    observe_services.configured_services(env), stack, get=get
+                )
 
     def _token(self) -> Path:
         directory = tempfile.TemporaryDirectory()
@@ -476,8 +502,8 @@ class ReadinessTests(unittest.TestCase):
             calls.append(passed_env)
             return CompletedProcess(command, 0, "", "")
 
-        observe.ComposeStack(runner, {}, path).up()
-        observe.ComposeStack(runner, {}, path).up()
+        observe_stack.ComposeStack(runner, {}, path).up()
+        observe_stack.ComposeStack(runner, {}, path).up()
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
         self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
@@ -492,7 +518,7 @@ class ReadinessTests(unittest.TestCase):
             calls.append((command, dict(passed_env)))
             return CompletedProcess(command, 0, "", "")
 
-        self.assertIsNone(observe.ComposeStack(runner, {}, path).container("prometheus"))
+        self.assertIsNone(observe_stack.ComposeStack(runner, {}, path).container("prometheus"))
         command, env = calls[0]
         self.assertEqual(command[-4:], ["ps", "--all", "--quiet", "prometheus"])
         self.assertIn("NARWHAL_RENDERER_TOKEN", env)
@@ -515,25 +541,25 @@ class ReadinessTests(unittest.TestCase):
                     calls.append(passed_env)
                     return CompletedProcess(command, 0, "", "")
 
-                observe.ComposeStack(
+                observe_stack.ComposeStack(
                     runner, {"NARWHAL_GRAFANA_BIND_ADDRESS": bind}, self._token()
                 ).up()
                 self.assertEqual(calls[0]["NARWHAL_GRAFANA_URL"], expected)
                 self.assertEqual(calls[0]["NARWHAL_RENDERER_ADDRESS"], renderer)
 
     def test_container_change_rejects_an_unrelated_response(self) -> None:
-        replacement = _container("x" * 64, observe.GRAFANA_IMAGE)
+        replacement = _container("x" * 64, observe_services.GRAFANA_IMAGE)
         stack = FakeStack(
             {
                 "prometheus": [self.prometheus],
                 "grafana": [self.grafana, replacement],
             }
         )
-        with self.assertRaisesRegex(observe.StartupError, "container changed"):
-            observe.wait_ready(self.services, stack, get=_healthy_get)
+        with self.assertRaisesRegex(observe_services.StartupError, "container changed"):
+            observe_readiness.wait_ready(self.services, stack, get=_healthy_get)
 
     def test_stopped_container_ends_readiness_before_timeout(self) -> None:
-        exited = _container("g" * 64, observe.GRAFANA_IMAGE, status="exited")
+        exited = _container("g" * 64, observe_services.GRAFANA_IMAGE, status="exited")
         stack = FakeStack(
             {
                 "prometheus": [self.prometheus],
@@ -558,8 +584,8 @@ class ReadinessTests(unittest.TestCase):
             nonlocal now
             now += seconds
 
-        with self.assertRaisesRegex(observe.StartupError, "entered exited"):
-            observe.wait_ready(
+        with self.assertRaisesRegex(observe_services.StartupError, "entered exited"):
+            observe_readiness.wait_ready(
                 self.services,
                 stack,
                 get=starting_get,
@@ -574,12 +600,14 @@ class ReadinessTests(unittest.TestCase):
     def test_main_reports_startup_failure(self) -> None:
         stderr = io.StringIO()
         with (
-            mock.patch.object(observe, "load_contract", return_value=self.contract),
-            mock.patch.object(observe, "ComposeStack"),
-            mock.patch.object(observe, "start", side_effect=observe.StartupError("occupied")),
+            mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
+            mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(
+                observe_cli, "start", side_effect=observe_services.StartupError("occupied")
+            ),
             redirect_stderr(stderr),
         ):
-            code = observe.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
+            code = observe_cli.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn("observability startup failed: occupied", stderr.getvalue())
 
@@ -590,22 +618,22 @@ class ReadinessTests(unittest.TestCase):
             calls.append((command, kwargs.get("timeout")))
             return CompletedProcess(command, 0, "", "")
 
-        stack = observe.ComposeStack(runner, token_path=self._token())
+        stack = observe_stack.ComposeStack(runner, token_path=self._token())
         stack.up()
         self.assertIsNone(stack.container("prometheus"))
-        self.assertEqual(calls[0][1], observe.COMPOSE_UP_TIMEOUT_S)
-        self.assertEqual(calls[1][1], observe.COMMAND_TIMEOUT_S)
+        self.assertEqual(calls[0][1], observe_stack.COMPOSE_UP_TIMEOUT_S)
+        self.assertEqual(calls[1][1], observe_services.COMMAND_TIMEOUT_S)
 
     def test_main_reports_command_timeout(self) -> None:
         stderr = io.StringIO()
         timeout = TimeoutExpired(["docker", "compose", "up", "-d"], 300.0)
         with (
-            mock.patch.object(observe, "load_contract", return_value=self.contract),
-            mock.patch.object(observe, "ComposeStack"),
-            mock.patch.object(observe, "start", side_effect=timeout),
+            mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
+            mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(observe_cli, "start", side_effect=timeout),
             redirect_stderr(stderr),
         ):
-            code = observe.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
+            code = observe_cli.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn(
             "command exceeded 300s: docker compose up -d",

@@ -28,7 +28,7 @@ The contract tool's `serve` action passes `--kv-events` and `--model` when both 
 - the checked launch has prefix caching on
 - the checked launch publishes cache events
 
-In a checkout, the contract tool command is `tools/deployment/attestation_contract.py serve`. In an installed package, it is `python -m narwhal.deployment.attestation_contract serve`.
+The contract tool command is `python -m narwhal.deployment.attestation_contract.cli serve`.
 
 ## Residency
 

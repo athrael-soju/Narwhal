@@ -72,13 +72,13 @@ class ReactivePolicy:
         adjusted = controller.restore_floor()
         if adjusted:
             controller._last_step = now
-            flip = controller.scheduler.flips[-1]
+            flip = controller.scheduler.roles.flips[-1]
             return controller.monitor.instances.get(flip.iid)
         observed_load = (
             controller.scheduler.pool_load(Role.PREFILL),
             controller.scheduler.pool_load(Role.DECODE),
         )
-        controller.scheduler.observe_control_load(*observed_load)
+        controller.scheduler.roles.observe_control_load(*observed_load)
         if now - controller._last_step < controller.step_s and prefill_recovery is None:
             return None
         if advance_cadence:
@@ -104,7 +104,7 @@ class ReactivePolicy:
                     "decision_basis": "projected_ttft_recovery",
                     "eligibility_rule": "projected_ttft_recovery",
                 }
-            controller.scheduler.record_decision(
+            controller.scheduler.roles.record_decision(
                 prefill=proposed_p,
                 decode=n - proposed_p,
                 by="reactive",
@@ -180,7 +180,7 @@ class ReactivePolicy:
                 details["decision_basis"] = "projected_ttft_recovery"
                 details["eligibility_rule"] = "projected_ttft_recovery"
             proposed_p = min(current_p + 1, n) if prefill_recovery is not None else current_p
-            controller.scheduler.record_decision(
+            controller.scheduler.roles.record_decision(
                 prefill=proposed_p,
                 decode=n - proposed_p,
                 by="reactive",
@@ -487,7 +487,7 @@ class ReactivePolicy:
                 reason = "projected improvement is below the movement margin"
             else:
                 reason = "operator constraints leave no adjacent split"
-            controller.scheduler.record_decision(
+            controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
                 decode=candidate.decode,
                 by="reactive",
@@ -533,7 +533,7 @@ class ReactivePolicy:
         details["confirmations"] = self.confirmations
         details["required_confirmations"] = confirmations
         if self.confirmations < confirmations:
-            controller.scheduler.record_decision(
+            controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
                 decode=candidate.decode,
                 by="reactive",
@@ -546,7 +546,7 @@ class ReactivePolicy:
         self.proposal, self.confirmations = None, 0
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
-        moved = controller.scheduler.flip(target, "reactive", decision_details=details)
+        moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)

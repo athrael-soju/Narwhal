@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment import launch_engine, stages
+from narwhal.deployment import stages
+from narwhal.deployment.launch_engine import docker as launch_docker
 
 
 class StageTests(unittest.TestCase):
@@ -299,7 +300,7 @@ class DockerStageTests(unittest.TestCase):
     def test_stalled_create_reconciles_label_and_preserves_unrelated_container(self):
         state = self.fake_docker()
         with self.assertRaises(stages.StageTimeout) as caught:
-            launch_engine.docker(["create", "image"], self.root, "docker.log")
+            launch_docker.docker(["create", "image"], self.root, "docker.log")
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["status"], "observed")
         self.assertEqual(report["removed"], ["a" * 64])
@@ -309,14 +310,14 @@ class DockerStageTests(unittest.TestCase):
 
     def test_stalled_inspection_preserves_the_existing_serving_container(self):
         state = self.fake_docker()
-        owner = launch_engine._docker_owner(self.root)
+        owner = launch_docker._docker_owner(self.root)
         records = json.loads(state.read_text())
         records["b" * 64]["Config"]["Labels"]["io.narwhal.launch"] = owner
         records["b" * 64]["State"] = {"Running": True}
         state.write_text(json.dumps(records))
         (self.root / "container.id").write_text("b" * 64)
         with self.assertRaises(stages.StageTimeout) as caught:
-            launch_engine.docker(["run", "--rm", "image"], self.root, "inspection.log")
+            launch_docker.docker(["run", "--rm", "image"], self.root, "inspection.log")
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["removed"], ["a" * 64])
         self.assertEqual(report["preserved_resources"], ["b" * 64])
@@ -325,7 +326,7 @@ class DockerStageTests(unittest.TestCase):
 
     def test_stalled_start_cleans_only_the_named_container(self):
         state = self.fake_docker()
-        owner = launch_engine._docker_owner(self.root)
+        owner = launch_docker._docker_owner(self.root)
         records = {
             cid: {"Id": cid, "Config": {"Labels": {"io.narwhal.launch": owner}}}
             for cid in ("a" * 64, "b" * 64)
@@ -333,7 +334,7 @@ class DockerStageTests(unittest.TestCase):
         state.write_text(json.dumps(records))
         (self.root / "container.id").write_text("b" * 64)
         with self.assertRaises(stages.StageTimeout) as caught:
-            launch_engine.docker(["start", "a" * 64], self.root, "start.log")
+            launch_docker.docker(["start", "a" * 64], self.root, "start.log")
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["removed"], ["a" * 64])
         self.assertEqual(report["preserved_resources"], ["b" * 64])
@@ -342,7 +343,7 @@ class DockerStageTests(unittest.TestCase):
     def test_daemon_survivor_is_recorded_after_successful_rm_response(self):
         self.fake_docker(FAKE_DOCKER_KEEP_RESOURCE="1")
         with self.assertRaises(stages.StageTimeout) as caught:
-            launch_engine.docker(["create", "image"], self.root, "docker.log")
+            launch_docker.docker(["create", "image"], self.root, "docker.log")
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["surviving_resources"], ["a" * 64])
         self.assertEqual(report["removed"], [])
@@ -351,7 +352,7 @@ class DockerStageTests(unittest.TestCase):
         self.fake_docker(FAKE_DOCKER_STALL_INSPECT="1", NARWHAL_DOCKER_RECONCILE_SECONDS="0.2")
         started = time.monotonic()
         with self.assertRaises(stages.StageTimeout) as caught:
-            launch_engine.docker(["create", "image"], self.root, "docker.log")
+            launch_docker.docker(["create", "image"], self.root, "docker.log")
         self.assertLess(time.monotonic() - started, 3)
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["status"], "inspection_required")

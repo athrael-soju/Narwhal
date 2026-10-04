@@ -17,14 +17,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.deployment.engine_launch import load_launches
-from tools.deployment.host_access import SSH, Host, load_hosts, write_private
-from tools.deployment.launch_engine import (
+from narwhal.deployment.launch_engine.plan import (
     ENV_PREFIXES,
     MANAGED_ENV,
     ds_conv_state_layout_required,
     validate_runtime,
 )
+from tools.deployment.engine_launch import load_launches
+from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
 # The remote probe applies the launcher's own convolutional-state rule.

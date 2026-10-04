@@ -22,7 +22,6 @@ from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
 FABRIC_BUDGET_SOURCE = Path(__file__).with_name("fabric_budget.py")
-ENGINE_LAUNCHER_SOURCE = Path(__file__).with_name("launch_engine.py")
 CACHE_CAPTURE_SOURCE = Path(__file__).with_name("cache_capture_hook.py")
 
 
@@ -30,7 +29,7 @@ def role_files(host: Host) -> list[str]:
     files = [f".env.{role}" for role in host.roles]
     files += [f"engine-launch.{role}.json" for role in host.roles if role.startswith("engine-")]
     if any(role.startswith("engine-") for role in host.roles):
-        files.extend(("fabric_budget.py", "launch_engine.py", "cache_capture_hook.py"))
+        files.extend(("fabric_budget.py", "cache_capture_hook.py"))
     if "router" in host.roles:
         files.extend(("fleet.local.json", "profiling-limits.json"))
     return files
@@ -115,13 +114,10 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
     expose_colocated_gpus(launches, [list(host.roles) for host in hosts])
     budget_tool = FABRIC_BUDGET_SOURCE.read_bytes()
     budget_hash = hashlib.sha256(budget_tool).hexdigest()
-    launcher_tool = ENGINE_LAUNCHER_SOURCE.read_bytes()
-    launcher_hash = hashlib.sha256(launcher_tool).hexdigest()
     capture_tool = CACHE_CAPTURE_SOURCE.read_bytes()
     capture_hash = hashlib.sha256(capture_tool).hexdigest()
     for role in engine_roles:
         selected[role]["NARWHAL_FABRIC_BUDGET_SHA256"] = budget_hash
-        selected[role]["NARWHAL_ENGINE_LAUNCHER_SHA256"] = launcher_hash
         selected[role]["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = capture_hash
     access_names = {name for h in hosts for name in (h.ssh_env, h.password_env) if name}
     if any(access_names.intersection(values) for values in selected.values()):
@@ -144,7 +140,6 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
                 )
         if any(role.startswith("engine-") for role in host.roles):
             write_private(directory / "fabric_budget.py", budget_tool)
-            write_private(directory / "launch_engine.py", launcher_tool)
             write_private(directory / "cache_capture_hook.py", capture_tool)
         if "router" in host.roles:
             write_private(directory / "fleet.local.json", fleet_path.read_bytes())
@@ -229,7 +224,7 @@ def install_script(host: Host, manifest: dict) -> str:
             target = "runs/deployment/fleet.json"
         elif name == "profiling-limits.json":
             target = "runs/deployment/profiling-limits.json"
-        if name in ("fabric_budget.py", "launch_engine.py", "cache_capture_hook.py"):
+        if name in ("fabric_budget.py", "cache_capture_hook.py"):
             target = f"runs/deployment-tools/{name}"
         if name == "fleet.local.json":
             copies.append(

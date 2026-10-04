@@ -12,7 +12,7 @@ from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import identity_generation
 from narwhal.profiling.model import Profile
-from narwhal.profiling.probe import device_key
+from narwhal.profiling.probe.fleet import device_key
 from narwhal.profiling.store import ProfileStore
 
 ROOT = Path(__file__).resolve().parents[1]

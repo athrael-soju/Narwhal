@@ -8,7 +8,8 @@ from pathlib import Path
 
 import httpx
 
-from narwhal.diagnostics.check import Report, gate_profile_generation
+from narwhal.diagnostics.check.profiles import gate_profile_generation
+from narwhal.diagnostics.check.report import Report
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.profiling.calibration import verify_calibration
 from narwhal.profiling.generation import read_generation

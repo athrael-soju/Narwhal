@@ -12,7 +12,7 @@ from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.profiling.model import Profile
 from narwhal.serving.app import create_app
 from narwhal.serving.completion import completion_body_error, output_cap
-from narwhal.serving.router import NarwhalRouter
+from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
 
 

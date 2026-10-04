@@ -177,7 +177,7 @@ Each area of the Python package lives in one package or module:
 
 Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
 
-`serving/lifecycle.py` manages individual requests, while `runtime/lifecycle.py` handles engine drains and replacement.
+`serving/lifecycle.py` manages individual requests, while `runtime/lifecycle/` handles engine drains and replacement.
 
 Keep package initializers light and cross-package imports explicit, using `TYPE_CHECKING` for type-only imports across the serving/runtime boundary. Config models import scheduling definitions from `scheduling/control.py` and serving policy from `serving/policy.py`, and those two modules must stay independent of router construction.
 
@@ -188,11 +188,69 @@ Module responsibilities break down as follows:
 - `engines/client.py` holds HTTP deadlines.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
 - `config/serialization.py` serializes the versioned fleet configuration for file output and CLI printing.
-- `observability/metrics.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.
+- `observability/metrics/render.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.
 
 Runtime helpers take `NarwhalRouter` explicitly, and injected HTTP transports should be typed as `httpx.AsyncBaseTransport` with their type errors resolved. Lease renewal requires a configured `FileLease`.
 
 Use the installed `narwhal-*` commands in deployment scripts. Each wire contract carries a document schema identifier, such as `narwhal.state`.
+
+### Subpackages
+
+Import each name from the subpackage module that defines it.
+
+| Module                                                                       | Contents                                                                 |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `profiling/probe/engine.py`                                                  | Engine metric scrapes, tokenization, prompt sizing and completion bodies |
+| `profiling/probe/sweep.py`                                                   | Sweep grids and their bounds from live engine limits                     |
+| `profiling/probe/prefill.py`, `decode.py`, `warm.py`                         | Cold prefill, decode token-gap and warm prefill probes                   |
+| `profiling/probe/instance.py`                                                | One engine's profile from its sweeps                                     |
+| `profiling/probe/neighbours.py`                                              | Paced load on engines that share a GPU group                             |
+| `profiling/probe/fleet.py`                                                   | Fleet profiling run                                                      |
+| `profiling/probe/offline.py`                                                 | TTFT refit and profile merge                                             |
+| `profiling/probe/cli.py`                                                     | `narwhal-profile`                                                        |
+| `runtime/lifecycle/records.py`                                               | Lifecycle errors, drain records and readmission outcomes                 |
+| `runtime/lifecycle/manager.py`                                               | `LifecycleManager` drain and hold state                                  |
+| `runtime/lifecycle/identity.py`                                              | Process identity binding, capture and profile recovery checks            |
+| `runtime/lifecycle/readmission.py`                                           | Readmission validation                                                   |
+| `diagnostics/check/report.py`                                                | Gate outcomes                                                            |
+| `diagnostics/check/engines.py`                                               | Reach, calibration, contract, model, pace and tokenize gates             |
+| `diagnostics/check/profiles.py`                                              | Profile, profile generation and SLO gates                                |
+| `diagnostics/check/transfer.py`                                              | KV handoff production and directed transfer gates                        |
+| `diagnostics/check/evidence.py`                                              | Directed KV evidence snapshots, writing and verification                 |
+| `diagnostics/check/preflight.py`                                             | Gate order for one preflight run                                         |
+| `diagnostics/check/cli.py`                                                   | `narwhal-check`                                                          |
+| `serving/router/routing.py`                                                  | `NarwhalRouter` construction, request admission and live state           |
+| `serving/router/sizing.py`                                                   | `RequestSizer` input counts and prefix-cache evidence                    |
+| `serving/router/verification.py`                                             | `SuspectVerifier` leg failure classes and suspect verification           |
+| `scheduling/scheduler/placement.py`                                          | `GlobalScheduler` placement, pricing, availability and engine health     |
+| `scheduling/scheduler/occupancy.py`                                          | Decode occupancy projection and decode admission                         |
+| `scheduling/scheduler/roles.py`                                              | `RoleChanges` role changes and controller decisions                      |
+| `observability/metrics/exposition.py`                                        | Prometheus text lines and SLO-scaled histograms                          |
+| `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
+| `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
+| `deployment/launch_engine/runtime.py`                                        | Standard-library code for the engine image and serving hook              |
+| `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
+| `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
+| `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
+| `deployment/launch_engine/captures.py`                                       | Model dimension, cache layout, cache registration and handshake captures |
+| `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
+| `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
+| `deployment/attestation_contract/evidence.py`                                | Checked plan and live engine binding                                     |
+| `deployment/attestation_contract/capture.py`                                 | Live NIXL, model, transfer and HTTP captures                             |
+| `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
+| `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |
+| `deployment/attestation_contract/fleet.py`                                   | Router engine contract finalization                                      |
+| `deployment/attestation_contract/cli.py`                                     | Contract tool command                                                    |
+
+`make observe` runs `tools/observability/start/cli.py`:
+
+| Module                                      | Contents                                         |
+| ------------------------------------------- | ------------------------------------------------ |
+| `tools/observability/start/services.py`     | Listener and service contracts                   |
+| `tools/observability/start/stack.py`        | Docker Compose control                           |
+| `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |
+| `tools/observability/start/readiness.py`    | Service, dashboard and target readiness          |
+| `tools/observability/start/cli.py`          | Startup sequence and command                     |
 
 ### Working files and deployment artifacts
 

@@ -12,7 +12,7 @@ from .retry import transient
 
 if TYPE_CHECKING:
     from ..scheduling.demand import ArrivalObservation
-    from .router import NarwhalRouter
+    from .router.routing import NarwhalRouter
 
 T = TypeVar("T")
 

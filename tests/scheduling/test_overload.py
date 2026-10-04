@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -130,10 +131,10 @@ class DecodeAdmissionTests(unittest.TestCase):
             )
 
     def test_decode_admission_follows_measured_concurrency(self):
-        self.assertTrue(self.scheduler.decode_admits(self.request))
+        self.assertTrue(decode_admits(self.scheduler, self.request))
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit)
-        self.assertFalse(self.scheduler.decode_admits(self.request))
+        self.assertFalse(decode_admits(self.scheduler, self.request))
 
     def prefilling(self, count, wanted_len=0, input_len=10):
         for _ in range(count):
@@ -146,24 +147,24 @@ class DecodeAdmissionTests(unittest.TestCase):
 
     def test_a_serving_concurrency_limit_caps_the_measured_limit(self):
         self.fill(2)
-        self.assertFalse(self.scheduler.decode_admits(self.request, concurrency=2))
-        self.assertTrue(self.scheduler.decode_admits(self.request, concurrency=3))
+        self.assertFalse(decode_admits(self.scheduler, self.request, concurrency=2))
+        self.assertTrue(decode_admits(self.scheduler, self.request, concurrency=3))
 
     def test_requests_in_prefill_count_when_they_start_decode_inside_the_window(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit - 3, wanted_len=2_000)
         self.prefilling(3, wanted_len=2_000, input_len=8_000)
         request = Request("new", 10, wanted_len=1)
-        self.assertTrue(self.scheduler.decode_admits(request))
+        self.assertTrue(decode_admits(self.scheduler, request))
         ready = self.ready(request)
-        self.assertFalse(self.scheduler.decode_admits(request, ready_s=ready))
+        self.assertFalse(decode_admits(self.scheduler, request, ready_s=ready))
 
     def test_requests_in_prefill_that_finish_decode_by_ready_time_hold_no_slot(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit - 1, wanted_len=2_000)
         self.prefilling(3, wanted_len=1)
         self.assertTrue(
-            self.scheduler.decode_admits(self.request, ready_s=self.ready(self.request) + 5.0)
+            decode_admits(self.scheduler, self.request, ready_s=self.ready(self.request) + 5.0)
         )
 
     def test_the_demand_model_estimates_output_from_the_requested_cap_or_reports_unknown(self):
@@ -174,11 +175,11 @@ class DecodeAdmissionTests(unittest.TestCase):
     def test_residents_that_finish_before_ready_time_hold_no_slot(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2)
         budget = self.scheduler.slo.ttft_s
-        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=budget))
-        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=10.0, ttft_s=budget))
+        self.assertFalse(decode_admits(self.scheduler, self.request, ttft_s=budget))
+        self.assertTrue(decode_admits(self.scheduler, self.request, ready_s=10.0, ttft_s=budget))
 
     def first_free_slot(self):
-        occupancy = self.scheduler.decode_occupancy(self.request.input_len)
+        occupancy = decode_occupancy(self.scheduler, self.request.input_len)
         return min(last for _, last, _ in occupancy.residents)
 
     def test_a_request_waits_for_a_slot_within_its_ttft_budget(self):
@@ -186,18 +187,18 @@ class DecodeAdmissionTests(unittest.TestCase):
         wait = self.first_free_slot()
         budget = self.scheduler.slo.ttft_s
         self.assertGreater(wait, 0.0)
-        self.assertTrue(self.scheduler.decode_admits(self.request, ttft_s=budget - 2 * wait))
-        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=budget - wait / 2))
+        self.assertTrue(decode_admits(self.scheduler, self.request, ttft_s=budget - 2 * wait))
+        self.assertFalse(decode_admits(self.scheduler, self.request, ttft_s=budget - wait / 2))
 
     def test_the_admission_margin_widens_the_budget_for_a_decode_wait(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
         wait = self.first_free_slot()
         budget = self.scheduler.slo.ttft_s
         priced = budget - wait / 2
-        self.assertFalse(self.scheduler.decode_admits(self.request, ttft_s=priced))
+        self.assertFalse(decode_admits(self.scheduler, self.request, ttft_s=priced))
         margin = wait / budget
         self.assertTrue(
-            self.scheduler.decode_admits(self.request, ttft_s=priced, ttft_margin=margin)
+            decode_admits(self.scheduler, self.request, ttft_s=priced, ttft_margin=margin)
         )
 
     def test_the_kv_limit_refuses_a_request_whose_wait_fits_its_budget(self):
@@ -206,8 +207,8 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"r{index}", 500, phase=Phase.DECODE, wanted_len=20_000)
             )
         request = Request("new", 500, wanted_len=20_000)
-        self.assertFalse(self.scheduler.decode_admits(request, ttft_s=0.0))
-        occupancy = self.scheduler.decode_occupancy(request.input_len)
+        self.assertFalse(decode_admits(self.scheduler, request, ttft_s=0.0))
+        occupancy = decode_occupancy(self.scheduler, request.input_len)
         self.assertLess(len(occupancy.residents), occupancy.slots)
 
     def test_a_hold_ending_as_the_request_starts_frees_its_kv(self):
@@ -216,14 +217,14 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"r{index}", 45_000, phase=Phase.DECODE, wanted_len=1)
             )
         request = Request("new", 45_000, wanted_len=1)
-        self.assertTrue(self.scheduler.decode_admits(request, concurrency=2))
+        self.assertTrue(decode_admits(self.scheduler, request, concurrency=2))
 
     def test_a_burst_admits_up_to_projected_decode_capacity(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1, wanted_len=2_000)
         admitted = 0
         for index in range(50):
             arrival = Request(f"a{index}", 10, wanted_len=2_000)
-            if self.scheduler.decode_admits(arrival, ready_s=self.ready(arrival)):
+            if decode_admits(self.scheduler, arrival, ready_s=self.ready(arrival)):
                 admitted += 1
                 self.scheduler.monitor.dispatched("e0", arrival)
         self.assertEqual(admitted, 1)
@@ -234,19 +235,19 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"d{index}", 500, phase=Phase.DECODE, wanted_len=32_768)
             )
         request = Request("new", 500, wanted_len=32_768)
-        self.assertFalse(self.scheduler.decode_admits(request))
-        self.assertTrue(self.scheduler.decode_admits(request, expected_output=lambda r: 300))
+        self.assertFalse(decode_admits(self.scheduler, request))
+        self.assertTrue(decode_admits(self.scheduler, request, expected_output=lambda r: 300))
 
     def test_residents_and_the_request_share_the_token_budget(self):
         request = Request("long", 30_000, wanted_len=20_000)
         for index in range(5):
             self.scheduler.monitor.dispatched("e3", Request(f"s{index}", 500, phase=Phase.DECODE))
-        self.assertTrue(self.scheduler.decode_admits(request))
+        self.assertTrue(decode_admits(self.scheduler, request))
         for index in range(2):
             self.scheduler.monitor.dispatched(
                 "e3", Request(f"l{index}", 30_000, phase=Phase.DECODE, wanted_len=20_000)
             )
-        self.assertFalse(self.scheduler.decode_admits(request))
+        self.assertFalse(decode_admits(self.scheduler, request))
 
     def test_a_resident_past_its_estimate_holds_until_its_cap(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
@@ -256,13 +257,13 @@ class DecodeAdmissionTests(unittest.TestCase):
             )
         estimate = lambda r: 100
         self.assertFalse(
-            self.scheduler.decode_admits(self.request, ready_s=10.0, expected_output=estimate)
+            decode_admits(self.scheduler, self.request, ready_s=10.0, expected_output=estimate)
         )
 
     def test_a_resident_with_an_unknown_output_holds_its_slot(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
         self.assertFalse(
-            self.scheduler.decode_admits(self.request, ready_s=10.0, expected_output=lambda r: 0)
+            decode_admits(self.scheduler, self.request, ready_s=10.0, expected_output=lambda r: 0)
         )
 
     def test_delivered_output_shortens_a_residents_hold(self):
@@ -272,10 +273,10 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3",
                 Request(f"r{index}", 10, phase=Phase.DECODE, output_len=1_999, wanted_len=2_000),
             )
-        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=1.0))
+        self.assertTrue(decode_admits(self.scheduler, self.request, ready_s=1.0))
         for request in self.scheduler.monitor.instances["e3"].decode.values():
             request.output_len = 0
-        self.assertFalse(self.scheduler.decode_admits(self.request, ready_s=1.0))
+        self.assertFalse(decode_admits(self.scheduler, self.request, ready_s=1.0))
 
     def test_requests_in_prefill_take_slots_in_handoff_order(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
@@ -283,10 +284,10 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.prefilling(1, wanted_len=200, input_len=1_000)
         budget = self.scheduler.slo.ttft_s
         request = Request("new", 10, wanted_len=200)
-        self.assertTrue(self.scheduler.decode_admits(request, ready_s=0.0, ttft_s=budget))
+        self.assertTrue(decode_admits(self.scheduler, request, ready_s=0.0, ttft_s=budget))
         ready = self.ready(request)
-        self.assertFalse(self.scheduler.decode_admits(request, ready_s=ready, ttft_s=budget))
-        self.assertTrue(self.scheduler.decode_admits(request, ready_s=ready, ttft_s=ready))
+        self.assertFalse(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=budget))
+        self.assertTrue(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=ready))
 
     def test_the_tpot_check_admits_on_any_engine_with_room(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE
@@ -305,7 +306,7 @@ class DecodeAdmissionTests(unittest.TestCase):
             self.scheduler.monitor.dispatched(
                 "e3", Request(f"s{index}", 12_000, phase=Phase.DECODE, wanted_len=2_000)
             )
-        self.assertTrue(self.scheduler.decode_admits(Request("new", 20_000, wanted_len=8)))
+        self.assertTrue(decode_admits(self.scheduler, Request("new", 20_000, wanted_len=8)))
 
     def test_the_tpot_check_counts_residents_generating_at_ready_time(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE
@@ -326,8 +327,8 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"b{index}", 200_000, phase=Phase.DECODE, wanted_len=2_000)
             )
         request = Request("new", 200_000, wanted_len=1)
-        self.assertFalse(self.scheduler.decode_admits(request))
-        self.assertTrue(self.scheduler.decode_admits(request, ready_s=2.0))
+        self.assertFalse(decode_admits(self.scheduler, request))
+        self.assertTrue(decode_admits(self.scheduler, request, ready_s=2.0))
 
     def test_admission_reuses_the_controller_estimate_snapshot(self):
         demand = self.router.controller.demand
@@ -342,14 +343,14 @@ class DecodeAdmissionTests(unittest.TestCase):
             self.scheduler.monitor.dispatched(
                 "e3", Request(f"r{index}", 500, phase=Phase.DECODE, wanted_len=20_000)
             )
-        self.assertFalse(self.scheduler.decode_admits(Request("new", 500, wanted_len=20_000)))
-        self.assertTrue(self.scheduler.decode_admits(Request("new", 500, wanted_len=17_000)))
+        self.assertFalse(decode_admits(self.scheduler, Request("new", 500, wanted_len=20_000)))
+        self.assertTrue(decode_admits(self.scheduler, Request("new", 500, wanted_len=17_000)))
 
     def test_an_uncapped_request_checks_decode_at_its_prefill_completion(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.prefilling(limit, wanted_len=2_000, input_len=1_000)
-        self.assertTrue(self.scheduler.decode_admits(Request("new", 10), ready_s=0.0))
-        self.assertFalse(self.scheduler.decode_admits(Request("new", 10), ready_s=20.0))
+        self.assertTrue(decode_admits(self.scheduler, Request("new", 10), ready_s=0.0))
+        self.assertFalse(decode_admits(self.scheduler, Request("new", 10), ready_s=20.0))
 
     def test_a_resident_at_its_cap_frees_its_slot(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
@@ -357,7 +358,7 @@ class DecodeAdmissionTests(unittest.TestCase):
             self.scheduler.monitor.dispatched(
                 "e3", Request(f"r{index}", 10, phase=Phase.DECODE, output_len=8, wanted_len=8)
             )
-        self.assertTrue(self.scheduler.decode_admits(self.request, ready_s=0.5))
+        self.assertTrue(decode_admits(self.scheduler, self.request, ready_s=0.5))
 
     def test_a_resident_past_its_estimate_holds_kv_to_its_cap(self):
         for index in range(5):
@@ -366,12 +367,12 @@ class DecodeAdmissionTests(unittest.TestCase):
                 Request(f"r{index}", 500, phase=Phase.DECODE, output_len=600, wanted_len=20_000),
             )
         request = Request("new", 500, wanted_len=20_000)
-        self.assertFalse(self.scheduler.decode_admits(request, expected_output=lambda r: 500))
+        self.assertFalse(decode_admits(self.scheduler, request, expected_output=lambda r: 500))
 
     def test_requests_that_decode_at_different_times_share_slots(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.prefilling(limit, wanted_len=1, input_len=1_000)
-        self.assertTrue(self.scheduler.decode_admits(Request("new", 10, wanted_len=2_000)))
+        self.assertTrue(decode_admits(self.scheduler, Request("new", 10, wanted_len=2_000)))
 
     def test_the_output_estimate_falls_back_to_the_fleet_median(self):
         demand = self.router.controller.demand
@@ -399,9 +400,9 @@ class DecodeAdmissionTests(unittest.TestCase):
 
     def test_requests_waiting_for_a_decode_slot_count_as_committed(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1)
-        self.assertTrue(self.scheduler.decode_admits(self.request))
+        self.assertTrue(decode_admits(self.scheduler, self.request))
         self.scheduler.monitor.waiting["w"] = Request("w", 10, phase=Phase.DECODE)
-        self.assertFalse(self.scheduler.decode_admits(self.request))
+        self.assertFalse(decode_admits(self.scheduler, self.request))
 
     def test_decode_admission_follows_the_tpot_budget_under_load(self):
         self.scheduler.profiles.put(
@@ -415,11 +416,11 @@ class DecodeAdmissionTests(unittest.TestCase):
             self.scheduler.monitor.dispatched(
                 "e3", Request(f"kv{index}", 150_000, phase=Phase.DECODE, wanted_len=1)
             )
-        self.assertFalse(self.scheduler.decode_admits(Request("new", 200_000, wanted_len=1)))
-        self.assertTrue(self.scheduler.decode_admits(Request("new", 40_000, wanted_len=1)))
+        self.assertFalse(decode_admits(self.scheduler, Request("new", 200_000, wanted_len=1)))
+        self.assertTrue(decode_admits(self.scheduler, Request("new", 40_000, wanted_len=1)))
 
     def test_a_request_that_misses_the_budget_alone_is_left_to_placement(self):
-        self.assertTrue(self.scheduler.decode_admits(Request("huge", 150_000)))
+        self.assertTrue(decode_admits(self.scheduler, Request("huge", 150_000)))
 
     def test_an_engine_without_a_profile_admits(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
@@ -431,9 +432,9 @@ class DecodeAdmissionTests(unittest.TestCase):
                 None if iid == "e3" else get(iid, *args, **kwargs)
             ),
         ):
-            self.assertTrue(self.scheduler.decode_admits(self.request))
+            self.assertTrue(decode_admits(self.scheduler, self.request))
 
     def test_a_fleet_without_live_decode_engines_admits(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
         self.scheduler.eject("e3")
-        self.assertTrue(self.scheduler.decode_admits(self.request))
+        self.assertTrue(decode_admits(self.scheduler, self.request))

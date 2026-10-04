@@ -15,7 +15,7 @@ from . import state as handoff_state
 from .lease import FileLease, LeaseError
 
 if TYPE_CHECKING:
-    from ..serving.router import NarwhalRouter
+    from ..serving.router.routing import NarwhalRouter
 
 
 log = logging.getLogger("narwhal.standby")
@@ -159,7 +159,7 @@ async def standby_loop(
                                     return
                                 router.lease_epoch = lease.epoch
                                 router.lease_holder = lease.holder
-                                from .lifecycle import (
+                                from .lifecycle.identity import (
                                     allow_profile_recovery,
                                     check_process_identities,
                                 )

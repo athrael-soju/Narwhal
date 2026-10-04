@@ -12,7 +12,7 @@ from ..profiling.model import Profile
 from ..types import Request, Role
 from .monitor import InstanceMonitor
 from .prefill import warm_prefill_time
-from .scheduler import GlobalScheduler
+from .scheduler.placement import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
 OutputEstimates = tuple[dict[tuple[int, int], float], dict[int, float]]

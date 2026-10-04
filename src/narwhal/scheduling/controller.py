@@ -11,7 +11,7 @@ from .consolidation import ConsolidationSafety
 from .demand import ArrivalObservation, Demand, DemandModel, OutputEstimates, rounded
 from .monitor import InstanceMonitor
 from .reactive import ReactivePolicy
-from .scheduler import GlobalScheduler
+from .scheduler.placement import GlobalScheduler
 from .scoring import PrefillProjection, SplitScorer
 
 log = logging.getLogger("narwhal.controller")
@@ -245,7 +245,7 @@ class ReactiveController:
             if not pool:
                 break
             mover = min(pool, key=lambda inst: len(inst.prefill) + len(inst.decode))
-            moved_engine = self.scheduler.flip(
+            moved_engine = self.scheduler.roles.flip(
                 Role.PREFILL,
                 "floor_recovery",
                 candidate=mover,

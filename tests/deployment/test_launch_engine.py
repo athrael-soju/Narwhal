@@ -14,28 +14,32 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-import tools.deployment.launch_engine as launcher
+from narwhal.deployment.launch_engine import docker as launch_docker
+from narwhal.deployment.launch_engine import plan as launch_plan
+from narwhal.deployment.launch_engine.captures import handshake_policy
+from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.plan import (
+    ENGINE_TTL_S,
+    build,
+    load,
+    prepare,
+    releases_peers,
+    validate_runtime,
+)
+from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.start import (
+    start,
+    start_shared,
+    validate_shared_gpu,
+    validate_shared_runs,
+)
 from tests.deployment.fixtures import (
     cache_settings_line,
     cuda_engine,
     engine_config_modules,
     launcher_inputs,
+    patched_docker,
     runtime,
-)
-from tools.deployment.launch_engine import (
-    ENGINE_TTL_S,
-    build,
-    check,
-    digest,
-    handshake_policy,
-    load,
-    prepare,
-    releases_peers,
-    start,
-    start_shared,
-    validate_runtime,
-    validate_shared_gpu,
-    validate_shared_runs,
 )
 
 IMAGE_CHECK_OUTPUT = (
@@ -76,7 +80,7 @@ class EngineLauncherTests(unittest.TestCase):
                 + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
             )
             with (
-                patch("tools.deployment.launch_engine.docker") as docker,
+                patched_docker() as docker,
                 patch("narwhal.deployment.stages.run") as invoke,
             ):
                 invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
@@ -130,7 +134,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
 
     def test_qwen_linear_convolution_requires_ds_layout(self):
-        from tools.deployment.launch_engine import requires_ds_conv_state_layout
+        from narwhal.deployment.launch_engine.plan import requires_ds_conv_state_layout
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -222,7 +226,7 @@ class EngineLauncherTests(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     prepare(run, env, backend=backend)
                 plan = load(run)
-                socket_dir = launcher.KV_EVENTS_ROOT / f"narwhal-{os.getuid()}" / plan["name"]
+                socket_dir = launch_plan.KV_EVENTS_ROOT / f"narwhal-{os.getuid()}" / plan["name"]
                 engine_dir = "/narwhal-kv-events" if backend == "container" else str(socket_dir)
                 self.assertEqual(
                     plan["kv_events"],
@@ -249,25 +253,25 @@ class EngineLauncherTests(unittest.TestCase):
                 self.assertEqual(mount in plan["common"], backend == "container")
                 # A host restart clears /tmp; check and start recreate the directory.
                 socket_dir.rmdir()
-                launcher.kv_events_directory(plan)
+                launch_plan.kv_events_directory(plan)
                 self.assertTrue(socket_dir.is_dir())
                 if backend == "container":
                     # Runtime scripts mount the directory before the engine starts.
                     socket_dir.rmdir()
-                    with patch.object(launcher, "docker", return_value="") as docker:
-                        launcher.run_runtime_script(run, plan, "pass", [], "script.log")
+                    with patch.object(launch_docker, "docker", return_value="") as docker:
+                        launch_docker.run_runtime_script(run, plan, "pass", [], "script.log")
                     docker.assert_called_once()
                     self.assertTrue(socket_dir.is_dir())
                 socket_dir.chmod(0o755)
                 with self.assertRaisesRegex(ValueError, "private to the launching user"):
-                    launcher.kv_events_directory(plan)
+                    launch_plan.kv_events_directory(plan)
                 socket_dir.chmod(0o700)
 
     def test_sidecar_connects_to_the_socket_names_the_launcher_binds(self):
         from narwhal.engines.attestation import EVENTS_SOCKET, REPLAY_SOCKET
 
         self.assertEqual(
-            launcher.KV_EVENTS_SOCKETS,
+            launch_plan.KV_EVENTS_SOCKETS,
             {"endpoint": EVENTS_SOCKET, "replay_endpoint": REPLAY_SOCKET},
         )
 
@@ -313,7 +317,7 @@ class EngineLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
             with (
-                patch.object(launcher, "KV_EVENTS_ROOT", Path(folder) / ("d" * 80)),
+                patch.object(launch_plan, "KV_EVENTS_ROOT", Path(folder) / ("d" * 80)),
                 self.assertRaisesRegex(ValueError, "exceeds 107 bytes"),
             ):
                 build(record, env, Path(folder) / "launch")
@@ -337,7 +341,7 @@ class EngineLauncherTests(unittest.TestCase):
                 )
                 image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
                 with (
-                    patch("tools.deployment.launch_engine.docker", side_effect=[image, output]),
+                    patched_docker(side_effect=[image, output]),
                     contextlib.redirect_stdout(io.StringIO()) as printed,
                 ):
                     if case == "endpoint_differs":
@@ -395,7 +399,7 @@ class EngineLauncherTests(unittest.TestCase):
                 )
                 image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
                 with (
-                    patch("tools.deployment.launch_engine.docker", side_effect=[image, output]),
+                    patched_docker(side_effect=[image, output]),
                     contextlib.redirect_stdout(io.StringIO()) as printed,
                 ):
                     check(run, plan)
@@ -455,7 +459,7 @@ class EngineLauncherTests(unittest.TestCase):
             )
             run = root / "launch"
             prepare(run, env)
-            with patch("tools.deployment.launch_engine.docker") as mocked:
+            with patched_docker() as mocked:
                 with self.assertRaisesRegex(ValueError, "requires --trust-remote-code"):
                     check(run, load(run))
                 mocked.assert_not_called()
@@ -479,7 +483,7 @@ class EngineLauncherTests(unittest.TestCase):
             env["NARWHAL_MODEL_CONFIG_SHA256"] = digest(root / "model/config.json")
             run = root / "launch"
             prepare(run, env)
-            with patch("tools.deployment.launch_engine.docker") as mocked:
+            with patched_docker() as mocked:
                 with self.assertRaisesRegex(ValueError, "requires VLLM_SSM_CONV_STATE_LAYOUT=DS"):
                     check(run, load(run))
                 mocked.assert_not_called()
@@ -547,7 +551,7 @@ class EngineLauncherTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.deployment.launch_engine.docker", side_effect=execute) as docker:
+                with patched_docker(side_effect=execute) as docker:
                     if passed:
                         handshake_policy(run, plan)
                         capture = run / "handshake-policy.json"
@@ -575,24 +579,21 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env)
             self.assertEqual((run / "container.env").stat().st_mode & 0o777, 0o600)
             plan = load(run)
-            with patch("tools.deployment.launch_engine.docker") as mocked:
+            with patched_docker() as mocked:
                 with self.assertRaises(FileNotFoundError):
                     start(run, plan)
                 mocked.assert_not_called()
-            with patch(
-                "tools.deployment.launch_engine.docker",
+            with patched_docker(
                 side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ) as mocked:
                 check(run, plan)
                 self.assertIn("--rm", mocked.call_args_list[1].args[0])
-            with patch(
-                "tools.deployment.launch_engine.docker", side_effect=["c" * 64, "started"]
-            ) as mocked:
+            with patched_docker(side_effect=["c" * 64, "started"]) as mocked:
                 start(run, load(run))
                 self.assertEqual(mocked.call_args_list[0].args[0][0], "create")
                 self.assertEqual(mocked.call_args_list[1].args[0], ["start", "c" * 64])
             self.assertEqual((run / "container.id").read_text().strip(), "c" * 64)
-            with patch("tools.deployment.launch_engine.docker") as mocked:
+            with patched_docker() as mocked:
                 with self.assertRaisesRegex(ValueError, "already has a container"):
                     start(run, load(run))
                 mocked.assert_not_called()
@@ -608,22 +609,20 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env)
             plan = load(run)
             with (
-                patch(
-                    "tools.deployment.launch_engine.docker",
+                patched_docker(
                     return_value=json.dumps([{"Id": "sha256:" + "d" * 64}]),
                 ),
                 self.assertRaisesRegex(ValueError, "image identity"),
             ):
                 check(run, plan)
             self.assertFalse((run / "checked.json").exists())
-            with patch(
-                "tools.deployment.launch_engine.docker",
+            with patched_docker(
                 side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
             ):
                 check(run, plan)
             plan["args"].append("--enforce-eager")
             (run / "launch.json").write_text(json.dumps(plan))
-            with patch("tools.deployment.launch_engine.docker") as mocked:
+            with patched_docker() as mocked:
                 with self.assertRaisesRegex(ValueError, "plan changed"):
                     start(run, plan)
                 mocked.assert_not_called()
@@ -681,7 +680,7 @@ class EngineLauncherTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.deployment.launch_engine.docker", side_effect=execute_check):
+                with patched_docker(side_effect=execute_check):
                     if missing_dependency:
                         with self.assertRaises(ModuleNotFoundError):
                             check(run, plan)
@@ -727,7 +726,7 @@ class EngineLauncherTests(unittest.TestCase):
                     exec(command[index + 1], {})
 
             with (
-                patch("tools.deployment.launch_engine.docker", side_effect=execute_check),
+                patched_docker(side_effect=execute_check),
                 self.assertRaisesRegex(AssertionError, "image package versions differ"),
             ):
                 check(run, plan)
@@ -785,9 +784,11 @@ class SharedEngineStartTests(unittest.TestCase):
                 (selected[1][0] / env_file).write_text("CUDA_VISIBLE_DEVICES=GPU-another\n")
                 plans = dict(selected)
                 with (
-                    patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
-                    patch("tools.deployment.launch_engine.require_checked"),
-                    patch("tools.deployment.launch_engine.run_runtime_script") as inspect,
+                    patch(
+                        "narwhal.deployment.launch_engine.start.load", side_effect=plans.__getitem__
+                    ),
+                    patch("narwhal.deployment.launch_engine.start.require_checked"),
+                    patch("narwhal.deployment.launch_engine.start.run_runtime_script") as inspect,
                     self.assertRaisesRegex(ValueError, "engine-2:.*differs from shared GPU"),
                 ):
                     validate_shared_runs([run for run, _ in selected], backend=backend)
@@ -827,7 +828,7 @@ class SharedEngineStartTests(unittest.TestCase):
                 (run / "engine.env").write_text(f"CUDA_VISIBLE_DEVICES=1\nPYTHONPATH={runtime}\n")
             plans = dict(selected)
             with (
-                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
+                patch("narwhal.deployment.launch_engine.start.load", side_effect=plans.__getitem__),
                 patch.dict(os.environ, {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}),
             ):
                 self.assertEqual(
@@ -865,7 +866,7 @@ class SharedEngineStartTests(unittest.TestCase):
                         exec(command[index + 1], {})
                     return output.getvalue()
 
-                with patch("tools.deployment.launch_engine.docker", side_effect=inspect):
+                with patched_docker(side_effect=inspect):
                     validate_shared_gpu(run, plan)
                     cuda.get_device_properties.assert_called_once_with(0)
                     cuda.device_count.return_value = 2
@@ -877,8 +878,8 @@ class SharedEngineStartTests(unittest.TestCase):
             selected = self.fixture(Path(folder), 4)
             plans = dict(selected)
             with (
-                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
-                patch("tools.deployment.launch_engine.require_checked"),
+                patch("narwhal.deployment.launch_engine.start.load", side_effect=plans.__getitem__),
+                patch("narwhal.deployment.launch_engine.start.require_checked"),
             ):
                 self.assertEqual(validate_shared_runs([run for run, _ in selected]), selected)
                 selected[3][1]["side_channel_port"] = 8001
@@ -896,8 +897,8 @@ class SharedEngineStartTests(unittest.TestCase):
                 plan["shared_device"]["gpu_memory_utilization"] = 0.1
             plans = dict(selected)
             with (
-                patch("tools.deployment.launch_engine.load", side_effect=plans.__getitem__),
-                patch("tools.deployment.launch_engine.require_checked"),
+                patch("narwhal.deployment.launch_engine.start.load", side_effect=plans.__getitem__),
+                patch("narwhal.deployment.launch_engine.start.require_checked"),
             ):
                 self.assertEqual(validate_shared_runs([run for run, _ in selected]), selected)
 
@@ -929,13 +930,17 @@ class SharedEngineStartTests(unittest.TestCase):
                 return "sha256:test"
 
             with (
-                patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
-                patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
                 patch(
-                    "tools.deployment.launch_engine._create_container", side_effect=start_container
+                    "narwhal.deployment.launch_engine.start.validate_shared_runs",
+                    return_value=selected,
                 ),
-                patch("tools.deployment.launch_engine.wait_ready", side_effect=ready),
-                patch("tools.deployment.launch_engine.docker", side_effect=inspect),
+                patch("narwhal.deployment.launch_engine.start.gpu_memory", side_effect=memory),
+                patch(
+                    "narwhal.deployment.launch_engine.start._create_container",
+                    side_effect=start_container,
+                ),
+                patch("narwhal.deployment.launch_engine.start.wait_ready", side_effect=ready),
+                patched_docker(side_effect=inspect),
             ):
                 start_shared([run for run, _ in selected], 30)
             self.assertEqual(
@@ -982,13 +987,17 @@ class SharedEngineStartTests(unittest.TestCase):
                 return "sha256:test"
 
             with (
-                patch("tools.deployment.launch_engine.validate_shared_runs", return_value=selected),
-                patch("tools.deployment.launch_engine.gpu_memory", side_effect=memory),
                 patch(
-                    "tools.deployment.launch_engine._create_container", side_effect=start_container
+                    "narwhal.deployment.launch_engine.start.validate_shared_runs",
+                    return_value=selected,
                 ),
-                patch("tools.deployment.launch_engine.wait_ready"),
-                patch("tools.deployment.launch_engine.docker", side_effect=inspect),
+                patch("narwhal.deployment.launch_engine.start.gpu_memory", side_effect=memory),
+                patch(
+                    "narwhal.deployment.launch_engine.start._create_container",
+                    side_effect=start_container,
+                ),
+                patch("narwhal.deployment.launch_engine.start.wait_ready"),
+                patched_docker(side_effect=inspect),
                 self.assertRaisesRegex(ValueError, "engine-2:.*29000/30000.*free GPU memory"),
             ):
                 start_shared([run for run, _ in selected], 30)
@@ -1000,7 +1009,7 @@ class SharedEngineStartTests(unittest.TestCase):
             self.assertEqual(failure["gpu_after_error"], "sensor offline")
 
     def test_docker_log_reader_keeps_stderr(self):
-        from tools.deployment.launch_engine import docker
+        from narwhal.deployment.launch_engine.docker import docker
 
         with (
             tempfile.TemporaryDirectory() as folder,

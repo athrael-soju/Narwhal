@@ -11,8 +11,9 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-from tests.deployment.fixtures import engine_config_modules, launcher_inputs
-from tools.deployment.launch_engine import check, load, prepare
+from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.plan import load, prepare
+from tests.deployment.fixtures import engine_config_modules, launcher_inputs, patched_docker
 
 
 class TokenizerCheckTests(unittest.TestCase):
@@ -149,7 +150,7 @@ class TokenizerCheckTests(unittest.TestCase):
         failure = case in {"default_missing", "explicit_missing", "custom_code"}
         with (
             patch("narwhal.deployment.stages.run", side_effect=native_execute),
-            patch("tools.deployment.launch_engine.docker", side_effect=container_execute),
+            patched_docker(side_effect=container_execute),
         ):
             if failure:
                 message = (

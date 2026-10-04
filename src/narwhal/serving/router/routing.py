@@ -1,75 +1,47 @@
-"""Router construction, request admission, recovery verification, and live state."""
+"""Router construction, request admission, and live state."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
-import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..config import FleetConfig
-from ..contracts import STATE, versioned
-from ..engines.client import (
-    EngineClient,
-    EngineError,
-    InferenceProbe,
-    first_output_timeout,
-    leg_failure_class,
-)
-from ..engines.connector import lookup as lookup_connector
-from ..engines.dialect import lookup as lookup_dialect
-from ..engines.prefix import CacheNamespace, block_identities
-from ..observability.journal import RunJournal
-from ..observability.metrics import slo_histogram
-from ..profiling.calibration import CalibrationCheck
-from ..profiling.store import ProfileStore
-from ..runtime.lifecycle import LifecycleManager
-from ..runtime.monitoring import MonitoringLedger
-from ..runtime.release import PeerRelease
-from ..runtime.residency import ResidencySubscriptions
-from ..runtime.standby import ready as router_ready
-from ..scheduling.controller import ReactiveController
-from ..scheduling.health import DriftTracker
-from ..scheduling.monitor import InstanceMonitor
-from ..scheduling.scheduler import GlobalScheduler
-from ..types import LEG_OVERLOAD, LEG_STREAM, Instance, Phase, Request, Role
-from .admission import AdmissionQueue, QueueExpired, QueueFull
-from .completion import cacheable_render, output_cap
-from .dispatch import Dispatcher
-from .execution import request_error, serve_request
-from .lifecycle import RequestExpired, RequestLifecycle
-from .records import overloaded_response
-from .retry import RetryBudget
-from .saturation import SATURATED_TTFT_SHARE, SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
+from ...config import FleetConfig
+from ...contracts import STATE, versioned
+from ...engines.client import EngineClient
+from ...engines.connector import lookup as lookup_connector
+from ...engines.dialect import lookup as lookup_dialect
+from ...observability.journal import RunJournal
+from ...observability.metrics.exposition import slo_histogram
+from ...profiling.calibration import CalibrationCheck
+from ...profiling.store import ProfileStore
+from ...runtime.lifecycle.manager import LifecycleManager
+from ...runtime.monitoring import MonitoringLedger
+from ...runtime.release import PeerRelease
+from ...runtime.residency import ResidencySubscriptions
+from ...runtime.standby import ready as router_ready
+from ...scheduling.controller import ReactiveController
+from ...scheduling.health import DriftTracker
+from ...scheduling.monitor import InstanceMonitor
+from ...scheduling.scheduler.placement import GlobalScheduler
+from ...types import Instance, Phase, Role
+from ..admission import AdmissionQueue, QueueExpired, QueueFull
+from ..completion import output_cap
+from ..dispatch import Dispatcher
+from ..execution import request_error, serve_request
+from ..lifecycle import RequestExpired, RequestLifecycle
+from ..records import overloaded_response
+from ..retry import RetryBudget
+from ..saturation import SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
+from .sizing import RequestSizer
+from .verification import SuspectVerifier
 
 if TYPE_CHECKING:
-    from ..runtime.lease import FileLease
-
-log = logging.getLogger("narwhal.server")
-
-
-# Prompts at least this long hash their block identities in a worker thread.
-HASH_THREAD_TOKENS = 8192
-# First and longest skip of an engine after a failed exact count; each failure doubles it.
-TOKENIZE_BACKOFF_S = 1.0
-TOKENIZE_BACKOFF_MAX_S = 30.0
-
-
-def _hash_prompt(
-    namespace: CacheNamespace | None, reusable: Sequence[int], sizes: set[int]
-) -> dict[int, list[bytes]]:
-    """Return the prompt's block identities per block size; empty for invalid token IDs."""
-    if namespace is None:
-        return {}
-    try:
-        return {size: block_identities(namespace, reusable, size) for size in sizes}
-    except ValueError:
-        return {}
+    from ...runtime.lease import FileLease
 
 
 class NarwhalRouter:
@@ -167,7 +139,8 @@ class NarwhalRouter:
                 relative_band=cfg.health_relative_band,
             ),
         )
-        self.scheduler.recheck_cache_evidence = self.recheck_cache_evidence
+        self.sizer = RequestSizer(self)
+        self.scheduler.recheck_cache_evidence = self.sizer.recheck_cache_evidence
         self.lifecycle = LifecycleManager(self)
         if cfg.engine_restart_policy == "whole_wave":
             self.scheduler.on_eject = lambda iid: self.lifecycle.require_restart_wave(
@@ -190,9 +163,7 @@ class NarwhalRouter:
             model=cfg.model,
             engine_api_key=cfg.resolve_engine_key(),
         )
-        self._inference_sources: dict[str, set[str]] = {}
-        self._verification_at: dict[str, float] = {}
-        self._verification_tasks: set[asyncio.Task[None]] = set()
+        self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock)
         # The journal writes this into its run metadata when it opens.
         journal.extra = {"token_accounting": self._token_accounting()}
@@ -236,9 +207,6 @@ class NarwhalRouter:
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
-        self._tokenize_turn = 0
-        # Engine ID to consecutive failed exact counts and the time it may count again.
-        self._tokenize_backoff: dict[str, tuple[int, float]] = {}
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](
@@ -267,139 +235,6 @@ class NarwhalRouter:
         """Return the decode token-accounting mode the fleet's dialect guarantees."""
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
 
-    async def size(
-        self, body: dict[str, Any]
-    ) -> tuple[int, dict[str, int], dict[str, int], dict[int, list[bytes]]]:
-        """Return the input token count and the prefix-cache evidence for the prompt.
-
-        A failed exact count raises EngineError and backs off that engine.
-        """
-        prompt = body.get("prompt")
-        if (
-            "messages" not in body
-            and isinstance(prompt, list)
-            and prompt
-            and all(type(token) is int and token >= 0 for token in prompt)
-        ):
-            return len(prompt), *(await self._cache_evidence(body, prompt))
-        if self.cfg.tokenize:
-            live = self.scheduler.live_instances()
-            if live:
-                engine = self._tokenize_engine(live)
-                try:
-                    got = await self.engines.tokenize(
-                        engine.url, body, self.cfg.tokenize_timeout_s, strict=True
-                    )
-                except EngineError:
-                    failures = self._tokenize_backoff.get(engine.iid, (0, 0.0))[0] + 1
-                    delay = min(
-                        TOKENIZE_BACKOFF_S * 2 ** min(failures - 1, 16), TOKENIZE_BACKOFF_MAX_S
-                    )
-                    self._tokenize_backoff[engine.iid] = (failures, self._clock() + delay)
-                    raise
-                if got is not None:
-                    self._tokenize_backoff.pop(engine.iid, None)
-                    ids = got.token_ids
-                    if ids is None:
-                        return got.count, {}, {}, {}
-                    return got.count, *(await self._cache_evidence(body, ids))
-        return self.estimate_length(body), {}, {}, {}
-
-    def saturated(self) -> bool:
-        """Return whether loop lag or recent request sizing takes a quarter of the TTFT budget."""
-        budget = SATURATED_TTFT_SHARE * self.scheduler.slo.ttft_s
-        return self.loop_lag_s >= budget or self.sizing_delays.median() >= budget
-
-    def _tokenize_engine(self, live: list[Instance]) -> Instance:
-        """Pick the least-occupied live engine outside its count backoff, rotating among ties."""
-        now = self._clock()
-        candidates = [
-            i for i in live if self._tokenize_backoff.get(i.iid, (0, 0.0))[1] <= now
-        ] or live
-        self._tokenize_turn += 1
-        start = self._tokenize_turn % len(candidates)
-        ordered = candidates[start:] + candidates[:start]
-        return min(ordered, key=lambda i: len(i.prefill) + len(i.decode))
-
-    def prefix_cache_evidence(
-        self, body: dict[str, Any], token_ids: Sequence[int]
-    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
-        """Return cached tokens and residency sequence per engine, and the matched block identities.
-
-        Identities cover the prompt minus its final token.
-        """
-        return self.residency.match(_hash_prompt(*self._evidence_inputs(body, token_ids)))
-
-    async def _cache_evidence(
-        self, body: dict[str, Any], token_ids: Sequence[int]
-    ) -> tuple[dict[str, int], dict[str, int], dict[int, list[bytes]]]:
-        """`prefix_cache_evidence`, hashing a long prompt in a worker thread."""
-        inputs = self._evidence_inputs(body, token_ids)
-        if len(inputs[1]) >= HASH_THREAD_TOKENS:
-            by_size = await asyncio.to_thread(_hash_prompt, *inputs)
-        else:
-            by_size = _hash_prompt(*inputs)
-        return self.residency.match(by_size)
-
-    def _evidence_inputs(
-        self, body: dict[str, Any], token_ids: Sequence[int]
-    ) -> tuple[CacheNamespace | None, Sequence[int], set[int]]:
-        contract = self.cfg.engine_contract
-        if (
-            contract is None
-            or len(token_ids) < 2
-            or not cacheable_render(body)
-            # Speculative decoding shortens vLLM's prefix hits by a block.
-            or contract.speculative_config not in ("", "disabled")
-        ):
-            return None, (), set()
-        salt = body.get("cache_salt")
-        namespace = CacheNamespace(
-            self.cfg.model, contract.fingerprint(), None, salt if isinstance(salt, str) else None
-        )
-        return namespace, token_ids[:-1], self.residency.block_sizes()
-
-    def recheck_cache_evidence(self, request: Request, fresh_s: float = 0.0) -> None:
-        """Refresh the request's cache evidence from current residency.
-
-        Evidence checked within `fresh_s` stays while every engine behind it keeps a known view.
-        """
-        now = self._clock()
-        checked = request.cache_checked_at
-        if (
-            checked is not None
-            and 0.0 <= now - checked < fresh_s
-            and all(
-                (view := self.residency.views.get(iid)) is not None and view.known
-                for iid in request.cached_tokens
-            )
-        ):
-            return
-        request.cache_checked_at = now
-        before = dict(request.cached_tokens)
-        cached, sequences, _ = self.residency.match(
-            request.cache_identities, engines=request.cached_tokens.keys()
-        )
-        for iid in list(request.cached_tokens):
-            if iid in cached:
-                request.cached_tokens[iid] = cached[iid]
-                if iid in sequences:
-                    request.cache_sequences[iid] = sequences[iid]
-            else:
-                del request.cached_tokens[iid]
-                request.cache_sequences.pop(iid, None)
-        if request.cached_tokens != before:
-            self.controller.demand.reprice_arrival(request)
-
-    def estimate_length(self, body: dict[str, Any]) -> int:
-        """Estimate offered input length locally."""
-        raw = body.get("prompt")
-        if raw is None:
-            raw = "".join(str(m.get("content", "")) for m in body.get("messages", []) or [])
-        if isinstance(raw, list):
-            return len(raw)
-        return max(1, int(len(str(raw)) / self.cfg.chars_per_token))
-
     async def serve(
         self,
         endpoint: str,
@@ -413,7 +248,7 @@ class NarwhalRouter:
         state = lifecycle or RequestLifecycle.offered(self, headers, arrived=arrived)
         rid, arrived = state.rid, state.arrived
         req = state.request
-        req.input_len = self.estimate_length(body)
+        req.input_len = self.sizer.estimate_length(body)
         req.wanted_len = output_cap(body)
         state.sized = True
         state.resolve_demand()
@@ -473,168 +308,6 @@ class NarwhalRouter:
             self.seat.observe(self._clock() - admitted_at)
             self.admission_queue.notify()
 
-    def _leg_failed(
-        self,
-        iid: str,
-        exc: BaseException,
-        *,
-        prefill_iid: str | None = None,
-        decode_leg: bool = False,
-        progressed: bool = False,
-    ) -> None:
-        """Classify a failed leg and update breaker state.
-
-        A 4xx outside 408/429 counts as transport evidence; a local pool timeout counts as none.
-        """
-        if isinstance(exc, httpx.PoolTimeout):
-            log.info("%s leg waited out the local HTTP pool; no breaker evidence", iid)
-            return
-        status = exc.status if isinstance(exc, EngineError) else 500
-        if 400 <= status < 500 and status not in (408, 429):
-            self.scheduler.record_answer(iid, "transport")
-            return
-        # Decode read timeouts, including those before headers, need inference verification.
-        klass = (
-            "stream"
-            if decode_leg and isinstance(exc, httpx.ReadTimeout)
-            else leg_failure_class(exc)
-        )
-        if klass is None:
-            return
-        if klass == LEG_STREAM and progressed and first_output_timeout(exc):
-            # A first-token timeout while the engine produced other output is overload.
-            klass = LEG_OVERLOAD
-        if klass == "stream":
-            self._inference_sources.setdefault(iid, set()).add(prefill_iid or "")
-        verdict = self.scheduler.record_failure(iid, klass)
-        if verdict == "eject":
-            log.warning(
-                "ejected %s after %d consecutive %s failures; it takes no "
-                "dispatch until readmission succeeds",
-                iid,
-                self.scheduler.availability.eject_after,
-                klass,
-            )
-        elif verdict in ("verify_health", "verify_inference"):
-            if verdict == "verify_inference":
-                self.scheduler.inference_suspects.add(iid)
-                if not self.scheduler.quarantine(iid, math.inf):
-                    log.warning(
-                        "%s stays live during inference verification: it alone serves its role", iid
-                    )
-            # One pending probe per engine and verdict kind; extra failures
-            # while it runs only grow the streak it will resolve.
-            key = (iid, verdict)
-            if key not in self.scheduler.verifying:
-                self.scheduler.verifying.add(key)
-                self._start_verification(iid, verdict)
-
-    def _start_verification(self, iid: str, kind: str) -> None:
-        task = asyncio.create_task(self._verify_suspect(iid, kind))
-        self._verification_tasks.add(task)
-        task.add_done_callback(self._verification_tasks.discard)
-
-    async def _verify_suspect(self, iid: str, kind: str) -> None:
-        """Resolve a suspect engine with a health or inference verification."""
-        try:
-            inst = self.monitor.instances.get(iid)
-            if inst is None:
-                return
-            if kind == "verify_inference":
-                await self._verify_inference(iid, inst.url)
-            else:
-                await self._verify_health(iid, inst.url)
-        except Exception:
-            log.exception("verification failed for %s; existing hold retained", iid)
-        finally:
-            self._verification_at[iid] = self._clock()
-            self.scheduler.verifying.discard((iid, kind))
-
-    async def _verify_health(self, iid: str, url: str) -> None:
-        """Resolve a health-evidence suspect with an engine health probe."""
-        from ..runtime.lifecycle import allow_profile_recovery
-
-        verdict = await self.engines.healthy(url)
-        if verdict is None:
-            log.info("suspect %s probe waited out the control pool; verdict deferred", iid)
-            return
-        if verdict:
-            if not await allow_profile_recovery(self, iid):
-                return
-            self.scheduler.record_answer(iid, "health")
-            log.info("suspect %s passed health verification; health failure classes cleared", iid)
-            return
-        if not self.scheduler.role_covered_without(iid):
-            log.warning("%s stays live after a failed /health probe: it alone serves its role", iid)
-            return
-        if self.scheduler.eject(iid):
-            log.warning("ejected %s: timeout-shaped failures and /health did not answer", iid)
-
-    async def _verify_inference(self, iid: str, url: str) -> None:
-        """Verify a suspect engine with a prefill/decode probe."""
-        from ..runtime.lifecycle import allow_profile_recovery
-
-        sources = self._inference_sources.get(iid, {""}).copy()
-        for source in sorted(sources):
-            producer = self.monitor.instances.get(source) if source else None
-            if source and producer is None:
-                return  # Transfer verification requires the original producer.
-            probe = await self.engines.probe_inference(
-                url,
-                prefill_url=producer.url if producer is not None else None,
-                deadline_s=self.cfg.probe_deadline_s(),
-            )
-            if not self._resolve_inference_probe(iid, probe):
-                return
-        if sources != self._inference_sources.get(iid, {""}):
-            return  # A newly failed path still needs verification.
-        if not await allow_profile_recovery(self, iid):
-            return
-        if sources != self._inference_sources.get(iid, {""}):
-            return  # Another path failed while profile evidence was being checked.
-        self._inference_sources.pop(iid, None)
-        self.scheduler.record_answer(iid, "verification")
-        log.info("suspect %s passed inference verification; failures cleared", iid)
-
-    def _resolve_inference_probe(self, iid: str, probe: InferenceProbe | None) -> bool:
-        """Resolve failure or defer an inconclusive probe without lifting its hold."""
-        if probe is None:
-            log.warning("inference probe unavailable for %s; verification deferred", iid)
-            return False
-        legs = {"prefill": probe.prefill, "decode": probe.decode}
-        if any(leg.inconclusive for leg in legs.values()):
-            if probe.decode.inconclusive and probe.prefill.failed is not None:
-                log.info(
-                    "suspect %s inference probe inconclusive: producer leg failed %s, "
-                    "decode leg untested; verdict deferred",
-                    iid,
-                    probe.prefill.failed,
-                )
-            else:
-                log.info(
-                    "suspect %s inference probe waited out the control pool; verdict deferred",
-                    iid,
-                )
-            return False
-        failed = {name: leg.failed for name, leg in legs.items() if leg.failed is not None}
-        if not failed:
-            return True
-        detail = ", ".join(f"{name} leg failed {klass}" for name, klass in sorted(failed.items()))
-        if not self.scheduler.role_covered_without(iid):
-            self.scheduler.quarantined.pop(iid, None)
-            self.scheduler.refresh_floor_state()
-            log.warning(
-                "%s stays live after a failed inference probe (%s): it alone serves its role",
-                iid,
-                detail,
-            )
-            return False
-        if self.scheduler.eject(iid):
-            log.warning("ejected %s: inference probe failed (%s)", iid, detail)
-        else:
-            log.warning("already ejected %s: inference probe failed (%s)", iid, detail)
-        return False
-
     def state(self) -> dict[str, Any]:
         """Return the live state exposed by `/narwhal/state`."""
         out = {
@@ -649,7 +322,7 @@ class NarwhalRouter:
             "invalid_requests": self.invalid_requests,
             "controller": "reactive",
             "token_accounting": self._token_accounting(),
-            "control": self.scheduler.control_snapshot(),
+            "control": self.scheduler.roles.control_snapshot(),
             # Monitoring failures and the degraded admission gate.
             "monitoring": self.monitoring.snapshot(),
             "ha": {
@@ -734,14 +407,14 @@ class NarwhalRouter:
             # Scored and undersampled drift windows per engine.
             "health": (self.scheduler.health.window_stats() if self.scheduler.health else {}),
             "unserved": self.scheduler.unserved,
-            "panic_bypasses": self.scheduler.panic_bypasses,
+            "panic_bypasses": self.scheduler.roles.panic_bypasses,
             # SLO outcome counts grouped into time buckets.
             "attainment": self.scheduler.outcome_summary(),
             "demand_history": self.controller.demand.history_summary(),
             "demand_evidence": self.controller.safety.consolidation_evidence_snapshot(),
             "flips_refused": [
                 {"at": at, "to": to, "why": why}
-                for at, to, why in self.scheduler.flips_refused[-20:]
+                for at, to, why in self.scheduler.roles.flips_refused[-20:]
             ],
             "flips": [
                 {
@@ -753,8 +426,8 @@ class NarwhalRouter:
                     "decode_inflight": f.decode_inflight,
                     "drained_s": f.drained_s,
                 }
-                for f in self.scheduler.flips
+                for f in self.scheduler.roles.flips
             ],
-            "decode_floor": self.scheduler.decode_floor_snapshot(),
+            "decode_floor": self.scheduler.roles.decode_floor_snapshot(),
         }
         return versioned(STATE, out)
