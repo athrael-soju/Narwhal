@@ -248,6 +248,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "steady_decode_work": 0.45,
             "steady_demand_s": 75.0,
             "departure_age_s": 25.0,
+            "departure_reverses": True,
             "arrivals_beyond_profile": 3,
             "unsized_offers": 2,
         }

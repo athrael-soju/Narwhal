@@ -38,6 +38,8 @@ class Departure:
     moved: bool = False
     # True until the shift ends or points back after the first move.
     leading: bool = True
+    # True when the departure reverses recent reactive moves at open.
+    reverses: bool = False
 
 
 class ReactivePolicy:
@@ -258,7 +260,9 @@ class ReactivePolicy:
             )
         )
         if not urgent_ready:
-            self._track_departure(controller, now, current, adjacent, demand, short)
+            self._track_departure(
+                controller, now, current, adjacent, demand, short, confirmation_s=confirmation_s
+            )
         departure = self.departure
         short_current = short.current if short is not None else current
         short_demand = short.demand if short is not None else demand
@@ -278,6 +282,7 @@ class ReactivePolicy:
         }
         if departure is not None:
             horizons["departure_age_s"] = rounded(now - departure.started_at)
+            horizons["departure_reverses"] = departure.reverses
 
         urgent_candidate: PrefillProjection | None = None
         if urgent_ready and recovery_projection is not None:
@@ -327,8 +332,8 @@ class ReactivePolicy:
             )
 
         window_rows = {c.prefill: evaluate(c, current) for c in adjacent}
-        # A departure prices its first move on the confirmation span, and later moves once it
-        # is one evidence span old and still leading. Mixed pressure keeps window pricing.
+        # A leading departure prices its first move on the confirmation span, and later moves when
+        # it reverses or once it is one evidence span old. Mixed pressure keeps window pricing.
         departure_moves = {
             p: score
             for p, score in (short.adjacent.items() if short is not None else ())
@@ -336,6 +341,7 @@ class ReactivePolicy:
             and departure.leading
             and (
                 not departure.moved
+                or departure.reverses
                 or now - departure.started_at >= controller.safety.evidence_span_s
             )
             and p - current_p == departure.heading
@@ -613,6 +619,25 @@ class ReactivePolicy:
             },
         )
 
+    @staticmethod
+    def _reverses(controller: ReactiveController, now: float, heading: int) -> bool:
+        """Return whether reactive moves in the reversal lookback all oppose `heading`.
+
+        True needs at least one such move, the latest at least one evidence span old.
+        """
+        span_s = controller.safety.evidence_span_s
+        target = Role.PREFILL if heading > 0 else Role.DECODE
+        moves = [
+            flip
+            for flip in controller.scheduler.roles.flips
+            if flip.by == "reactive" and now - flip.at <= controller.window_s + span_s
+        ]
+        return (
+            bool(moves)
+            and now - moves[-1].at >= span_s
+            and all(flip.to is not target for flip in moves)
+        )
+
     def _track_departure(
         self,
         controller: ReactiveController,
@@ -621,6 +646,8 @@ class ReactivePolicy:
         adjacent: list[SplitScore],
         demand: Demand,
         short: ShortView | None,
+        *,
+        confirmation_s: float,
     ) -> None:
         """Track the settled run, open a departure when demand shifts, and end its lead.
 
@@ -674,14 +701,12 @@ class ReactivePolicy:
             and now - self.lead_break_since >= controller.step_s
         ):
             self.departure = replace(departure, leading=False)
-        if (
-            self.departure is None
-            and heading
-            and shifted
-            and self.settled_since is not None
-            and now - self.settled_since >= controller.safety.evidence_span_s
-        ):
-            self.departure = Departure(heading, now)
+        if self.departure is None and heading and shifted and self.settled_since is not None:
+            reverses = self._reverses(controller, now, heading)
+            # A reversing shift needs a settled run one confirmation span shorter.
+            settled_s = controller.safety.evidence_span_s - (confirmation_s if reverses else 0.0)
+            if now - self.settled_since >= settled_s:
+                self.departure = Departure(heading, now, reverses=reverses)
         if heading or window_gain >= margin:
             if self.unsettled_since is None:
                 self.unsettled_since = now

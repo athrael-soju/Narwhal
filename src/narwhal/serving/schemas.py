@@ -257,6 +257,7 @@ class ControllerDecisionOut(BaseModel):
     steady_decode_work: float | None = None
     steady_demand_s: float | None = None
     departure_age_s: float | None = None
+    departure_reverses: bool | None = None
     confirmations: int | None = None
     required_confirmations: int | None = None
     trigger_rid: str | None = None
