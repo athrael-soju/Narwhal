@@ -155,7 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.SubprocessError,
         httpx.HTTPError,
     ) as error:
-        print(f"Router benchmark blocked: {error}. Retain {args.out}.", file=sys.stderr)
+        detail = str(error) or type(error).__name__
+        print(f"Router benchmark blocked: {detail}. Retain {args.out}.", file=sys.stderr)
         return 1
 
 

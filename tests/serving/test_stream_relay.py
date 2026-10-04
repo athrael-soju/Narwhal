@@ -13,6 +13,7 @@ from narwhal.engines import stream as sse
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from tests.fixtures import fleet
+from tests.wire import engine_transports
 
 PROMPT = {"model": "", "prompt": "hello", "max_tokens": 4, "stream": True}
 
@@ -87,7 +88,7 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
 
     def app(self):
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, transport=httpx.MockTransport(self.engine), **kwargs)
+            return NarwhalRouter(*args, **engine_transports(self.engine), **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             app = create_app(self.cfg, journal_path=self.root / "journal.jsonl")
@@ -212,7 +213,7 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
         last = json.loads(text.rstrip("\n").rsplit("\n\n", 1)[-1][len("data: ") :])
         self.assertEqual(last["error"]["code"], "expired")
         self.assertEqual(self.terminal_rows()[-1]["terminal"], "expired")
-        self.assertTrue(self.upstream_closed.is_set())
+        await asyncio.wait_for(self.upstream_closed.wait(), 1.0)
 
     async def test_client_disconnect_during_decode_cancels_and_closes_upstream(self):
         self.chunks = [wire(token("a", [1])), 5.0, wire(token("b", [2], "length"))]
@@ -221,7 +222,7 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(b"".join(bodies).decode(), client_frame(token("a", [1])))
         self.assertEqual(self.terminal_rows()[-1]["terminal"], "cancelled")
-        self.assertTrue(self.upstream_closed.is_set())
+        await asyncio.wait_for(self.upstream_closed.wait(), 1.0)
         self.assertEqual(self.router.inflight, 0)
 
     async def test_journal_fields_follow_relayed_tokens(self):

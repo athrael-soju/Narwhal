@@ -49,7 +49,8 @@ def report_text(doc: dict) -> str:
             f"busy {number(point['event_loop_busy_share'], 3)}, "
             f"marks {','.join(point['marks']) or '-'}"
         )
-    lines.append(f"stopped_by: {doc['stopped_by'] or '-'}")
+    detail = f" ({doc['stop_detail']})" if doc["stop_detail"] else ""
+    lines.append(f"stopped_by: {doc['stopped_by'] or '-'}{detail}")
     return "\n".join(lines) + "\n"
 
 

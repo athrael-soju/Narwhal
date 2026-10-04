@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.config import EngineSpec, FleetConfig
+from narwhal.engines.wire import Dial, dial_tcp
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
@@ -26,12 +27,18 @@ from narwhal.serving.response import RequestStreamResponse
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.serving.schemas import ControllerDecisionOut
 from narwhal.types import Instance, Phase, Request, Role
+from tests.wire import engine_transports
 
 
 class Fleet:
     """Real policy, demand, scoring and scheduler with controlled telemetry and time."""
 
-    def __init__(self, directory: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        directory: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        dial: Dial = dial_tcp,
+    ) -> None:
         self.now = 0.0
         self.profiles = ProfileStore(Path(directory) / "profiles.json")
         self.monitor = InstanceMonitor(clock=lambda: self.now, profiles=self.profiles)
@@ -98,7 +105,9 @@ class Fleet:
             )
             self.journal = RunJournal(Path(directory) / "journal.jsonl")
             self.journal.open()
-            self.router = NarwhalRouter(cfg, self.journal, transport, clock=lambda: self.now)
+            self.router = NarwhalRouter(
+                cfg, self.journal, transport, clock=lambda: self.now, dial=dial
+            )
             self.profiles = self.router.profiles
             self.monitor = self.router.monitor
             self.scheduler = self.router.scheduler
@@ -1013,7 +1022,7 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
             ]
             return httpx.Response(200, text="\n\n".join([*chunks, "data: [DONE]", ""]))
 
-        fleet = Fleet(directory.name, httpx.MockTransport(engine))
+        fleet = Fleet(directory.name, **engine_transports(engine))
         self.addCleanup(fleet.telemetry.stop)
         self.addCleanup(fleet.journal.close)
         self.addAsyncCleanup(fleet.router.engines.aclose)

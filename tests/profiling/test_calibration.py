@@ -24,6 +24,7 @@ from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe.fleet import device_key
 from narwhal.types import Role
 from tests.fixtures import ROOT, calibration_document
+from tests.wire import engine_transports
 
 TOKEN = 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
 
@@ -663,9 +664,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 calibration,
                 "EngineClient",
-                side_effect=lambda **kwargs: EngineClient(
-                    **kwargs, transport=httpx.MockTransport(handle)
-                ),
+                side_effect=lambda **kwargs: EngineClient(**kwargs, **engine_transports(handle)),
             ),
             patch.object(
                 calibration,
