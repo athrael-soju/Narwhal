@@ -17,6 +17,8 @@ A response is complete when:
 - the completed output length equals the requested output length
 - final usage matches the observed token counts
 
+`token_events` counts stream events that carry at least one token.
+
 `batched_token_events` counts stream events that carry more than one token under the helper's `stream_interval: 1`.
 
 Client TTFT and TPOT follow the [measurement contract](01-Profile.md#1-defining-the-measurement-contract). Latency percentiles use complete responses.

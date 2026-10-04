@@ -79,6 +79,7 @@ def metric_values(content: str) -> dict[str, float]:
         "narwhal_invalid_requests_total",
         "narwhal_cancelled_total",
         "narwhal_flips_total",
+        "narwhal_event_loop_busy_seconds_total",
     }
     values = defaultdict(float)
     for line in content.splitlines():

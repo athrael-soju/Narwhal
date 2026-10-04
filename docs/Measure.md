@@ -54,3 +54,15 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
     Cold-priced and cache-aware arms on one fleet, scored on repeated-prefix and cold-control workloads.
 
 </div>
+
+## Router throughput
+
+<div class="grid cards" markdown>
+
+-   [Benchmarking the router](measure/09-Router-Benchmark.md)
+
+    ---
+
+    Relayed frames per router CPU-second for one router process against simulated engines.
+
+</div>

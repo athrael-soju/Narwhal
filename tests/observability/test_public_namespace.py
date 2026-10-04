@@ -120,6 +120,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('narwhal_tpot_seconds_count{slo="0.02"}', response.text)
         self.assertIn("narwhal_event_loop_lag_seconds 0.0", response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.0", response.text)
+        self.assertIn("narwhal_event_loop_busy_seconds_total 0.0", response.text)
         names = re.findall(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", response.text, re.M)
         self.assertTrue(names)
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
@@ -165,6 +166,17 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitoring["event_loop_lag_high_water_s"], 0.03)
         self.assertIn("narwhal_event_loop_lag_seconds 0.01", metrics_response.text)
         self.assertIn("narwhal_event_loop_lag_high_water_seconds 0.03", metrics_response.text)
+
+    async def test_state_and_metrics_share_event_loop_busy(self):
+        self.router.monitoring.observe_event_loop_busy(1.5)
+
+        state_response = await self.client.get("/narwhal/state")
+        metrics_response = await self.client.get("/metrics")
+
+        self.assertEqual(state_response.status_code, 200, state_response.text)
+        self.assertEqual(state_response.json()["monitoring"]["event_loop_busy_s"], 1.5)
+        self.assertIn("# TYPE narwhal_event_loop_busy_seconds_total counter", metrics_response.text)
+        self.assertIn("narwhal_event_loop_busy_seconds_total 1.5", metrics_response.text)
 
     async def test_state_response_keeps_residency_snapshot(self):
         view = self.router.residency.views["p"]
@@ -265,6 +277,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "narwhal_served_total",
                 "narwhal_engine_lifecycle_state",
                 "narwhal_slo_met_total",
+                "narwhal_event_loop_busy_seconds_total",
             ),
             "tools/observability/prometheus-alerts.yml": (
                 "narwhal_failed_total",
@@ -310,6 +323,22 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("narwhal_queue_wait_seconds_bucket", waiting)
         self.assertIn("narwhal_seat_seconds_bucket", waiting)
         self.assertIn("narwhal_retry_attempts_total", " ".join(panel_queries(elements["panel-12"])))
+
+    def test_dashboard_plots_event_loop_busy_share_and_lag(self):
+        """The router event-loop panel plots busy share and deadline lag of the selected router."""
+        [panel] = [
+            element["spec"]
+            for element in dashboard()["spec"]["elements"].values()
+            if element["spec"]["title"] == "Router event loop"
+        ]
+        queries = [query["spec"]["query"]["spec"] for query in panel["data"]["spec"]["queries"]]
+        self.assertEqual([query["legendFormat"] for query in queries], ["busy", "lag"])
+        scope = '{job="narwhal-router",instance=~"$router"}'
+        self.assertIn(
+            f"rate(narwhal_event_loop_busy_seconds_total{scope}[$__rate_interval])",
+            queries[0]["expr"],
+        )
+        self.assertIn(f"narwhal_event_loop_lag_seconds{scope}", queries[1]["expr"])
 
     def test_engine_views_mark_held_and_unreachable_engines(self):
         """The engine table ranks each engine's state and the role history marks held periods."""
