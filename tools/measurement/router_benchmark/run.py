@@ -123,6 +123,7 @@ class Run:
         self.children.record()
         rows: list[dict] = []
         stopped_by = None
+        stop_detail = None
         async with httpx.AsyncClient(trust_env=False, timeout=10.0) as http:
             try:
                 await self.start_engines()
@@ -141,7 +142,14 @@ class Run:
                     raise RuntimeError(f"router drain after warmup ended in {warm['drain']}")
                 for rate in args.rates:
                     directory = out / "rates" / format(rate, "g")
-                    samples = await self.offer(http, rate, args.duration, directory, sampled=True)
+                    try:
+                        samples = await self.offer(
+                            http, rate, args.duration, directory, sampled=True
+                        )
+                    except httpx.HTTPError as error:
+                        stopped_by = "sample_failed"
+                        stop_detail = f"{type(error).__name__}: {error}".rstrip(": ")
+                        break
                     trial.private_json(directory / "samples.json", samples)
                     client_rows = [
                         json.loads(line)
@@ -175,6 +183,7 @@ class Run:
             "allocation": asdict(self.allocation),
             "rates": rows,
             "stopped_by": stopped_by,
+            "stop_detail": stop_detail,
             "point": select_point(rows),
         }
         trial.private_json(out / "report.json", report)

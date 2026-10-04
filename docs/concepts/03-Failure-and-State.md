@@ -30,7 +30,12 @@ A successful pass clears the streak and reopens admission. A router restart rese
 
 ### Connection pools
 
-Each engine has one data connection pool for prefill, decode, and token counting, bounded at `serving.max_connections` per pool. A reserved control pool carries health probes and inference probes, bounded at `engine.control_connections`.
+Each engine has two connection pools:
+
+| Pool | Carries | Bound | Client |
+| --- | --- | --- | --- |
+| Data | Token counting, prefill and decode | `serving.max_connections` connections, half kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
+| Control | Health probes and inference probes | `engine.control_connections` | HTTPX |
 
 ### Failure evidence
 

@@ -15,6 +15,7 @@ from ...contracts import STATE, versioned
 from ...engines.client import EngineClient
 from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
+from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import slo_histogram
 from ...profiling.calibration import CalibrationCheck
@@ -53,6 +54,7 @@ class NarwhalRouter:
         journal: RunJournal,
         transport: httpx.AsyncBaseTransport | None = None,
         *,
+        dial: Dial = dial_tcp,
         clock: Callable[[], float] = time.monotonic,
         max_concurrent: int | None = None,
     ) -> None:
@@ -158,6 +160,7 @@ class NarwhalRouter:
             connect_timeout_s=cfg.connect_timeout_s,
             health_timeout_s=cfg.health_timeout_s,
             transport=transport,
+            dial=dial,
             kv=lookup_connector(cfg.connector),
             dialect=lookup_dialect(cfg.dialect),
             model=cfg.model,

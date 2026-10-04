@@ -36,6 +36,7 @@ from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import calibration_document, fleet, profile
+from tests.wire import engine_transports
 
 UNCALIBRATED = (
     "first-token deadline has no calibration evidence; run narwhal-check "
@@ -772,7 +773,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         client = EngineClient(
             read_timeout_s=self.cfg.decode_read_timeout_s,
-            transport=httpx.MockTransport(answer),
+            **engine_transports(answer),
         )
         result = NixlConnector().prefill_result(
             payload,
@@ -803,7 +804,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.aclose()
         self.assertEqual(snapshot.await_count, 2)
-        self.assertTrue(closed.is_set())
+        await asyncio.wait_for(closed.wait(), 1.0)
         self.assertEqual(report.pairs[0]["status"], "failed")
         self.assertEqual(report.pairs[0]["failure_kind"], "request_deadline_exceeded")
         self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)

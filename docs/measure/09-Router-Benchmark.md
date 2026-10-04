@@ -224,6 +224,7 @@ The sweep ends after the first rate that meets one of these stop conditions:
 | `saturation_rejections` above 0 | `saturation` |
 | An engine in `ejected` or `quarantined` | `ejected` |
 | `drain` is `timeout` or `state_error` | `drain_timeout` |
+| A driver request for router state or metrics fails during the rate | `sample_failed` |
 
 ## Report fields
 
@@ -241,6 +242,7 @@ The sweep ends after the first rate that meets one of these stop conditions:
 | `allocation` | CPU of each process, as in [CPU allocation](#cpu-allocation) |
 | `rates` | One row per measured rate |
 | `stopped_by` | Stop condition code of the last measured rate, otherwise `null` |
+| `stop_detail` | Exception name and message for `sample_failed`, otherwise `null` |
 | `point` | [Benchmark point](#benchmark-point) fields |
 
 `tools` in `report.json` and the top level of `manifest.json` hold these digests:

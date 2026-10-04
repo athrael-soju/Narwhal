@@ -10,9 +10,10 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -27,6 +28,7 @@ from narwhal.profiling.store import ProfileStore
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
+from tests.wire import EngineWire
 from tools.measurement import load_trial as trial
 from tools.measurement.router_benchmark import cli as bench_cli
 from tools.measurement.router_benchmark import client as bench_client
@@ -390,6 +392,55 @@ class RunTests(unittest.TestCase):
             self.assertNotEqual(bench_run.package_digest(root), digest)
 
 
+class SweepStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_failed_router_sample_ends_the_sweep_with_a_report(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        out = Path(directory.name) / "run"
+        src = bench_processes.ROOT / "src"
+        args = bench_cli.parser_for().parse_args(
+            [
+                *("run", "--router-src", str(src), "--cpus", "0-31", "--rates", "5,10"),
+                *("--clients", "1", "--out", str(out)),
+            ]
+        )
+        rows, samples = rows_and_samples()
+        clean = bench_report.rate_row(5.0, 5, rows, samples, ALLOCATION, ROLES) | {
+            "offered_rps": 5.0,
+            "saturation_rejections": 0,
+            "drain": "idle",
+        }
+        clean["fleet"] |= {"ejected": [], "quarantined": []}
+
+        async def offer(self, http, rate, duration, path, *, sampled):
+            path.mkdir(parents=True)
+            (path / "client-0.jsonl").write_text("")
+            if rate == 10.0:
+                raise httpx.ReadTimeout("")
+            return {"requests": 5, "client_exit": {"0": 0}, "drain": "idle"}
+
+        imported = json.dumps(str(src / "narwhal" / "__init__.py"))
+        run = bench_run.Run(args, src, "branch", out, ALLOCATION)
+        with (
+            patch.object(
+                bench_run.subprocess, "run", return_value=SimpleNamespace(stdout=imported)
+            ),
+            patch.object(bench_run.Run, "start_engines", new=AsyncMock()),
+            patch.object(bench_run.Run, "start_router", new=AsyncMock(return_value="sha")),
+            patch.object(bench_run.Run, "offer", new=offer),
+            patch.object(bench_run, "write_fleet"),
+            patch.object(bench_run, "rate_row", return_value=clean),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(await run.execute(), 0)
+        report = json.loads((out / "report.json").read_text())
+        self.assertEqual(
+            (report["stopped_by"], report["stop_detail"]), ("sample_failed", "ReadTimeout")
+        )
+        self.assertEqual([row["offered_rps"] for row in report["rates"]], [5.0])
+        self.assertEqual(report["point"]["offered_rps"], 5.0)
+
+
 class ReportTests(unittest.TestCase):
     def test_rate_row_reports_every_field(self):
         rows, samples = rows_and_samples()
@@ -639,13 +690,16 @@ class RenderTests(unittest.TestCase):
             "router_source": "sha-branch",
             "rates": [clean, result],
             "stopped_by": "saturation",
+            "stop_detail": None,
             "point": bench_report.select_point([clean, result]),
         }
         text = bench_render.report_text(report)
         self.assertIn("full_cpu(client-0,e0)", text)
         self.assertIn("point: 5 rps, 3.2 frames/router CPU-s", text)
-        self.assertIn("stopped_by: saturation", text)
+        self.assertIn("stopped_by: saturation\n", text)
         self.assertEqual(len(text.splitlines()), 6)
+        failed = report | {"stopped_by": "sample_failed", "stop_detail": "ReadTimeout"}
+        self.assertIn("stopped_by: sample_failed (ReadTimeout)\n", bench_render.report_text(failed))
 
 
 class RouterContractTests(unittest.IsolatedAsyncioTestCase):
@@ -691,7 +745,7 @@ class RouterContractTests(unittest.IsolatedAsyncioTestCase):
             )
 
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, transport=mock, **kwargs)
+            return NarwhalRouter(*args, transport=mock, dial=EngineWire(handler).dial, **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             app = create_app(cfg)

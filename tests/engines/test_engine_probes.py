@@ -24,6 +24,7 @@ from narwhal.types import (
     LEG_STREAM,
     LEG_TIMEOUT,
 )
+from tests.wire import engine_transports
 
 
 class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
@@ -35,7 +36,7 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.client = EngineClient(
             model="stub",
             engine_api_key="synthetic-engine-key",
-            transport=httpx.MockTransport(self.handle),
+            **engine_transports(self.handle),
             control_connections=0,
         )
         self.addAsyncCleanup(self.client.aclose)
@@ -135,8 +136,8 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         seen = {}
 
         def handle(request):
-            seen[request.url.path] = request.extensions["timeout"]
             if request.url.path == "/health":
+                seen["/health"] = request.extensions["timeout"]
                 return httpx.Response(200)
             if request.url.path == "/tokenize":
                 return httpx.Response(200, json={"count": 2})
@@ -146,7 +147,7 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             )
 
         client = EngineClient(
-            transport=httpx.MockTransport(handle),
+            **engine_transports(handle),
             connect_timeout_s=0.2,
             pool_timeout_s=0.1,
             health_timeout_s=0.5,
@@ -156,22 +157,25 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await client.healthy("http://engine"))
         self.assertEqual(await client.token_count("http://engine", {"prompt": "x"}, 0.3), 2)
         await client.prefill("http://engine", "/v1/completions", {"prompt": "x"}, {})
-        for path in ("/health", "/tokenize", "/v1/completions"):
-            self.assertEqual(seen[path]["connect"], 0.2)
-            self.assertEqual(seen[path]["pool"], 0.1)
-        self.assertEqual(seen["/v1/completions"]["read"], 0.4)
+        self.assertEqual((seen["/health"]["connect"], seen["/health"]["pool"]), (0.2, 0.1))
+        self.assertEqual((client._wire.connect_timeout_s, client._wire.pool_timeout_s), (0.2, 0.1))
 
     async def test_strict_tokenizer_fails_before_fallback(self):
-        self.responses["tokenize"] = httpx.ReadTimeout("slow tokenizer")
-        with self.assertRaisesRegex(EngineError, "exact count exceeded 1s"):
-            await self.client.token_count("http://engine", {"prompt": "x"}, 1, strict=True)
+        async def slow(request):
+            await asyncio.sleep(0.3)
+            return httpx.Response(200, json={"count": 12})
+
+        client = EngineClient(**engine_transports(slow))
+        self.addAsyncCleanup(client.aclose)
+        with self.assertRaisesRegex(EngineError, "exact count exceeded 0.05s"):
+            await client.token_count("http://engine", {"prompt": "x"}, 0.05, strict=True)
 
     async def test_prefill_uses_one_elapsed_budget(self):
         async def slow(request):
             await asyncio.sleep(0.08)
             return httpx.Response(200, json={})
 
-        client = EngineClient(transport=httpx.MockTransport(slow), prefill_timeout_s=0.02)
+        client = EngineClient(**engine_transports(slow), prefill_timeout_s=0.02)
         self.addAsyncCleanup(client.aclose)
         with self.assertRaisesRegex(httpx.ReadTimeout, "prefill exceeded its 0.02s"):
             await client.prefill("http://engine", "/v1/completions", {"prompt": "x"}, {})
