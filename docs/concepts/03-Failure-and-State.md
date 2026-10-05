@@ -37,6 +37,8 @@ Each engine has two connection pools:
 | Data | Token counting, prefill and decode | `serving.max_connections` connections, half kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
 | Control | Health probes and inference probes | `engine.control_connections` | HTTPX |
 
+Both pools reuse a kept-alive connection for 5 s after its last response. A connection the engine has closed leaves the pool before reuse.
+
 ### Failure evidence
 
 When an engine's failure streak for one class reaches `recovery.eject_after`, the action depends on the class:
