@@ -15,24 +15,45 @@ The **Router** selector scopes every panel built from router metrics. **Engine d
 
 ## Colours
 
-Each colour keeps one meaning on every panel.
+Each colour keeps one meaning on every panel. In the headline row, cells that judge the service fill green, yellow or red, and count cells show plain values.
 
-| Colour      | Hex                  | Meaning                                                                                                           |
-| ----------- | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Teal        | `#299E97`            | Prefill role, **Prefill/s** and TTFT p95                                                                          |
-| Teal shades | `#1A847E`, `#49B7B0` | TTFT p50 and p99                                                                                                  |
-| Blue        | `#336B9E`            | Decode role, **Decode/s** and TPOT p50                                                                            |
-| Blue shades | `#4E86BB`, `#69A2D8` | TPOT p95 and p99                                                                                                  |
-| Violet      | `#8C84CE`            | Colocated role                                                                                                    |
-| Green       | `#56A64B`            | Serving, Ready, completed and within target                                                                       |
-| Amber       | `#C8963E`            | Backlogged, Probation, Verifying, warnings, refused, retry attempts and the pool target                           |
-| Orange      | `#E0752D`            | Quarantined and rejected                                                                                          |
-| Red         | `#D44A3A`            | Ejected, Unreachable, failed, pages and SLO lines                                                                 |
-| Dark red    | `#A11D1D`            | Blocked and expired                                                                                               |
-| Magenta     | `#9E4AA4`            | Switching, Validating, queue wait and event-loop lag                                                              |
-| Grey        | `#8E9196`            | Draining, Restarting, N/A, cancelled, ended before sizing, seat time, event-loop busy share and engine table bars |
-| Olive       | `#7A6813`            | invalid                                                                                                           |
-| Theme text  |                      | offered                                                                                                           |
+These colours mark the engine roles and completed work on every panel:
+
+| Colour      | Hex                  | Meaning                                                                       |
+| ----------- | -------------------- | ----------------------------------------------------------------------------- |
+| Teal        | `#299E97`            | Prefill role, prefill pool, **Prefill/s** and TTFT p95                        |
+| Teal shades | `#1A847E`, `#49B7B0` | TTFT p50 and p99                                                              |
+| Blue        | `#336B9E`            | Decode role, decode pool, **Decode/s** and TPOT p95                           |
+| Blue shades | `#21537E`, `#69A2D8` | TPOT p50 and p99                                                              |
+| Violet      | `#8C84CE`            | Colocated role                                                                |
+| Green       | `#56A64B`            | Serving, completed, KV cache below 80% and headline values within their limit |
+
+The engine table and **Engine role history** colour engine states:
+
+| Colour       | Hex       | Meaning                                                |
+| ------------ | --------- | ------------------------------------------------------ |
+| Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80% |
+| Burnt orange | `#E0752D` | Quarantined                                            |
+| Brick red    | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
+| Maroon       | `#A11D1D` | Blocked                                                |
+| Magenta      | `#9E4AA4` | Switching and Validating                               |
+| Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
+
+The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
+
+| Colour       | Hex       | Meaning                                                                        |
+| ------------ | --------- | ------------------------------------------------------------------------------ |
+| Light blue   | `#5794F2` | offered                                                                        |
+| Pale blue    | `#8AB8FF` | ended before sizing                                                            |
+| Light yellow | `#FFEE52` | cancelled                                                                      |
+| Yellow       | `#F2CC0C` | refused, warnings, the pool target and headline values near their limit        |
+| Orange       | `#FF9830` | rejected                                                                       |
+| Pink         | `#FF7383` | invalid                                                                        |
+| Red          | `#F2495C` | failed, pages, SLO lines, ejected engines and headline values past their limit |
+| Dark red     | `#C4162A` | expired                                                                        |
+| Purple       | `#B877D9` | retry attempts                                                                 |
+| Dark purple  | `#A352CC` | queue wait and event-loop lag                                                  |
+| Light purple | `#CA95E5` | seat time and event-loop busy share                                            |
 
 ## Headline row
 
@@ -68,7 +89,7 @@ Ended requests are completed, failed, refused, rejected, expired and cancelled r
 
 Status colours:
 
-| Value                     | Green       | Amber       | Red                  |
+| Value                     | Green       | Yellow      | Red                  |
 | ------------------------- | ----------- | ----------- | -------------------- |
 | Within SLO                | 95% or more | 90% to 95%  | below 90%            |
 | Dropped                   | below 1%    | 1% to 5%    | 5% or more           |
@@ -111,6 +132,10 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 ![Request outcomes near 30 requests per second, with completed following offered and page markers where n8 dropped out.](../assets/observability/request-outcomes.png)
 
+</div>
+
+<div class="narwhal-panel-row" markdown>
+
 ![Fleet events timeline with NarwhalEngineDown pages for n8 and a NarwhalEngineEjected page.](../assets/observability/fleet-events.png)
 
 </div>
@@ -128,9 +153,9 @@ In a healthy fleet, **completed** follows **offered** and the other series stay 
 | cancelled            | Requests their client abandoned before completion                             |
 | invalid              | Malformed or unsupported client requests rejected before dispatch             |
 
-When a Narwhal alert starts firing, a red (page) or amber (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine.
+When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine.
 
-**Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`. A red or amber bar marks the time the alert fires.
+**Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`. A red or yellow bar marks the time the alert fires.
 
 ## Pool assignments
 
@@ -152,7 +177,15 @@ These panels show how long requests take and how much work the engines complete.
 
 ![Time to first token with p50, p95 and p99 below the SLO line for the whole window, and p95 and p99 rising sharply in a load spike at the end.](../assets/observability/time-to-first-token.png)
 
+</div>
+
+<div class="narwhal-panel-row" markdown>
+
 ![Time per output token with p50, p95 and p99 below the SLO line for the whole window.](../assets/observability/time-per-output-token.png)
+
+</div>
+
+<div class="narwhal-panel-row" markdown>
 
 ![Token throughput with prefilled prompt tokens near 17K per second and output tokens near 8K per second.](../assets/observability/token-throughput.png)
 
@@ -172,13 +205,21 @@ These panels show pool load, request waiting time and retries.
 
 ![Pool pressure with decode load crossing its target in short spikes and prefill load near zero.](../assets/observability/pool-pressure.png)
 
+</div>
+
+<div class="narwhal-panel-row" markdown>
+
 ![Request waiting time with seat time p95 near 6 seconds and queue wait near zero.](../assets/observability/request-waiting-time.png)
+
+</div>
+
+<div class="narwhal-panel-row" markdown>
 
 ![Retries and early exits at zero until requests begin ending before sizing at the end of the window.](../assets/observability/retries.png)
 
 </div>
 
-**Pool pressure** plots each pool's load as a fraction of its SLO target, and the amber line at 1 marks the target. When a pool's load stays at or above `controller.thresholds.expand` (default 1.0), [reactive role control](../concepts/02-Role-Control.md#expansion-and-consolidation) can move an engine into that pool.
+**Pool pressure** plots each pool's load as a fraction of its SLO target, and the dashed yellow line at 1 marks the target. When a pool's load stays at or above `controller.thresholds.expand` (default 1.0), [reactive role control](../concepts/02-Role-Control.md#expansion-and-consolidation) can move an engine into that pool.
 
 **Request waiting time** plots two p95 times: how long a request waits for admission and dispatch (**queue wait p95**) and how long it holds an admission seat (**seat time p95**).
 
