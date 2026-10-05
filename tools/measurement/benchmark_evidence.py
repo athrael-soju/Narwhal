@@ -45,6 +45,26 @@ def retain_client_file(path: Path, directory: Path, snapshot_name: str) -> tuple
     }
 
 
+def client_row(row: dict) -> dict:
+    """Return a load trial row, or the same fields for an AIPerf `profile_export.jsonl` record."""
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict) or "metrics" not in row:
+        return row
+    error = row.get("error")
+    if metadata.get("was_cancelled"):
+        outcome = "cancelled"
+    elif error:
+        outcome = f"http_{error['code']}" if error.get("code") else error.get("type") or "error"
+    else:
+        outcome = "completed"
+    return {
+        "client_rid": metadata.get("x_request_id"),
+        "sent": True,
+        "outcome": outcome,
+        "benchmark_warmup": metadata.get("benchmark_phase") == "warmup",
+    }
+
+
 def cursor(path: Path) -> dict:
     stat = path.stat()
     return {"device": stat.st_dev, "inode": stat.st_ino, "offset": stat.st_size}
@@ -392,7 +412,7 @@ class EvidenceCollector:
             )
             for number, line in enumerate(client_text.splitlines(), 1):
                 try:
-                    client_rows.append(json.loads(line))
+                    client_rows.append(client_row(json.loads(line)))
                 except ValueError:
                     journal_errors.append(
                         {"kind": "client_parse_error", "point": self.point["id"], "line": number}

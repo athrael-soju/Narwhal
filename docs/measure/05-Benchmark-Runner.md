@@ -76,9 +76,9 @@ For a plan with an `evidence` object, run the runner on a host that reads the ro
 
 ## Running AIPerf points
 
-AIPerf 0.13.0 is the standard benchmark client for fleet runs. It requires Python 3.11 through 3.13.
+AIPerf 0.13.0 is the standard benchmark client for fleet runs.
 
-1. Install AIPerf 0.13.0 in its own virtual environment on the runner host, with `<aiperf-venv>` replaced by the environment path:
+1. Install AIPerf 0.13.0 in a Python 3.11 through 3.13 virtual environment on the runner host, with `<aiperf-venv>` replaced by the environment path:
 
     ```bash
     python3 -m venv <aiperf-venv>
@@ -118,7 +118,12 @@ AIPerf 0.13.0 is the standard benchmark client for fleet runs. It requires Pytho
     }
     ```
 
-4. Set `benchmark_client_version` in the [evidence identity](06-Benchmark-Evidence.md) to `aiperf 0.13.0`.
+4. Set these fields in the plan's [`evidence` object](06-Benchmark-Evidence.md):
+
+    | Field | Value |
+    | --- | --- |
+    | `client_records` | `{point_dir}/aiperf/profile_export.jsonl` |
+    | `identity.benchmark_client_version` | `aiperf 0.13.0` |
 
 ## Plan fields
 
