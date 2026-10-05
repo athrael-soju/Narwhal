@@ -177,7 +177,12 @@ class _Connection(asyncio.Protocol):
         if self.closed or now - self.idle_at >= KEEPALIVE_EXPIRY_S:
             return False
         sock = self.transport.get_extra_info("socket")
-        return sock is not None and not select.select([sock], [], [], 0)[0]
+        if sock is None:
+            return False
+        # poll() accepts descriptors above FD_SETSIZE.
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        return not poller.poll(0)
 
     def close(self) -> None:
         if self._timer is not None:
