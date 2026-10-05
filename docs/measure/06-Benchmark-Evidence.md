@@ -21,7 +21,7 @@ Put `evidence` at the top level of the plan, next to `schema` and `points`:
   "identity": {
     "narwhal_revision": "<40-character-commit>",
     "model_id": "<served-model>",
-    "benchmark_client_version": "<client-version-or-commit>",
+    "benchmark_client_version": "aiperf 0.13.0",
     "engine_image": "<pinned-image-with-digest>",
     "engine_version": "<engine-version>",
     "checkpoint_revision": "<checkpoint-commit>",

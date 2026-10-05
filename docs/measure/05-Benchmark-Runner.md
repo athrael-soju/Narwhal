@@ -74,6 +74,52 @@ For a plan with an `evidence` object, run the runner on a host that reads the ro
       --out runs/benchmark-001
     ```
 
+## Running AIPerf points
+
+AIPerf 0.13.0 is the standard benchmark client for fleet runs. It requires Python 3.11 through 3.13.
+
+1. Install AIPerf 0.13.0 in its own virtual environment on the runner host, with `<aiperf-venv>` replaced by the environment path:
+
+    ```bash
+    python3 -m venv <aiperf-venv>
+    <aiperf-venv>/bin/python -m pip install aiperf==0.13.0
+    ```
+
+2. Check the installed version:
+
+    ```bash
+    <aiperf-venv>/bin/aiperf --version
+    ```
+
+    Expected output:
+
+    ```text
+    0.13.0
+    ```
+
+3. Add an AIPerf point to the plan's `points`, with `<tokenizer-path>` replaced by the served model's tokenizer directory:
+
+    ```json
+    {
+      "id": "aiperf-rate-1",
+      "workload": {"client": "aiperf 0.13.0", "isl": 512, "osl": 256, "rate_rps": 1, "requests": 200},
+      "client_argv": [
+        "<aiperf-venv>/bin/aiperf", "profile",
+        "--url", "{base}", "--model", "{model}",
+        "--tokenizer", "<tokenizer-path>",
+        "--endpoint-type", "chat", "--streaming",
+        "--isl", "512", "--osl", "256",
+        "--request-rate", "1", "--request-count", "200",
+        "--ui", "none", "--no-gpu-telemetry",
+        "--artifact-dir", "{point_dir}/aiperf"
+      ],
+      "client_timeout_s": 900,
+      "drain_timeout_s": 180
+    }
+    ```
+
+4. Set `benchmark_client_version` in the [evidence identity](06-Benchmark-Evidence.md) to `aiperf 0.13.0`.
+
 ## Plan fields
 
 A plan is a JSON object with these fields:
