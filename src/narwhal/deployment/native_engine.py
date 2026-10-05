@@ -21,7 +21,7 @@ from narwhal.runtime.listeners import check_engine_bind, check_http_bind
 from . import stages
 from .launch_engine.plan import kv_events_directory, read_env, remove_kv_events_directory
 from .launch_engine.runtime import digest, write_private
-from .launch_engine.start import gpu_memory, validate_shared_runs
+from .launch_engine.start import READY_SECONDS, gpu_memory, validate_shared_runs
 
 
 def process_identity(pid: int) -> dict[str, int | str]:
@@ -221,7 +221,7 @@ def stop(run: Path) -> None:
     )
 
 
-def start_shared(runs: list[Path], ready_seconds: int = 180) -> None:
+def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
     """Launch checked engines sequentially against live shared GPU headroom."""
     if ready_seconds < 1:
         raise ValueError("ready_seconds must be positive")

@@ -151,25 +151,25 @@ For a runtime change or engine restart:
 
 ## Stage deadlines and recovery
 
-`dev up` and `dev verify` run subprocess stages with time budgets. `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the budget for every stage, default 300 seconds.
+`dev up` and `dev verify` run subprocess stages with time budgets. `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the budget for every stage.
 
 `NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` sets the budget for one stage. `<NAME>` is the stage name in uppercase, with hyphens replaced by underscores.
 
-Stage names:
+Stages and default budgets:
 
-| Stage | Work |
-| --- | --- |
-| `engine-<n>` | Runtime check for engine `n` |
-| `native-start-shared` | Native shared startup |
-| `attest-<n>` | Attestation capture for engine `n` |
-| `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines |
-| `profile-merge` | Merging the role-split profiles, with three or more engines |
-| `preflight` | Directed KV preflight during `verify` |
+| Stage | Work | Default budget |
+| --- | --- | --- |
+| `engine-<n>` | Runtime check for engine `n` | 300 seconds |
+| `native-start-shared` | Native shared startup | 180 seconds per engine |
+| `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
+| `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
+| `profile-merge` | Merging the role-split profiles, with three or more engines | 300 seconds |
+| `preflight` | Directed KV preflight during `verify` | 300 seconds |
 
 Override the startup and preflight budgets:
 
 ```bash
-NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=720 narwhal dev up
+NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=900 narwhal dev up
 NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 ```
 

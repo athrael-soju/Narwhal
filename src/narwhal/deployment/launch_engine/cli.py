@@ -19,7 +19,7 @@ from .captures import (
 )
 from .check import check
 from .plan import load, prepare
-from .start import start, start_shared
+from .start import READY_SECONDS, start, start_shared
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,7 +95,7 @@ def _main(argv: list[str]) -> int:
     shared.add_argument(
         "--ready-seconds",
         type=int,
-        default=180,
+        default=READY_SECONDS,
         help="readiness budget in seconds per engine, at least 1 (default: %(default)s)",
     )
     shared.add_argument(

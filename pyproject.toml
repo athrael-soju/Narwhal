@@ -36,7 +36,7 @@ license-files = ["LICENSE", "NOTICE"]
 # Narwhal talks to engines over HTTP and KV transfer.
 # Engine builds are pinned in fleet configuration.
 dependencies = [
-  "fastapi>=0.141.1",
+  "fastapi>=0.136.3",
   "httptools>=0.8.0",
   "httpx>=0.28.1",
   "msgpack>=1.2.2",

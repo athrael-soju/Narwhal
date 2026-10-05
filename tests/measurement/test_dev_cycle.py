@@ -133,6 +133,7 @@ class CycleTests(unittest.TestCase):
 
             async def run_trial(client, base, args):
                 workload = json.loads(args.workload.read_text())
+                self.assertEqual(args.run_seed, 0)
                 seen.append((workload["input_tokens"], workload["seed"], args.requests))
                 (args.out / "summary.json").write_text(
                     json.dumps(

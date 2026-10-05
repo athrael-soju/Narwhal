@@ -22,7 +22,7 @@
   },
   "runtime": {
     "expected_packages": {
-      "vllm": "0.29.0",
+      "vllm": "0.30.0",
       "nixl": "1.4.1",
       "vllm-gguf-plugin": "0.0.5",
       "torch": "2.13.0",
