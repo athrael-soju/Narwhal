@@ -4,9 +4,11 @@ import asyncio
 import json
 import socket
 import unittest
+from unittest.mock import patch
 
 import httpx
 
+from narwhal.engines import wire
 from narwhal.engines.client import leg_failure_class
 from narwhal.engines.wire import WireClient
 from narwhal.types import LEG_CONNECTION, LEG_TIMEOUT
@@ -34,6 +36,7 @@ class ScriptedEngine:
         self.scripts = list(scripts)
         self.connections = 0
         self.requests = []
+        self.sockets = []
         self.tasks = set()
 
     async def dial(self, host, port):
@@ -41,6 +44,7 @@ class ScriptedEngine:
         near, far = socket.socketpair()
         near.setblocking(False)
         far.setblocking(False)
+        self.sockets.append(far)
         task = asyncio.get_running_loop().create_task(self.serve(far))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -137,6 +141,25 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"host: engine:8000\r\n", request)
         self.assertIn(b"x-request-id: r2\r\n", request)
         self.assertEqual(json.loads(body), {"n": 2, "text": "\u2028"})
+
+    async def test_an_idle_connection_past_the_keep_alive_expiry_is_replaced(self):
+        ok = head(content_length=2) + b"{}"
+        engine = ScriptedEngine([ok], [ok])
+        client = self.client(engine)
+        await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        with patch.object(wire, "KEEPALIVE_EXPIRY_S", 0.0):
+            response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        self.assertEqual((response.status_code, engine.connections), (200, 2))
+
+    async def test_an_idle_connection_the_engine_closed_is_replaced(self):
+        ok = head(content_length=2) + b"{}"
+        engine = ScriptedEngine([ok], [ok])
+        client = self.client(engine)
+        await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        # The engine's FIN arrives before the event loop reads it.
+        engine.sockets[0].shutdown(socket.SHUT_WR)
+        response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        self.assertEqual((response.status_code, engine.connections), (200, 2))
 
     async def test_the_pool_limit_queues_then_times_out(self):
         engine = ScriptedEngine(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import select
 import socket
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -16,6 +17,8 @@ import httpx
 
 Dial = Callable[[str, int], Awaitable[socket.socket]]
 GapTimeout = Callable[[], float | None]
+# Seconds an idle keep-alive connection stays reusable, the HTTPX default.
+KEEPALIVE_EXPIRY_S = 5.0
 
 
 async def dial_tcp(host: str, port: int) -> socket.socket:
@@ -46,6 +49,7 @@ class _Connection(asyncio.Protocol):
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
         self.closed = False
+        self.idle_at = 0.0
         self._parser = httptools.HttpResponseParser(self)
         self._reset()
 
@@ -168,6 +172,13 @@ class _Connection(asyncio.Protocol):
                 return
             await self.wait()
 
+    def reusable(self, now: float) -> bool:
+        """Open, idle for less than the keep-alive expiry, and with no unread engine bytes."""
+        if self.closed or now - self.idle_at >= KEEPALIVE_EXPIRY_S:
+            return False
+        sock = self.transport.get_extra_info("socket")
+        return sock is not None and not select.select([sock], [], [], 0)[0]
+
     def close(self) -> None:
         if self._timer is not None:
             self._timer.cancel()
@@ -228,10 +239,11 @@ class _Pool:
         while True:
             while self.idle:
                 connection = self.idle.pop()
-                if not connection.closed:
+                if connection.reusable(loop.time()):
                     if on_slot is not None:
                         on_slot()
                     return connection
+                connection.close()
                 self.open -= 1
             if self.open < self.client.max_connections:
                 self.open += 1
@@ -279,6 +291,7 @@ class _Pool:
             and len(self.idle) < self.client.max_keepalive
         )
         if reusable:
+            connection.idle_at = connection.loop.time()
             self.idle.append(connection)
         else:
             connection.close()
