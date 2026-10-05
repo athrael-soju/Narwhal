@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.5.0](https://github.com/athrael-soju/Narwhal/compare/v0.4.1...v0.5.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* engine-role environments drop NARWHAL_ENGINE_LAUNCHER and NARWHAL_ENGINE_LAUNCHER_SHA256; run engine actions with narwhal-engine. The attestation contract tool runs as python -m narwhal.deployment.attestation_contract.cli.
+* concurrent first-token calibration with measured and reused reporting ([#242](https://github.com/athrael-soju/Narwhal/issues/242))
+
+* split oversized modules by concern ([#252](https://github.com/athrael-soju/Narwhal/issues/252)) ([e29cadc](https://github.com/athrael-soju/Narwhal/commit/e29cadc484cdc09a81eb4522361771acb8f735e3)), closes [#239](https://github.com/athrael-soju/Narwhal/issues/239)
+
+
+### Features
+
+* colour dashboard series by meaning ([#270](https://github.com/athrael-soju/Narwhal/issues/270)) ([9212382](https://github.com/athrael-soju/Narwhal/commit/9212382d703c3d6590f8bc5a1ad06cfe9c671ba2))
+* concurrent first-token calibration with measured and reused reporting ([#242](https://github.com/athrael-soju/Narwhal/issues/242)) ([683b83b](https://github.com/athrael-soju/Narwhal/commit/683b83baaf29e0cb41207f415b57fc92ae488964))
+* enhance reactive policy to manage unsettled evaluations and departure leads ([#251](https://github.com/athrael-soju/Narwhal/issues/251)) ([4712899](https://github.com/athrael-soju/Narwhal/commit/47128997188aada12829831c81e360af2f605eb2))
+* faster role changes and slot-aware decode admission ([#234](https://github.com/athrael-soju/Narwhal/issues/234)) ([55f7854](https://github.com/athrael-soju/Narwhal/commit/55f78541ca2766e7969641be5ddd8051ad2eedea))
+* make AIPerf 0.13.0 the documented benchmark client ([#280](https://github.com/athrael-soju/Narwhal/issues/280)) ([cadcc87](https://github.com/athrael-soju/Narwhal/commit/cadcc8730cc341069d54b556f1432d7951ddc161)), closes [#271](https://github.com/athrael-soju/Narwhal/issues/271)
+* router data-plane throughput ([#267](https://github.com/athrael-soju/Narwhal/issues/267)) ([1be680b](https://github.com/athrael-soju/Narwhal/commit/1be680bc4bf357afcbb5f40a77f3c9b6d2ad521d))
+
+
+### Fixes
+
+* check idle engine connections with poll() ([#281](https://github.com/athrael-soju/Narwhal/issues/281)) ([714adb7](https://github.com/athrael-soju/Narwhal/commit/714adb74a4c9c689ab2bc1ec4e375cdc09777f6a))
+* keep a departure leading through one evaluation below the margin ([#250](https://github.com/athrael-soju/Narwhal/issues/250)) ([551fa2f](https://github.com/athrael-soju/Narwhal/commit/551fa2f0070f80a8ca6087dc491d2b08b1692e33))
+* pin Narwhal dev to vLLM 0.30.0 ([#269](https://github.com/athrael-soju/Narwhal/issues/269)) ([25f5383](https://github.com/athrael-soju/Narwhal/commit/25f5383cb6f57059e96b0ea63a1c83ae6db99771))
+* use one red across the dashboard ([#279](https://github.com/athrael-soju/Narwhal/issues/279)) ([37b5f5b](https://github.com/athrael-soju/Narwhal/commit/37b5f5b6f9f1cc53669fbbbeaa693d1cae84eba8))
+
+
+### Documentation
+
+* document resetting engine prefix caches ([#283](https://github.com/athrael-soju/Narwhal/issues/283)) ([01cc58d](https://github.com/athrael-soju/Narwhal/commit/01cc58d9f64817d069e63ccfa52bde2ec933489d))
+
 ## [0.4.1](https://github.com/athrael-soju/Narwhal/compare/v0.4.0...v0.4.1) (2026-10-02)
 
 
