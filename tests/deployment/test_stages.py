@@ -231,6 +231,24 @@ class StageTests(unittest.TestCase):
         record = json.loads(next(self.root.glob("relative.log.*.stage.json")).read_text())
         self.assertEqual(Path(record["evidence"]).parent, self.root)
 
+    def test_stage_default_budget_yields_to_environment_budgets(self):
+        names = ("NARWHAL_STAGE_TIMEOUT_SECONDS", "NARWHAL_STAGE_START_TIMEOUT_SECONDS")
+        cases = (
+            ({}, 720.0),
+            ({names[0]: "40"}, 40.0),
+            ({names[0]: "40", names[1]: "50"}, 50.0),
+        )
+        for index, (env, budget) in enumerate(cases):
+            log = self.root / f"start-{index}.log"
+            with self.subTest(env=env), patch.dict(os.environ, env):
+                for name in set(names) - set(env):
+                    os.environ.pop(name, None)
+                stages.run(
+                    [sys.executable, "-c", "pass"], stage="start", log=log, default_timeout=720
+                )
+                record = json.loads(next(self.root.glob(f"{log.name}.*.stage.json")).read_text())
+                self.assertEqual(record["budget_seconds"], budget)
+
     def test_invalid_budgets_reject_before_launch(self):
         for value in ("0", "-1", "nan", "inf"):
             with (

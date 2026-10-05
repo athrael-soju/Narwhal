@@ -19,6 +19,9 @@ from .docker import docker, run_runtime_script
 from .plan import container_options, env_file_name, load, read_env
 from .runtime import digest, write_private
 
+# Readiness budget for each engine of a shared start.
+READY_SECONDS = 180
+
 
 def _create_container(run: Path, plan: dict) -> str:
     require_checked(run, plan)

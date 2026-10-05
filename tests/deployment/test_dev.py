@@ -191,7 +191,9 @@ class DevTests(unittest.TestCase):
                 run = self.root / key_env
                 run.mkdir()
 
-                def inspect_preparation(root, module, args, log, run=run, key_env=key_env):
+                def inspect_preparation(
+                    root, module, args, log, default_timeout=300, run=run, key_env=key_env
+                ):
                     if log != "native-start-shared":
                         return
                     runs = [Path(args[i + 1]) for i, arg in enumerate(args) if arg == "--run"]
@@ -284,6 +286,9 @@ class DevTests(unittest.TestCase):
             + [f"attest-{number}" for number in (1, 2, 3, 4)]
             + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
         )
+        budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
+        self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
+        self.assertEqual(budgets["engine-1"], {})
 
     def test_reference_sweep_fits_engine_context_and_concurrency(self):
         profile = self.spec["profile"]
@@ -515,6 +520,20 @@ class DevTests(unittest.TestCase):
                     lifecycle.up(self.root)
                 launch.assert_not_called()
         self.assertFalse((self.root / "lifecycle.json").exists())
+
+    def test_port_closed_by_its_server_stays_available(self):
+        with socket.socket() as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            port = server.getsockname()[1]
+            with socket.create_connection(("127.0.0.1", port)) as client:
+                accepted, _ = server.accept()
+                accepted.close()
+                client.recv(1)
+        with socket.socket() as probe, self.assertRaises(OSError):
+            probe.bind(("127.0.0.1", port))
+        template._check_free_ports({port}, "127.0.0.1")
 
     def child(self):
         process = subprocess.Popen(

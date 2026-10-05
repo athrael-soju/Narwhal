@@ -19,13 +19,25 @@ Install from a checkout on the Linux filesystem:
     python3.12 -m venv .venv-dev
     source .venv-dev/bin/activate
     python -m pip install .
-    python -m pip install 'vllm==0.29.0' 'torch==2.13.0' \
+    python -m pip install 'vllm==0.30.0' 'torch==2.13.0' \
       'transformers==5.17.0' 'nixl==1.4.1' 'nixl-cu13==1.4.1'
     python -m pip install \
       'https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl'
     ```
 
-2. Overwrite the wheel's Python files with the pinned GGUF plugin sources:
+2. Check the installed requirements:
+
+    ```bash
+    python -m pip check
+    ```
+
+    A consistent environment prints:
+
+    ```text
+    No broken requirements found.
+    ```
+
+3. Overwrite the wheel's Python files with the pinned GGUF plugin sources:
 
     ```bash
     mkdir -p runs
@@ -45,20 +57,21 @@ Install from a checkout on the Linux filesystem:
     PY
     ```
 
-3. Download the model and tokenizer into the Hugging Face cache:
+4. Download the model, its multimodal projector and the tokenizer into the Hugging Face cache:
 
     ```bash
     hf download unsloth/Qwen3.5-0.8B-GGUF \
       --revision e524882462b3f2a9fe83be967c654c4322abb2f6 \
-      Qwen3.5-0.8B-Q4_K_M.gguf
+      Qwen3.5-0.8B-Q4_K_M.gguf mmproj-F16.gguf
     hf download Qwen/Qwen3.5-0.8B \
       --revision 2fc06364715b967f1860aea9cf38778875588b17 \
-      --include '*.json' '*.txt' '*.jinja'
+      --include '*.json' --include '*.txt' --include '*.jinja'
     ```
 
 Pinned runtime rules:
 
 - `narwhal dev init` requires the package versions and GGUF plugin hashes of the selected template.
 - Reapply the pinned plugin sources after every plugin wheel reinstall.
+- The GGUF plugin reads the multimodal projector `mmproj-F16.gguf` from the directory of the GGUF file.
 
 For a model outside the standard Hugging Face cache, pass the GGUF file with `--model` and the tokenizer directory with `--model-dir` to `narwhal dev init`.

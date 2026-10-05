@@ -131,6 +131,7 @@ async def replay(client, out, instance, template):
             out=directory,
             workload=source,
             run_id=uuid.uuid4().hex,
+            run_seed=0,
             requests=phase["requests"],
             rate=phase["rate_rps"],
             max_inflight=phase["max_inflight"],

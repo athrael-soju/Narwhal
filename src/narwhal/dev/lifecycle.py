@@ -24,7 +24,7 @@ from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
-from narwhal.deployment.launch_engine.start import gpu_memory
+from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
 from .template import _check_free_ports, _port_layout, _sha256, check_plugin
@@ -141,7 +141,7 @@ def _busy(root: Path) -> bool:
         return True
 
 
-def _run(root: Path, module: str, args: list[str], log: str) -> None:
+def _run(root: Path, module: str, args: list[str], log: str, default_timeout: float = 300) -> None:
     # Unbuffered output keeps progress ahead of the final diagnostic.
     command = [sys.executable, "-u", "-m", module, *args]
     write(root / f"{log}.command.json", {"argv": command})
@@ -150,6 +150,7 @@ def _run(root: Path, module: str, args: list[str], log: str) -> None:
         stage=log,
         log=root / f"{log}.log",
         cwd=root,
+        default_timeout=default_timeout,
         retain_descendants=log == "native-start-shared",
     )
     if result.returncode:
@@ -415,6 +416,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             *[arg for path in runs for arg in ("--run", str(path))],
         ],
         "native-start-shared",
+        default_timeout=READY_SECONDS * len(runs),
     )
     for index, engine_run in enumerate(runs):
         _run(

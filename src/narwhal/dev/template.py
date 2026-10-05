@@ -21,6 +21,7 @@ from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.plan import validate_runtime
 from narwhal.deployment.launch_engine.runtime import write_private
 from narwhal.deployment.launch_engine.start import gpu_memory
+from narwhal.runtime.listeners import check_engine_bind
 
 
 def reference() -> dict:
@@ -157,12 +158,10 @@ def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
 
 def _check_free_ports(ports: set[int], address: str) -> None:
     for port in sorted(ports):
-        family = socket.AF_INET6 if ":" in address else socket.AF_INET
-        with socket.socket(family, socket.SOCK_STREAM) as probe:
-            try:
-                probe.bind((address, port))
-            except OSError as exc:
-                raise ValueError(f"port {port} is unavailable on {address}") from exc
+        try:
+            check_engine_bind(address, port)
+        except OSError as exc:
+            raise ValueError(f"port {port} is unavailable on {address}") from exc
 
 
 def _sha256(path: Path) -> str:

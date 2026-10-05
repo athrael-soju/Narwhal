@@ -260,10 +260,11 @@ def run(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
+    default_timeout: float = 300,
     retain_descendants: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Execute one stage; execution and cleanup have independent finite budgets."""
-    default = seconds("NARWHAL_STAGE_TIMEOUT_SECONDS", 300)
+    default = seconds("NARWHAL_STAGE_TIMEOUT_SECONDS", default_timeout)
     override = "NARWHAL_STAGE_" + re.sub(r"[^A-Z0-9]", "_", stage.upper()) + "_TIMEOUT_SECONDS"
     budget = timeout if timeout is not None else seconds(override, default)
     grace = seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10)

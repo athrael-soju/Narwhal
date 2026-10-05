@@ -12,6 +12,7 @@ from unittest.mock import patch
 from narwhal.config import SLO, EngineContract, EngineSpec, FleetConfig
 from narwhal.config.serialization import document
 from narwhal.contracts import CONTRACTS
+from narwhal.dev.template import default_template, reference
 from tests.fixtures import ROOT
 
 
@@ -112,6 +113,29 @@ class DocumentationContractTests(unittest.TestCase):
                     # None defers resolution to FleetConfig or the runtime constructor.
                     if actual is not None:
                         self.assertEqual(actual, expected)
+
+    def test_cuda_runtime_install_pins_each_dev_template(self):
+        """The documented CUDA install provides the runtime each dev template requires."""
+        text = (ROOT / "docs/dev/CUDA-Runtime.md").read_text()
+        packages = dict(re.findall(r"'([a-z0-9-]+)==([^']+)'", text))
+        packages["vllm-gguf-plugin"] = re.search(r"/vllm_gguf_plugin-([^-]+)-cp310", text)[1]
+        revision = re.search(r"checkout ([0-9a-f]{40})", text)[1]
+        commands = re.sub(r" \\\n\s*", " ", text)
+        for template in (reference(), default_template()):
+            model = template["model"]
+            with self.subTest(template=template["name"]):
+                self.assertEqual(packages, template["runtime"]["expected_packages"])
+                self.assertEqual(revision, template["runtime"]["gguf_plugin_source_revision"])
+                self.assertIn(
+                    f"hf download {model['repository']} --revision {model['revision']} "
+                    f"{model['filename']} ",
+                    commands,
+                )
+                self.assertIn(
+                    f"hf download {model['tokenizer_repository']} "
+                    f"--revision {model['tokenizer_revision']} ",
+                    commands,
+                )
 
     def test_reference_versions_cover_the_contract_registry(self):
         """Every versioned interface appears with its current schema version."""
