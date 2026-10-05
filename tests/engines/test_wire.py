@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import resource
 import socket
 import unittest
 from unittest.mock import patch
@@ -160,6 +162,34 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
         engine.sockets[0].shutdown(socket.SHUT_WR)
         response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
         self.assertEqual((response.status_code, engine.connections), (200, 2))
+
+    async def test_a_connection_above_the_select_descriptor_limit_is_reused(self):
+        high = 1500
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard != resource.RLIM_INFINITY and hard <= high:
+            self.skipTest(f"open-file limit {hard} is below descriptor {high}")
+        if soft <= high:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (high + 1, hard))
+            self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, (soft, hard))
+        ok = head(content_length=2) + b"{}"
+        engine = ScriptedEngine([ok], [ok])
+
+        async def dial(host, port):
+            sock = await engine.dial(host, port)
+            moved = socket.socket(fileno=os.dup2(sock.fileno(), high))
+            sock.close()
+            moved.setblocking(False)
+            return moved
+
+        client = WireClient(
+            max_connections=2, max_keepalive=1, connect_timeout_s=1.0, pool_timeout_s=1.0, dial=dial
+        )
+        self.addAsyncCleanup(client.aclose)
+        self.addAsyncCleanup(engine.aclose)
+        for _ in range(2):
+            response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(engine.connections, 1)
 
     async def test_the_pool_limit_queues_then_times_out(self):
         engine = ScriptedEngine(
