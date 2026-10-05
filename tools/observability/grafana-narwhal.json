@@ -2114,7 +2114,7 @@
         "spec": {
           "id": 10,
           "title": "Pool assignments",
-          "description": "Engines assigned to each pool and engines held out by the breaker.",
+          "description": "Engines in service in each pool, and engines out of service in any pool.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -2125,8 +2125,8 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
-                        "legendFormat": "{{role}}"
+                        "expr": "count(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",role=\"prefill\"} unless on(iid) narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",role=\"decode\"} unless on(iid) (max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",state=~\"validating|blocked\"} == 1) or max by(iid) (up{job=\"engines\"} == 0)))",
+                        "legendFormat": "prefill"
                       }
                     },
                     "datasource": {
@@ -2142,8 +2142,8 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
-                        "legendFormat": "ejected"
+                        "expr": "count(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",role=\"decode\"} unless on(iid) (max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",state=~\"validating|blocked\"} == 1) or max by(iid) (up{job=\"engines\"} == 0)))",
+                        "legendFormat": "decode"
                       }
                     },
                     "datasource": {
@@ -2151,6 +2151,23 @@
                       "uid": "${DS_PROMETHEUS}"
                     },
                     "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "count(max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\"}) and on(iid) (max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\"} == 1) or max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",state=~\"validating|blocked\"} == 1) or max by(iid) (up{job=\"engines\"} == 0)))",
+                        "legendFormat": "out of service"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
                   }
                 }
               ],
@@ -2184,7 +2201,8 @@
                     "gradientMode": "opacity",
                     "lineWidth": 2,
                     "showPoints": "never"
-                  }
+                  },
+                  "decimals": 0
                 },
                 "overrides": [
                   {
@@ -2220,7 +2238,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "ejected"
+                      "options": "out of service"
                     },
                     "properties": [
                       {

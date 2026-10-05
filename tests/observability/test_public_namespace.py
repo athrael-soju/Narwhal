@@ -441,6 +441,30 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(roles[str(code)]["color"], table_colors[name])
         self.assertIn("label_replace(4 * max by(iid) (narwhal_engine_quarantined{", expr)
 
+    def test_pool_assignments_count_engines_in_service(self):
+        """Pool lines count in-service engines, and the red line counts engines out of service."""
+        element = dashboard()["spec"]["elements"]["panel-10"]
+        queries = {
+            query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
+            for query in element["spec"]["data"]["spec"]["queries"]
+        }
+        self.assertEqual(list(queries), ["prefill", "decode", "out of service"])
+        held = (
+            "narwhal_engine_quarantined",
+            "narwhal_engine_draining",
+            "narwhal_ejected{",
+            'state=~"validating|blocked"',
+            'up{job="engines"} == 0',
+        )
+        for legend, expr in queries.items():
+            with self.subTest(legend=legend):
+                self.assertIn("narwhal_instance_role", expr)
+                for source in held:
+                    self.assertIn(source, expr)
+        self.assertIn("unless on(iid)", queries["prefill"])
+        self.assertIn("unless on(iid)", queries["decode"])
+        self.assertIn("and on(iid)", queries["out of service"])
+
     def test_headline_row_reports_requests_and_latency_against_the_slo(self):
         """The first row holds one-row Requests and Latency tables beside the Router block."""
         spec = dashboard()["spec"]

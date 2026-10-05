@@ -41,19 +41,19 @@ The engine table and **Engine role history** colour engine states:
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
 
-| Colour       | Hex       | Meaning                                                                        |
-| ------------ | --------- | ------------------------------------------------------------------------------ |
-| Light blue   | `#5794F2` | offered                                                                        |
-| Pale blue    | `#8AB8FF` | ended before sizing                                                            |
-| Light yellow | `#FFEE52` | cancelled                                                                      |
-| Yellow       | `#F2CC0C` | refused, warnings, the pool target and headline values near their limit        |
-| Orange       | `#FF9830` | rejected                                                                       |
-| Pink         | `#FF7383` | invalid                                                                        |
-| Red          | `#F2495C` | failed, pages, SLO lines, ejected engines and headline values past their limit |
-| Dark red     | `#C4162A` | expired                                                                        |
-| Purple       | `#B877D9` | retry attempts                                                                 |
-| Dark purple  | `#A352CC` | queue wait and event-loop lag                                                  |
-| Light purple | `#CA95E5` | seat time and event-loop busy share                                            |
+| Colour       | Hex       | Meaning                                                                               |
+| ------------ | --------- | ------------------------------------------------------------------------------------- |
+| Light blue   | `#5794F2` | offered                                                                               |
+| Pale blue    | `#8AB8FF` | ended before sizing                                                                   |
+| Light yellow | `#FFEE52` | cancelled                                                                             |
+| Yellow       | `#F2CC0C` | refused, warnings, the pool target and headline values near their limit               |
+| Orange       | `#FF9830` | rejected                                                                              |
+| Pink         | `#FF7383` | invalid                                                                               |
+| Red          | `#F2495C` | failed, pages, SLO lines, engines out of service and headline values past their limit |
+| Dark red     | `#C4162A` | expired                                                                               |
+| Purple       | `#B877D9` | retry attempts                                                                        |
+| Dark purple  | `#A352CC` | queue wait and event-loop lag                                                         |
+| Light purple | `#CA95E5` | seat time and event-loop busy share                                                   |
 
 ## Headline row
 
@@ -159,7 +159,7 @@ When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed mark
 
 ## Pool assignments
 
-**Pool assignments** shows how many engines serve each phase over time.
+**Pool assignments** shows how many engines serve each phase over time, and how many are out of service.
 
 <div class="narwhal-panel-row" markdown>
 
@@ -167,7 +167,7 @@ When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed mark
 
 </div>
 
-The teal line counts prefill engines, the blue line counts decode engines and the red line counts engines the breaker ejected. Mirrored steps in the teal and blue lines mark a role flip.
+The teal line counts prefill engines in service and the blue line counts decode engines in service. The red line counts engines in any out-of-service [engine state](#engine-states), and it appears while at least one engine is out. An engine that leaves service moves from its pool line to the red line, so the three lines add up to the fleet. Mirrored steps in the teal and blue lines mark a role flip.
 
 ## Latency and token throughput
 
