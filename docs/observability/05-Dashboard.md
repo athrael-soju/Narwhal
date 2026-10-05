@@ -34,7 +34,7 @@ The engine table and **Engine role history** colour engine states:
 | ------------ | --------- | ------------------------------------------------------ |
 | Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80% |
 | Burnt orange | `#E0752D` | Quarantined                                            |
-| Brick red    | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
+| Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
 | Maroon       | `#A11D1D` | Blocked                                                |
 | Magenta      | `#9E4AA4` | Switching and Validating                               |
 | Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
@@ -49,7 +49,7 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Yellow       | `#F2CC0C` | refused, warnings, the pool target and headline values near their limit        |
 | Orange       | `#FF9830` | rejected                                                                       |
 | Pink         | `#FF7383` | invalid                                                                        |
-| Red          | `#F2495C` | failed, pages, SLO lines, ejected engines and headline values past their limit |
+| Red          | `#D44A3A` | failed, pages, SLO lines, ejected engines and headline values past their limit |
 | Dark red     | `#C4162A` | expired                                                                        |
 | Purple       | `#B877D9` | retry attempts                                                                 |
 | Dark purple  | `#A352CC` | queue wait and event-loop lag                                                  |

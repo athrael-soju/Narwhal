@@ -83,7 +83,7 @@
           },
           "enable": true,
           "hide": true,
-          "iconColor": "#F2495C",
+          "iconColor": "#D44A3A",
           "name": "Narwhal pages",
           "filter": {
             "exclude": false,
@@ -226,11 +226,11 @@
                             "options": {
                               "-1": {
                                 "text": "Offline",
-                                "color": "#F2495C"
+                                "color": "#D44A3A"
                               },
                               "0": {
                                 "text": "Not ready",
-                                "color": "#F2495C"
+                                "color": "#D44A3A"
                               },
                               "1": {
                                 "text": "Ready",
@@ -264,7 +264,7 @@
                               "value": null
                             },
                             {
-                              "color": "#F2495C",
+                              "color": "#D44A3A",
                               "value": 1
                             }
                           ]
@@ -1319,7 +1319,7 @@
                         "id": "color",
                         "value": {
                           "mode": "fixed",
-                          "fixedColor": "#F2495C"
+                          "fixedColor": "#D44A3A"
                         }
                       }
                     ]
@@ -1579,7 +1579,7 @@
                         "id": "color",
                         "value": {
                           "mode": "fixed",
-                          "fixedColor": "#F2495C"
+                          "fixedColor": "#D44A3A"
                         }
                       }
                     ]
@@ -1763,7 +1763,7 @@
                         "id": "color",
                         "value": {
                           "mode": "fixed",
-                          "fixedColor": "#F2495C"
+                          "fixedColor": "#D44A3A"
                         }
                       }
                     ]
@@ -2093,7 +2093,7 @@
                         },
                         "2": {
                           "text": "Page",
-                          "color": "#F2495C"
+                          "color": "#D44A3A"
                         }
                       }
                     }
@@ -2227,7 +2227,7 @@
                         "id": "color",
                         "value": {
                           "mode": "fixed",
-                          "fixedColor": "#F2495C"
+                          "fixedColor": "#D44A3A"
                         }
                       }
                     ]
@@ -2522,7 +2522,7 @@
                           "mode": "absolute",
                           "steps": [
                             {
-                              "color": "#F2495C",
+                              "color": "#D44A3A",
                               "value": null
                             },
                             {
@@ -2579,7 +2579,7 @@
                               "value": 0.01
                             },
                             {
-                              "color": "#F2495C",
+                              "color": "#D44A3A",
                               "value": 0.05
                             }
                           ]
@@ -2787,7 +2787,7 @@
                               "value": 0.8
                             },
                             {
-                              "color": "#F2495C",
+                              "color": "#D44A3A",
                               "value": 1.0
                             }
                           ]
@@ -2836,7 +2836,7 @@
                               "value": 0.8
                             },
                             {
-                              "color": "#F2495C",
+                              "color": "#D44A3A",
                               "value": 1.0
                             }
                           ]
