@@ -6,12 +6,13 @@ import random
 import tempfile
 import unittest
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from narwhal.profiling.store import ProfileStore
-from narwhal.scheduling.control import SLO, Thresholds
+from narwhal.scheduling.control import SLO, Flip, Thresholds
 from narwhal.scheduling.controller import ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
@@ -41,6 +42,7 @@ class TrackDepartureTests(unittest.TestCase):
             step_s=5.0,
             within_floors=lambda p: 0 < p < 8,
             safety=SimpleNamespace(demand_rise_tolerance=0.25, evidence_span_s=60.0),
+            scheduler=SimpleNamespace(roles=SimpleNamespace(flips=[])),
         )
         self.policy = ReactivePolicy()
         self.window = Demand(4.8, 0.2, 100, 0)
@@ -58,7 +60,13 @@ class TrackDepartureTests(unittest.TestCase):
         best = current_p - 1 if toward is None else toward
         short = ShortView(short_demand, current, {best: score(best, 1.0 - short_gain)})
         self.policy._track_departure(
-            self.controller, now, current, [score(6, 1.1)], self.window, short
+            self.controller,
+            now,
+            current,
+            [score(6, 1.1)],
+            self.window,
+            short,
+            confirmation_s=15.0,
         )
 
     def settle(self, until: float) -> None:
@@ -83,6 +91,47 @@ class TrackDepartureTests(unittest.TestCase):
         self.settle(50.0)
         self.track(55.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertIsNone(self.policy.departure)
+
+    def test_reversing_shift_opens_after_a_settled_run_one_confirmation_span_shorter(self):
+        self.controller.scheduler.roles.flips = [Flip(-20.0, "e1", Role.PREFILL, "reactive", 0, 0)]
+        self.settle(45.0)
+        self.track(50.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 50.0, reverses=True))
+
+    def test_reversing_shift_on_a_shorter_settled_run_opens_no_departure(self):
+        self.controller.scheduler.roles.flips = [Flip(-20.0, "e1", Role.PREFILL, "reactive", 0, 0)]
+        self.settle(35.0)
+        self.track(40.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+        self.assertIsNone(self.policy.departure)
+
+    def test_non_reversing_shift_needs_one_evidence_span_settled(self):
+        for flips in (
+            [],
+            [Flip(-20.0, "e1", Role.DECODE, "reactive", 0, 0)],
+            [
+                Flip(-20.0, "e1", Role.PREFILL, "reactive", 0, 0),
+                Flip(-10.0, "e2", Role.DECODE, "reactive", 0, 0),
+            ],
+        ):
+            with self.subTest(flips=[flip.to for flip in flips]):
+                self.policy = ReactivePolicy()
+                self.controller.scheduler.roles.flips = flips
+                self.settle(50.0)
+                self.track(55.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+                self.assertIsNone(self.policy.departure)
+
+    def test_old_new_or_floor_repair_flips_need_one_evidence_span_settled(self):
+        for flip in (
+            Flip(-126.0, "e1", Role.PREFILL, "reactive", 0, 0),
+            Flip(0.0, "e1", Role.PREFILL, "reactive", 0, 0),
+            Flip(-20.0, "e1", Role.PREFILL, "floor_recovery", 0, 0),
+        ):
+            with self.subTest(at=flip.at, by=flip.by):
+                self.policy = ReactivePolicy()
+                self.controller.scheduler.roles.flips = [flip]
+                self.settle(50.0)
+                self.track(55.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+                self.assertIsNone(self.policy.departure)
 
     def test_short_demand_within_the_rise_tolerance_opens_no_departure(self):
         self.settle(60.0)
@@ -113,6 +162,30 @@ class TrackDepartureTests(unittest.TestCase):
         self.track(60.0, short_gain=0.0, short_demand=self.window)
         self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
         self.assertIsNone(self.policy.departure)
+
+    def open_after(self, *flips: Flip) -> None:
+        self.controller.scheduler.roles.flips = list(flips)
+        self.settle(60.0)
+        self.track(65.0, short_gain=0.5, short_demand=Demand(2.4, 2.5, 100, 0))
+
+    def test_departure_against_recent_reactive_moves_reverses(self):
+        self.open_after(Flip(-20.0, "e1", Role.PREFILL, "reactive", 0, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0, reverses=True))
+
+    def test_departure_with_a_recent_move_along_its_heading_does_not_reverse(self):
+        self.open_after(
+            Flip(-20.0, "e1", Role.PREFILL, "reactive", 0, 0),
+            Flip(-10.0, "e2", Role.DECODE, "reactive", 0, 0),
+        )
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0))
+
+    def test_reactive_moves_older_than_window_plus_evidence_span_do_not_reverse(self):
+        self.open_after(Flip(65.0 - 180.0 - 1.0, "e1", Role.PREFILL, "reactive", 0, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0))
+
+    def test_floor_repairs_do_not_reverse(self):
+        self.open_after(Flip(-20.0, "e1", Role.PREFILL, "floor_recovery", 0, 0))
+        self.assertEqual(self.policy.departure, Departure(-1, 65.0))
 
     def test_departure_closes_when_the_short_view_turns(self):
         self.settle(60.0)
@@ -431,15 +504,23 @@ class ReverseHoldTests(unittest.TestCase):
 
 
 class LeadingDepartureTests(unittest.TestCase):
-    """After one evidence span, a leading departure moves on demand over the confirmation span."""
+    """A leading departure moves on demand over the confirmation span.
 
-    def walk(self, start: int, settle, shift) -> list[dict[str, object]]:
+    A departure that reverses recent reactive moves does so from its first move; any other
+    departure does so once it is one evidence span old.
+    """
+
+    def walk(
+        self, start: int, phases: tuple[tuple[int, tuple[int, int, float]], ...]
+    ) -> tuple[Sim, float]:
         with tempfile.TemporaryDirectory() as directory:
             sim = Sim(directory, prefill=start)
-            sim.run(300, settle)
-            sim.run(120, shift)
+            for seconds, workload in phases[:-1]:
+                sim.run(seconds, workload)
+            shift = sim.now
+            sim.run(*phases[-1])
             sim.close()
-        return [d for d in sim.decisions if d["result"] == "applied" and d["at"] > 300.0]
+        return sim, shift
 
     def test_departure_walks_to_the_far_split_within_115_s(self):
         for start, settle, shift, end in (
@@ -447,16 +528,72 @@ class LeadingDepartureTests(unittest.TestCase):
             (1, DECODE_HEAVY, PREFILL_HEAVY, 7),
         ):
             with self.subTest(start=start, end=end):
-                moves = self.walk(start, settle, shift)
+                sim, at = self.walk(start, ((300, settle), (120, shift)))
+                moves = [d for d in sim.decisions if d["result"] == "applied"]
+                self.assertTrue(all(move["at"] > at for move in moves))
                 self.assertEqual(moves[0]["eligibility_rule"], "settled_departure")
                 self.assertEqual(moves[-1]["prefill"], end)
-                self.assertLessEqual(moves[-1]["at"] - 300.0, 115.0)
+                self.assertLessEqual(moves[-1]["at"] - at, 115.0)
                 self.assertEqual(len(moves), abs(end - start))
                 self.assertGreaterEqual(moves[1]["departure_age_s"], 60.0)
                 for move in moves[1:]:
                     self.assertEqual(move["eligibility_rule"], "source_shrink")
                     self.assertEqual(move["demand_horizon_s"], move["steady_horizon_s"])
                     self.assertLess(move["departure_age_s"], 120.0)
+                    self.assertIs(move["departure_reverses"], False)
+
+    def test_reversing_departure_leads_from_its_first_move(self):
+        # A decode-heavy shift starts within one evidence span of the prefill walk's last move.
+        sim, at = self.walk(1, ((300, DECODE_HEAVY), (165, PREFILL_HEAVY), (120, DECODE_HEAVY)))
+        applied = [d for d in sim.decisions if d["result"] == "applied"]
+        moves = [d for d in applied if d["at"] > at]
+        last_prefill_move = max(d["at"] for d in applied if d["at"] <= at)
+        self.assertLess(at - last_prefill_move, sim.controller.safety.evidence_span_s)
+        self.assertEqual(moves[0]["eligibility_rule"], "settled_departure")
+        self.assertLess(moves[1]["departure_age_s"], 60.0)
+        self.assertEqual(moves[1]["demand_horizon_s"], moves[1]["steady_horizon_s"])
+        for move in moves[1:]:
+            self.assertEqual(move["eligibility_rule"], "source_shrink")
+            self.assertIs(move["departure_reverses"], True)
+            ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+        for earlier, later in pairwise(moves):
+            self.assertGreaterEqual(later["at"] - earlier["at"], sim.scheduler.th.cooldown_s)
+        self.assertEqual(moves[-1]["prefill"], 1)
+        self.assertLessEqual(moves[-1]["at"] - at, 85.0)
+
+
+class ReversingShiftTests(unittest.TestCase):
+    """A shift that reverses the previous phase's walk opens a departure after a shorter run.
+
+    The reversing departure leads on confirmation-span demand from its first move.
+    """
+
+    def test_walk_back_soon_after_the_last_move_leads_from_its_first_move(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=1)
+            sim.run(300, DECODE_HEAVY)
+            sim.run(160, PREFILL_HEAVY)
+            shift = sim.now
+            settled_since = sim.controller.reactive.settled_since
+            sim.run(120, DECODE_HEAVY)
+            sim.close()
+        moves = [d for d in sim.decisions if d["result"] == "applied"]
+        walk = [d for d in moves if d["at"] <= shift]
+        back = [d for d in moves if d["at"] > shift]
+        span_s = sim.controller.safety.evidence_span_s
+        self.assertEqual(walk[-1]["prefill"], 7)
+        self.assertLess(shift - walk[-1]["at"], span_s)
+        self.assertIsNotNone(settled_since)
+        self.assertEqual(back[0]["eligibility_rule"], "settled_departure")
+        self.assertLess(back[0]["at"] - back[0]["departure_age_s"] - settled_since, span_s)
+        self.assertLessEqual(back[0]["at"] - shift, 30.0)
+        self.assertLess(back[1]["departure_age_s"], span_s)
+        for move in back[1:]:
+            self.assertEqual(move["eligibility_rule"], "source_shrink")
+            self.assertEqual(move["demand_horizon_s"], move["steady_horizon_s"])
+            self.assertIs(move["departure_reverses"], True)
+        self.assertEqual(back[-1]["prefill"], 1)
+        self.assertLessEqual(back[-1]["at"] - shift, 85.0)
 
 
 class PendingBodyTests(unittest.TestCase):
@@ -592,7 +729,9 @@ class PhaseTraceTests(unittest.TestCase):
         decisions = sim.decisions
         self.assertTrue(all(d["demand_complete"] for d in decisions))
         self.assertTrue(any(d.get("unsized_offers") for d in decisions))
-        for start in (180, 540):
+        self.assertFalse([d for d in decisions if d["at"] <= 180 and d["result"] == "applied"])
+        # The second document phase reverses the generation phase's moves toward decode.
+        for start, reverses, reached_s in ((180, False, 95), (540, True, 70)):
             with self.subTest(phase_start=start):
                 toward = [
                     d
@@ -605,9 +744,10 @@ class PhaseTraceTests(unittest.TestCase):
                 self.assertEqual(toward[0]["eligibility_rule"], "settled_departure")
                 self.assertGreater(toward[0]["arrivals_beyond_profile"], 0)
                 self.assertEqual(toward[1]["demand_horizon_s"], toward[1]["steady_horizon_s"])
-                self.assertGreaterEqual(toward[1]["departure_age_s"], 60.0)
+                self.assertIs(toward[1]["departure_reverses"], reverses)
+                self.assertEqual(toward[1]["departure_age_s"] < 60.0, reverses)
                 reached = next(t for t in range(start, start + self.PHASE_S) if splits[t] >= 6)
-                self.assertLessEqual(reached + 1 - start, 95)
+                self.assertLessEqual(reached + 1 - start, reached_s)
 
 
 if __name__ == "__main__":

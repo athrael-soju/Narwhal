@@ -344,25 +344,25 @@ class SplitScorer:
             profiles[inst.iid] = profile
 
         waiting = [row for row in self.monitor.waiting.values() if row.phase is Phase.PREFILL]
-        if request is not None and all(row.rid != request.rid for row in waiting):
-            waiting.append(request)
+        if request is not None:
+            # Waiting requests are keyed by request ID.
+            queued = self.monitor.waiting.get(request.rid)
+            if queued is None or queued.phase is not Phase.PREFILL:
+                waiting.append(request)
         self.recheck(waiting)
         if not waiting:
             return None
         # A stable sort keeps queue publication order for offers that share a clock tick.
         waiting.sort(key=lambda row: row.arrived_at if row.arrived_at is not None else now)
 
+        health = self.scheduler.health
+        probation = health.probation_set() if health is not None else set()
         loads: dict[str, float] = {}
         resident_prefill = 0.0
         for inst in pool:
             profile = profiles[inst.iid]
             resident = resident_prefill_seconds(profile, inst)
-            penalty = (
-                self.scheduler.health.penalty_s
-                if self.scheduler.health is not None
-                and inst.iid in self.scheduler.health.probation_set()
-                else 0.0
-            )
+            penalty = health.penalty_s if health is not None and inst.iid in probation else 0.0
             loads[inst.iid] = resident + penalty
             resident_prefill += resident
 

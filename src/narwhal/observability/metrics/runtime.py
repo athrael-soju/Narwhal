@@ -53,6 +53,12 @@ def render_runtime(state: dict) -> list[str]:
             "gauge",
             [({}, monitoring.get(field_name, 0.0))],
         )
+    out += metric_lines(
+        "narwhal_event_loop_busy_seconds_total",
+        "Event-loop thread CPU seconds since the monitoring loop started",
+        "counter",
+        [({}, monitoring.get("event_loop_busy_s", 0.0))],
+    )
     monitoring_stages = monitoring.get("stages") or {}
     out += metric_lines(
         "narwhal_monitoring_stage_failures_total",

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
 from narwhal.runtime.lifecycle import identity, readmission
 from narwhal.runtime.lifecycle.records import DrainRecord, LifecycleError, ValidationOutcome
@@ -69,7 +70,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
 
     async def decode(self, *args, **kwargs):
         """Return token evidence for the requested fabric pair."""
-        yield 'data: {"choices":[{"token_ids":[1,2],"text":"ok"}]}'
+        yield [parse_event('data: {"choices":[{"token_ids":[1,2],"text":"ok"}]}')]
 
     def http(self, request):
         """Serve attestation, model and local generation gates with per-engine overrides."""
@@ -475,7 +476,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         """Each failed transfer identifies both its producer and consumer."""
 
         async def empty(*args, **kwargs):
-            yield 'data: {"choices": []}'
+            yield [parse_event('data: {"choices": []}')]
 
         self.router.engines.decode = empty
         outcome = await self.validate()

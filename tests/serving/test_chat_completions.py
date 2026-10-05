@@ -14,6 +14,7 @@ from narwhal.serving.app import create_app
 from narwhal.serving.completion import completion_body_error, output_cap
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
+from tests.wire import engine_transports
 
 
 def chunk(delta, *, token=None, finish=None, **fields):
@@ -69,7 +70,7 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, transport=httpx.MockTransport(engine), **kwargs)
+            return NarwhalRouter(*args, **engine_transports(engine), **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             self.app = create_app(cfg)

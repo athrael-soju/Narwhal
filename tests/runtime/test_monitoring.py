@@ -3,6 +3,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack, suppress
 from pathlib import Path
@@ -68,6 +69,12 @@ class MonitoringLedgerTests(unittest.TestCase):
         self.assertEqual(snapshot["event_loop_lag_high_water_s"], 0.03)
         ledger.observe_event_loop_lag(-1.0)
         self.assertEqual(ledger.snapshot()["event_loop_lag_s"], 0.0)
+
+    def test_event_loop_busy_reports_the_latest_observation(self):
+        ledger = MonitoringLedger()
+        self.assertEqual(ledger.snapshot()["event_loop_busy_s"], 0.0)
+        ledger.observe_event_loop_busy(1.25)
+        self.assertEqual(ledger.snapshot()["event_loop_busy_s"], 1.25)
 
 
 class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
@@ -148,6 +155,35 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
                 await task
         observe.assert_called()
         self.assertGreaterEqual(observe.call_args.args[0], 0.0)
+
+    async def test_event_loop_busy_rises_with_loop_cpu_and_holds_while_idle(self):
+        """Loop-thread CPU raises the counter; sleeping and worker threads leave it flat."""
+        self.router.cfg.monitor_interval_s = 0.01
+        ledger = self.router.monitoring
+
+        def spin(seconds):
+            start = time.thread_time()
+            while time.thread_time() - start < seconds:
+                pass
+
+        with patch.object(monitoring, "monitor_once", new=AsyncMock()):
+            task = asyncio.create_task(monitoring.monitor_loop(self.router))
+            await asyncio.sleep(0.05)
+            b0 = ledger.event_loop_busy_s
+            spin(0.1)
+            await asyncio.sleep(0.05)
+            b1 = ledger.event_loop_busy_s
+            self.assertGreaterEqual(b1 - b0, 0.09)
+            await asyncio.sleep(0.3)
+            b2 = ledger.event_loop_busy_s
+            self.assertLess(b2 - b1, 0.05)
+            await asyncio.to_thread(spin, 0.2)
+            await asyncio.sleep(0.05)
+            b3 = ledger.event_loop_busy_s
+            self.assertLess(b3 - b2, 0.05)
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     async def test_urgent_control_preserves_demand_sampling_cadence(self):
         """Scheduled monitoring passes retain ownership of demand sampling."""

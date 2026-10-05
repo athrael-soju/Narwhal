@@ -30,11 +30,13 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.connector import NixlConnector
 from narwhal.engines.dialect import VllmDialect
+from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import calibration_document, fleet, profile
+from tests.wire import engine_transports
 
 UNCALIBRATED = (
     "first-token deadline has no calibration evidence; run narwhal-check "
@@ -613,7 +615,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.failed), 1)
 
         async def empty(*args, **kwargs):
-            yield 'data: {"choices":[]}'
+            yield [parse_event('data: {"choices":[]}')]
 
         client.prefill = AsyncMock(return_value=result)
         client.decode = empty
@@ -636,7 +638,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         async def output(url, endpoint, body, headers, params, **kwargs):
             decoded.append(body)
-            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+            yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
 
         client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
         pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
@@ -672,7 +674,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def output(*args, **kwargs):
-            yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+            yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
 
         client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
 
@@ -771,7 +773,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         client = EngineClient(
             read_timeout_s=self.cfg.decode_read_timeout_s,
-            transport=httpx.MockTransport(answer),
+            **engine_transports(answer),
         )
         result = NixlConnector().prefill_result(
             payload,
@@ -802,7 +804,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.aclose()
         self.assertEqual(snapshot.await_count, 2)
-        self.assertTrue(closed.is_set())
+        await asyncio.wait_for(closed.wait(), 1.0)
         self.assertEqual(report.pairs[0]["status"], "failed")
         self.assertEqual(report.pairs[0]["failure_kind"], "request_deadline_exceeded")
         self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)
@@ -821,7 +823,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
             async def failed(*args, failure_detail=detail, **kwargs):
                 raise EngineError("decode", self.cfg.engines[1].url, 503, failure_detail)
-                yield ""
+                yield []
 
             client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=failed)
             with (
@@ -950,7 +952,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     }
 
                 async def output(*args, **kwargs):
-                    yield 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
+                    yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
 
                 result = NixlConnector().prefill_result(
                     {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},

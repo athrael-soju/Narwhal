@@ -5,12 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field
 
 import anyio
 from fastapi.responses import StreamingResponse
 from starlette.types import Message, Receive, Scope, Send
 
+from ..engines.stream import SseEvent
 from .lifecycle import RequestLifecycle
+
+
+@dataclass
+class RelayBatch:
+    """Client frames from one engine read and their client-filtered events."""
+
+    text: str
+    events: list[SseEvent] = field(default_factory=list)
 
 
 class RequestStreamResponse(StreamingResponse):
@@ -18,14 +28,14 @@ class RequestStreamResponse(StreamingResponse):
 
     def __init__(
         self,
-        stream: AsyncGenerator[str, None],
+        stream: AsyncGenerator[RelayBatch, None],
         lifecycle: RequestLifecycle,
         *,
-        first: str | None = None,
+        first: RelayBatch | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.upstream = stream
-        # A frame already read from `stream`, sent before the rest of it.
+        # A batch already read from `stream`, sent before the rest of it.
         self.first = first
         self.closed = False
         self.iterator = self._iterate()
@@ -34,9 +44,9 @@ class RequestStreamResponse(StreamingResponse):
     async def _iterate(self) -> AsyncGenerator[str, None]:
         try:
             if self.first is not None:
-                yield self.first
-            async for line in self.upstream:
-                yield line
+                yield self.first.text
+            async for batch in self.upstream:
+                yield batch.text
         finally:
             await self._close_upstream()
 

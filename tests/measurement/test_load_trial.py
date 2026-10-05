@@ -101,6 +101,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["outcome"], "completed")
         self.assertEqual(row["input_tokens"], 8)
         self.assertEqual(row["output_tokens"], 3)
+        self.assertEqual(row["token_events"], 3)
         self.assertEqual(row["ttft_s"], 2.0)
         self.assertAlmostEqual(row["tpot_s"], 0.02)
 
@@ -126,6 +127,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         row = await self.request(content, clock=lambda: next(times))
         self.assertEqual(row["outcome"], "completed")
         self.assertEqual(row["output_tokens"], 3)
+        self.assertEqual(row["token_events"], 2)
         self.assertEqual(row["batched_token_events"], 1)
         self.assertAlmostEqual(row["tpot_s"], 0.02)
 

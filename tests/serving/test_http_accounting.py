@@ -22,6 +22,7 @@ from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.serving.saturation import SIZING_MIN_SAMPLES, RecentDelays
 from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet, hold_prefix, invalid_token_choices, put_warm
+from tests.wire import engine_transports
 
 
 class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
@@ -65,7 +66,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         """Create the app and register cleanup for its journal, engine client and HTTP client."""
 
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, transport=httpx.MockTransport(self.engine), **kwargs)
+            return NarwhalRouter(*args, **engine_transports(self.engine), **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             app = create_app(self.cfg, journal_path=self.root / "journal.jsonl")

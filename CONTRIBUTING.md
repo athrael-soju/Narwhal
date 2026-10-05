@@ -252,6 +252,22 @@ Import each name from the subpackage module that defines it.
 | `tools/observability/start/readiness.py`    | Service, dashboard and target readiness          |
 | `tools/observability/start/cli.py`          | Startup sequence and command                     |
 
+The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurement/router_benchmark/cli.py`:
+
+| Module                                             | Contents                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------- |
+| `tools/measurement/router_benchmark/cpus.py`       | CPU lists, SMT siblings, CPU allocation, pinning and CPU time |
+| `tools/measurement/router_benchmark/fleet.py`      | Simulated fleet, engine roles and profiles                    |
+| `tools/measurement/router_benchmark/processes.py`  | Child environment, readiness, process records and shutdown    |
+| `tools/measurement/router_benchmark/files.py`      | Private output files                                          |
+| `tools/measurement/router_benchmark/client.py`     | Load client process                                           |
+| `tools/measurement/router_benchmark/sampling.py`   | Router, client, engine and core samples                       |
+| `tools/measurement/router_benchmark/report.py`     | Rate rows, stop conditions and the benchmark point            |
+| `tools/measurement/router_benchmark/comparison.py` | Alternating runs and the comparison document                  |
+| `tools/measurement/router_benchmark/render.py`     | Report and comparison text                                    |
+| `tools/measurement/router_benchmark/run.py`        | One run: engines, router, rate sweep and report               |
+| `tools/measurement/router_benchmark/cli.py`        | Options and command                                           |
+
 ### Working files and deployment artifacts
 
 Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers, and paper working files outside the tracked source tree.

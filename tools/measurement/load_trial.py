@@ -158,6 +158,7 @@ async def request_one(client, base, body, rid, scheduled, timeout, clock=time.mo
         "status": None,
         "outcome": "invalid_stream",
         "output_tokens": 0,
+        "token_events": 0,
         "input_tokens": None,
         "ttft_s": None,
         "tpot_s": None,
@@ -203,6 +204,7 @@ async def request_one(client, base, body, rid, scheduled, timeout, clock=time.mo
                         if first is None:
                             first = last
                         row["output_tokens"] += len(ids)
+                        row["token_events"] += 1
                         if len(ids) > 1:
                             row["batched_token_events"] = row.get("batched_token_events", 0) + 1
                         if row["output_tokens"] > body["max_tokens"]:

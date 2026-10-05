@@ -197,6 +197,7 @@ class MonitoringOut(BaseModel):
     core_failures: int = 0
     event_loop_lag_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     event_loop_lag_high_water_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    event_loop_busy_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     stages: dict[str, MonitoringStageOut] = Field(default_factory=dict)
 
 
@@ -256,6 +257,7 @@ class ControllerDecisionOut(BaseModel):
     steady_decode_work: float | None = None
     steady_demand_s: float | None = None
     departure_age_s: float | None = None
+    departure_reverses: bool | None = None
     confirmations: int | None = None
     required_confirmations: int | None = None
     trigger_rid: str | None = None

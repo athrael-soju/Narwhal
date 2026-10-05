@@ -92,6 +92,21 @@ After a resume or takeover, the new router process restores `offered`, `unsized_
 
 </div>
 
+### `monitoring`
+
+The `monitoring` object reports the engine monitoring loop:
+
+| Field                         | Meaning                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `degraded`                    | `true` while the router holds new admissions after `controller.monitor_failure_limit` consecutive failed passes                      |
+| `reason`                      | First failure of the streak that set `degraded`, as `<class>:<stage>`, otherwise `null`                                              |
+| `core_consecutive`            | Consecutive monitoring passes with a failed stage                                                                                    |
+| `core_failures`               | Monitoring passes with a failed stage since process start                                                                            |
+| `event_loop_lag_s`            | Delay beyond the latest scheduled monitoring deadline, in seconds                                                                    |
+| `event_loop_lag_high_water_s` | Largest monitoring-deadline delay since process start, in seconds                                                                    |
+| `event_loop_busy_s`           | Event-loop thread CPU seconds since the monitoring loop started                                                                      |
+| `stages`                      | Each monitoring stage's `failures`, `consecutive`, `last_class` and `last_at` (router monotonic-clock seconds of the latest failure) |
+
 ### `health`
 
 Each engine's `health` entry tracks its drift windows:
@@ -295,6 +310,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `steady_prefill_work`, `steady_decode_work`       | Prefill and decode demand over `steady_horizon_s` in engines, `null` with incomplete demand or on a projected-TTFT recovery evaluation                            |
 | `steady_demand_s`                                 | Seconds since confirmation-span demand began to match window demand, `null` while they differ, with incomplete demand, or on a projected-TTFT recovery evaluation |
 | `departure_age_s`                                 | Seconds since the open departure began                                                                                                                            |
+| `departure_reverses`                              | Whether the open departure reverses the role controller's recent moves                                                                                            |
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                                                                          |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                      |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
@@ -306,7 +322,7 @@ These decisions add fields to `control.last_decision`:
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scored                          | Decode capacity fields `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens` |
 | Scored                          | Demand span fields `demand_horizon_s`, `steady_horizon_s`, `steady_prefill_work`, `steady_decode_work`, and `steady_demand_s`                                                                      |
-| Scored during an open departure | `departure_age_s`                                                                                                                                                                                  |
+| Scored during an open departure | `departure_age_s` and `departure_reverses`                                                                                                                                                         |
 | Decode-to-prefill               | `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix                                                              |
 
 `eligibility_rule` takes the first value that applies, in table order:

@@ -72,8 +72,8 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def consume(self, budget=0.4):
         return [
-            line
-            async for line in self.client.decode(
+            event.line
+            async for batch in self.client.decode(
                 self.url,
                 "/v1/completions",
                 {"model": "stub", "prompt": "x"},
@@ -81,6 +81,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 first_token_timeout_s=budget,
             )
+            for event in batch
         ]
 
     async def test_first_token_budget_covers_response_headers(self):
@@ -206,35 +207,23 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*pending, return_exceptions=True)
 
     async def test_elapsed_deadline_during_pool_wait_is_not_breaker_evidence(self):
-        for explicit_transport in (False, True):
-            with self.subTest(explicit_transport=explicit_transport):
-                self.release.clear()
-                self.requests.clear()
-                transport = (
-                    httpx.AsyncHTTPTransport(limits=httpx.Limits(max_connections=1))
-                    if explicit_transport
-                    else None
-                )
-                client = EngineClient(
-                    max_connections=1,
-                    prefill_timeout_s=0.04,
-                    pool_timeout_s=1,
-                    transport=transport,
-                )
-                try:
-                    async with client._data(self.url).stream(
-                        "POST", self.url + "/occupied", json={}
-                    ) as held:
-                        with self.assertRaises(httpx.PoolTimeout) as caught:
-                            await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
-                        self.assertIsNone(leg_failure_class(caught.exception))
-                        self.assertEqual(self.requests, ["/occupied"])
-                        self.release.set()
-                        await held.aread()
-                    result = await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
-                    self.assertEqual(result.parameters()["remote_engine_id"], "e0")
-                finally:
-                    await client.aclose()
+        self.release.clear()
+        self.requests.clear()
+        client = EngineClient(max_connections=1, prefill_timeout_s=0.04, pool_timeout_s=1)
+        try:
+            async with client._wire.stream(
+                self.url + "/occupied", {}, {}, gap=lambda: None
+            ) as held:
+                with self.assertRaises(httpx.PoolTimeout) as caught:
+                    await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
+                self.assertIsNone(leg_failure_class(caught.exception))
+                self.assertEqual(self.requests, ["/occupied"])
+                self.release.set()
+                await held.aread()
+            result = await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
+            self.assertEqual(result.parameters()["remote_engine_id"], "e0")
+        finally:
+            await client.aclose()
 
     async def test_a_held_connection_to_one_engine_leaves_other_engines_free(self):
         self.release.clear()
@@ -242,15 +231,17 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
         client = EngineClient(max_connections=1, prefill_timeout_s=0.5, pool_timeout_s=0.2)
         other = self.url.replace("127.0.0.1", "localhost")
         try:
-            async with client._data(self.url).stream(
-                "POST", self.url + "/occupied", json={}
+            async with client._wire.stream(
+                self.url + "/occupied", {}, {}, gap=lambda: None
             ) as held:
                 result = await client.prefill(other, "/v1/completions", {"prompt": "x"}, {})
                 self.assertEqual(result.parameters()["remote_engine_id"], "e0")
                 self.release.set()
                 await held.aread()
-            self.assertIsNot(client._data(self.url), client._data(other))
-            self.assertIs(client._data(other), client._data(other))
+            port = int(self.url.rsplit(":", 1)[1])
+            wire = client._wire
+            self.assertIsNot(wire._pool("127.0.0.1", port), wire._pool("localhost", port))
+            self.assertIs(wire._pool("localhost", port), wire._pool("localhost", port))
         finally:
             await client.aclose()
 

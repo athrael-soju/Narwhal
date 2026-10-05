@@ -107,6 +107,8 @@ class InstanceMonitor:
         self.waiting: dict[str, Request] = {}
         self.on_capacity_change: Callable[[], None] = lambda: None
         self._windows: dict[str, _Window] = {}
+        # Resident decode tokens per engine, read by `output_token`.
+        self._decode_tokens: dict[str, int] = {}
         self._prices: dict[str, _PriceWindow] = {}
         self._last_token: dict[str, float] = {}
         # Latest prefill completion or decode token per engine.
@@ -121,6 +123,7 @@ class InstanceMonitor:
         self.instances[instance.iid] = instance
         self._windows[instance.iid] = _Window()
         self._prices[instance.iid] = _PriceWindow(anchor=now, window_start=now)
+        self._decode_tokens[instance.iid] = instance.decode_tokens()
 
     def pool(self, role: Role) -> list[Instance]:
         """Return engines assigned to a role."""
@@ -130,7 +133,7 @@ class InstanceMonitor:
         """Update the engine's resident prefill price at the current time."""
         w = self._prices[iid]
         w.touch(self._clock())
-        profile = self.profiles.get(iid) if self.profiles else None
+        profile = self.profiles.get(iid) if self.profiles is not None else None
         if profile is None:
             w.current = 0.0
             return
@@ -148,7 +151,11 @@ class InstanceMonitor:
             self._prefill_changed(iid)
             self._reprice(iid)
         else:
+            replaced = inst.decode.get(request.rid)
+            if replaced is not None:
+                self._decode_tokens[iid] -= replaced.length
             inst.decode[request.rid] = request
+            self._decode_tokens[iid] += request.length
 
     def first_token(self, iid: str, rid: str) -> None:
         """Move a request out of prefill and start its token clock."""
@@ -169,9 +176,9 @@ class InstanceMonitor:
                 # A gap spanning prefill remains mixed even if that prefill
                 # completed before this token or the current monitoring pass.
                 window.prefill_overlap = True
-            profile = self.profiles.get(iid) if self.profiles else None
+            profile = self.profiles.get(iid) if self.profiles is not None else None
             expected = (
-                profile.token_interval(inst.decode_tokens(), len(inst.decode))
+                profile.token_interval(self._decode_tokens[iid], len(inst.decode))
                 if profile is not None and profile.decode_max_requests is not None
                 else None
             )
@@ -181,6 +188,7 @@ class InstanceMonitor:
         req = self.instances[iid].decode.get(rid)
         if req is not None:
             req.output_len += 1
+            self._decode_tokens[iid] += 1
 
     def output_since(self, iid: str, since: float) -> bool:
         """Return whether `iid` completed a prefill or emitted a decode token after `since`."""
@@ -189,7 +197,9 @@ class InstanceMonitor:
     def finished(self, iid: str, rid: str) -> None:
         """Remove all tracking state for a completed request."""
         inst = self.instances[iid]
-        inst.decode.pop(rid, None)
+        decoding = inst.decode.pop(rid, None)
+        if decoding is not None:
+            self._decode_tokens[iid] -= decoding.length
         had_prefill = inst.prefill.pop(rid, None)
         self._last_token.pop(rid, None)
         self._decode_started.discard(rid)

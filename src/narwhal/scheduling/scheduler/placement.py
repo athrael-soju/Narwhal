@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterable
 from typing import Any
 
 from ...profiling.store import ProfileStore
@@ -178,8 +178,18 @@ class GlobalScheduler:
         """Return whether another live engine places every role that `iid` places."""
         return self.availability.role_covered_without(iid)
 
-    def cost(self, request: Request, inst: Instance, *, warm: bool = True) -> Cost:
-        """Price a request with the current health and prefix-reuse evidence."""
+    def cost(
+        self,
+        request: Request,
+        inst: Instance,
+        *,
+        warm: bool = True,
+        probation: Collection[str] | None = None,
+    ) -> Cost:
+        """Price a request with the current health and prefix-reuse evidence.
+
+        `probation` is the health tracker's probation set, read from it when None.
+        """
         return costs.cost(
             request,
             inst,
@@ -188,6 +198,29 @@ class GlobalScheduler:
             slo=self.slo,
             health=self.health,
             warm=warm,
+            probation=probation,
+        )
+
+    def decode_price(
+        self,
+        request: Request,
+        iid: str,
+        requests: int,
+        tokens: int,
+        *,
+        probation: Collection[str] | None = None,
+    ) -> float:
+        """Price a decode leg on `iid` beside `requests` residents holding `tokens` tokens."""
+        return costs.decode_price(
+            request,
+            iid,
+            requests,
+            tokens,
+            monitor=self.monitor,
+            profiles=self.profiles,
+            slo=self.slo,
+            health=self.health,
+            probation=probation,
         )
 
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
@@ -321,14 +354,17 @@ class GlobalScheduler:
         if request.phase is Phase.PREFILL:
             request.cache_placement = None
             self.recheck_evidence(request, 0.0)
-        prices = {i.iid: self.cost(request, i) for i in candidates}
+        probation = self.health.probation_set() if self.health is not None else None
+        prices = {i.iid: self.cost(request, i, probation=probation) for i in candidates}
 
         chosen, served = self._cheapest(request, candidates, prices)
         if not served:
             # Admission decides over-budget placements.
             self.unserved += 1
         if request.phase is Phase.PREFILL and request.cached_tokens:
-            request.cache_placement = self._cache_placement(request, chosen, candidates)
+            request.cache_placement = self._cache_placement(
+                request, chosen, candidates, prices, probation
+            )
         return chosen
 
     def recheck_evidence(self, request: Request, fresh_s: float) -> None:
@@ -348,7 +384,12 @@ class GlobalScheduler:
         return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
 
     def _cache_placement(
-        self, request: Request, chosen: Instance, candidates: list[Instance]
+        self,
+        request: Request,
+        chosen: Instance,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        probation: Collection[str] | None,
     ) -> dict[str, Any] | None:
         """Return cache-evidence pricing details for the chosen prefill engine."""
         profile = self.profiles.get(chosen.iid)
@@ -360,11 +401,25 @@ class GlobalScheduler:
             "evidence_sequence": request.cache_sequences.get(chosen.iid),
             "predicted_prefill_s": prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
-            "cold_choice_iid": self._cold_choice(request, candidates),
+            "cold_choice_iid": self._cold_choice(request, candidates, prices, probation),
         }
 
-    def _cold_choice(self, request: Request, candidates: list[Instance]) -> str:
-        cold = {i.iid: self.cost(request, i, warm=False) for i in candidates}
+    def _cold_choice(
+        self,
+        request: Request,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        probation: Collection[str] | None,
+    ) -> str:
+        # Without positive cache evidence on an engine, its warm price is its cold price.
+        cold = {
+            i.iid: (
+                self.cost(request, i, warm=False, probation=probation)
+                if _cached_on(i.iid, request, i.prefill.values())
+                else prices[i.iid]
+            )
+            for i in candidates
+        }
         return self._cheapest(request, candidates, cold)[0].iid
 
     def health_pass(self) -> None:
@@ -401,3 +456,10 @@ class GlobalScheduler:
                     "probation stands, eviction refused",
                     iid,
                 )
+
+
+def _cached_on(iid: str, request: Request, residents: Iterable[Request]) -> bool:
+    """Return whether `request` or a resident holds positive cache evidence for `iid`."""
+    return request.cached_tokens.get(iid, 0) > 0 or any(
+        r.cached_tokens.get(iid, 0) > 0 for r in residents
+    )

@@ -5,7 +5,7 @@ description: Read the Narwhal Orchestrator dashboard from the service-level head
 
 # Reading the dashboard
 
-The **Narwhal Orchestrator** dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine and pool panels below it show how the fleet carries the load, and the latency and pressure panels at the bottom show where delays and failures start.
+The **Narwhal Orchestrator** dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine and pool panels below it show how the fleet carries the load, and the latency, pressure and router event-loop panels at the bottom show where delays and failures start.
 
 Open the dashboard through the tunnel in [Accessing the dashboard from a workstation](02-Access.md#accessing-the-dashboard-from-a-workstation).
 
@@ -17,22 +17,22 @@ The **Router** selector scopes every panel built from router metrics. **Engine d
 
 Each colour keeps one meaning on every panel.
 
-| Colour | Hex | Meaning |
-| --- | --- | --- |
-| Teal | `#299E97` | Prefill role, **Prefill/s** and TTFT p95 |
-| Teal shades | `#1A847E`, `#49B7B0` | TTFT p50 and p99 |
-| Blue | `#336B9E` | Decode role, **Decode/s** and TPOT p50 |
-| Blue shades | `#4E86BB`, `#69A2D8` | TPOT p95 and p99 |
-| Violet | `#8C84CE` | Colocated role |
-| Green | `#56A64B` | Serving, Ready, completed and within target |
-| Amber | `#C8963E` | Backlogged, Probation, Verifying, warnings, refused, retry attempts and the pool target |
-| Orange | `#E0752D` | Quarantined and rejected |
-| Red | `#D44A3A` | Ejected, Unreachable, failed, pages and SLO lines |
-| Dark red | `#A11D1D` | Blocked and expired |
-| Magenta | `#9E4AA4` | Switching, Validating and queue wait |
-| Grey | `#8E9196` | Draining, Restarting, N/A, cancelled, ended before sizing, seat time and engine table bars |
-| Olive | `#7A6813` | invalid |
-| Theme text | | offered |
+| Colour      | Hex                  | Meaning                                                                                                           |
+| ----------- | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Teal        | `#299E97`            | Prefill role, **Prefill/s** and TTFT p95                                                                          |
+| Teal shades | `#1A847E`, `#49B7B0` | TTFT p50 and p99                                                                                                  |
+| Blue        | `#336B9E`            | Decode role, **Decode/s** and TPOT p50                                                                            |
+| Blue shades | `#4E86BB`, `#69A2D8` | TPOT p95 and p99                                                                                                  |
+| Violet      | `#8C84CE`            | Colocated role                                                                                                    |
+| Green       | `#56A64B`            | Serving, Ready, completed and within target                                                                       |
+| Amber       | `#C8963E`            | Backlogged, Probation, Verifying, warnings, refused, retry attempts and the pool target                           |
+| Orange      | `#E0752D`            | Quarantined and rejected                                                                                          |
+| Red         | `#D44A3A`            | Ejected, Unreachable, failed, pages and SLO lines                                                                 |
+| Dark red    | `#A11D1D`            | Blocked and expired                                                                                               |
+| Magenta     | `#9E4AA4`            | Switching, Validating, queue wait and event-loop lag                                                              |
+| Grey        | `#8E9196`            | Draining, Restarting, N/A, cancelled, ended before sizing, seat time, event-loop busy share and engine table bars |
+| Olive       | `#7A6813`            | invalid                                                                                                           |
+| Theme text  |                      | offered                                                                                                           |
 
 ## Headline row
 
@@ -52,29 +52,29 @@ The **Requests** and **Latency** tables summarise the displayed interval. **Rout
 
 </div>
 
-| Requests column | Shows |
-| --- | --- |
-| Within SLO | Share of ended requests that met both the TTFT and TPOT SLOs |
-| Offered, Completed, Cancelled | Requests clients sent, requests completed and requests their clients abandoned |
-| Dropped | Share of ended requests that were refused, rejected, failed or expired |
-| Refused, Rejected, Failed, Expired | The count of each dropped outcome |
+| Requests column                    | Shows                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------ |
+| Within SLO                         | Share of ended requests that met both the TTFT and TPOT SLOs                   |
+| Offered, Completed, Cancelled      | Requests clients sent, requests completed and requests their clients abandoned |
+| Dropped                            | Share of ended requests that were refused, rejected, failed or expired         |
+| Refused, Rejected, Failed, Expired | The count of each dropped outcome                                              |
 
 Ended requests are completed, failed, refused, rejected, expired and cancelled requests.
 
-| Latency column | Shows |
-| --- | --- |
+| Latency column         | Shows                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
 | TTFT / SLO, TPOT / SLO | 95th-percentile time to first token and time per output token as a share of the SLO the router ran with |
-| TTFT p95, TPOT p95 | The same percentiles as times |
+| TTFT p95, TPOT p95     | The same percentiles as times                                                                           |
 
 Status colours:
 
-| Value | Green | Amber | Red |
-| --- | --- | --- | --- |
-| Within SLO | 95% or more | 90% to 95% | below 90% |
-| Dropped | below 1% | 1% to 5% | 5% or more |
-| TTFT / SLO and TPOT / SLO | below 80% | 80% to 100% | 100% or more |
-| Admission | Ready | | Not ready or Offline |
-| Alerts | 0 | | 1 or more |
+| Value                     | Green       | Amber       | Red                  |
+| ------------------------- | ----------- | ----------- | -------------------- |
+| Within SLO                | 95% or more | 90% to 95%  | below 90%            |
+| Dropped                   | below 1%    | 1% to 5%    | 5% or more           |
+| TTFT / SLO and TPOT / SLO | below 80%   | 80% to 100% | 100% or more         |
+| Admission                 | Ready       |             | Not ready or Offline |
+| Alerts                    | 0           |             | 1 or more            |
 
 ## Engines and engine role history
 
@@ -90,16 +90,16 @@ The engine table shows each engine's current role, state and load. **Engine role
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
 
-| Column | Shows |
-| --- | --- |
-| Engine | Engine ID (`iid`) |
-| Role | Current pool assignment: Prefill, Decode or Colocated |
-| State | The most serious [engine state](#engine-states) |
-| Resident | Narwhal requests currently on the engine |
-| vLLM running | Requests vLLM reports as running |
-| KV cache | vLLM KV cache use, amber from 80% and red from 95% |
-| Prefix hits | Share of prompt tokens served from the engine's prefix cache |
-| Tokens/s | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines |
+| Column       | Shows                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Engine       | Engine ID (`iid`)                                                                                                   |
+| Role         | Current pool assignment: Prefill, Decode or Colocated                                                               |
+| State        | The most serious [engine state](#engine-states)                                                                     |
+| Resident     | Narwhal requests currently on the engine                                                                            |
+| vLLM running | Requests vLLM reports as running                                                                                    |
+| KV cache     | vLLM KV cache use, amber from 80% and red from 95%                                                                  |
+| Prefix hits  | Share of prompt tokens served from the engine's prefix cache                                                        |
+| Tokens/s     | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines |
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
 
@@ -117,16 +117,16 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went:
 
-| Series | Requests per second |
-| --- | --- |
-| offered | Original completion requests received, including early refusals |
-| completed | Requests completed successfully |
-| failed | Requests that ended in an error |
+| Series               | Requests per second                                                           |
+| -------------------- | ----------------------------------------------------------------------------- |
+| offered              | Original completion requests received, including early refusals               |
+| completed            | Requests completed successfully                                               |
+| failed               | Requests that ended in an error                                               |
 | refused (predictive) | Requests predictive admission refused for a projected TTFT or decode SLO miss |
-| rejected (capacity) | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness |
-| expired | Requests terminated by their admission or total deadline |
-| cancelled | Requests their client abandoned before completion |
-| invalid | Malformed or unsupported client requests rejected before dispatch |
+| rejected (capacity)  | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness  |
+| expired              | Requests terminated by their admission or total deadline                      |
+| cancelled            | Requests their client abandoned before completion                             |
+| invalid              | Malformed or unsupported client requests rejected before dispatch             |
 
 When a Narwhal alert starts firing, a red (page) or amber (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine.
 
@@ -184,23 +184,38 @@ These panels show pool load, request waiting time and retries.
 
 **Retries and early exits** plots retry attempts per second next to the requests per second that ended before [input sizing](../http-api/03-Backend-and-Failures.md#input-sizing).
 
+## Router event loop
+
+**Router event loop** shows the selected router's event-loop busy share and monitoring-deadline lag.
+
+<div class="narwhal-panel-row" markdown>
+
+![Router event loop with busy share and event-loop lag during a load ramp.](../assets/observability/router-event-loop.png)
+
+</div>
+
+| Series | Shows                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| busy   | Share of wall time the event-loop thread spends on CPU, from `rate(narwhal_event_loop_busy_seconds_total)`, on the left axis |
+| lag    | `narwhal_event_loop_lag_seconds`, the delay beyond the latest scheduled monitoring deadline, on the right axis               |
+
 ## Engine states
 
 The **State** column shows the most serious state that applies to an engine. The states run from least to most serious:
 
-| State | Meaning | Service |
-| --- | --- | --- |
-| Serving | Normal operation | In service |
-| Switching | The engine finishes requests from its previous role after a flip | In service |
-| Backlogged | vLLM reports waiting requests | In service |
-| Probation | Placement ranks the engine lower after latency drift | In service |
-| Verifying | A breaker health or inference probe is in flight | In service |
-| Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement | Out of service |
-| Draining | An operator drain holds the engine out of placement | Out of service |
-| Ejected | The breaker removed the engine from placement | Out of service |
-| Validating | Readmission checks run against the engine | Out of service |
-| Blocked | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |
-| Unreachable | The engine's metrics endpoint fails to answer Prometheus | Out of service |
-| Restarting | The engine is unreachable while a drain holds it | Out of service |
+| State       | Meaning                                                                                                            | Service        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ | -------------- |
+| Serving     | Normal operation                                                                                                   | In service     |
+| Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
+| Backlogged  | vLLM reports waiting requests                                                                                      | In service     |
+| Probation   | Placement ranks the engine lower after latency drift                                                               | In service     |
+| Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
+| Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |
+| Draining    | An operator drain holds the engine out of placement                                                                | Out of service |
+| Ejected     | The breaker removed the engine from placement                                                                      | Out of service |
+| Validating  | Readmission checks run against the engine                                                                          | Out of service |
+| Blocked     | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |
+| Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
+| Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
 
 [![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)

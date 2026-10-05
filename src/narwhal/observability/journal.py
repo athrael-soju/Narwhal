@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..contracts import JOURNAL, versioned
+from ..contracts import JOURNAL, writer_contract
 from ..provenance import stamp_line
 
 
@@ -39,7 +39,9 @@ class RunJournal:
     def write(self, row: dict[str, Any]) -> None:
         """Append a request row tagged with this process's run ID."""
         if self._fh is not None:
-            self._fh.write(json.dumps(versioned(JOURNAL, {"run": self.run, **row})) + "\n")
+            spec = writer_contract(JOURNAL, row)
+            line = {"schema": spec.schema, "schema_version": spec.current, "run": self.run, **row}
+            self._fh.write(json.dumps(line) + "\n")
 
     def close(self) -> None:
         """Close the journal if open."""

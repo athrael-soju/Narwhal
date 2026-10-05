@@ -236,7 +236,7 @@ async def validate_readmission(
             if not await identities_unchanged():
                 return outcome
             tokens = 0
-            async for line in router.engines.decode(
+            async for batch in router.engines.decode(
                 by_id[target].url,
                 "/v1/completions",
                 body,
@@ -244,7 +244,7 @@ async def validate_readmission(
                 params,
                 first_token_timeout_s=cfg.first_token_timeout_s,
             ):
-                tokens += sse_token_count(line)
+                tokens += sum(sse_token_count(event) for event in batch)
             if tokens < 1:
                 raise EngineError("decode", by_id[target].url, 502, "no tokens")
         except Exception as exc:

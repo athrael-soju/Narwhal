@@ -6,11 +6,12 @@ import asyncio
 import math
 import statistics
 import time
+from contextlib import aclosing
 
 import httpx
 
 from ...engines.dialect import EngineDialect, VllmDialect
-from ...engines.stream import event_choices, event_object, token_ids
+from ...engines.stream import event_choices, sse_events, token_ids
 from ..tasks import cancel_tasks
 from .engine import make_prompt
 from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
@@ -57,61 +58,62 @@ async def _one_decode_stream(
                 raise RuntimeError(
                     f"decode probe failed on {url} ({r.status_code}): {detail[:200]}"
                 )
-            async for line in r.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    done = True
-                    break
-                try:
-                    obj = event_object(line)
-                except ValueError as exc:
-                    raise RuntimeError("decode probe returned malformed SSE") from exc
-                if obj is None or obj.get("error"):
-                    raise RuntimeError("decode probe returned an error")
-                try:
-                    choices = event_choices(obj)
-                except ValueError as exc:
-                    raise RuntimeError("decode probe returned invalid choices") from exc
-                if len(choices) > 1:
-                    raise RuntimeError("decode probe returned invalid choices")
-                ids = token_ids(choices)
-                if ids is None:
-                    raise RuntimeError("decode probe SSE event lacks exact token IDs")
-                if any(choice.get("finish_reason") is not None for choice in choices):
-                    if choices[0]["finish_reason"] != "length":
-                        raise RuntimeError("decode probe stopped before its forced token limit")
-                    if finished or mine + len(ids) != tokens:
-                        raise RuntimeError("decode probe has an invalid terminal token count")
-                    finished = True
-                if not ids:
-                    continue
-                if mine + len(ids) > tokens:
-                    raise RuntimeError("decode probe exceeded its forced token limit")
-                now = time.monotonic()
-                if mine == 0:
-                    state["resident"] += input_len
-                    state["requests"] += 1
-                    state["epoch"] += 1
-                    state["joined"] = state.get("joined", 0) + 1
-                    state.setdefault("first_at", now)
-                    if state["joined"] == state["cohort"]:
-                        state["last_join_at"] = now
-                mine += len(ids)
-                state["resident"] += len(ids)
-                if (
-                    len(ids) == 1
-                    and last is not None
-                    and last_epoch == state["epoch"]
-                    and state["requests"] == state["cohort"]
-                    and now > last
-                ):
-                    samples.append((float(state["requests"]), float(state["resident"]), now - last))
-                # vLLM can bundle final token IDs even with stream_interval=1.
-                # Gaps adjacent to a multi-token chunk are discarded.
-                last = now if len(ids) == 1 else None
-                last_epoch = state["epoch"]
+            async with aclosing(sse_events(r.aiter_bytes())) as events:
+                async for event in events:
+                    if not event.line.startswith("data:"):
+                        continue
+                    if event.done:
+                        done = True
+                        break
+                    if event.malformed:
+                        raise RuntimeError("decode probe returned malformed SSE")
+                    obj = event.data
+                    if obj is None or obj.get("error"):
+                        raise RuntimeError("decode probe returned an error")
+                    try:
+                        choices = event_choices(obj)
+                    except ValueError as exc:
+                        raise RuntimeError("decode probe returned invalid choices") from exc
+                    if len(choices) > 1:
+                        raise RuntimeError("decode probe returned invalid choices")
+                    ids = token_ids(choices)
+                    if ids is None:
+                        raise RuntimeError("decode probe SSE event lacks exact token IDs")
+                    if any(choice.get("finish_reason") is not None for choice in choices):
+                        if choices[0]["finish_reason"] != "length":
+                            raise RuntimeError("decode probe stopped before its forced token limit")
+                        if finished or mine + len(ids) != tokens:
+                            raise RuntimeError("decode probe has an invalid terminal token count")
+                        finished = True
+                    if not ids:
+                        continue
+                    if mine + len(ids) > tokens:
+                        raise RuntimeError("decode probe exceeded its forced token limit")
+                    now = time.monotonic()
+                    if mine == 0:
+                        state["resident"] += input_len
+                        state["requests"] += 1
+                        state["epoch"] += 1
+                        state["joined"] = state.get("joined", 0) + 1
+                        state.setdefault("first_at", now)
+                        if state["joined"] == state["cohort"]:
+                            state["last_join_at"] = now
+                    mine += len(ids)
+                    state["resident"] += len(ids)
+                    if (
+                        len(ids) == 1
+                        and last is not None
+                        and last_epoch == state["epoch"]
+                        and state["requests"] == state["cohort"]
+                        and now > last
+                    ):
+                        samples.append(
+                            (float(state["requests"]), float(state["resident"]), now - last)
+                        )
+                    # vLLM can bundle final token IDs even with stream_interval=1.
+                    # Gaps adjacent to a multi-token chunk are discarded.
+                    last = now if len(ids) == 1 else None
+                    last_epoch = state["epoch"]
         if not done or not finished or mine != tokens:
             raise RuntimeError(
                 f"decode probe incomplete: tokens={mine}/{tokens}, done={done}, finished={finished}"

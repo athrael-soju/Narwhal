@@ -26,6 +26,8 @@ class ProfileStore:
         self.path = path
         self._by_id: dict[str, Profile] = {}
         self._by_mix: dict[tuple[str, str, int, int, str], Profile] = {}
+        # Engine IDs with at least one role-mix variant in `_by_mix`.
+        self._mix_iids: set[str] = set()
         self._group_by_id: dict[str, str] = {}
         self._mix_for_group: Callable[[str], tuple[int, int]] | None = None
         self._role_for_id: Callable[[str], Role] | None = None
@@ -76,6 +78,7 @@ class ProfileStore:
             raise ValueError(f"{self.path}: duplicate profile role mix {key!r}")
         self._group_by_id[profile.iid] = key[1]
         self._by_mix[key] = profile
+        self._mix_iids.add(profile.iid)
 
     def bind_role_mix(
         self,
@@ -119,7 +122,7 @@ class ProfileStore:
     ) -> Profile | None:
         """Return the profile measured for this engine's shared-device mix."""
         group = self._group_by_id.get(iid)
-        if group is not None and any(key[0] == iid for key in self._by_mix):
+        if group is not None and iid in self._mix_iids:
             mix = role_mix
             if mix is None and self._mix_for_group is not None:
                 mix = self._mix_for_group(group)
@@ -147,7 +150,7 @@ class ProfileStore:
         """
         selected = tuple(dict.fromkeys(iids))
         groups = {self._group_by_id.get(iid) for iid in selected if iid in self._group_by_id}
-        if len(groups) > 1 and any(key[0] in selected for key in self._by_mix):
+        if len(groups) > 1 and not self._mix_iids.isdisjoint(selected):
             return ()
         rows = tuple(
             self.get(iid, role_mix=(prefill, decode), role=roles.get(iid) if roles else None)
@@ -194,13 +197,13 @@ class ProfileStore:
         `missing` ids are configured but not stored; `extra` ids are stored but not configured.
         """
         fleet = set(iids)
-        stored = set(self._by_id) | {key[0] for key in self._by_mix}
+        stored = set(self._by_id) | self._mix_iids
         return sorted(fleet - stored), sorted(stored - fleet)
 
     def _rows_for(self, iids: Iterable[str] | None) -> list[Profile]:
         """Return stored profiles for `iids`, or for every stored engine when `iids` is None."""
         if iids is None:
-            iids = set(self._by_id) | {key[0] for key in self._by_mix}
+            iids = set(self._by_id) | self._mix_iids
         return [profile for iid in dict.fromkeys(iids) if (profile := self.get(iid)) is not None]
 
     def mean_max_tokens(
@@ -257,4 +260,4 @@ class ProfileStore:
         )
 
     def __len__(self) -> int:
-        return len(set(self._by_id) | {key[0] for key in self._by_mix})
+        return len(set(self._by_id) | self._mix_iids)

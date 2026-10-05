@@ -94,12 +94,15 @@ def _event(item: Any) -> CacheEvent | None:
         raise ValueError("parent block hash must be bytes or an integer")
     if extras is not None and not isinstance(extras, list):
         raise ValueError("extra keys must be a list")
+    adapter = item.get("lora_name")
+    if adapter is not None and not isinstance(adapter, str):
+        raise ValueError("LoRA name must be a string")
     return StoredBlocks(
         _hashes(item["block_hashes"]),
         parent,
         tuple(tokens),
         int(item["block_size"]),
-        item.get("lora_name"),
+        adapter,
         None if extras is None else tuple(None if k is None else tuple(k) for k in extras),
         item.get("group_idx"),
         item.get("kv_cache_spec_kind"),

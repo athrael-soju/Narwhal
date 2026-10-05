@@ -6,6 +6,8 @@ import secrets
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+from .prefix import non_negative_ints
+
 
 class EngineDialect(ABC):
     """Describe the HTTP details that differ between engine builds."""
@@ -88,7 +90,7 @@ class VllmDialect(EngineDialect):
         tokens = payload.get("tokens")
         if (
             not isinstance(tokens, list)
-            or any(type(token) is not int or token < 0 for token in tokens)
+            or not non_negative_ints(tokens)
             or self.tokenize_response(payload) != len(tokens)
         ):
             return None

@@ -497,7 +497,7 @@ class _Lockstep:
             async with deadline:
                 began = time.monotonic()
                 first: float | None = None
-                async for line in self.client.decode(
+                async for batch in self.client.decode(
                     self.urls[attempt.dst],
                     "/v1/completions",
                     attempt.body,
@@ -505,7 +505,9 @@ class _Lockstep:
                     attempt.handoff,
                     first_token_timeout_s=self.observation_timeout_s,
                 ):
-                    if first is None and sse_token_bearing(line, self.dialect):
+                    if first is None and any(
+                        sse_token_bearing(event, self.dialect) for event in batch
+                    ):
                         first = time.monotonic() - began
                         attempt.row["first_token_seconds"] = first
                 if first is None:
