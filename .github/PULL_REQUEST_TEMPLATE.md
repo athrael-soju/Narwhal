@@ -1,6 +1,6 @@
 ## Change
 
-Describe the problem and the behaviour this PR changes. Link the related issue and its parent when applicable.
+Describe the problem and the behaviour this PR changes. Link the related issue, and its task number for milestone task work.
 
 For milestone work, target the branch in [Milestone delivery](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md#milestone-delivery).
 

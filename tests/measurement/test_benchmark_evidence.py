@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tools.measurement import benchmark_runner
-from tools.measurement.benchmark_evidence import counter_deltas, metric_values
+from tools.measurement.benchmark_evidence import client_row, counter_deltas, metric_values
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request
@@ -22,6 +22,15 @@ if mode == 'warmup':
     target.mkdir()
     (target / 'warmup.json').write_text(json.dumps(
         {'client_rid': 'warmup', 'sent': True, 'outcome': 'completed'}))
+if mode == 'aiperf':
+    urllib.request.urlopen(base + '/start/a').read()
+    target = pathlib.Path(directory) / 'aiperf'
+    target.mkdir()
+    record = {'metadata': {'x_request_id': 'a', 'benchmark_phase': 'profiling',
+                           'was_cancelled': False},
+              'metrics': {'request_latency': {'value': 1.0, 'unit': 'ms'}}, 'error': None}
+    (target / 'profile_export.jsonl').write_text(json.dumps(record) + '\\n')
+    sys.exit()
 for name in ('a', 'b') if mode == 'restart' else ('a',):
     if name == 'b':
         urllib.request.urlopen(base + '/restart').read()
@@ -83,6 +92,42 @@ class CounterDeltaTests(unittest.TestCase):
         )
         self.assertNotIn("narwhal_event_loop_busy_seconds_total", deltas["run-a"])
         self.assertEqual(diagnostics, [])
+
+
+class ClientRowTests(unittest.TestCase):
+    def record(self, error=None, *, phase="profiling", cancelled=False):
+        return {
+            "metadata": {
+                "x_request_id": "rid-1",
+                "benchmark_phase": phase,
+                "was_cancelled": cancelled,
+            },
+            "metrics": {},
+            "error": error,
+        }
+
+    def test_aiperf_records_map_to_client_rows(self):
+        cases = [
+            (self.record(), "completed", False),
+            (self.record({"code": 429, "type": "Too Many Requests"}), "http_429", False),
+            (self.record({"type": "ClientConnectorError"}), "ClientConnectorError", False),
+            (self.record(cancelled=True), "cancelled", False),
+            (self.record(phase="warmup"), "completed", True),
+        ]
+        for record, outcome, warmup in cases:
+            self.assertEqual(
+                client_row(record),
+                {
+                    "client_rid": "rid-1",
+                    "sent": True,
+                    "outcome": outcome,
+                    "benchmark_warmup": warmup,
+                },
+            )
+
+    def test_load_trial_rows_pass_through(self):
+        row = {"client_rid": "a", "sent": False, "outcome": "client_schedule_miss"}
+        self.assertIs(client_row(row), row)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -198,6 +243,11 @@ class EvidenceTests(unittest.TestCase):
         client_dir = self.root / "external-client" if external_client else "{point_dir}"
         if external_client:
             client_dir.mkdir()
+        client_records = (
+            {"client_records": "{point_dir}/aiperf/profile_export.jsonl"}
+            if mode == "aiperf"
+            else {}
+        )
         plan = {
             "schema": 1,
             "evidence": {
@@ -209,7 +259,7 @@ class EvidenceTests(unittest.TestCase):
                 **(
                     {"client_records": str(client_dir / "client/requests.jsonl")}
                     if external_client
-                    else {}
+                    else client_records
                 ),
                 "identity": {
                     "narwhal_revision": "test-revision",
@@ -324,6 +374,16 @@ class EvidenceTests(unittest.TestCase):
             )
             self.assertEqual(retained.stat().st_mode & 0o777, 0o600)
         self.assertFalse((point / "client-rows.json").exists())
+
+    def test_aiperf_records_reconcile_with_the_journal(self):
+        status, evidence, _ = self.execute("aiperf")
+        self.assertEqual(status, 0)
+        self.assertEqual(evidence["diagnostics"], [])
+        self.assertEqual(evidence["client"]["outcomes"], {"completed": 1})
+        self.assertEqual(evidence["journal"]["outcomes"], {"completed": 1})
+        self.assertEqual(
+            evidence["retained_client_files"], {"records": "aiperf/profile_export.jsonl"}
+        )
 
     def test_discrepancy_and_scrape_gap_are_tied_to_point(self):
         self.missing_journal = True

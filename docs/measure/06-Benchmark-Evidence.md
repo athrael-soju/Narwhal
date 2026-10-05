@@ -21,7 +21,7 @@ Put `evidence` at the top level of the plan, next to `schema` and `points`:
   "identity": {
     "narwhal_revision": "<40-character-commit>",
     "model_id": "<served-model>",
-    "benchmark_client_version": "<client-version-or-commit>",
+    "benchmark_client_version": "aiperf 0.13.0",
     "engine_image": "<pinned-image-with-digest>",
     "engine_version": "<engine-version>",
     "checkpoint_revision": "<checkpoint-commit>",
@@ -42,7 +42,7 @@ The `evidence` object takes these fields:
 | `sample_interval_s` | Positive sampling interval in seconds |
 | `engine_metrics_urls` | Engine name mapped to its HTTP metrics URL |
 | `identity` | All nine labels shown in the example |
-| `client_records` | Optional client records path, default `{point_dir}/client/requests.jsonl` |
+| `client_records` | Optional [client records](#client-records) path, default `{point_dir}/client/requests.jsonl` |
 
 The collector reads `warmup.json` and `summary.json` from the directory that holds the client records.
 
@@ -51,6 +51,16 @@ The collector reads `warmup.json` and `summary.json` from the directory that hol
 3. Keep the plan and everything under `runs/` private.
 
 The collector records SHA-256 digests of the fleet file and profiles before each point and reports changes to them during the point. It records SHA-256 digests of the retained client records, warmup, and summary files. It groups metrics samples by process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
+
+## Client records
+
+The collector reads each line of the client records file as one of these records:
+
+| Field | Load trial row | AIPerf `profile_export.jsonl` record |
+| --- | --- | --- |
+| `client_rid` | `client_rid` | `metadata.x_request_id` |
+| Outcome | `outcome` | `completed`, `cancelled`, `http_<code>`, or the AIPerf error `type` |
+| Warmup | The `warmup.json` row | A record with `metadata.benchmark_phase` set to `warmup` |
 
 ## Point files
 

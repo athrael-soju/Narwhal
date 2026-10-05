@@ -297,24 +297,24 @@ Combine labels when several apply. Maintainers replace `triage` with the applica
 
 For each newly scoped milestone:
 
-1. Create one parent issue in the milestone.
+1. Create one issue in the milestone.
 2. Create the integration branch `milestone/<number>-<slug>` from current `main`, using the milestone number.
-3. Create native GitHub sub-issues under the parent in the same milestone.
-4. Branch `issue/<number>-<slug>` from the integration branch after prerequisites merge.
-5. Open the sub-issue PR against the integration branch.
+3. List the milestone's tasks as a numbered task list in the issue.
+4. Branch `issue/<number>-<task>-<slug>` from the integration branch after the task's prerequisites merge, using the issue number and task number.
+5. Open the task PR against the integration branch.
 6. Update dependent work from the integration branch before review.
-7. Close each sub-issue explicitly after its PR merges and its criteria pass.
-8. Open the parent PR from the integration branch to `main`.
-9. Merge the parent PR after all sub-issues close and the milestone criteria pass.
-10. Close the parent issue and the milestone.
+7. Check off each task after its PR merges and its criteria pass.
+8. Open the milestone PR from the integration branch to `main`.
+9. Merge the milestone PR after every task is checked off and the milestone criteria pass.
+10. Close the issue and the milestone.
 
-The parent issue records the outcome, scope, exclusions, dependencies, acceptance criteria, integration branch, and starting commit. Each sub-issue records its package, prerequisites, acceptance criteria, and required checks.
+The issue records the outcome, scope, exclusions, dependencies, tasks, acceptance criteria, integration branch, and starting commit. Each task records its prerequisites and acceptance criteria as nested checkboxes, plus its package and required checks when they differ from the issue's defaults.
 
 Link cross-milestone prerequisites explicitly. Deliver shared contracts through the defining milestone's merge to `main`, then update dependent integration branches from `main` after it lands.
 
 ### Hardware and model selection
 
-Keep Narwhal's scope and shared contracts hardware and GPU agnostic. Milestones, issues, and sub-issues describe the required capabilities, topology, behaviour, and acceptance criteria.
+Keep Narwhal's scope and shared contracts hardware and GPU agnostic. Milestones, issues, and tasks describe the required capabilities, topology, behaviour, and acceptance criteria.
 
 Select hardware and model inputs when the corresponding work starts, keeping those selections, pinned execution inputs, and raw evidence in the private locations under [Working files and deployment artifacts](#working-files-and-deployment-artifacts).
 
@@ -324,11 +324,11 @@ Keep hardware and model identities out of public milestone and issue text, comme
 
 Review the diff and commit messages and run the local checks before pushing. Push your branch to your fork, or to `athrael-soju/Narwhal` as a maintainer, and open a pull request in `athrael-soju/Narwhal`.
 
-A sub-issue PR targets its [milestone integration branch](#milestone-delivery). A parent milestone PR or a standalone change targets `main`.
+A task PR targets its [milestone integration branch](#milestone-delivery). A milestone PR or a standalone change targets `main`.
 
 Keep each branch to one coherent change, and open a draft while implementation or evidence gathering continues.
 
-The PR description should cover the problem, the resulting behaviour, and how you checked it, along with the relevant issue and, for a sub-issue, its parent. Include reproduction steps for a bug fix and note any checks that require hardware.
+The PR description should cover the problem, the resulting behaviour, and how you checked it, along with the relevant issue and, for a task, its task number. Include reproduction steps for a bug fix and note any checks that require hardware.
 
 Keep deployment selections in private execution records, and sanitize logs and configuration before attaching them.
 
@@ -339,7 +339,7 @@ Release Please includes each `docs:` squash commit in the Documentation changelo
 Before merge:
 
 - Bring the branch up to date with its PR target and run `make check`.
-- For a parent milestone PR, update the integration branch from `main` and repeat the required checks.
+- For a milestone PR, update the integration branch from `main` and repeat the required checks.
 - For documentation changes, run the strict build in [Documentation preview](#documentation-preview).
 
 A maintainer reviews the PR and any manually requested CI results, then squash-merges it with the PR title. GitHub deletes each branch at squash-merge.
