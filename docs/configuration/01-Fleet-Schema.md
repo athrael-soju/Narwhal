@@ -209,7 +209,7 @@ An attestation document with launch evidence adds two fields to each sidecar res
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence
 
-An engine restarted from an identical launch keeps its `launch_digest`.
+An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`.
 
 Saved profiles and first-token calibrations bind to the engine's `launch_digest` when the response carries launch evidence, otherwise to its `attestation_digest`.
 

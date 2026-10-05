@@ -229,3 +229,29 @@ To keep prefix caching on and turn event publishing off, add vLLM's event settin
 ```
 
 The launcher rejects every other `--kv-events-config` value.
+
+### 16.2 Resetting prefix caches
+
+vLLM serves `POST /reset_prefix_cache` on an engine started with `VLLM_SERVER_DEV_MODE=1`. The route empties the engine's prefix cache.
+
+1. Add the variable to `runtime.environment` in the engine's launch record:
+
+    ```json
+    "environment": {"VLLM_SERVER_DEV_MODE": "1"}
+    ```
+
+2. Prepare and start the engine from the updated launch record.
+3. [Profile the engine](../measure/01-Profile.md#2-reusing-or-creating-an-idle-fleet-latency-profile) for its new [`launch_digest`](01-Fleet-Schema.md#33-attestation).
+4. If the fleet configures a first-token calibration artifact, [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+
+While the router is idle, reset the engine's prefix cache, with `<engine-url>` replaced by the engine's URL:
+
+```bash
+curl -fsS -X POST '<engine-url>/reset_prefix_cache'
+```
+
+Expected output:
+
+```text
+{"success":true}
+```
