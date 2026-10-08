@@ -50,6 +50,22 @@ class AdmissionOut(BaseModel):
     engine_auth: str = "boundary"
 
 
+class EngineSeatsOut(BaseModel):
+    """One engine's seats; `0` means the engine has no seat limit for that phase."""
+
+    prefill: int = 0
+    decode: int = 0
+    # `--max-num-seqs` from the engine's verified attestation.
+    sequence_limit: int | None = None
+
+
+class SeatsOut(BaseModel):
+    """Per-engine seats and the mean sized input length that sets prefill seats."""
+
+    mean_input_len: float | None = None
+    engines: dict[str, EngineSeatsOut] = Field(default_factory=dict)
+
+
 class ServingOut(BaseModel):
     """Accounting for HTTP retention and physical attempts across original requests."""
 
@@ -477,6 +493,7 @@ class StateOut(BaseModel):
     ha: HAOut
     lifecycle: LifecycleViewOut
     admission: AdmissionOut
+    seats: SeatsOut = Field(default_factory=SeatsOut)
     serving: ServingOut = Field(default_factory=ServingOut)
     http_pools: HttpPoolsOut
     pools: PoolsOut

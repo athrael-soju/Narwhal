@@ -127,17 +127,7 @@ Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gate
 
 ### Decode recovery ratio
 
-When `serving.decode_concurrency` is positive and at least one engine has the decode role, the decode recovery ratio is:
-
-```text
-recovery_decode_ratio = max(
-  observed decode pressure,
-  (decode residents on decode-role engines + requests waiting for a decode slot)
-    / (current decode engine count * serving.decode_concurrency)
-)
-```
-
-Otherwise, `recovery_decode_ratio` equals the observed decode pressure.
+`recovery_decode_ratio` equals the observed decode pressure. Role control prices decode capacity from engine profiles without the router's [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats).
 
 Decisions held before candidate scoring, while they wait for demand history or fleet profiles, report `recovery_decode_ratio`.
 

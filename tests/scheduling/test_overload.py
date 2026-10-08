@@ -97,8 +97,6 @@ class DispatcherFallbackTests(unittest.IsolatedAsyncioTestCase):
                 cfg.serving = ServingPolicy(
                     queue_capacity=4,
                     queue_timeout_s=5.0,
-                    prefill_concurrency=4,
-                    decode_concurrency=4,
                     handoff_timeout_s=5.0,
                 )
                 cfg.engines = [replace(spec, pin=pinned) for spec in cfg.engines]

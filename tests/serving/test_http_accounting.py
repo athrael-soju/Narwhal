@@ -25,7 +25,7 @@ from tests.fixtures import fleet, hold_prefix, invalid_token_choices, put_warm
 from tests.wire import engine_transports
 
 
-class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
+class HttpHarness(unittest.IsolatedAsyncioTestCase):
     """Requests traverse ingress and the real router against a local HTTP transport."""
 
     def setUp(self):
@@ -102,6 +102,10 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.ingress_inflight, 0)
         self.assertFalse(self.router.monitor.waiting)
 
+
+class HttpAccountingTests(HttpHarness):
+    """Admission, retries, body limits and original-request accounting."""
+
     async def test_token_id_prompt_carries_cache_evidence_to_demand_and_journal(self):
         client = self.client()
         scheduler = self.router.scheduler
@@ -136,8 +140,6 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                     ServingPolicy(
                         queue_capacity=queue,
                         queue_timeout_s=5.0,
-                        prefill_concurrency=4,
-                        decode_concurrency=4,
                         handoff_timeout_s=5.0,
                     )
                     if queue

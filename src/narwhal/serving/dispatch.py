@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING
 from ..runtime.standby import control_ready
 from ..types import Instance, Phase, Request, Role
 from .admission import AdmissionQueue
+from .seats import decode_seats, prefill_seats
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
 
 
 class Dispatcher:
-    """Bound phase waiters by admitted work and select using current capacity."""
+    """Hold phase waiters until an engine has a free seat, then select by current capacity."""
 
     def __init__(self, router: NarwhalRouter) -> None:
         self.router = router
@@ -32,10 +33,9 @@ class Dispatcher:
     async def place(self, request: Request, *, deadline: float) -> Instance:
         """Select after waiting; the caller must reserve before its next await."""
         router = self.router
-        policy = router.cfg.serving
         phase = request.phase
         role = Role.PREFILL if phase is Phase.PREFILL else Role.DECODE
-        limit = policy.prefill_concurrency if phase is Phase.PREFILL else policy.decode_concurrency
+        seats = prefill_seats if phase is Phase.PREFILL else decode_seats
 
         def reserve() -> Instance | None:
             if router.lifecycle_blocked or router.monitoring_degraded:
@@ -46,7 +46,8 @@ class Dispatcher:
             candidates = {
                 inst.iid
                 for inst in router.scheduler.role_pool(role, live)
-                if not limit or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
+                if not (limit := seats(router, inst.iid))
+                or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
             }
             if not candidates:
                 return None

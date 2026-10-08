@@ -26,8 +26,8 @@ Interface versions in this release:
 
 | Interface | Schema | Version | Manifest key |
 | --- | --- | :--: | --- |
-| Narwhal fleet configuration | `narwhal.fleet` | 1 | `fleet` |
-| Effective fleet configuration | `narwhal.effective-config` | 1 | `effective_config` |
+| Narwhal fleet configuration | `narwhal.fleet` | 2 | `fleet` |
+| Effective fleet configuration | `narwhal.effective-config` | 2 | `effective_config` |
 | Engine profile store | `narwhal.profiles` | 1 | `profiles` |
 | Engine attestation | `narwhal.attestation` | 1 | `attestation` |
 | Router state handoff | `narwhal.handoff` | 1 | `handoff` |
@@ -65,3 +65,5 @@ When the manifests are identical, installed-release documents pass validation on
 ## Schema version changes
 
 Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped.
+
+Fleet configuration version `2` and effective fleet configuration version `2` remove `serving.prefill_concurrency` and `serving.decode_concurrency`. The router derives [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) in their place. Delete both keys and set `schema_version` to `2` to upgrade a version `1` fleet file.

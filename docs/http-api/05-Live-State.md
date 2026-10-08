@@ -32,6 +32,7 @@ The state document carries these top-level fields:
 | `ha`                      | High-availability state: readiness, standby status, lease, and failover block             |
 | `lifecycle`               | Drain state, resident work, and lifecycle events                                          |
 | `admission`               | Router and phase occupancy, queue state, and limits                                       |
+| `seats`                   | Each engine's prefill and decode seats and the inputs that set them                      |
 | `serving`                 | Retained HTTP work, attempts, and retry state                                             |
 | `http_pools`              | Data and control connection pools, and the pool-wait timeout                              |
 | `pools`                   | Engines grouped by prefill or decode role                                                 |
@@ -210,6 +211,15 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `rejected`         | HTTP `429` capacity refusals and HTTP `503` router-readiness refusals |
 | `refused`          | Requests refused by global predictive admission                       |
 | `engine_auth`      | `boundary` or `engine-credential`                                     |
+
+`seats` fields:
+
+| Field                       | Meaning                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `mean_input_len`            | Mean sized input length that sets prefill seats, `null` before a request is sized in the window          |
+| `engines.<iid>.prefill`     | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit           |
+| `engines.<iid>.decode`      | Decode seats, `0` for no limit                                                                          |
+| `engines.<iid>.sequence_limit` | `--max-num-seqs` from the engine's verified attestation, `null` when the launch arguments omit it    |
 
 `serving` fields:
 

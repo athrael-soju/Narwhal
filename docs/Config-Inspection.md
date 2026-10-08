@@ -25,9 +25,9 @@ Each invocation prints this output:
 | Invocation | Output |
 | --- | --- |
 | `validate` in text mode | `Validated <source>: <N> engines` |
-| `validate --format json` | A `narwhal.effective-config` version 1 document in the `data` field of the [command result](Command-Results.md) |
-| `inspect` in text mode | A `narwhal.effective-config` version 1 document |
-| `inspect --format json` | A `narwhal.effective-config` version 1 document in the `data` field of the command result |
+| `validate --format json` | A `narwhal.effective-config` version 2 document in the `data` field of the [command result](Command-Results.md) |
+| `inspect` in text mode | A `narwhal.effective-config` version 2 document |
+| `inspect --format json` | A `narwhal.effective-config` version 2 document in the `data` field of the command result |
 
 ## Fleet-file values and serving defaults
 

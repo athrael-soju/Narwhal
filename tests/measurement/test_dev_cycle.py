@@ -107,7 +107,7 @@ class CycleTests(unittest.TestCase):
             spec = reference()
             fleet = {
                 "schema": "narwhal.fleet",
-                "schema_version": 1,
+                "schema_version": 2,
                 "model": spec["model"]["served_name"],
                 "controller": copy.deepcopy(spec["controller"]),
                 "slo": spec["slo"],

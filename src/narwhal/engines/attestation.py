@@ -218,6 +218,26 @@ def make_attestation(
     return payload
 
 
+def attested_sequence_limit(payload: Any) -> int | None:
+    """Return the `--max-num-seqs` value in an attestation's launch arguments, if set."""
+    launch = payload.get("launch") if isinstance(payload, dict) else None
+    args = launch.get("args") if isinstance(launch, dict) else None
+    if not isinstance(args, list):
+        return None
+    for index, arg in enumerate(args):
+        if not isinstance(arg, str):
+            continue
+        name, equals, value = arg.partition("=")
+        if name != "--max-num-seqs":
+            continue
+        if not equals:
+            value = args[index + 1] if index + 1 < len(args) else ""
+        if isinstance(value, str) and value.isdigit() and int(value) > 0:
+            return int(value)
+        return None
+    return None
+
+
 def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
     """Digest the contract and launch evidence that fix an engine's timing."""
     return canonical_digest({"contract": contract, "launch": launch})
