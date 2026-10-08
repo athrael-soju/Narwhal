@@ -31,10 +31,12 @@ class ModelsOut(BaseModel):
 
 
 class AdmissionOut(BaseModel):
-    """Admission occupancy and refusal counts.
+    """Admission occupancy, saturation signals and refusal counts.
 
-    `rejected` counts pool-exhaustion rejections. `refused` counts requests that the
-    cost model prices over the TTFT budget on every landing, before dispatch.
+    `inflight` counts requests holding one of the `limit` admission seats. `rejected`
+    counts requests rejected at the in-flight limit, by router saturation, or while the
+    router is not ready. `refused` counts requests that predictive admission refused for a
+    projected TTFT or decode SLO miss before dispatch.
     """
 
     inflight: int
@@ -44,6 +46,11 @@ class AdmissionOut(BaseModel):
     waiting_prefill: int = 0
     waiting_decode: int = 0
     limit: int
+    # Router event-loop lag and the median request sizing delay, each against the
+    # threshold at which ingress answers a saturation 429.
+    loop_lag_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    sizing_delay_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    saturation_threshold_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     rejected: int
     refused: int
     # Engine-authentication mode: boundary or engine-credential.

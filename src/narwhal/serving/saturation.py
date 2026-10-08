@@ -28,10 +28,15 @@ async def measure_loop_lag(router: NarwhalRouter) -> None:
         router.loop_lag_s = max(0.0, loop.time() - started - LAG_PROBE_S)
 
 
+def saturation_threshold(router: NarwhalRouter) -> float:
+    """Return the loop lag or median sizing delay at which ingress answers 429."""
+    return SATURATED_TTFT_SHARE * router.scheduler.slo.ttft_s
+
+
 def saturated(router: NarwhalRouter) -> bool:
     """Return whether loop lag or recent request sizing takes a quarter of the TTFT budget."""
-    budget = SATURATED_TTFT_SHARE * router.scheduler.slo.ttft_s
-    return router.loop_lag_s >= budget or router.sizing_delays.median() >= budget
+    threshold = saturation_threshold(router)
+    return router.loop_lag_s >= threshold or router.sizing_delays.median() >= threshold
 
 
 class RecentDelays:

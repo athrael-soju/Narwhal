@@ -16,10 +16,9 @@ The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_ma
 | `n > 1` or `best_of > 1`                                                                                                     | `400` | `invalid_request_error`                              |                                                    |
 | Unsupported non-streaming audio, modality, or tool request                                                                   | `400` | `invalid_request_error` with the option in `param`   |                                                    |
 | Request exceeds `serving.max_request_bytes`                                                                                  | `413` | `request_too_large`                                  |                                                    |
-| HTTP retention limit is full                                                                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
+| Requests counted against the [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`; message `router in-flight limit reached`                                                                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
 | Router event-loop lag reaches a quarter of `slo.ttft_s`                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
 | Median token-counting and prefix-hashing time of at least 8 requests in the last 2 seconds reaches a quarter of `slo.ttft_s` | `429` | `server_overloaded_error`                            | `1`                                                |
-| Admission queue is full                                                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
 | Admission wait expires before response headers                                                                               | `504` | `queue_expired`                                      |                                                    |
 | Original request deadline expires before response headers                                                                    | `504` | `request_expired` or `expired`                       |                                                    |
 | Projected TTFT exceeds the budget for a prompt that fits alone                                                               | `429` | `server_overloaded_error`                            | Budget overrun in seconds, rounded up, minimum `1` |
@@ -35,7 +34,7 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 `/ready` reports the reason for each `503` refusal.
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks and the HTTP retention, queue, and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit.
 
 ### Admission counters
 

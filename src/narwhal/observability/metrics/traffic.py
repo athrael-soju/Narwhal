@@ -80,6 +80,29 @@ def render_admission(state: dict) -> list[str]:
             f"narwhal_{field_name}", help_text, "gauge", [({}, serving.get(field_name, 0))]
         )
     admission = state.get("admission") or {}
+    for name, field_name, help_text in (
+        ("admission_inflight", "inflight", "Requests holding an admission seat"),
+        (
+            "admission_inflight_limit",
+            "limit",
+            "Router in-flight limit: --max-concurrent, else serving.max_connections",
+        ),
+        ("router_loop_lag_seconds", "loop_lag_s", "Latest router event-loop wake-up lateness"),
+        (
+            "request_sizing_delay_seconds",
+            "sizing_delay_s",
+            "Median request sizing delay over the trailing window",
+        ),
+        (
+            "saturation_threshold_seconds",
+            "saturation_threshold_s",
+            "Loop lag or sizing delay at which ingress answers a saturation 429",
+        ),
+    ):
+        if field_name in admission:
+            out += metric_lines(
+                f"narwhal_{name}", help_text, "gauge", [({}, admission[field_name])]
+            )
     if "mode" in admission:
         out += metric_lines(
             "narwhal_admission_info",

@@ -153,6 +153,17 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
             response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
         self.assertEqual((response.status_code, engine.connections), (200, 2))
 
+    async def test_reuse_stops_before_the_engine_closes_an_idle_connection(self):
+        # vLLM closes a connection idle for 5 s; a request sent at that age fails unanswered.
+        ok = head(content_length=2) + b"{}"
+        engine = ScriptedEngine([ok], [ok])
+        client = self.client(engine)
+        await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        (pool,) = client._pools.values()
+        pool.idle[0].idle_at -= 4.5
+        response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        self.assertEqual((response.status_code, engine.connections), (200, 2))
+
     async def test_an_idle_connection_the_engine_closed_is_replaced(self):
         ok = head(content_length=2) + b"{}"
         engine = ScriptedEngine([ok], [ok])

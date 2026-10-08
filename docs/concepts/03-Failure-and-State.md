@@ -30,14 +30,16 @@ A successful pass clears the streak and reopens admission. A router restart rese
 
 ### Connection pools
 
-Each engine has two connection pools:
+The router reaches engines through two kinds of connection pool:
 
-| Pool | Carries | Bound | Client |
-| --- | --- | --- | --- |
-| Data | Token counting, prefill and decode | `serving.max_connections` connections, half kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
-| Control | Health probes and inference probes | `engine.control_connections` | HTTPX |
+| Pool | Scope | Carries | Bound | Client |
+| --- | --- | --- | --- | --- |
+| Data | One pool per engine | Token counting, prefill and decode | `serving.max_connections` open connections to each engine, and up to half that number kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
+| Control | One pool shared by all engines | Health probes and inference probes | `engine.control_connections` open connections across all engines, and up to half that number kept alive | HTTPX |
 
-Both pools reuse a kept-alive connection for 5 s after its last response. A connection the engine has closed leaves the pool before reuse.
+A data leg waits for a connection to its own engine only, so a busy engine does not hold connections that another engine's legs need. Health and inference probes for every engine share the control pool.
+
+Both pools reuse a kept-alive connection for up to 4 s after its last response. vLLM closes an idle connection after 5 s, so the router stops reusing a connection before the engine closes it. A connection the engine has already closed leaves the pool before reuse.
 
 ### Failure evidence
 

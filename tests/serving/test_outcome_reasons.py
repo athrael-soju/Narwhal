@@ -58,12 +58,16 @@ class OutcomeReasonTests(HttpHarness):
         router.loop_lag_s = router.scheduler.slo.ttft_s
         self.assertEqual((await self.post(client)).status_code, 429)
         router.loop_lag_s = 0.0
+        # Ingress and the admission queue enforce one in-flight limit with one message.
         router.ingress_inflight = router.max_concurrent
-        self.assertEqual((await self.post(client)).status_code, 429)
+        at_ingress = await self.post(client)
         router.ingress_inflight = 0
         router.inflight = router.max_concurrent
-        self.assertEqual((await self.post(client)).status_code, 429)
+        at_queue = await self.post(client)
         router.inflight = 0
+        self.assertEqual((at_ingress.status_code, at_queue.status_code), (429, 429))
+        self.assertEqual(at_ingress.json(), at_queue.json())
+        self.assertEqual(at_ingress.json()["error"]["message"], "router in-flight limit reached")
         router.lifecycle.identities_ready = False
         not_ready = await self.post(client)
         self.assertEqual(not_ready.status_code, 503)
@@ -72,8 +76,8 @@ class OutcomeReasonTests(HttpHarness):
             [(row["reason"], row["status"], row["error_type"]) for row in rows],
             [
                 ("saturated", 429, "server_overloaded_error"),
-                ("retention_limit", 429, "server_overloaded_error"),
-                ("queue_full", 429, "server_overloaded_error"),
+                ("inflight_limit", 429, "server_overloaded_error"),
+                ("inflight_limit", 429, "server_overloaded_error"),
                 ("not_ready", 503, "standby"),
             ],
         )
@@ -82,8 +86,8 @@ class OutcomeReasonTests(HttpHarness):
         self.assertEqual(rows[-1]["readiness_reason"], not_ready.json()["error"]["message"])
         self.assertTrue(all(row["terminal"] == "rejected" for row in rows))
         text = await self.metrics(client)
-        for reason in ("saturated", "retention_limit", "queue_full", "not_ready"):
-            self.assertIn(f'narwhal_rejected_total{{reason="{reason}"}} 1', text)
+        for reason, count in (("saturated", 1), ("inflight_limit", 2), ("not_ready", 1)):
+            self.assertIn(f'narwhal_rejected_total{{reason="{reason}"}} {count}', text)
         self.assertEqual(router.rejected, 4)
         self.assert_released()
 

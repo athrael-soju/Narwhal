@@ -143,9 +143,8 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `refused` | `slot_wait` | The projected TTFT plus the decode slot wait exceeds the TTFT budget. |
 | `refused` | `kv_capacity` | Peak decode KV tokens during the request's decode hold exceed live decode capacity. |
 | `refused` | `tpot` | Decode load pushes the request past `slo.tpot_s` on every live decode engine. |
-| `rejected` | `retention_limit` | The HTTP retention limit is full. |
+| `rejected` | `inflight_limit` | Requests counted against the router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`. |
 | `rejected` | `saturated` | Router event-loop lag or request-sizing time reaches a quarter of `slo.ttft_s`. |
-| `rejected` | `queue_full` | The admission queue is full. |
 | `rejected` | `not_ready` | The router is not ready to serve; `readiness_reason` gives the cause. |
 | `expired` | `deadline` | The original request deadline, `serving.request_timeout_s`, expires. |
 | `expired` | `queue_timeout` | The admission wait reaches `serving.queue_timeout_s` before the original deadline. |

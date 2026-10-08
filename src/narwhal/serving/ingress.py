@@ -12,6 +12,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
+from .outcomes import INFLIGHT_LIMIT_MESSAGE
 from .records import overloaded_response
 from .response import RequestStreamResponse
 from .saturation import saturated
@@ -63,9 +64,7 @@ class ServingIngress:
         scope[LIFECYCLE] = state
         limit = router.max_concurrent + router.cfg.serving.queue_capacity
         if router.ingress_inflight >= limit:
-            await _overloaded(
-                state, "HTTP retention limit reached", "retention_limit", scope, receive, send
-            )
+            await _overloaded(state, INFLIGHT_LIMIT_MESSAGE, "inflight_limit", scope, receive, send)
             return
         if saturated(router):
             message = (

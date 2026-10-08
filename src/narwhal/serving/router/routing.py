@@ -38,10 +38,15 @@ from ..completion import output_cap
 from ..dispatch import Dispatcher
 from ..execution import request_error, serve_request
 from ..lifecycle import QUEUE_STAGES, RequestLifecycle
-from ..outcomes import OUTCOME_REASONS, RequestExpired, failure_reason
+from ..outcomes import INFLIGHT_LIMIT_MESSAGE, OUTCOME_REASONS, RequestExpired, failure_reason
 from ..records import overloaded_response
 from ..retry import RetryBudget
-from ..saturation import SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
+from ..saturation import (
+    SIZING_MIN_SAMPLES,
+    SIZING_WINDOW_S,
+    RecentDelays,
+    saturation_threshold,
+)
 from ..seats import InputLengths
 from ..seats import snapshot as seats_snapshot
 from .sizing import RequestSizer
@@ -331,7 +336,8 @@ class NarwhalRouter:
             state.phase = "admission"
             response = await serve_request(state, endpoint, body, headers)
         except QueueFull:
-            response = overloaded_response(state, "server_overloaded_error", reason="queue_full")
+            # A full queue is the same in-flight limit that ingress checks on arrival.
+            response = overloaded_response(state, INFLIGHT_LIMIT_MESSAGE, reason="inflight_limit")
         except (QueueExpired, RequestExpired) as exc:
             state.finish(
                 "expired",
@@ -394,6 +400,10 @@ class NarwhalRouter:
                 "waiting_prefill": len(self.dispatcher.queues[Phase.PREFILL]),
                 "waiting_decode": len(self.dispatcher.queues[Phase.DECODE]),
                 "limit": self.max_concurrent,
+                # The two signals behind the saturation 429 and the value each must stay below.
+                "loop_lag_s": self.loop_lag_s,
+                "sizing_delay_s": self.sizing_delays.median(),
+                "saturation_threshold_s": saturation_threshold(self),
                 "rejected": self.rejected,
                 "refused": self.refused,
                 "engine_auth": self.cfg.engine_auth_mode(),
