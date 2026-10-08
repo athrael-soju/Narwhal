@@ -114,12 +114,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path):
                 self.assertIn(method, paths[path])
 
-    async def test_metrics_use_narwhal_prefix_and_contract_version_one(self):
+    async def test_metrics_use_narwhal_prefix_and_contract_version_two(self):
         self.router.served = 7
         response = await self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(current(METRICS), 1)
-        self.assertIn('narwhal_contract_info{contract="metrics",version="1"} 1', response.text)
+        self.assertEqual(current(METRICS), 2)
+        self.assertIn('narwhal_contract_info{contract="metrics",version="2"} 1', response.text)
         self.assertIn("narwhal_served_total 7", response.text)
         self.assertIn('narwhal_instance_role{iid="p",role="prefill"} 1', response.text)
         self.assertIn('narwhal_slo_seconds{metric="ttft",slo="1"} 1.0', response.text)

@@ -43,7 +43,11 @@ class Histogram:
 
     def render(self, name: str, help_text: str) -> list[str]:
         """Render the histogram's Prometheus exposition lines."""
-        out = [f"# HELP {name} {help_text}", f"# TYPE {name} histogram"]
+        return [f"# HELP {name} {help_text}", f"# TYPE {name} histogram", *self.samples(name)]
+
+    def samples(self, name: str) -> list[str]:
+        """Render this series' bucket, sum and count lines without the family header."""
+        out: list[str] = []
         prefix = "".join(f'{k}="{v}",' for k, v in self.labels.items())
         series = "{" + prefix[:-1] + "}" if prefix else ""
         for edge, count in zip(self.buckets, self.counts, strict=True):
@@ -52,6 +56,14 @@ class Histogram:
         out.append(f"{name}_sum{series} {self.total}")
         out.append(f"{name}_count{series} {self.n}")
         return out
+
+
+def render_histograms(name: str, help_text: str, series: Sequence[Histogram]) -> list[str]:
+    """Render several labelled series of one histogram family."""
+    out = [f"# HELP {name} {help_text}", f"# TYPE {name} histogram"]
+    for histogram in series:
+        out += histogram.samples(name)
+    return out
 
 
 def slo_histogram(slo_s: float) -> Histogram:

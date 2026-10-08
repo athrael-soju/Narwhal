@@ -40,7 +40,8 @@ from ..runtime.standby import (
     standby_loop,
 )
 from .completion import completion_body_error
-from .ingress import BodyTooLarge, ServingIngress, bounded_body, serve_connected
+from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
+from .lifecycle import RequestLifecycle
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
@@ -428,7 +429,7 @@ def create_app(
     @app.post("/v1/completions", summary="Completions, body passed to the engine unchanged")
     async def completions(request: HTTPRequest) -> Response:
         if not ready(router):
-            return _not_ready_refusal(router)
+            return _not_ready_refusal(router, request.scope.get(LIFECYCLE))
         body = await _completion_body(router, request)
         if not isinstance(body, dict):
             return body
@@ -437,7 +438,7 @@ def create_app(
     @app.post("/v1/chat/completions", summary="Chat, body passed to the engine unchanged")
     async def chat_completions(request: HTTPRequest) -> Response:
         if not ready(router):
-            return _not_ready_refusal(router)
+            return _not_ready_refusal(router, request.scope.get(LIFECYCLE))
         body = await _completion_body(router, request)
         if not isinstance(body, dict):
             return body
@@ -450,9 +451,17 @@ async def _completion_body(
     router: NarwhalRouter, request: HTTPRequest
 ) -> dict[str, Any] | JSONResponse:
     """Parse a bounded body before reserving active or engine capacity."""
+    state: RequestLifecycle | None = request.scope.get(LIFECYCLE)
     try:
         raw = json.loads(await bounded_body(request, router.cfg.serving.max_request_bytes))
     except BodyTooLarge:
+        if state is not None:
+            state.finish(
+                "invalid",
+                error="request body exceeds max_request_bytes",
+                status=413,
+                error_type="request_too_large",
+            )
         return JSONResponse(
             status_code=413,
             content={
@@ -463,15 +472,19 @@ async def _completion_body(
             },
         )
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return _invalid_refusal(router, "the request body is not valid JSON", None)
+        return _invalid_refusal(state, "the request body is not valid JSON", None)
     problem = completion_body_error(raw)
     if problem is not None:
-        return _invalid_refusal(router, *problem)
+        return _invalid_refusal(state, *problem)
     return raw
 
 
-def _invalid_refusal(router: NarwhalRouter, message: str, param: str | None) -> JSONResponse:
-    """Return the stable malformed-request 400; ingress records its outcome."""
+def _invalid_refusal(
+    state: RequestLifecycle | None, message: str, param: str | None
+) -> JSONResponse:
+    """Record and return the stable malformed-request 400."""
+    if state is not None:
+        state.finish("invalid", error=message, status=400, error_type="invalid_request_error")
     return JSONResponse(
         status_code=400,
         content={
@@ -494,8 +507,8 @@ def _monitoring_degraded_reason(router: NarwhalRouter) -> str:
     return f"monitoring degraded: {stage} {klass}"
 
 
-def _not_ready_refusal(router: NarwhalRouter) -> Response:
-    """Return a retryable refusal while control or backends are unavailable."""
+def _not_ready_refusal(router: NarwhalRouter, state: RequestLifecycle | None) -> Response:
+    """Record and return a retryable refusal while control or backends are unavailable."""
     backend_unavailable = (
         control_ready(router)
         and not router.lifecycle_blocked
@@ -510,6 +523,16 @@ def _not_ready_refusal(router: NarwhalRouter) -> Response:
         or "standby: the primary router is serving"
     )
     code = "backend_unavailable" if backend_unavailable else "standby"
+    if state is not None:
+        state.finish(
+            "rejected",
+            error=f"router not ready: {reason}",
+            status=503,
+            reason="not_ready",
+            error_type=code,
+            error_code=code,
+            extra={"readiness_reason": reason},
+        )
     return JSONResponse(
         content={"error": {"message": reason, "type": code, "code": code}},
         status_code=503,

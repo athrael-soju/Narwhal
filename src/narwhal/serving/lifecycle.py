@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..types import Instance, Phase, Request
+from .outcomes import RequestExpired, failure_reason
 from .retry import transient
 
 if TYPE_CHECKING:
@@ -16,9 +17,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-
-class RequestExpired(Exception):
-    """The original request exhausted its end-to-end deadline."""
+# Wait stages in the order a request reaches them.
+QUEUE_STAGES = ("admission", "prefill", "decode")
 
 
 class RequestLifecycle:
@@ -41,11 +41,16 @@ class RequestLifecycle:
         self.deadline = arrived + router.cfg.request_timeout_s
         self.ingress_timer: asyncio.Timeout | None = None
         self.attempts = 0
+        # Whether the current attempt reached prefill dispatch.
+        self.dispatched = False
         self.decode_attempts = 0
         self.attempt_failures: list[dict[str, Any]] = []
         self.output_started = False
         self.phase = "admission"
-        self.queue_wait_s = 0.0
+        # Seconds waited per stage, for each stage the request reached.
+        self.queue_waits: dict[str, float] = {}
+        # The latest prefill admission price and its parts.
+        self.admission_price: dict[str, Any] | None = None
         self.owned: set[str] = set()
         self.terminal: str | None = None
         self.outcome: dict[str, Any] = {"error": None, "status": 200}
@@ -117,9 +122,19 @@ class RequestLifecycle:
         self.owned.clear()
         self.router.monitor.waiting.pop(self.rid, None)
 
+    @property
+    def queue_wait_s(self) -> float:
+        """Total seconds waited across every stage."""
+        return sum(self.queue_waits.values())
+
+    def waited(self, stage: str, seconds: float) -> None:
+        """Add one wait at `stage`; the stage counts as reached even at zero seconds."""
+        self.queue_waits[stage] = self.queue_waits.get(stage, 0.0) + seconds
+
     def begin_attempt(self) -> None:
         """Count an actual prefill dispatch, keeping retries out of arrivals."""
         self.attempts += 1
+        self.dispatched = True
         self.router.prefill_attempts += 1
         if self.attempts > 1:
             self.router.retry_attempts += 1
@@ -141,12 +156,17 @@ class RequestLifecycle:
 
     async def retry(self, exc: BaseException) -> bool:
         """Spend shared quota for a classified failure before visible output."""
-        policy = self.router.cfg.serving.retry_policy()
+        router = self.router
+        policy = router.cfg.serving.retry_policy()
         retryable = transient(exc)
+        now = router._clock()
+        reason = failure_reason(exc, deadline_passed=now >= self.deadline)
         failure: dict[str, Any] = {
-            "at": self.router._clock(),
-            "attempt": self.attempts,
+            "at": now,
+            # A failure before dispatch belongs to the attempt that never started.
+            "attempt": self.attempts if self.dispatched else self.attempts + 1,
             "phase": self.phase,
+            "reason": reason,
             "prefill_iid": self.prefill_iid,
             "decode_iid": self.decode_iid,
             "error_type": type(exc).__name__,
@@ -157,9 +177,11 @@ class RequestLifecycle:
             "retry_scheduled": False,
             "backoff_s": None,
         }
-        # One failure per attempt, including a pre-dispatch failure.
-        if len(self.attempt_failures) < policy.max_attempts:
-            self.attempt_failures.append(failure)
+        self.attempt_failures.append(failure)
+        router.attempt_failures[self.phase, reason] += 1
+        if not self.dispatched:
+            failure["retry_reason"] = "not_dispatched"
+            return False
         if self.output_started:
             failure["retry_reason"] = "output_started"
             return False
@@ -178,11 +200,13 @@ class RequestLifecycle:
             return False
         failure.update(retry_scheduled=True, retry_reason="allowed", backoff_s=delay)
         self.release()
+        self.dispatched = False
         self.phase = "backoff"
         self.request.phase = Phase.PREFILL
         # A request in backoff counts as waiting demand.
         self.router.monitor.waiting[self.rid] = self.request
         await self.wait(lambda: asyncio.sleep(delay))
+        self.phase = "admission"
         return True
 
     def finish(
@@ -191,13 +215,21 @@ class RequestLifecycle:
         *,
         error: str | None = None,
         status: int = 200,
+        reason: str | None = None,
+        error_type: str | None = None,
+        error_code: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Settle terminal counters, reservations and one journal row."""
+        """Settle terminal counters, reservations and one journal row.
+
+        `reason` labels failed, rejected, refused and expired outcomes. `error_type` and
+        `error_code` repeat the client error body's `type` and `code`.
+        """
         if self.terminal is not None:
             return
         if terminal == "cancelled" and self.router._clock() >= self.deadline:
             terminal, error, status = "expired", "original request deadline expired", 504
+            reason, error_type, error_code = "deadline", self.phase, "expired"
         self.terminal = terminal
         router = self.router
         req = self.request
@@ -220,10 +252,20 @@ class RequestLifecycle:
             "invalid": "invalid_requests",
         }[terminal]
         setattr(router, counter, getattr(router, counter) + 1)
+        if terminal in router.outcome_reasons:
+            reason = reason or "unclassified"
+            router.outcome_reasons[terminal][reason] += 1
+        else:
+            reason = None
+        if completed := terminal == "completed":
+            error_type = error_code = None
+            if self.attempts > 1:
+                router.served_after_retry += 1
         if self.admitted:
             self.admitted = False
             router._release_seat(self.rid)
-        router.queue_wait.observe(self.queue_wait_s)
+        for stage, waited in self.queue_waits.items():
+            router.queue_wait[stage].observe(waited)
         prefill_s = None if self.prefilled_at is None else self.prefilled_at - self.arrived
         first_s = None if self.first_at is None else self.first_at - self.arrived
         tpot_s = (
@@ -242,7 +284,6 @@ class RequestLifecycle:
             and self.tokens > 1
             else None
         )
-        completed = terminal == "completed"
         if completed:
             router.retry_budget.succeeded()
             if measured is not None:
@@ -274,6 +315,8 @@ class RequestLifecycle:
             "first_byte_s": first_s,
             "decode_tpot_s": decode_tpot_s,
             "queue_wait_s": self.queue_wait_s,
+            "queue_waits": {stage: self.queue_waits.get(stage) for stage in QUEUE_STAGES},
+            "admission_price": self.admission_price,
             "duration_s": router._clock() - self.arrived,
             "attempts": self.attempts,
             "decode_attempts": self.decode_attempts,
@@ -287,6 +330,11 @@ class RequestLifecycle:
             "cache_placement": req.cache_placement,
             "token_accounting": router._token_accounting(),
             "error": error,
+            # Response headers carry 200 once output starts; a later error ends the stream.
+            "status": 200 if self.output_started else (None if terminal == "cancelled" else status),
+            "error_type": error_type,
+            "error_code": error_code,
+            "reason": reason,
             "terminal": terminal,
         }
         if terminal == "cancelled":
