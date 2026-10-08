@@ -62,6 +62,10 @@ def failure_reason(exc: BaseException, *, deadline_passed: bool) -> str:
     if isinstance(exc, ResponseLimitExceeded):
         return "response_limit"
     if isinstance(exc, EngineError):
+        cause = exc.__cause__
+        # A wrapped transport failure keeps its own classification.
+        if isinstance(cause, httpx.HTTPError | TimeoutError):
+            return failure_reason(cause, deadline_passed=deadline_passed)
         if exc.status in (408, 429):
             return "engine_overloaded"
         if exc.status == 504:

@@ -2,9 +2,13 @@
 
 import asyncio
 import json
+import unittest
 from unittest.mock import patch
 
-from narwhal.serving.outcomes import OUTCOME_REASONS
+import httpx
+
+from narwhal.engines.client import EngineError
+from narwhal.serving.outcomes import OUTCOME_REASONS, failure_reason
 from narwhal.serving.policy import ServingPolicy
 from tests.serving.test_http_accounting import HttpHarness
 
@@ -262,3 +266,23 @@ class OutcomeReasonTests(HttpHarness):
             self.assertEqual((await self.post(client)).status_code, 429)
         price = self.terminal_rows()[-1]["admission_price"]
         self.assertEqual((price["backlog_s"], price["price_s"]), (None, None))
+
+
+class FailureReasonTests(unittest.TestCase):
+    def test_a_wrapped_transport_failure_keeps_its_classification(self):
+        """A tokenize leg wraps a dropped connection; the outcome names the connection failure."""
+        request = httpx.Request("POST", "http://engine/tokenize")
+        for cause, reason in (
+            (
+                httpx.RemoteProtocolError("peer closed connection", request=request),
+                "engine_connection",
+            ),
+            (httpx.ConnectError("refused", request=request), "engine_unreachable"),
+            (httpx.ReadTimeout("slow", request=request), "engine_timeout"),
+            (ValueError("bad continuation"), "engine_error"),
+        ):
+            with self.subTest(reason=reason):
+                try:
+                    raise EngineError("tokenize", "http://engine", 502, str(cause)) from cause
+                except EngineError as exc:
+                    self.assertEqual(failure_reason(exc, deadline_passed=False), reason)
