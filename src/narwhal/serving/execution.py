@@ -135,9 +135,11 @@ async def _place(
             )
             return inst
         except QueueExpired as exc:
+            # The wait timer can fire just before the bound on the router clock.
             if (
-                handoff_deadline is not None
-                and router._clock() >= handoff_deadline < state.deadline
+                exc.at_deadline
+                and handoff_deadline is not None
+                and handoff_deadline < state.deadline
             ):
                 raise HandoffExpired(
                     "KV handoff bound reached while waiting for a decode seat"

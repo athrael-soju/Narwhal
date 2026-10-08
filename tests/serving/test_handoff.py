@@ -137,6 +137,30 @@ class HandoffExpiryTests(HttpHarness):
         for rid in held:
             self.router.monitor.finished(decode.iid, rid)
 
+    async def test_a_decode_seat_wait_timer_firing_before_the_bound_is_a_handoff_expiry(self):
+        self.cfg.serving = ServingPolicy(queue_capacity=4, queue_timeout_s=5.0)
+        client = self.client()
+        self.router.kv_leases["e0"] = 1
+        # The router clock falls behind the event loop during the wait, as when the
+        # loop's timer fires shortly before the bound.
+        lag = [0.0]
+        self.router._clock = lambda: time.monotonic() - lag[0]
+        decode = self.router.monitor.instances["e3"]
+        held = [f"held{index}" for index in range(decode_seats(self.router, "e3"))]
+        for rid in held:
+            self.router.monitor.dispatched("e3", Request(rid, 5, phase=Phase.DECODE))
+        task = asyncio.create_task(self.post(client))
+        for _ in range(200):
+            if self.router.dispatcher.queues[Phase.DECODE]:
+                break
+            await asyncio.sleep(0.005)
+        lag[0] = 0.05
+        self.assert_handoff_expiry(
+            await task, "KV handoff bound reached while waiting for a decode seat"
+        )
+        for rid in held:
+            self.router.monitor.finished(decode.iid, rid)
+
     async def test_a_handoff_expiry_with_attempts_left_retries_on_a_fresh_prefill(self):
         self.cfg.serving = ServingPolicy(max_attempts=2, retry_base_s=0.001, retry_cap_s=0.001)
         client = self.client()

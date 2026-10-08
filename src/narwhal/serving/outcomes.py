@@ -53,7 +53,7 @@ def failure_reason(exc: BaseException, *, deadline_passed: bool) -> str:
     if isinstance(exc, RequestExpired):
         return "deadline"
     if isinstance(exc, QueueExpired):
-        return "deadline" if deadline_passed else "queue_timeout"
+        return "deadline" if deadline_passed or exc.at_deadline else "queue_timeout"
     if isinstance(exc, PlacementRefused):
         return exc.cause
     if isinstance(exc, NoEngine):

@@ -93,15 +93,25 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
                 task = await self.enqueue(lambda: None, deadline)
                 self.now = expires
                 self.queue.notify()
-                with self.assertRaises(QueueExpired):
+                with self.assertRaises(QueueExpired) as caught:
                     await task
+                self.assertEqual(caught.exception.at_deadline, deadline == expires)
                 self.assertEqual(len(self.queue), 0)
 
     async def test_transport_wait_timeout_removes_waiter(self):
         """The event-loop timeout cleans up a queue with a stationary test clock."""
         queue = AdmissionQueue(1, 0.001, clock=lambda: 0)
-        with self.assertRaises(QueueExpired):
+        with self.assertRaises(QueueExpired) as caught:
             await queue.acquire(lambda: None, deadline=1)
+        self.assertFalse(caught.exception.at_deadline)
+        self.assertEqual(len(queue), 0)
+
+    async def test_a_timer_ahead_of_the_queue_clock_still_reports_the_deadline(self):
+        """The event-loop timer ends the wait while the queue clock reads before the deadline."""
+        queue = AdmissionQueue(1, 30, clock=lambda: 0)
+        with self.assertRaises(QueueExpired) as caught:
+            await queue.acquire(lambda: None, deadline=0.001)
+        self.assertTrue(caught.exception.at_deadline)
         self.assertEqual(len(queue), 0)
 
     async def test_callback_failure_releases_waiter(self):
