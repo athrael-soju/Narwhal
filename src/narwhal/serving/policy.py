@@ -14,8 +14,6 @@ class ServingPolicy:
 
     queue_capacity: int = 0
     queue_timeout_s: float = 0.0
-    prefill_concurrency: int = 0
-    decode_concurrency: int = 0
     # Conservative local age bound, shorter than the verified producer KV lease.
     handoff_timeout_s: float = 0.0
     max_attempts: int = 1
@@ -29,12 +27,7 @@ class ServingPolicy:
 
     def validate(self) -> None:
         """Reject unbounded, mistyped, and contradictory serving settings."""
-        for name in (
-            "queue_capacity",
-            "prefill_concurrency",
-            "decode_concurrency",
-            "retry_budget",
-        ):
+        for name in ("queue_capacity", "retry_budget"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"serving.{name} must be a nonnegative integer")
@@ -54,13 +47,8 @@ class ServingPolicy:
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"serving.{name} must be finite and nonnegative")
-        if self.queue_capacity and (
-            self.queue_timeout_s <= 0 or self.prefill_concurrency < 1 or self.decode_concurrency < 1
-        ):
-            raise ValueError(
-                "serving.queue_capacity requires positive queue_timeout_s, "
-                "prefill_concurrency, and decode_concurrency from workload measurements"
-            )
+        if self.queue_capacity and self.queue_timeout_s <= 0:
+            raise ValueError("serving.queue_capacity requires positive serving.queue_timeout_s")
         if self.retry_base_s <= 0 or self.retry_cap_s < self.retry_base_s:
             raise ValueError("serving retry delays require 0 < retry_base_s <= retry_cap_s")
         if self.retry_replenish > 1:

@@ -64,7 +64,7 @@ A fleet needs six fields:
 | Field            | Value             | Notes                                                                                       |
 | ---------------- | ----------------- | ------------------------------------------------------------------------------------------- |
 | `schema`         | `"narwhal.fleet"` | Identifies the fleet interface.                                                             |
-| `schema_version` | `1`               | The configuration version.                                                                  |
+| `schema_version` | `2`               | The configuration version.                                                                  |
 | `model`          | string            | The exact model name the router exposes and every engine serves.                            |
 | `engines`        | nonempty array    | The engine instances.                                                                       |
 | `slo.ttft_s`     | positive seconds  | Time-to-first-token (TTFT) target for admission, placement, load projection, and control.   |

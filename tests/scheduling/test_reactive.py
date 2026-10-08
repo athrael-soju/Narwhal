@@ -26,6 +26,7 @@ from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.serving.schemas import ControllerDecisionOut
+from narwhal.serving.seats import prefill_seats
 from narwhal.types import Instance, Phase, Request, Role
 from tests.wire import engine_transports
 
@@ -98,8 +99,6 @@ class Fleet:
                 serving=ServingPolicy(
                     queue_capacity=8,
                     queue_timeout_s=10.0,
-                    prefill_concurrency=1,
-                    decode_concurrency=100,
                     handoff_timeout_s=60.0,
                 ),
             )
@@ -1074,8 +1073,10 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(
             fleet.monitor.instances["e1"].decode[first.lifecycle.rid], first.lifecycle.request
         )
-        # With e0's prefill slot held, a fresh original selects e1 in its new role.
-        fleet.monitor.dispatched("e0", Request("busy", 100))
+        # With e0's prefill seats held, a fresh original selects e1 in its new role.
+        busy = [f"busy{index}" for index in range(max(1, prefill_seats(router, "e0")))]
+        for rid in busy:
+            fleet.monitor.dispatched("e0", Request(rid, 100))
         fresh = await request("fresh")
         self.assertEqual(fresh.lifecycle.prefill_iid, "e1")
         self.assertNotEqual(fresh.lifecycle.decode_iid, "e1")
@@ -1098,7 +1099,8 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(done, 1 if response is fresh else 0)
                 await response.aclose()
                 self.assertEqual(response.lifecycle.tokens, 3)
-        fleet.monitor.finished("e0", "busy")
+        for rid in busy:
+            fleet.monitor.finished("e0", rid)
         fleet.scheduler.roles.settle_drains()
         self.assertEqual(flip.drained_s, 1.0)
         self.assertEqual(

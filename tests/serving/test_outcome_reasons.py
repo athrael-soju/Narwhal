@@ -17,8 +17,6 @@ FAST_RETRY = {"handoff_timeout_s": 5, "retry_base_s": 0.001, "retry_cap_s": 0.00
 QUEUED = {
     "queue_capacity": 2,
     "queue_timeout_s": 5.0,
-    "prefill_concurrency": 1,
-    "decode_concurrency": 1,
     "handoff_timeout_s": 5.0,
 }
 

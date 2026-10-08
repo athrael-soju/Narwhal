@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
+from ...engines.attestation import attested_sequence_limit
 from ...engines.client import EngineClient
 from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
@@ -41,6 +42,8 @@ from ..outcomes import OUTCOME_REASONS, RequestExpired, failure_reason
 from ..records import overloaded_response
 from ..retry import RetryBudget
 from ..saturation import SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
+from ..seats import InputLengths
+from ..seats import snapshot as seats_snapshot
 from .sizing import RequestSizer
 from .verification import SuspectVerifier
 
@@ -132,7 +135,6 @@ class NarwhalRouter:
             # Four controller windows cover the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
-            decode_concurrency=cfg.serving.decode_concurrency,
             health=DriftTracker(
                 clock=clock,
                 window_s=cfg.health_window_s,
@@ -192,6 +194,9 @@ class NarwhalRouter:
         self.ingress_high_water = 0
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
+        self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
+        # Engine ID to the `--max-num-seqs` its verified attestation reports.
+        self.sequence_limits: dict[str, int] = {}
         self.unsized_offered = 0
         self.expired = 0
         # Outcome counts by reason for each counted terminal state.
@@ -257,6 +262,14 @@ class NarwhalRouter:
     def _admission_mode(self) -> dict[str, Any]:
         """Return the admission mode and the TTFT budget margin it applies."""
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
+
+    def attested(self, iid: str, payload: Any) -> None:
+        """Record the sequence limit from an engine's verified attestation."""
+        limit = attested_sequence_limit(payload)
+        if limit is None:
+            self.sequence_limits.pop(iid, None)
+        else:
+            self.sequence_limits[iid] = limit
 
     def _token_accounting(self) -> str:
         """Return the decode token-accounting mode the fleet's dialect guarantees."""
@@ -394,6 +407,8 @@ class NarwhalRouter:
                 }
                 for terminal, counts in self.outcome_reasons.items()
             },
+            # Per-engine prefill and decode seats and their inputs.
+            "seats": seats_snapshot(self),
             "serving": {
                 "http_retained": self.ingress_inflight,
                 "http_retained_limit": self.max_concurrent + self.cfg.serving.queue_capacity,
