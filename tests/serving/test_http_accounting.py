@@ -62,11 +62,15 @@ class HttpHarness(unittest.IsolatedAsyncioTestCase):
         wire = "".join("data: " + json.dumps(frame) + "\n\n" for frame in self.decode_frames)
         return httpx.Response(200, text=wire + "data: [DONE]\n\n")
 
+    def transports(self):
+        """Return the control-pool transport and data-leg dial for the engine handler."""
+        return engine_transports(self.engine)
+
     def client(self):
         """Create the app and register cleanup for its journal, engine client and HTTP client."""
 
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, **engine_transports(self.engine), **kwargs)
+            return NarwhalRouter(*args, **self.transports(), **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             app = create_app(self.cfg, journal_path=self.root / "journal.jsonl")

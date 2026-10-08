@@ -382,10 +382,20 @@ class ConfigTests(unittest.TestCase):
             ({"retry_base_s": 0}, "retry delays"),
             ({"retry_cap_s": 0.01}, "retry delays"),
             ({"retry_replenish": 1.01}, "retry_replenish"),
-            ({"max_attempts": 2}, "handoff_timeout_s"),
+            (
+                {
+                    "queue_capacity": 1,
+                    "queue_timeout_s": 1,
+                    "prefill_concurrency": 1,
+                    "decode_concurrency": 1,
+                },
+                "handoff_timeout_s",
+            ),
         ):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
                 replace(policy, **changes).validate()
+        # Each attempt prefills afresh, so retries need no handoff bound with the queue off.
+        replace(policy, max_attempts=3).validate()
         with self.assertRaisesRegex(ValueError, "max_attempts"):
             self.load({**self.raw, "serving": {"max_attempts": 4}})
         with self.assertRaisesRegex(ValueError, "max_attempts"):

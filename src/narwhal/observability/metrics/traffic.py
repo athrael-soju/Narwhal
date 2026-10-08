@@ -53,7 +53,7 @@ def render_admission(state: dict) -> list[str]:
         ("prefill_attempts", "Prefill HTTP attempts including retries"),
         ("decode_attempts", "Decode HTTP attempts including retries"),
         ("retry_attempts", "Additional prefill attempts after an original attempt failed"),
-        ("retry_credits_spent", "Retry credits consumed, including cancelled backoffs"),
+        ("retry_credits_spent", "Retry credits spent by retries that dispatched"),
         ("retry_denied", "Retries denied by the shared retry quota"),
         ("served_after_retry", "Requests completed by an attempt after the first"),
         ("decode_tokens_observed", "Exact decode tokens read across all attempts when supported"),

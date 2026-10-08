@@ -65,9 +65,9 @@ class ServingPolicy:
             raise ValueError("serving retry delays require 0 < retry_base_s <= retry_cap_s")
         if self.retry_replenish > 1:
             raise ValueError("serving.retry_replenish must not exceed one credit per completion")
-        if (self.queue_capacity or self.max_attempts > 1) and self.handoff_timeout_s <= 0:
+        if self.queue_capacity and self.handoff_timeout_s <= 0:
             raise ValueError(
-                "queued or retried serving requires positive serving.handoff_timeout_s "
+                "queued serving requires positive serving.handoff_timeout_s "
                 "below the verified backend KV lease"
             )
 
