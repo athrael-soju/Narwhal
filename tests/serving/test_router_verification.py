@@ -111,6 +111,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
         """A failed engine's backoff doubles per failure and survives other engines' success."""
         self.cfg.tokenize = True
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         bad = self.cfg.engines[0].url
@@ -147,6 +149,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_backoff_doubles_caps_and_clears_on_own_success(self):
         """A failed engine's backoff doubles to its cap; its next successful count clears it."""
         self.cfg.tokenize = True
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         bad = self.router.scheduler.live_instances()[0]
@@ -179,6 +183,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sustained_tokenizer_failures_keep_the_engine_error_and_the_capped_backoff(self):
         """Every consecutive failed count raises the engine error and holds the capped backoff."""
         self.cfg.tokenize = True
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         live = self.router.scheduler.live_instances()
@@ -406,7 +412,13 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         inst = router.monitor.instances["e3"]
         request = Request("r", 10, phase=Phase.DECODE)
         other = Request("o", 10, phase=Phase.DECODE)
-        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        state = SimpleNamespace(
+            router=router,
+            prefill_iid="e0",
+            request=request,
+            output_started=False,
+            failed_engines={"prefill": set(), "decode": set()},
+        )
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", other)
         started = router._clock()
@@ -421,7 +433,13 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         router = self.router()
         inst = router.monitor.instances["e3"]
         request = Request("r", 10, phase=Phase.DECODE)
-        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        state = SimpleNamespace(
+            router=router,
+            prefill_iid="e0",
+            request=request,
+            output_started=False,
+            failed_engines={"prefill": set(), "decode": set()},
+        )
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", Request("stuck", 10, phase=Phase.DECODE))
         with patch.object(router.verifier, "start") as start:

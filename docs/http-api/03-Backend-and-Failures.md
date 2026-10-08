@@ -89,11 +89,13 @@ The router sizes each request's input before placement:
 | Text or chat, with `engine.tokenize` on and an exact-count endpoint in the dialect | Exact count from an engine |
 | Other input                                                                        | Character ratio            |
 
-A failed exact count puts that engine into count backoff for 1 second. Each further consecutive failure doubles the backoff, up to 30 seconds, and a successful count resets it.
+A failed exact count puts that engine into count backoff for 1 second. Each further consecutive failure doubles the backoff, up to 30 seconds, and a successful count resets it. The failure also counts as [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) against that engine.
+
+After a transient failure, the router moves the exact count to another live engine that has not failed it for this request. A request tries at most `serving.max_attempts` engines for its exact count, and these tries spend no retry credit. A non-transient failure, such as an HTTP 400 for the prompt, ends the count on its first engine.
 
 The exact count goes to the live engine outside count backoff that holds the fewest requests. When every live engine is in count backoff, the exact count goes to the live engine that holds the fewest requests.
 
-Tokenization failures return the [engine-fault mapping](#engine-failure-handling) status before placement.
+When the last exact count fails, or a count fails non-transiently, the request returns the [engine-fault mapping](#engine-failure-handling) status before placement.
 
 ### Breaker ejection and readmission
 
@@ -127,9 +129,27 @@ A fresh attempt starts for a transient fault before visible output when:
 - the original request deadline permits it
 - retry budget remains
 
+A retry reserves one retry credit when it is scheduled and spends that credit when its prefill dispatches. A retry that ends before dispatch returns its credit.
+
 Each retry receives:
 
 - fresh backend request IDs
 - a new KV handoff
+- placement that avoids the engines that failed earlier attempts
+
+#### Retry placement
+
+A retry excludes, for each role, every engine whose leg failed earlier in the same request:
+
+| Failed leg                         | Engines the retry excludes                     |
+| ---------------------------------- | ---------------------------------------------- |
+| Prefill                            | That prefill engine                            |
+| Decode, before visible output      | That decode engine and the attempt's producer  |
+
+A decode failure before visible output also excludes the producer because its KV handoff can cause the failure. The exclusion lasts for that request only.
+
+When no live engine outside the exclusions can take a role's legs, the request ends with HTTP `503` and error type `backend_unavailable`. Under [aggregate fallback](../concepts/02-Role-Control.md#aggregate-fallback), an unpinned engine of the other role can still take them. The journal records reason `no_engine`, and the final attempt entry carries `retry_reason` `not_dispatched`.
+
+In `predictive` mode, a retry skips the TTFT check and runs the decode admission check. [Retry pricing](../configuration/02-Serving-and-Role-Control.md#retry-pricing) gives the check a retry passes.
 
 With `recovery.failure_quarantine_s` above `0`, placement of the engine whose leg failed follows [failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine).

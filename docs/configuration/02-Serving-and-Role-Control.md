@@ -82,17 +82,21 @@ The check admits the request when all three of these pass:
 | KV tokens | Peak request KV during the checked request's hold fits the sum of the live decode engines' [decode KV token bounds](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request is alone in decode during its hold |
 | TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents still generating on that engine, or the request misses `slo.tpot_s` on every idle decode engine                               |
 
+#### Retry pricing
+
+In `predictive` mode, only an original request's first attempt is priced against the TTFT check. An attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
+
 ### 4.2 Waiting, phase concurrency, and retries
 
 | Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
 | `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline.                                                      | Positive when `serving.queue_capacity` is positive                         |
-| `serving.handoff_timeout_s`   | `0.0`      | Maximum KV handoff age from the start of the prefill HTTP request, with `0` meaning the request deadline.             | Positive and below the verified backend KV lease when queueing or retrying |
+| `serving.handoff_timeout_s`   | `0.0`      | Maximum KV handoff age from the start of the prefill HTTP request, with `0` meaning the request deadline.             | Positive and below the verified backend KV lease when queueing            |
 | `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                                              | At least `serving.retry_base_s`                                            |
-| `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit.                              | Zero or greater                                                            |
+| `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit when it dispatches.          | Zero or greater                                                            |
 | `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request.                                                                 | 0 to 1                                                                     |
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                                       | At least 1                                                                 |
 | `serving.max_response_bytes`  | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output. | At least 1                                                                 |
@@ -130,6 +134,8 @@ Any of these ends the request:
 - starvation of the local data connection pool
 - cancellation
 - any failure after visible output
+
+A retry avoids each engine whose leg failed earlier in the same request. When no engine remains for a role, the request ends with HTTP 503. [Retries](../http-api/03-Backend-and-Failures.md#retries) gives the placement rules, the retry credit and the exact-count failures that move between engines.
 
 The original request deadline covers tokenization, queue wait, retry backoff, engine work, and client writes.
 

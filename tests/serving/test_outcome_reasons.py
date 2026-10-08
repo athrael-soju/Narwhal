@@ -10,6 +10,7 @@ import httpx
 from narwhal.engines.client import EngineError
 from narwhal.serving.outcomes import OUTCOME_REASONS, failure_reason
 from narwhal.serving.policy import ServingPolicy
+from tests.fixtures import fleet
 from tests.serving.test_http_accounting import HttpHarness
 
 FAST_RETRY = {"handoff_timeout_s": 5, "retry_base_s": 0.001, "retry_cap_s": 0.001}
@@ -146,6 +147,9 @@ class OutcomeReasonTests(HttpHarness):
         self.assertEqual(row["reason"], "engine_error")
 
     async def test_attempt_failures_hold_one_entry_per_attempt(self):
+        # Each retry needs an engine whose leg has not failed.
+        self.cfg = fleet(self.root, engines=("e0", "e1", "e2", "e3"), pinned=("e3",))
+        self.cfg.tokenize, self.cfg.admission, self.cfg.failure_quarantine_s = False, "open", 0
         self.cfg.serving = ServingPolicy(max_attempts=3, **FAST_RETRY)
         self.prefill_statuses = [503, 503, 503]
         client = self.client()
@@ -172,20 +176,26 @@ class OutcomeReasonTests(HttpHarness):
             (failure["attempt"], failure["reason"], failure["retry_reason"]),
             (1, "queue", "not_dispatched"),
         )
+        # A retry skips the TTFT price and refuses only on its decode check.
         self.prefill_statuses = [503]
-        prices = iter((0.0, 20.0))
+        checks = iter((None, "tpot"))
         with (
-            patch.object(scheduler, "prefill_admission_price", side_effect=lambda *a: next(prices)),
+            patch.object(scheduler, "prefill_admission_price", return_value=0.0) as price,
             patch.object(scheduler, "cheapest_own_prefill", return_value=1),
+            patch(
+                "narwhal.serving.execution.decode_refusal", side_effect=lambda *a, **k: next(checks)
+            ) as decode,
         ):
             self.assertEqual((await self.post(client)).status_code, 429)
+        self.assertIsNone(decode.call_args_list[1].kwargs["ttft_s"])
+        self.assertEqual(price.call_count, 2)
         row = self.terminal_rows()[-1]
         self.assertEqual(
             [(f["attempt"], f["retry_reason"]) for f in row["attempt_failures"]],
             [(1, "allowed"), (2, "not_dispatched")],
         )
         self.assertEqual(row["attempt_failures"][1]["phase"], "admission")
-        self.assertEqual(self.router.outcome_reasons["refused"], {"queue": 2})
+        self.assertEqual(self.router.outcome_reasons["refused"], {"queue": 1, "tpot": 1})
         self.assert_released()
 
     async def test_a_request_served_after_a_retry_is_counted(self):

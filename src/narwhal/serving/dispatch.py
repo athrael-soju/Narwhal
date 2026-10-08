@@ -30,8 +30,13 @@ class Dispatcher:
         for queue in self.queues.values():
             queue.notify()
 
-    async def place(self, request: Request, *, deadline: float) -> Instance:
-        """Select after waiting; the caller must reserve before its next await."""
+    async def place(
+        self, request: Request, *, deadline: float, exclude: set[str] | None = None
+    ) -> Instance:
+        """Select after waiting, never from `exclude`.
+
+        The caller must reserve before its next await.
+        """
         router = self.router
         phase = request.phase
         role = Role.PREFILL if phase is Phase.PREFILL else Role.DECODE
@@ -48,7 +53,7 @@ class Dispatcher:
                 for inst in router.scheduler.role_pool(role, live)
                 if not (limit := seats(router, inst.iid))
                 or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
-            }
+            } - (exclude or set())
             if not candidates:
                 return None
             excluded = set(router.monitor.instances) - candidates

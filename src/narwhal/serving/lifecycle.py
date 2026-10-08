@@ -43,6 +43,10 @@ class RequestLifecycle:
         self.attempts = 0
         # Whether the current attempt reached prefill dispatch.
         self.dispatched = False
+        # Whether a scheduled retry holds a retry credit it spends at dispatch.
+        self.retry_reserved = False
+        # Engines whose prefill or decode leg failed for this request, by role.
+        self.failed_engines: dict[str, set[str]] = {"prefill": set(), "decode": set()}
         self.decode_attempts = 0
         self.attempt_failures: list[dict[str, Any]] = []
         self.output_started = False
@@ -135,6 +139,9 @@ class RequestLifecycle:
         """Count an actual prefill dispatch, keeping retries out of arrivals."""
         self.attempts += 1
         self.dispatched = True
+        if self.retry_reserved:
+            self.retry_reserved = False
+            self.router.retry_budget.spend()
         self.router.prefill_attempts += 1
         if self.attempts > 1:
             self.router.retry_attempts += 1
@@ -180,6 +187,7 @@ class RequestLifecycle:
         self.attempt_failures.append(failure)
         router.attempt_failures[self.phase, reason] += 1
         if not self.dispatched:
+            self.release_retry_credit()
             failure["retry_reason"] = "not_dispatched"
             return False
         if self.output_started:
@@ -195,9 +203,10 @@ class RequestLifecycle:
         if self.router._clock() + delay >= self.deadline:
             failure["retry_reason"] = "original_deadline"
             return False
-        if not self.router.retry_budget.acquire():
+        if not self.router.retry_budget.reserve():
             failure["retry_reason"] = "shared_budget"
             return False
+        self.retry_reserved = True
         failure.update(retry_scheduled=True, retry_reason="allowed", backoff_s=delay)
         self.release()
         self.dispatched = False
@@ -208,6 +217,12 @@ class RequestLifecycle:
         await self.wait(lambda: asyncio.sleep(delay))
         self.phase = "admission"
         return True
+
+    def release_retry_credit(self) -> None:
+        """Return the credit of a retry that ends before it dispatches."""
+        if self.retry_reserved:
+            self.retry_reserved = False
+            self.router.retry_budget.release()
 
     def finish(
         self,
@@ -233,6 +248,7 @@ class RequestLifecycle:
         self.terminal = terminal
         router = self.router
         req = self.request
+        self.release_retry_credit()
         if not self.sized:
             router.unsized_offered += 1
         # Unread bodies other than invalid ones stay visible as unsized demand.

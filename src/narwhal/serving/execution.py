@@ -90,6 +90,14 @@ def _failed_leg(
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
+    # A retry avoids every engine whose leg failed for this request.
+    if decode:
+        state.failed_engines["decode"].add(inst.iid)
+        # Without output, the producer's KV handoff may be the fault.
+        if not state.output_started and state.prefill_iid is not None:
+            state.failed_engines["prefill"].add(state.prefill_iid)
+    else:
+        state.failed_engines["prefill"].add(inst.iid)
     router.verifier.leg_failed(
         inst.iid,
         exc,
@@ -111,6 +119,7 @@ async def _place(
     if prefill and not control_ready(router):
         raise NoEngine("router control is fenced")
     req.phase = Phase.PREFILL if prefill else Phase.DECODE
+    failed = state.failed_engines["prefill" if prefill else "decode"]
     if router.cfg.serving.queue_capacity:
         state.phase = "queue"
         began = router._clock()
@@ -120,7 +129,9 @@ async def _place(
                 if handoff_deadline is not None
                 else state.deadline
             )
-            inst = await state.wait(lambda: router.dispatcher.place(req, deadline=deadline))
+            inst = await state.wait(
+                lambda: router.dispatcher.place(req, deadline=deadline, exclude=failed)
+            )
             return inst
         except QueueExpired as exc:
             if (
@@ -136,7 +147,7 @@ async def _place(
     if router.lifecycle_blocked:
         raise NoEngine(router.lifecycle_blocked)
     try:
-        return router.scheduler.schedule(req)
+        return router.scheduler.schedule(req, exclude=set(failed))
     except RuntimeError as exc:
         raise NoEngine(
             "no schedulable engines" + (" after prefill" if not prefill else "")
@@ -173,11 +184,18 @@ async def _prepare_once(
     for role in (Role.PREFILL, Role.DECODE):
         if not router.scheduler.role_placeable(role):
             raise NoEngine(f"no schedulable engines for the {role.value} role")
+        failed = state.failed_engines[role.value]
+        if failed and not router.scheduler.role_pool(
+            role, router.scheduler.live_instances(exclude=failed)
+        ):
+            raise NoEngine(f"no {role.value} engine remains after failed attempts")
     prefill = await _place(state, prefill=True)
     # Open admission records the same price without enforcing it.
     priced = _price_admission(state, prefill)
+    retry = state.attempts > 0
     if router.cfg.admission == "predictive":
-        if not router.scheduler.meets_slo(
+        # A retry already passed the TTFT price; it rechecks decode as a fresh handoff.
+        if not retry and not router.scheduler.meets_slo(
             req, (0.0, priced), ttft_margin=router.cfg.admission_margin
         ):
             raise PlacementRefused(priced, cause=ttft_refusal_cause(router, req, priced))
@@ -185,7 +203,7 @@ async def _prepare_once(
             router.scheduler,
             req,
             ready_s=router.scheduler.prefill_ready_s(req, prefill),
-            ttft_s=priced,
+            ttft_s=None if retry else priced,
             ttft_margin=router.cfg.admission_margin,
             seats=decode_seat_map(router),
             expected_output=router.controller.demand.output_estimator(),

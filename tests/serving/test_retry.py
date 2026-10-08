@@ -60,14 +60,28 @@ class RetryTests(unittest.TestCase):
     def test_fractional_replenishment_crosses_exact_credit_boundary(self):
         """Ten tenths buy exactly one retry after the initial credit is spent."""
         budget = RetryBudget(1, 0.1)
-        self.assertTrue(budget.acquire())
+        self.assertTrue(budget.reserve())
+        budget.spend()
         for _ in range(9):
             budget.succeeded()
         self.assertEqual(budget.available, 0.9)
-        self.assertFalse(budget.acquire())
+        self.assertFalse(budget.reserve())
         budget.succeeded()
-        self.assertTrue(budget.acquire())
+        self.assertTrue(budget.reserve())
+        budget.spend()
         self.assertEqual((budget.available, budget.spent, budget.denied), (0, 2, 1))
+
+    def test_a_reserved_credit_is_spent_at_dispatch_or_released(self):
+        """A reservation holds a credit until its retry dispatches or ends first."""
+        budget = RetryBudget(1, 0.5)
+        self.assertTrue(budget.reserve())
+        self.assertEqual((budget.available, budget.spent), (0, 0))
+        self.assertFalse(budget.reserve())
+        budget.release()
+        self.assertEqual((budget.available, budget.spent, budget.reserved), (1, 0, 0))
+        self.assertTrue(budget.reserve())
+        budget.spend()
+        self.assertEqual((budget.available, budget.spent, budget.reserved), (0, 1, 0))
 
     def test_refills_stop_at_capacity_and_zero_capacity_stays_empty(self):
         """Successful requests preserve the configured bucket ceiling."""
@@ -78,5 +92,5 @@ class RetryTests(unittest.TestCase):
                     budget.succeeded()
                 self.assertEqual(budget.available, capacity)
                 for _ in range(capacity):
-                    self.assertTrue(budget.acquire())
-                self.assertFalse(budget.acquire())
+                    self.assertTrue(budget.reserve())
+                self.assertFalse(budget.reserve())
