@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy
+from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy, decode_refusal
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -187,6 +187,9 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertGreater(wait, 0.0)
         self.assertTrue(decode_admits(self.scheduler, self.request, ttft_s=budget - 2 * wait))
         self.assertFalse(decode_admits(self.scheduler, self.request, ttft_s=budget - wait / 2))
+        self.assertEqual(
+            decode_refusal(self.scheduler, self.request, ttft_s=budget - wait / 2), "slot_wait"
+        )
 
     def test_the_admission_margin_widens_the_budget_for_a_decode_wait(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
@@ -205,7 +208,7 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"r{index}", 500, phase=Phase.DECODE, wanted_len=20_000)
             )
         request = Request("new", 500, wanted_len=20_000)
-        self.assertFalse(decode_admits(self.scheduler, request, ttft_s=0.0))
+        self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "kv_capacity")
         occupancy = decode_occupancy(self.scheduler, request.input_len)
         self.assertLess(len(occupancy.residents), occupancy.slots)
 
@@ -325,8 +328,8 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"b{index}", 200_000, phase=Phase.DECODE, wanted_len=2_000)
             )
         request = Request("new", 200_000, wanted_len=1)
-        self.assertFalse(decode_admits(self.scheduler, request))
-        self.assertTrue(decode_admits(self.scheduler, request, ready_s=2.0))
+        self.assertEqual(decode_refusal(self.scheduler, request), "tpot")
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=2.0))
 
     def test_admission_reuses_the_controller_estimate_snapshot(self):
         demand = self.router.controller.demand

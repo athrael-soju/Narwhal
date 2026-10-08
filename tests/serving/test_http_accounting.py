@@ -12,7 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.prefix import CacheNamespace
-from narwhal.scheduling.scheduler.occupancy import decode_admits
+from narwhal.scheduling.scheduler.occupancy import decode_refusal
 from narwhal.serving import execution
 from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
@@ -225,7 +225,7 @@ class HttpAccountingTests(HttpHarness):
         async def prepare(*args, **kwargs):
             attempts.append(1)
             if len(attempts) % 2 == 0:
-                raise PlacementRefused(2.0, decode=True)
+                raise PlacementRefused(2.0, cause="slot_wait")
             return await real(*args, **kwargs)
 
         with patch.object(execution, "prepare_attempt", side_effect=prepare):
@@ -420,7 +420,9 @@ class HttpAccountingTests(HttpHarness):
         response = await self.post(client)
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["retry-after"], "1")
-        self.assertEqual(self.terminal_rows()[-1]["refused_cause"], "decode")
+        row = self.terminal_rows()[-1]
+        self.assertEqual((row["refused_cause"], row["reason"]), ("decode", "slot_wait"))
+        self.assertEqual(self.router.outcome_reasons["refused"], {"slot_wait": 1})
         self.assertEqual(self.calls, [])
         for index in range(limit):
             self.router.monitor.finished(decode.iid, f"d{index}")
@@ -433,7 +435,7 @@ class HttpAccountingTests(HttpHarness):
         prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
         self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
         with (
-            patch.object(execution, "decode_admits", wraps=decode_admits) as gate,
+            patch.object(execution, "decode_refusal", wraps=decode_refusal) as gate,
             patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
         ):
             self.assertEqual((await self.post(client)).status_code, 200)

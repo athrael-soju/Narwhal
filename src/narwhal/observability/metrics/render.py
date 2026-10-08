@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from .control import render_controller, render_decode_floor, render_demand
 from .engines import render_availability, render_health, render_roles, render_work
-from .exposition import Histogram
+from .exposition import Histogram, render_histograms
 from .runtime import render_runtime
 from .traffic import render_admission, render_outcomes, render_refusals, render_slo
 
@@ -14,7 +16,7 @@ def render(
     ttft: Histogram,
     tpot: Histogram,
     seat: Histogram | None = None,
-    queue_wait: Histogram | None = None,
+    queue_wait: Mapping[str, Histogram] | None = None,
 ) -> str:
     """Render a `/narwhal/state` snapshot plus the latency histograms."""
     out: list[str] = []
@@ -40,7 +42,9 @@ def render(
             "How long an admission seat was held",
         )
     if queue_wait is not None:
-        out += queue_wait.render(
-            "narwhal_queue_wait_seconds", "Total admission and dispatch wait per original request"
+        out += render_histograms(
+            "narwhal_queue_wait_seconds",
+            "Wait per original request at each stage it reached: admission, prefill or decode seat",
+            list(queue_wait.values()),
         )
     return "\n".join(out) + "\n"

@@ -49,6 +49,8 @@ The router keeps these admission counters:
 | `refused`          | Global predictive refusal                                          |
 | `invalid_requests` | HTTP `400`, `404`, or `413` refusal before admission               |
 
+Journal rows and `/metrics` split `rejected` and `refused` by [outcome reason](../telemetry/01-Journal.md#outcome-reasons).
+
 ## Streaming and response assembly
 
 ### Streaming responses

@@ -96,7 +96,18 @@ class RequestStreamResponse(StreamingResponse):
                 raise
             if finished:
                 return
-            self.lifecycle.finish("expired", error="original request deadline expired", status=504)
+            # Before headers, ingress answers the expiry with its own `request_expired` body.
+            error_type, error_code = (
+                (self.lifecycle.phase, "expired") if started else ("request_expired", None)
+            )
+            self.lifecycle.finish(
+                "expired",
+                error="original request deadline expired",
+                status=504,
+                reason="deadline",
+                error_type=error_type,
+                error_code=error_code,
+            )
             if not started or self.lifecycle.terminal != "expired":
                 raise
             await self.aclose()

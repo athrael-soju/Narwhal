@@ -206,7 +206,34 @@ def decode_admits(
     seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> bool:
-    """Return whether `request` starts decode within its TTFT budget and fits decode.
+    """Return whether `request` starts decode within its TTFT budget and fits decode."""
+    return (
+        decode_refusal(
+            scheduler,
+            request,
+            ready_s=ready_s,
+            ttft_s=ttft_s,
+            ttft_margin=ttft_margin,
+            concurrency=concurrency,
+            seats=seats,
+            expected_output=expected_output,
+        )
+        is None
+    )
+
+
+def decode_refusal(
+    scheduler: GlobalScheduler,
+    request: Request,
+    *,
+    ready_s: float = 0.0,
+    ttft_s: float | None = None,
+    ttft_margin: float = 0.0,
+    concurrency: int = 0,
+    seats: Mapping[str, int] | None = None,
+    expected_output: Callable[[Request], int] | None = None,
+) -> str | None:
+    """Return the decode check `request` fails, `slot_wait`, `kv_capacity` or `tpot`, else None.
 
     `ttft_s` is the projected TTFT at prefill completion `ready_s`, `ready_s` by default.
     The request takes a free slot behind earlier handoffs, and `ttft_margin` widens the
@@ -222,7 +249,7 @@ def decode_admits(
         expected_output=estimate,
     )
     if occupancy is None:
-        return True
+        return None
     started, ((start, end, request_kv),) = occupancy.schedule(
         occupancy.slots, (decode_span(request, ready_s, occupancy.step, estimate),)
     )
@@ -232,7 +259,7 @@ def decode_admits(
         (0.0, (ready_s if ttft_s is None else ttft_s) + wait),
         ttft_margin=ttft_margin,
     ):
-        return False
+        return "slot_wait"
     # A hold ending as it starts adds no peak, and KV that fits with every hold fits every peak.
     end = start if end == math.inf else end
     if (
@@ -246,7 +273,7 @@ def decode_admits(
             (*occupancy.residents, *started), start, end, held=1, held_kv=request_kv
         )
         if peak > 1 and peak_kv > occupancy.tokens:
-            return False
+            return "kv_capacity"
     decode = replace(request, phase=Phase.DECODE)
     health = scheduler.health
     probation = health.probation_set() if health is not None else None
@@ -260,11 +287,11 @@ def decode_admits(
     if any(
         fits(inst.iid, len(inst.decode), occupancy.held[inst.iid]) for inst in occupancy.engines
     ):
-        return True
+        return None
     for inst in occupancy.engines:
         generating = [
             r.length for rid, r in inst.decode.items() if occupancy.ends[inst.iid, rid] > start
         ]
         if len(generating) < len(inst.decode) and fits(inst.iid, len(generating), sum(generating)):
-            return True
-    return not any(fits(inst.iid, 0, 0) for inst in occupancy.engines)
+            return None
+    return "tpot" if any(fits(inst.iid, 0, 0) for inst in occupancy.engines) else None

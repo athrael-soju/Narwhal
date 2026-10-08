@@ -48,6 +48,17 @@ class AdmissionOut(BaseModel):
     refused: int
     # Engine-authentication mode: boundary or engine-credential.
     engine_auth: str = "boundary"
+    # `serving.admission` and `serving.admission_margin`.
+    mode: str = "predictive"
+    margin: float = 0.0
+
+
+class AttemptFailuresOut(BaseModel):
+    """Failed attempts in one request phase for one failure reason."""
+
+    phase: str
+    reason: str
+    count: int
 
 
 class EngineSeatsOut(BaseModel):
@@ -78,6 +89,8 @@ class ServingOut(BaseModel):
     retry_credits: float = 0.0
     retry_credits_spent: int = 0
     retry_denied: int = 0
+    served_after_retry: int = 0
+    attempt_failures: list[AttemptFailuresOut] = Field(default_factory=list)
     decode_tokens_observed: int = 0
     upstream_seconds: dict[str, float] = Field(default_factory=dict)
 
@@ -493,6 +506,8 @@ class StateOut(BaseModel):
     ha: HAOut
     lifecycle: LifecycleViewOut
     admission: AdmissionOut
+    # Failed, refused, rejected and expired counts by reason.
+    outcome_reasons: dict[str, dict[str, int]] = Field(default_factory=dict)
     seats: SeatsOut = Field(default_factory=SeatsOut)
     serving: ServingOut = Field(default_factory=ServingOut)
     http_pools: HttpPoolsOut

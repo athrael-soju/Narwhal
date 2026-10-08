@@ -12,6 +12,7 @@ A new router process starts each series at these values:
 | --- | --- |
 | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
 | `narwhal_retry_credits` | `serving.retry_budget`. |
+| Reason series of `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, and `narwhal_expired_total` | Handoff values on resume and standby takeover, otherwise `0`. A handoff without reason counts restores its totals under `unclassified`. |
 | Histograms and every other counter | `0`. |
 
 Split journal rows by `run` when comparing restored outcome counts with offered counts.
@@ -23,10 +24,11 @@ The router exports these series on `/metrics`, grouped by area:
 | Area | Series |
 | --- | --- |
 | Contract identity | `narwhal_contract_info` |
+| Admission mode | `narwhal_admission_info`, `narwhal_admission_margin` |
 | Router lease | `narwhal_router_ready`, `narwhal_router_lease_epoch` |
 | Engine monitoring | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`, `narwhal_event_loop_busy_seconds_total` |
 | Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
-| Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total` |
+| Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_attempt_failures_total`, `narwhal_served_after_retry_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total` |
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | HTTP retention | `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water` |
 | Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`, `narwhal_engine_seats` |
@@ -38,6 +40,23 @@ The router exports these series on `/metrics`, grouped by area:
 | Consolidation | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total` |
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
+
+## Reading outcome reasons
+
+These series split request outcomes and failed attempts by their [journal reason](01-Journal.md#outcome-reasons):
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
+| `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
+| `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
+| `narwhal_expired_total` | counter | `reason` | Deadline expiries: `deadline` or `queue_timeout`. |
+| `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
+| `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
+| `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |
+| `narwhal_admission_margin` | gauge | | `serving.admission_margin`. |
+
+The four outcome counters export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the total that `/narwhal/state` reports.
 
 ## Reading engine lifecycle gauges
 
@@ -68,7 +87,7 @@ These metrics track role changes and pool load:
 | --- | --- | --- |
 | `narwhal_ttft_seconds` | Arrival to prefill completion. | `slo.ttft_s` |
 | `narwhal_tpot_seconds` | Mean seconds per output token after prefill completion. | `slo.tpot_s` |
-| `narwhal_queue_wait_seconds` | Total admission and dispatch wait per original request. | `serving.queue_timeout_s`, or `slo.ttft_s` when it is `0` |
+| `narwhal_queue_wait_seconds` | Wait per original request at each `stage` it reached: `admission`, `prefill` seat, or `decode` seat. | `serving.queue_timeout_s`, or `slo.ttft_s` when it is `0` |
 | `narwhal_seat_seconds` | Time a request holds an admission seat. | `slo.ttft_s` |
 
 Bucket boundaries, as multiples of the bucket scale:
@@ -79,7 +98,7 @@ Bucket boundaries, as multiples of the bucket scale:
 
 Histogram aggregation:
 
-- Compute quantiles from bucket rates grouped by `instance`, `slo` and `le`.
+- Compute quantiles from bucket rates grouped by `instance`, `slo` and `le`, and by `stage` for `narwhal_queue_wait_seconds`.
 - Divide a `narwhal_ttft_seconds` or `narwhal_tpot_seconds` quantile by the `narwhal_slo_seconds` series with the matching `metric`, `instance` and `slo`.
 
 ## Inspecting retained attainment evidence

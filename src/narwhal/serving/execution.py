@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -15,26 +16,20 @@ from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import SseEvent, rewrite_sse, sse_token_bearing, sse_token_ids
 from ..runtime.standby import control_ready
-from ..scheduling.scheduler.occupancy import decode_admits
+from ..scheduling.prefill import prefill_seconds
+from ..scheduling.scheduler.occupancy import decode_refusal
 from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
-from .lifecycle import RequestExpired, RequestLifecycle
-from .records import forward_headers, refuse_request
+from .lifecycle import RequestLifecycle
+from .outcomes import NoEngine, RequestExpired, ResponseLimitExceeded, failure_reason
+from .records import forward_headers, refuse_request, ttft_refusal_cause
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
 from .seats import decode_seat_map
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
-
-
-class NoEngine(Exception):
-    """No eligible engine can receive this phase in queue-free serving."""
-
-
-class ResponseLimitExceeded(ValueError):
-    """A response exceeds local retention policy, without backend failure evidence."""
 
 
 @dataclass
@@ -137,7 +132,7 @@ async def _place(
                 ) from exc
             raise
         finally:
-            state.queue_wait_s += router._clock() - began
+            state.waited("prefill" if prefill else "decode", router._clock() - began)
     if router.lifecycle_blocked:
         raise NoEngine(router.lifecycle_blocked)
     try:
@@ -146,6 +141,25 @@ async def _place(
         raise NoEngine(
             "no schedulable engines" + (" after prefill" if not prefill else "")
         ) from exc
+
+
+def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:
+    """Return the projected TTFT on `prefill` and record its parts on the request."""
+    router, req = state.router, state.request
+    placement = router.scheduler.prefill_admission_price(req, prefill)
+    elapsed = max(0.0, router._clock() - state.arrived)
+    profile = router.profiles.get(prefill.iid)
+    own = prefill_seconds(profile, req) if profile is not None else None
+    finite = math.isfinite(placement)
+    state.admission_price = {
+        "attempt": state.attempts + 1,
+        # Resident prefill work and any probation penalty on the placed engine.
+        "backlog_s": placement - own if finite and own is not None else None,
+        "own_prefill_s": own,
+        "elapsed_s": elapsed,
+        "price_s": placement + elapsed if finite else None,
+    }
+    return placement + elapsed
 
 
 async def _prepare_once(
@@ -160,14 +174,14 @@ async def _prepare_once(
         if not router.scheduler.role_placeable(role):
             raise NoEngine(f"no schedulable engines for the {role.value} role")
     prefill = await _place(state, prefill=True)
+    # Open admission records the same price without enforcing it.
+    priced = _price_admission(state, prefill)
     if router.cfg.admission == "predictive":
-        priced = router.scheduler.prefill_admission_price(req, prefill)
-        priced += max(0.0, router._clock() - state.arrived)
         if not router.scheduler.meets_slo(
             req, (0.0, priced), ttft_margin=router.cfg.admission_margin
         ):
-            raise PlacementRefused(priced)
-        if not decode_admits(
+            raise PlacementRefused(priced, cause=ttft_refusal_cause(router, req, priced))
+        check = decode_refusal(
             router.scheduler,
             req,
             ready_s=router.scheduler.prefill_ready_s(req, prefill),
@@ -175,8 +189,9 @@ async def _prepare_once(
             ttft_margin=router.cfg.admission_margin,
             seats=decode_seat_map(router),
             expected_output=router.controller.demand.output_estimator(),
-        ):
-            raise PlacementRefused(priced, decode=True)
+        )
+        if check is not None:
+            raise PlacementRefused(priced, cause=check)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
@@ -227,9 +242,7 @@ async def prepare_attempt(
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     """Settle the request and keep its error response for streamed and buffered replies."""
     response = (
-        refuse_request(state, exc.predicted_s, decode=exc.decode)
-        if isinstance(exc, PlacementRefused)
-        else _failure(state, exc)
+        refuse_request(state, exc) if isinstance(exc, PlacementRefused) else _failure(state, exc)
     )
     state.outcome["response"] = response
     return response
@@ -252,7 +265,17 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         public_detail = "Invalid non-streaming upstream response"
     else:
         public_detail = "Upstream request failed"
-    state.finish("expired" if expired else "failed", error=detail, status=status)
+    terminal = "expired" if expired else "failed"
+    # After output starts, the stream's terminal event carries the phase and terminal state.
+    error_type, error_code = (state.phase, terminal) if state.output_started else (kind, kind)
+    state.finish(
+        terminal,
+        error=detail,
+        status=status,
+        reason=failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline),
+        error_type=error_type,
+        error_code=error_code,
+    )
     state.outcome["public_error"] = public_detail
     return JSONResponse(
         status_code=status,

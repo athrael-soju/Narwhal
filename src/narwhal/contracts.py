@@ -41,7 +41,7 @@ CONTRACTS: dict[str, Contract] = {
     LIFECYCLE: Contract("narwhal.lifecycle"),
     JOURNAL: Contract("narwhal.journal"),
     STATE: Contract("narwhal.state"),
-    METRICS: Contract("narwhal.metrics"),
+    METRICS: Contract("narwhal.metrics", 2),
     ATTESTATION: Contract("narwhal.attestation"),
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),

@@ -25,7 +25,7 @@ Each Narwhal interface uses one public namespace:
 | OpenAPI schema       | `/openapi.json`                                                                |
 | Schema browser       | `/docs`                                                                        |
 
-The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="1"} 1`.
+The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="2"} 1`.
 
 ## HTTP contracts
 

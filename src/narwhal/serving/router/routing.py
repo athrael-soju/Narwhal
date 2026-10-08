@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +20,7 @@ from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
-from ...observability.metrics.exposition import slo_histogram
+from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
 from ...profiling.calibration import CalibrationCheck
 from ...profiling.store import ProfileStore
 from ...runtime.lifecycle.manager import LifecycleManager
@@ -35,7 +37,8 @@ from ..admission import AdmissionQueue, QueueExpired, QueueFull
 from ..completion import output_cap
 from ..dispatch import Dispatcher
 from ..execution import request_error, serve_request
-from ..lifecycle import RequestExpired, RequestLifecycle
+from ..lifecycle import QUEUE_STAGES, RequestLifecycle
+from ..outcomes import OUTCOME_REASONS, RequestExpired, failure_reason
 from ..records import overloaded_response
 from ..retry import RetryBudget
 from ..saturation import SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
@@ -172,7 +175,10 @@ class NarwhalRouter:
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock)
         # The journal writes this into its run metadata when it opens.
-        journal.extra = {"token_accounting": self._token_accounting()}
+        journal.extra = {
+            "token_accounting": self._token_accounting(),
+            "admission": self._admission_mode(),
+        }
         self.served = 0
         self.slo_met = 0
         self.failed = 0
@@ -193,6 +199,13 @@ class NarwhalRouter:
         self.sequence_limits: dict[str, int] = {}
         self.unsized_offered = 0
         self.expired = 0
+        # Outcome counts by reason for each counted terminal state.
+        self.outcome_reasons: dict[str, Counter[str]] = {
+            terminal: Counter() for terminal in OUTCOME_REASONS
+        }
+        # Attempt failures by request phase and failure reason.
+        self.attempt_failures: Counter[tuple[str, str]] = Counter()
+        self.served_after_retry = 0
         self.prefill_attempts = 0
         self.decode_attempts = 0
         self.retry_attempts = 0
@@ -225,7 +238,13 @@ class NarwhalRouter:
         self.dispatcher = Dispatcher(self)
         self.monitor.on_capacity_change = self.dispatcher.notify
         self.retry_budget = RetryBudget(cfg.serving.retry_budget, cfg.serving.retry_replenish)
-        self.queue_wait = slo_histogram(cfg.serving.queue_timeout_s or cfg.slo.ttft_s)
+        wait_scale = cfg.serving.queue_timeout_s or cfg.slo.ttft_s
+        self.queue_wait = {
+            stage: Histogram(
+                buckets_for(wait_scale), labels={"stage": stage, "slo": slo_label(wait_scale)}
+            )
+            for stage in QUEUE_STAGES
+        }
         # Request ID to the time it took an admission seat.
         self._seat_since: dict[str, float] = {}
         self.seat = slo_histogram(cfg.slo.ttft_s)
@@ -239,6 +258,10 @@ class NarwhalRouter:
     def profile_set_diff(self) -> tuple[list[str], list[str]]:
         """Return (missing, extra) engine IDs between the fleet and profile store."""
         return self.profiles.engine_set_diff(self.monitor.instances)
+
+    def _admission_mode(self) -> dict[str, Any]:
+        """Return the admission mode and the TTFT budget margin it applies."""
+        return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
 
     def attested(self, iid: str, payload: Any) -> None:
         """Record the sequence limit from an engine's verified attestation."""
@@ -271,7 +294,14 @@ class NarwhalRouter:
         state.resolve_demand()
         invalid = request_error(self, body)
         if invalid is not None:
-            state.finish("invalid", error="unsupported request", status=invalid.status_code)
+            error = json.loads(bytes(invalid.body))["error"]
+            state.finish(
+                "invalid",
+                error="unsupported request",
+                status=invalid.status_code,
+                error_type=error["type"],
+                error_code=error.get("code"),
+            )
             invalid.headers["x-request-id"] = rid
             return invalid
         # Local sizing keeps rejected traffic visible without issuing probes.
@@ -297,13 +327,19 @@ class NarwhalRouter:
                 )
             finally:
                 self.monitor.waiting.pop(rid, None)
-                state.queue_wait_s += self._clock() - began
+                state.waited("admission", self._clock() - began)
             state.phase = "admission"
             response = await serve_request(state, endpoint, body, headers)
         except QueueFull:
-            response = overloaded_response(state, "server_overloaded_error")
-        except (QueueExpired, RequestExpired):
-            state.finish("expired", error="queue deadline expired", status=504)
+            response = overloaded_response(state, "server_overloaded_error", reason="queue_full")
+        except (QueueExpired, RequestExpired) as exc:
+            state.finish(
+                "expired",
+                error="queue deadline expired",
+                status=504,
+                reason=failure_reason(exc, deadline_passed=self._clock() >= state.deadline),
+                error_type="queue_expired",
+            )
             response = JSONResponse(
                 status_code=504,
                 content={"error": {"message": "queue deadline expired", "type": "queue_expired"}},
@@ -312,7 +348,7 @@ class NarwhalRouter:
             state.finish("cancelled")
             raise
         except BaseException:
-            state.finish("failed", error="request execution failed", status=500)
+            state.finish("failed", error="request execution failed", status=500, reason="internal")
             raise
         response.headers["x-request-id"] = rid
         return response
@@ -361,6 +397,15 @@ class NarwhalRouter:
                 "rejected": self.rejected,
                 "refused": self.refused,
                 "engine_auth": self.cfg.engine_auth_mode(),
+                **self._admission_mode(),
+            },
+            # Every known reason, zero until it occurs.
+            "outcome_reasons": {
+                terminal: {
+                    reason: counts[reason]
+                    for reason in (*OUTCOME_REASONS[terminal], *sorted(counts))
+                }
+                for terminal, counts in self.outcome_reasons.items()
             },
             # Per-engine prefill and decode seats and their inputs.
             "seats": seats_snapshot(self),
@@ -374,6 +419,11 @@ class NarwhalRouter:
                 "retry_credits": self.retry_budget.available,
                 "retry_credits_spent": self.retry_budget.spent,
                 "retry_denied": self.retry_budget.denied,
+                "served_after_retry": self.served_after_retry,
+                "attempt_failures": [
+                    {"phase": phase, "reason": reason, "count": count}
+                    for (phase, reason), count in sorted(self.attempt_failures.items())
+                ],
                 "decode_tokens_observed": self.decode_tokens_observed,
                 "upstream_seconds": self.upstream_seconds.copy(),
             },
