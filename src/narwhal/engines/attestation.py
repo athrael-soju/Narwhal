@@ -238,6 +238,35 @@ def attested_sequence_limit(payload: Any) -> int | None:
     return None
 
 
+def attested_kv_lease(payload: Any) -> int | None:
+    """Return `kv_lease_duration` from the NIXL connector configuration an attestation records.
+
+    The value is the seconds a producer holds a finished prefill's KV blocks for its consumer.
+    """
+    launch = payload.get("launch") if isinstance(payload, dict) else None
+    args = launch.get("args") if isinstance(launch, dict) else None
+    if not isinstance(args, list):
+        return None
+    for index, arg in enumerate(args):
+        if not isinstance(arg, str):
+            continue
+        name, equals, value = arg.partition("=")
+        if name != "--kv-transfer-config":
+            continue
+        if not equals:
+            value = args[index + 1] if index + 1 < len(args) else ""
+        try:
+            config = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        extra = config.get("kv_connector_extra_config") if isinstance(config, dict) else None
+        lease = extra.get("kv_lease_duration") if isinstance(extra, dict) else None
+        if config.get("kv_connector") != "NixlConnector" or type(lease) is not int or lease < 1:
+            return None
+        return lease
+    return None
+
+
 def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
     """Digest the contract and launch evidence that fix an engine's timing."""
     return canonical_digest({"contract": contract, "launch": launch})

@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
-from ...engines.attestation import attested_sequence_limit
+from ...engines.attestation import attested_kv_lease, attested_sequence_limit
 from ...engines.client import EngineClient
 from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
@@ -37,6 +37,7 @@ from ..admission import AdmissionQueue, QueueExpired, QueueFull
 from ..completion import output_cap
 from ..dispatch import Dispatcher
 from ..execution import request_error, serve_request
+from ..handoff import snapshot as handoff_snapshot
 from ..lifecycle import QUEUE_STAGES, RequestLifecycle
 from ..outcomes import INFLIGHT_LIMIT_MESSAGE, OUTCOME_REASONS, RequestExpired, failure_reason
 from ..records import overloaded_response
@@ -202,6 +203,8 @@ class NarwhalRouter:
         self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
         # Engine ID to the `--max-num-seqs` its verified attestation reports.
         self.sequence_limits: dict[str, int] = {}
+        # Engine ID to the NIXL producer lease in seconds from its verified attestation.
+        self.kv_leases: dict[str, int] = {}
         self.unsized_offered = 0
         self.expired = 0
         # Outcome counts by reason for each counted terminal state.
@@ -269,12 +272,15 @@ class NarwhalRouter:
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
 
     def attested(self, iid: str, payload: Any) -> None:
-        """Record the sequence limit from an engine's verified attestation."""
-        limit = attested_sequence_limit(payload)
-        if limit is None:
-            self.sequence_limits.pop(iid, None)
-        else:
-            self.sequence_limits[iid] = limit
+        """Record the sequence limit and KV lease from an engine's verified attestation."""
+        for values, value in (
+            (self.sequence_limits, attested_sequence_limit(payload)),
+            (self.kv_leases, attested_kv_lease(payload)),
+        ):
+            if value is None:
+                values.pop(iid, None)
+            else:
+                values[iid] = value
 
     def _token_accounting(self) -> str:
         """Return the decode token-accounting mode the fleet's dialect guarantees."""
@@ -419,6 +425,8 @@ class NarwhalRouter:
             },
             # Per-engine prefill and decode seats and their inputs.
             "seats": seats_snapshot(self),
+            # Per-engine attested KV lease and the handoff bound derived from it.
+            "handoff": handoff_snapshot(self),
             "serving": {
                 "http_retained": self.ingress_inflight,
                 "http_retained_limit": self.max_concurrent + self.cfg.serving.queue_capacity,

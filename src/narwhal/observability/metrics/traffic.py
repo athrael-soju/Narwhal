@@ -140,6 +140,25 @@ def render_admission(state: dict) -> list[str]:
             for phase in ("prefill", "decode")
         ],
     )
+    handoff = state.get("handoff") or {}
+    for name, field_name, help_text in (
+        ("kv_lease_seconds", "kv_lease_s", "Producer KV lease from the engine's attestation"),
+        (
+            "handoff_bound_seconds",
+            "bound_s",
+            "Time after prefill completion by which decode must reach its engine",
+        ),
+    ):
+        out += metric_lines(
+            f"narwhal_{name}",
+            help_text,
+            "gauge",
+            [
+                ({"iid": iid}, entry[field_name])
+                for iid, entry in sorted(handoff.items())
+                if entry.get(field_name) is not None
+            ],
+        )
     out += metric_lines(
         "narwhal_upstream_seconds_total",
         "Summed HTTP leg duration including transfer and failed attempts; not GPU execution time",

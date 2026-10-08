@@ -13,11 +13,10 @@ from narwhal.serving.policy import ServingPolicy
 from tests.fixtures import fleet
 from tests.serving.test_http_accounting import HttpHarness
 
-FAST_RETRY = {"handoff_timeout_s": 5, "retry_base_s": 0.001, "retry_cap_s": 0.001}
+FAST_RETRY = {"retry_base_s": 0.001, "retry_cap_s": 0.001}
 QUEUED = {
     "queue_capacity": 2,
     "queue_timeout_s": 5.0,
-    "handoff_timeout_s": 5.0,
 }
 
 

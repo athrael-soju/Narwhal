@@ -14,8 +14,6 @@ class ServingPolicy:
 
     queue_capacity: int = 0
     queue_timeout_s: float = 0.0
-    # Conservative local age bound, shorter than the verified producer KV lease.
-    handoff_timeout_s: float = 0.0
     max_attempts: int = 1
     retry_base_s: float = 0.1
     retry_cap_s: float = 1.0
@@ -39,7 +37,6 @@ class ServingPolicy:
                 raise ValueError(f"serving.{name} must be a positive integer")
         for name in (
             "queue_timeout_s",
-            "handoff_timeout_s",
             "retry_base_s",
             "retry_cap_s",
             "retry_replenish",
@@ -53,11 +50,6 @@ class ServingPolicy:
             raise ValueError("serving retry delays require 0 < retry_base_s <= retry_cap_s")
         if self.retry_replenish > 1:
             raise ValueError("serving.retry_replenish must not exceed one credit per completion")
-        if self.queue_capacity and self.handoff_timeout_s <= 0:
-            raise ValueError(
-                "queued serving requires positive serving.handoff_timeout_s "
-                "below the verified backend KV lease"
-            )
 
     def retry_policy(self) -> RetryPolicy:
         """Return the per-request attempt and delay policy."""

@@ -55,9 +55,7 @@ class InflightLimitTests(HttpHarness):
 
     async def test_queued_requests_extend_retention_but_not_the_limit(self):
         self.cfg.max_connections = 1
-        self.cfg.serving = ServingPolicy(
-            queue_capacity=1, queue_timeout_s=5.0, handoff_timeout_s=5.0
-        )
+        self.cfg.serving = ServingPolicy(queue_capacity=1, queue_timeout_s=5.0)
         client = self.client()
         tasks = await self.fill(client, 1)
         tasks.append(asyncio.create_task(self.post(client)))

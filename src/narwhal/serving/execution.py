@@ -21,6 +21,7 @@ from ..scheduling.scheduler.occupancy import decode_refusal
 from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
+from .handoff import handoff_bound
 from .lifecycle import RequestLifecycle
 from .outcomes import NoEngine, RequestExpired, ResponseLimitExceeded, failure_reason
 from .records import forward_headers, refuse_request, ttft_refusal_cause
@@ -139,7 +140,7 @@ async def _place(
                 and router._clock() >= handoff_deadline < state.deadline
             ):
                 raise HandoffExpired(
-                    "KV handoff expired while waiting for decode capacity"
+                    "KV handoff bound reached while waiting for a decode seat"
                 ) from exc
             raise
         finally:
@@ -229,11 +230,9 @@ async def _prepare_once(
     state.prefilled_at = router._clock()
     router.scheduler.record_answer(prefill.iid, "prefill")
     router.monitor.first_token(prefill.iid, req.rid)
-    handoff_s = router.cfg.serving.handoff_timeout_s
-    # The handoff age counts from local prefill dispatch, before the remote lease starts.
-    expires_at = began + handoff_s if handoff_s else None
-    if expires_at is not None and router._clock() >= expires_at:
-        raise HandoffExpired("prefill consumed the configured KV handoff age allowance")
+    # The producer's lease starts when prefill completes.
+    bound = handoff_bound(router, prefill.iid)
+    expires_at = None if bound is None else state.prefilled_at + bound
     decode = await _place(state, prefill=False, handoff_deadline=expires_at)
     state.reserve(decode)
     state.decode_iid = decode.iid
@@ -268,14 +267,18 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
 
 def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     status = _status_of(exc)
-    expired = isinstance(exc, RequestExpired | QueueExpired)
+    expired = isinstance(exc, RequestExpired | QueueExpired | HandoffExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
     kind = "expired" if expired else state.phase
+    if isinstance(exc, HandoffExpired):
+        kind = "handoff_expired"
     if isinstance(exc, NoEngine):
         kind = "backend_unavailable" if state.attempts else "no_schedulable_engines"
     if isinstance(exc, NoEngine):
         public_detail = "Engine capacity is unavailable"
-    elif isinstance(exc, RequestExpired | QueueExpired | HandoffExpired):
+    elif isinstance(exc, HandoffExpired):
+        public_detail = "KV handoff expired before decode dispatch"
+    elif isinstance(exc, RequestExpired | QueueExpired):
         public_detail = "Request deadline expired"
     elif isinstance(exc, ResponseLimitExceeded):
         public_detail = "Response exceeds the configured limit"

@@ -47,7 +47,7 @@ class ConfigTests(unittest.TestCase):
         for source in ("tests/data/fleet.json", "config/fleet.example.json"):
             with self.subTest(source=source):
                 cfg = FleetConfig.load(ROOT / source)
-                cfg.serving = ServingPolicy(max_attempts=2, handoff_timeout_s=5)
+                cfg.serving = ServingPolicy(max_attempts=2)
                 cfg.save(self.path)
                 restored = FleetConfig.load(self.path)
                 self.assertEqual(restored, cfg)
@@ -382,18 +382,13 @@ class ConfigTests(unittest.TestCase):
             ({"retry_base_s": 0}, "retry delays"),
             ({"retry_cap_s": 0.01}, "retry delays"),
             ({"retry_replenish": 1.01}, "retry_replenish"),
-            (
-                {
-                    "queue_capacity": 1,
-                    "queue_timeout_s": 1,
-                },
-                "handoff_timeout_s",
-            ),
         ):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
                 replace(policy, **changes).validate()
-        # Each attempt prefills afresh, so retries need no handoff bound with the queue off.
-        replace(policy, max_attempts=3).validate()
+        # Retries and the queue need no configured handoff age; the attested lease bounds it.
+        replace(policy, max_attempts=3, queue_capacity=1, queue_timeout_s=1).validate()
+        with self.assertRaisesRegex(ValueError, "unknown serving key 'handoff_timeout_s'"):
+            self.load({**self.raw, "serving": {"handoff_timeout_s": 5}})
         with self.assertRaisesRegex(ValueError, "max_attempts"):
             self.load({**self.raw, "serving": {"max_attempts": 4}})
         with self.assertRaisesRegex(ValueError, "max_attempts"):

@@ -34,6 +34,7 @@ The state document carries these top-level fields:
 | `admission`               | Router and phase occupancy, queue state, limits, and admission mode                       |
 | `outcome_reasons`         | `failed`, `refused`, `rejected`, and `expired` counts by [reason](../telemetry/01-Journal.md#outcome-reasons) |
 | `seats`                   | Each engine's prefill and decode seats and the inputs that set them                      |
+| `handoff`                 | Each engine's attested KV lease and the handoff bound derived from it                    |
 | `serving`                 | Retained HTTP work, attempts, and retry state                                             |
 | `http_pools`              | Data and control connection pools, and the pool-wait timeout                              |
 | `pools`                   | Engines grouped by prefill or decode role                                                 |
@@ -226,6 +227,14 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `engines.<iid>.prefill`     | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit           |
 | `engines.<iid>.decode`      | Decode seats, `0` for no limit                                                                          |
 | `engines.<iid>.sequence_limit` | `--max-num-seqs` from the engine's verified attestation, `null` when the launch arguments omit it    |
+
+`handoff` fields, one entry per engine:
+
+| Field                  | Meaning                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `<iid>.kv_lease_s`     | `kv_lease_duration` from the engine's verified attestation, `null` when the attestation records none |
+| `<iid>.renewal_s`      | The connector's lease-renewal interval, `kv_lease_s // 6`                                            |
+| `<iid>.bound_s`        | [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) for requests this engine prefills |
 
 `serving` fields:
 

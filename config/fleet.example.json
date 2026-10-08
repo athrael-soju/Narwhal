@@ -1,6 +1,6 @@
 {
   "schema": "narwhal.fleet",
-  "schema_version": 2,
+  "schema_version": 3,
   "_deployment": "Provision one model and one hardware/TP shape through site automation, then bind its running engines here.",
   "model": "<served-model>",
   "hardware": {

@@ -95,9 +95,9 @@ class EngineSeatTests(unittest.TestCase):
         self.assertTrue(decode_admits(scheduler, request, ttft_s=budget, seats={"e3": 0}))
 
     def test_queueing_needs_only_its_capacity_and_wait(self):
-        ServingPolicy(queue_capacity=4, queue_timeout_s=1.0, handoff_timeout_s=1.0).validate()
+        ServingPolicy(queue_capacity=4, queue_timeout_s=1.0).validate()
         with self.assertRaisesRegex(ValueError, "queue_timeout_s"):
-            ServingPolicy(queue_capacity=4, handoff_timeout_s=1.0).validate()
+            ServingPolicy(queue_capacity=4).validate()
 
 
 class SeatHttpTests(HttpHarness):
@@ -116,9 +116,7 @@ class SeatHttpTests(HttpHarness):
         self.assertIn(f'narwhal_engine_seats{{iid="e0",phase="prefill"}} {prefill}', text)
 
     async def test_a_queued_request_waits_for_a_free_prefill_seat(self):
-        self.cfg.serving = ServingPolicy(
-            queue_capacity=2, queue_timeout_s=0.05, handoff_timeout_s=5.0
-        )
+        self.cfg.serving = ServingPolicy(queue_capacity=2, queue_timeout_s=0.05)
         # The original deadline bounds a prefill-seat wait.
         self.cfg.request_timeout_s = 0.2
         client = self.client()

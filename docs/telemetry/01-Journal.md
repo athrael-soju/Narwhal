@@ -148,6 +148,7 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `rejected` | `not_ready` | The router is not ready to serve; `readiness_reason` gives the cause. |
 | `expired` | `deadline` | The original request deadline, `serving.request_timeout_s`, expires. |
 | `expired` | `queue_timeout` | The admission wait reaches `serving.queue_timeout_s` before the original deadline. |
+| `expired` | `handoff` | The KV handoff reaches the producer's [handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch. |
 | `failed` | `no_engine` | Zero live engines can take the prefill or decode leg, router control is fenced, or a whole-wave hold blocks placement. |
 | `failed` | `engine_unreachable` | The connection to the engine fails or times out. |
 | `failed` | `engine_connection` | An established engine connection fails or breaks the HTTP protocol. |
@@ -156,7 +157,6 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `failed` | `engine_rejected` | The engine returns another HTTP `4xx` status. |
 | `failed` | `engine_error` | The engine returns another error status, an error event, a stream without `[DONE]`, or output without valid token IDs. |
 | `failed` | `local_pool` | The wait for a router data connection reaches `engine.pool_timeout_s`. |
-| `failed` | `handoff_expired` | The KV handoff age reaches `serving.handoff_timeout_s`. |
 | `failed` | `invalid_response` | An engine response fails validation, such as a malformed KV handoff descriptor or an unassemblable non-streaming response. |
 | `failed` | `response_limit` | The response exceeds `serving.max_response_bytes` or the pre-output metadata limit. |
 | `failed` | `internal` | The router raises an unexpected error. |
