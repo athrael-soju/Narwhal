@@ -27,7 +27,7 @@ Command-line options take [precedence](../configuration/06-Fabric-and-Operations
 | `--port PORT` | `8000` | Uvicorn bind port. |
 | `--log-level LEVEL` | `info` | Logging threshold: `critical`, `error`, `warning`, `info`, `debug`, or `trace`. |
 | `--journal PATH` | `journal.jsonl` beside `profiles.path` | Request journal, append mode. |
-| `--max-concurrent N` | Config `serving.max_connections` | Router admission limit, from 1 to `serving.max_connections` inclusive. |
+| `--max-concurrent N` | Config `serving.max_connections` | Router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections` inclusive. |
 | `--graceful-timeout SECONDS` | Config `serving.graceful_timeout_s` | Uvicorn shutdown drain time, in whole seconds, zero or greater. |
 | `--resume` | Config `recovery.resume` | Restore roles, breaker holds, and counters from the last state handoff. |
 

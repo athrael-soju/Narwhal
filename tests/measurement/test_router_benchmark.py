@@ -55,10 +55,10 @@ SATURATED = json.dumps(
         }
     }
 )
-RETENTION = json.dumps(
+INFLIGHT_LIMIT = json.dumps(
     {
         "error": {
-            "message": "HTTP retention limit reached",
+            "message": "router in-flight limit reached",
             "type": "server_overloaded_error",
         }
     }
@@ -107,7 +107,7 @@ def rows_and_samples():
         row("completed", 100.0, 0.01, 2.0, ttft=0.5, events=16),
         row("completed", 100.5, 0.07, 2.5, ttft=0.4, events=16),
         row("http_error", 101.0, 0.0, 0.01, status=429, body=SATURATED),
-        row("http_error", 101.5, 0.0, 0.02, status=429, body=RETENTION),
+        row("http_error", 101.5, 0.0, 0.02, status=429, body=INFLIGHT_LIMIT),
         row("http_error", 102.0, 0.0, 0.03, status=503, body="upstream failure"),
     ]
     samples = {
@@ -495,7 +495,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(
             result["rejections_by_reason"],
             [
-                {"status": 429, "reason": "HTTP retention limit reached", "count": 1},
+                {"status": 429, "reason": "router in-flight limit reached", "count": 1},
                 {"status": 429, "reason": "router saturated", "count": 1},
                 {"status": 503, "reason": "unparsed", "count": 1},
             ],
@@ -545,12 +545,12 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(
             result["rejections_by_reason"],
             [
-                {"status": 429, "reason": "HTTP retention limit reached", "count": 1},
                 {
                     "status": 429,
                     "reason": "cheapest placement prices TTFT at",
                     "count": 2,
                 },
+                {"status": 429, "reason": "router in-flight limit reached", "count": 1},
                 {"status": 429, "reason": "router saturated", "count": 1},
                 {"status": 503, "reason": "unparsed", "count": 1},
             ],

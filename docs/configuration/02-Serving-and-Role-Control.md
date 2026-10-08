@@ -12,14 +12,31 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
 | `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
-| `serving.max_connections`    | `512`          | Global admitted-request limit and data connection pool size.           | At least 1                                             |
-| `engine.control_connections` | `0`            | Control connection pool size, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
+| `serving.max_connections`    | `512`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
+| `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 In `predictive` mode, the router returns HTTP 429 when a request fails the time to first token (TTFT) check or the decode admission check. `open` mode disables predictive refusals.
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
 Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy.
+
+#### In-flight limit
+
+The in-flight limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`. At most that many requests hold an admission seat at once. With `serving.queue_capacity` above 0, up to that many more requests wait for a seat.
+
+The router counts a completion request against the limit from its arrival, before it reads the body, until its response ends. When the requests it counts reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429, error type `server_overloaded_error` and message `router in-flight limit reached`. It sends the 429 before parsing the body and counts the request as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers) with rejection reason `inflight_limit`.
+
+`/metrics` reports the admission seats in use as `narwhal_admission_inflight`, the limit as `narwhal_admission_inflight_limit`, and the counted requests as `narwhal_http_retained` against `narwhal_http_retained_limit`.
+
+#### Router saturation
+
+The router also answers HTTP 429 with rejection reason `saturated` when either signal reaches a quarter of `slo.ttft_s`:
+
+- event-loop lag, the lateness of a 50 ms wake-up probe
+- the median time to count tokens and hash prefixes for at least 8 requests sized in the last 2 seconds
+
+`/metrics` reports the signals as `narwhal_router_loop_lag_seconds` and `narwhal_request_sizing_delay_seconds`, and their threshold as `narwhal_saturation_threshold_seconds`.
 
 #### Decode admission check
 
@@ -117,10 +134,6 @@ The mean input length covers requests the router sized within the last `controll
 The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
-
-The admission limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`.
-
-The router retains at most the admission limit plus `serving.queue_capacity` completion requests. At that ceiling, the router answers a new request with HTTP 429 before parsing its body and counts it as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers).
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 

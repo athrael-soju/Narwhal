@@ -123,7 +123,7 @@ Options that default to a fleet field:
 
 | Option                       | Default                      | Description                                                     |
 | ---------------------------- | ---------------------------- | --------------------------------------------------------------- |
-| `--max-concurrent N`         | `serving.max_connections`    | Router admission capacity, from 1 to `serving.max_connections`. |
+| `--max-concurrent N`         | `serving.max_connections`    | Router [in-flight limit](02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections`. |
 | `--graceful-timeout SECONDS` | `serving.graceful_timeout_s` | Uvicorn shutdown drain time in zero or more whole seconds.      |
 | `--resume`                   | `recovery.resume`            | Turns resume on.                                                |
 

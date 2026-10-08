@@ -208,8 +208,11 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `queue_high_water` | Peak queue depth                                                      |
 | `waiting_prefill`  | Requests waiting for prefill dispatch                                 |
 | `waiting_decode`   | Requests waiting for decode dispatch                                  |
-| `limit`            | `--max-concurrent` when set, otherwise `serving.max_connections`      |
-| `rejected`         | HTTP `429` capacity refusals and HTTP `503` router-readiness refusals |
+| `limit`            | [In-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit): `--max-concurrent` when set, otherwise `serving.max_connections` |
+| `loop_lag_s`       | Latest router event-loop wake-up lateness                              |
+| `sizing_delay_s`   | Median request sizing delay over the last 2 seconds, `0` below 8 sized requests |
+| `saturation_threshold_s` | Value of `loop_lag_s` or `sizing_delay_s` at which the router answers a saturation 429, a quarter of `slo.ttft_s` |
+| `rejected`         | HTTP `429` in-flight-limit and saturation rejections, and HTTP `503` router-readiness rejections |
 | `refused`          | Requests refused by global predictive admission                       |
 | `engine_auth`      | `boundary` or `engine-credential`                                     |
 | `mode`             | `serving.admission`: `predictive` or `open`                           |
@@ -228,8 +231,8 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 
 | Field                      | Meaning                                                       |
 | -------------------------- | ------------------------------------------------------------- |
-| `http_retained`            | Completion requests the router retains                        |
-| `http_retained_limit`      | Limit on retained requests                                    |
+| `http_retained`            | Completion requests counted against the in-flight limit, from arrival until the response ends |
+| `http_retained_limit`      | In-flight limit plus `serving.queue_capacity`                 |
 | `http_retained_high_water` | Peak number of retained requests                              |
 | `prefill_attempts`         | Cumulative prefill dispatches                                 |
 | `decode_attempts`          | Cumulative decode dispatches                                  |

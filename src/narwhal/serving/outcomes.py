@@ -36,7 +36,9 @@ FAILED_REASONS = (
     "response_limit",
     "internal",
 )
-REJECTED_REASONS = ("retention_limit", "saturated", "queue_full", "not_ready", "unclassified")
+REJECTED_REASONS = ("inflight_limit", "saturated", "not_ready", "unclassified")
+# The one message of every 429 at the router in-flight limit.
+INFLIGHT_LIMIT_MESSAGE = "router in-flight limit reached"
 EXPIRED_REASONS = ("deadline", "queue_timeout")
 REFUSED_CAUSES = ("queue", "prompt", "aggregate_unpriced", "slot_wait", "kv_capacity", "tpot")
 OUTCOME_REASONS = {
