@@ -31,7 +31,8 @@ The state document carries these top-level fields:
 | `monitoring`              | Timing and failure state of the engine monitoring loop                                    |
 | `ha`                      | High-availability state: readiness, standby status, lease, and failover block             |
 | `lifecycle`               | Drain state, resident work, and lifecycle events                                          |
-| `admission`               | Router and phase occupancy, queue state, and limits                                       |
+| `admission`               | Router and phase occupancy, queue state, limits, and admission mode                       |
+| `outcome_reasons`         | `failed`, `refused`, `rejected`, and `expired` counts by [reason](../telemetry/01-Journal.md#outcome-reasons) |
 | `serving`                 | Retained HTTP work, attempts, and retry state                                             |
 | `http_pools`              | Data and control connection pools, and the pool-wait timeout                              |
 | `pools`                   | Engines grouped by prefill or decode role                                                 |
@@ -62,7 +63,7 @@ The state document carries these top-level fields:
 | `flips_refused`           | The 20 most recent refused role changes                                                   |
 | `flips`                   | The most recent role changes, up to `flip_history`                                        |
 
-After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, and `admission.refused` from the state handoff. Its other counters start at zero.
+After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero.
 
 <div class="grid cards" markdown>
 
@@ -210,6 +211,8 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `rejected`         | HTTP `429` capacity refusals and HTTP `503` router-readiness refusals |
 | `refused`          | Requests refused by global predictive admission                       |
 | `engine_auth`      | `boundary` or `engine-credential`                                     |
+| `mode`             | `serving.admission`: `predictive` or `open`                           |
+| `margin`           | `serving.admission_margin`                                            |
 
 `serving` fields:
 
@@ -224,6 +227,8 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `retry_credits`            | Available shared retry credit                                 |
 | `retry_credits_spent`      | Shared retry credit consumed                                  |
 | `retry_denied`             | Retries that the retry budget refused                         |
+| `served_after_retry`       | Completed requests whose final attempt followed a failed one  |
+| `attempt_failures`         | Failed attempts as `phase`, `reason`, and `count` rows        |
 | `decode_tokens_observed`   | Decode tokens the router observed                             |
 | `upstream_seconds`         | Total time in engine HTTP calls by phase, across all attempts |
 

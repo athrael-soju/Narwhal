@@ -35,7 +35,7 @@ Interface versions in this release:
 | Engine lifecycle | `narwhal.lifecycle` | 1 | `lifecycle` |
 | Request journal | `narwhal.journal` | 1 | `journal` |
 | Live state | `narwhal.state` | 1 | `state` |
-| Prometheus metrics | `narwhal.metrics` | 1 | `metrics` |
+| Prometheus metrics | `narwhal.metrics` | 2 | `metrics` |
 | Command result | `narwhal.command-result` | 1 | `command_result` |
 | Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
@@ -64,4 +64,6 @@ When the manifests are identical, installed-release documents pass validation on
 
 ## Schema version changes
 
-Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped.
+Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped. For Prometheus metrics, a new label on an existing series also needs a new version.
+
+Metrics version `2` adds the `reason` label to `narwhal_failed_total`, `narwhal_rejected_total`, and `narwhal_expired_total`, the `cause` label to `narwhal_refused_total`, and the `stage` label to `narwhal_queue_wait_seconds`.

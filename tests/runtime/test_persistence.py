@@ -92,6 +92,23 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e3", self.router.scheduler.ejected)
         self.assertEqual(self.router.verifier.sources["e3"], {"e0"})
 
+    def test_restore_keeps_reason_counts_summing_to_their_totals(self):
+        """Saved reasons transfer, and counts a handoff leaves unexplained stay unclassified."""
+        self.router.outcome_reasons["failed"]["engine_error"] = 2
+        self.router.outcome_reasons["refused"]["prompt"] = 1
+        self.router.failed, self.router.refused = 2, 1
+        doc = state.snapshot(self.router)
+        doc["counters"]["rejected"] = 3
+        replacement = create_app(self.cfg).state.router
+        self.addAsyncCleanup(replacement.engines.aclose)
+        self.assertTrue(state.apply(replacement, doc).applied)
+        self.assertEqual(replacement.outcome_reasons["failed"], {"engine_error": 2})
+        self.assertEqual(replacement.outcome_reasons["refused"], {"prompt": 1})
+        self.assertEqual(replacement.outcome_reasons["rejected"], {"unclassified": 3})
+        self.assertEqual(replacement.outcome_reasons["expired"], {})
+        metrics = replacement.state()["outcome_reasons"]["rejected"]
+        self.assertEqual((metrics["unclassified"], metrics["not_ready"]), (3, 0))
+
     def test_a_restored_suspect_stays_live_while_it_alone_serves_its_role(self):
         for pinned, ejected in ((True, False), (False, True)):
             with self.subTest(pinned=pinned):

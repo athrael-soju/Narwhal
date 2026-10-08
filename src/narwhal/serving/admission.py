@@ -17,16 +17,16 @@ class QueueFull(Exception):
 
 
 class PlacementRefused(Exception):
-    """The cheapest placement exceeds the predictive admission budget."""
+    """The cheapest placement exceeds the predictive admission budget.
 
-    def __init__(self, predicted_s: float, *, decode: bool = False) -> None:
-        super().__init__(
-            "every live decode engine is at its decode capacity"
-            if decode
-            else f"cheapest placement prices TTFT at {predicted_s:.2f}s"
-        )
+    `cause` is `queue`, `prompt` or `aggregate_unpriced` for the TTFT check, or the failed
+    decode check: `slot_wait`, `kv_capacity` or `tpot`.
+    """
+
+    def __init__(self, predicted_s: float, *, cause: str) -> None:
+        super().__init__(f"{cause} refusal; cheapest placement prices TTFT at {predicted_s:.2f}s")
         self.predicted_s = predicted_s
-        self.decode = decode
+        self.cause = cause
 
 
 class QueueExpired(Exception):

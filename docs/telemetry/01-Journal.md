@@ -27,7 +27,7 @@ Terminal and event rows carry these fields:
 Build metadata row:
 
 ```json
-{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.3.1","git":"<commit>","source":"sha256:...","token_accounting":"token_ids"}}
+{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.3.1","git":"<commit>","source":"sha256:...","token_accounting":"token_ids","admission":{"mode":"predictive","margin":0.0}}}
 ```
 
 | Field | Meaning |
@@ -36,6 +36,7 @@ Build metadata row:
 | `git` | `git describe` output for a source checkout, null for an installed package. |
 | `source` | SHA-256 digest of the installed package's Python files. |
 | `token_accounting` | Decode-output accounting mode of the fleet's engine dialect. |
+| `admission` | `mode` from `serving.admission` and `margin` from `serving.admission_margin`. |
 
 ### Terminal request records
 
@@ -59,13 +60,19 @@ Each original completion request and its retries share one terminal row.
 | `cache_placement` | The prefill placement priced with [cache evidence](#cache-placement). |
 | `token_accounting` | `token_ids` for exact per-token identity, `unavailable` when the engine dialect omits token IDs. |
 | `refused`, `refused_cause` | `true` on a predictive refusal, with its [refusal cause](#refusal-causes). |
-| `rejected` | `true` on a capacity rejection. |
+| `rejected` | `true` on a capacity or router-readiness rejection. |
 | `expired` | `true` on an admission or total deadline expiry. |
 | `cancelled`, `cancelled_phase` | `true` on a client disconnect, with its phase: `admission`, `queue`, `backoff`, `prefill`, or `decode`. |
 | `terminal` | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`. |
+| `reason` | [Outcome reason](#outcome-reasons) on `failed`, `refused`, `rejected`, and `expired` rows. |
+| `status` | HTTP status of the router's response. |
+| `error_type`, `error_code` | `type` and `code` of the client error body or terminal stream event. |
+| `readiness_reason` | On a `not_ready` rejection, the reason `/ready` reports. |
 | `attempts`, `decode_attempts` | Prefill and decode dispatch counts for the original request. |
 | `attempt_failures` | One [entry](#attempt-failures) per failed attempt, retried or final. |
-| `queue_wait_s` | Total admission and dispatch wait. |
+| `queue_waits` | Seconds waited at each stage: `admission`, `prefill` seat, and `decode` seat. |
+| `queue_wait_s` | Sum of `queue_waits`. |
+| `admission_price` | The latest [prefill admission price](#admission-price) and its parts. |
 | `duration_s` | Complete request lifetime on the router clock. |
 | `decode_tokens_observed` | Decode tokens read across every attempt. |
 | `upstream_seconds` | Summed HTTP leg seconds per phase (`prefill`, `decode`) across every attempt, failed or successful. |
@@ -80,7 +87,15 @@ These conditions set a field to `0` or null:
 | Fewer than two measured output tokens | `tpot_s` and `decode_tpot_s` are null. |
 | Prefill incomplete | `ttft_s` and `tpot_s` are null. |
 | Zero visible output | `first_byte_s` is null. |
-| `terminal` is `completed` or `cancelled` | `error` is null. |
+| `terminal` is `completed` or `cancelled` | `error`, `error_type`, and `error_code` are null. |
+| `terminal` is `completed`, `invalid`, or `cancelled` | `reason` is null. |
+| A stream has sent output | `status` is `200`; a later error ends the stream with a terminal event. |
+| Cancelled before output | `status` is null. |
+| The client error body has no `code` | `error_code` is null. |
+| The request never reached a stage | That stage's `queue_waits` entry is null. |
+| The request ended before prefill placement | `admission_price` is null. |
+
+The `prefill` and `decode` seat waits apply with `serving.queue_capacity` above `0`.
 
 `cached_tokens` lists each engine that input sizing finds holding at least one leading prompt block before the final prompt token. A prefill-placement recheck drops a listed engine when it finds zero matching blocks on it.
 
@@ -114,7 +129,39 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `prompt` | The prompt's prefill alone exceeds the TTFT budget. |
 | `queue` | The prompt alone fits the TTFT budget, and the cheapest placement including queueing exceeds it. |
 | `aggregate_unpriced` | Every candidate engine carries decode work. |
-| `decode` | The request fails one of the three [decode admission checks](../configuration/02-Serving-and-Role-Control.md#decode-admission-check): slot wait, KV tokens or TPOT. |
+| `decode` | The request fails one of the three [decode admission checks](../configuration/02-Serving-and-Role-Control.md#decode-admission-check): slot wait, KV tokens or TPOT. `reason` names the failed check. |
+
+#### Outcome reasons
+
+`reason` takes these values. The router's [outcome counters](03-Metrics-and-Control.md#reading-outcome-reasons) carry the same values.
+
+| `terminal` | `reason` | Condition |
+| --- | --- | --- |
+| `refused` | `queue` | `refused_cause` is `queue`. |
+| `refused` | `prompt` | `refused_cause` is `prompt`. |
+| `refused` | `aggregate_unpriced` | `refused_cause` is `aggregate_unpriced`. |
+| `refused` | `slot_wait` | The projected TTFT plus the decode slot wait exceeds the TTFT budget. |
+| `refused` | `kv_capacity` | Peak decode KV tokens during the request's decode hold exceed live decode capacity. |
+| `refused` | `tpot` | Decode load pushes the request past `slo.tpot_s` on every live decode engine. |
+| `rejected` | `retention_limit` | The HTTP retention limit is full. |
+| `rejected` | `saturated` | Router event-loop lag or request-sizing time reaches a quarter of `slo.ttft_s`. |
+| `rejected` | `queue_full` | The admission queue is full. |
+| `rejected` | `not_ready` | The router is not ready to serve; `readiness_reason` gives the cause. |
+| `expired` | `deadline` | The original request deadline, `serving.request_timeout_s`, expires. |
+| `expired` | `queue_timeout` | The admission wait reaches `serving.queue_timeout_s` before the original deadline. |
+| `failed` | `no_engine` | Zero live engines can take the prefill or decode leg, router control is fenced, or a whole-wave hold blocks placement. |
+| `failed` | `engine_unreachable` | The connection to the engine fails or times out. |
+| `failed` | `engine_connection` | An established engine connection fails or breaks the HTTP protocol. |
+| `failed` | `engine_timeout` | The engine returns HTTP `504`, or a prefill, first-token, or between-token timeout expires. |
+| `failed` | `engine_overloaded` | The engine returns HTTP `408` or `429`. |
+| `failed` | `engine_rejected` | The engine returns another HTTP `4xx` status. |
+| `failed` | `engine_error` | The engine returns another error status, an error event, a stream without `[DONE]`, or output without valid token IDs. |
+| `failed` | `local_pool` | The wait for a router data connection reaches `engine.pool_timeout_s`. |
+| `failed` | `handoff_expired` | The KV handoff age reaches `serving.handoff_timeout_s`. |
+| `failed` | `invalid_response` | An engine response fails validation, such as a malformed KV handoff descriptor or an unassemblable non-streaming response. |
+| `failed` | `response_limit` | The response exceeds `serving.max_response_bytes` or the pre-output metadata limit. |
+| `failed` | `internal` | The router raises an unexpected error. |
+| any counted state | `unclassified` | Another HTTP status before dispatch, or a count restored from a state handoff without its reasons. |
 
 #### Attempt failures
 
@@ -124,16 +171,35 @@ Each `attempt_failures` entry carries these fields:
 | --- | --- |
 | `at` | Monotonic time of the failure. |
 | `attempt` | Attempt number. |
-| `phase` | Request phase. |
+| `phase` | Request phase: `admission`, `queue`, `prefill`, or `decode`. |
+| `reason` | [Outcome reason](#outcome-reasons) of the failure. |
 | `prefill_iid`, `decode_iid` | Engines of the failed attempt. |
 | `error_type`, `error_message`, `status` | Exception type, message cut at 240 characters, and status. |
 | `transient` | Transient classification. |
 | `output_started` | Whether client-visible output had started. |
 | `retry_scheduled` | Whether a retry was scheduled. |
-| `retry_reason` | `allowed`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. |
+| `retry_reason` | `allowed`, `not_dispatched`, `output_started`, `attempt_limit`, `non_transient`, `original_deadline`, or `shared_budget`. |
 | `backoff_s` | Scheduled backoff seconds. |
 
+An attempt starts at prefill placement and dispatches with its prefill leg. A failure before dispatch, such as a predictive refusal or a placement failure, ends the request in the undispatched attempt with `retry_reason: not_dispatched`. After a backoff, the request returns to the `admission` phase for its next attempt.
+
 `attempt_failures` holds at most `serving.max_attempts` entries. After a cancellation during backoff, the last entry keeps `retry_scheduled: true`.
+
+#### Admission price
+
+The router prices each attempt's prefill placement in both [admission modes](../configuration/02-Serving-and-Role-Control.md#41-global-admission). `predictive` mode refuses the request when `price_s` exceeds the TTFT budget, and `open` mode records the price without enforcing it.
+
+| Field | Meaning |
+| --- | --- |
+| `attempt` | Attempt the router priced. |
+| `backlog_s` | Resident prefill work and any probation penalty on the placed prefill engine. |
+| `own_prefill_s` | The request's own prefill on that engine, priced with its cache evidence. |
+| `elapsed_s` | Seconds from arrival to pricing. |
+| `price_s` | Projected TTFT: `backlog_s + own_prefill_s + elapsed_s`. |
+
+`backlog_s` and `price_s` are null when aggregate prefill has no calibrated price. `own_prefill_s` and `backlog_s` are null when the placed engine is outside the profile store.
+
+Compare `price_s` with `ttft_s` on completed rows to check the price against the observed TTFT.
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 
