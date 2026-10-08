@@ -17,6 +17,7 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tools.observability.start import readiness as observe_readiness
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -60,6 +61,46 @@ def panel_queries(element):
         query["spec"]["query"]["spec"]["expr"]
         for query in element["spec"]["data"]["spec"]["queries"]
     ]
+
+
+def titled(title):
+    """Return the dashboard panel with this title and its grid position."""
+    spec = dashboard()["spec"]
+    [name] = [name for name, item in spec["elements"].items() if item["spec"]["title"] == title]
+    [grid] = [
+        item["spec"]
+        for item in spec["layout"]["spec"]["items"]
+        if item["spec"]["element"]["name"] == name
+    ]
+    return spec["elements"][name]["spec"], grid
+
+
+def legend_queries(panel):
+    """Map each query's legend to its expression."""
+    return {
+        query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
+        for query in panel["data"]["spec"]["queries"]
+    }
+
+
+def override_colors(panel):
+    """Map each override matcher to the fixed colour it sets."""
+    return {
+        override["matcher"]["options"]: prop["value"]["fixedColor"]
+        for override in panel["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+        for prop in override["properties"]
+        if prop["id"] == "color"
+    }
+
+
+def alert_rules():
+    """Return each shipped alert rule's expression, duration and severity."""
+    text = (ROOT / "tools/observability/prometheus-alerts.yml").read_text()
+    rules = {}
+    for block in re.split(r"\n\s*- alert: ", text)[1:]:
+        name, _, body = block.partition("\n")
+        rules[name.strip()] = dict(re.findall(r"^\s+(expr|for|severity): (.+)$", body, re.M))
+    return rules
 
 
 class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
@@ -301,6 +342,188 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 for name in names:
                     self.assertIn(name, text)
                     self.assertIn(name, response.text)
+
+    async def test_dashboard_and_alert_queries_name_exported_metrics(self):
+        """Every Narwhal metric the dashboard or alerts query is a family on `/metrics`."""
+        response = await self.client.get("/metrics")
+        exported = set()
+        for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", response.text, re.M):
+            exported.add(name)
+            if kind == "histogram":
+                exported.update(f"{name}_{suffix}" for suffix in ("bucket", "sum", "count"))
+        expressions = [
+            *observe_readiness._expressions(dashboard()["spec"]),
+            *(rule["expr"] for rule in alert_rules().values()),
+        ]
+        queried = {name for expr in expressions for name in re.findall(r"\bnarwhal_\w+", expr)}
+        self.assertLessEqual(queried, exported)
+        # Engine panels read only the vLLM series the observability README lists.
+        readme = (ROOT / "tools/observability/README.md").read_text()
+        engine = {name for expr in expressions for name in re.findall(r"vllm:\w+", expr)}
+        self.assertTrue(engine)
+        for name in engine:
+            self.assertIn(f"`{name}`", readme)
+
+    def test_dashboard_charts_admission_queues_and_retries(self):
+        """Queue depth by stage, in-flight against its limit, and retry quota panels."""
+        scope = '{job="narwhal-router",instance=~"$router"}'
+        expected = {
+            "Queue depth": {
+                "admission": "narwhal_queued",
+                "prefill": "narwhal_waiting_prefill",
+                "decode": "narwhal_waiting_decode",
+            },
+            "Admission in-flight": {
+                "in-flight": "narwhal_admission_inflight",
+                "limit": "narwhal_admission_inflight_limit",
+            },
+            "Retries and early exits": {
+                "retry attempts": "narwhal_retry_attempts_total",
+                "retries denied": "narwhal_retry_denied_total",
+                "completed after retry": "narwhal_served_after_retry_total",
+                "ended before sizing": "narwhal_unsized_offered_total",
+            },
+            "Retry credits": {"available": "narwhal_retry_credits"},
+        }
+        for title, series in expected.items():
+            with self.subTest(title=title):
+                panel, _ = titled(title)
+                queries = legend_queries(panel)
+                self.assertEqual(set(queries), set(series))
+                for legend, metric in series.items():
+                    self.assertIn(f"{metric}{scope}", queries[legend])
+        queues, queue_grid = titled("Queue depth")
+        colors = override_colors(queues)
+        self.assertEqual(
+            (colors["admission"], colors["prefill"], colors["decode"]),
+            (
+                DASHBOARD_PALETTE["router delay"],
+                DASHBOARD_PALETTE["prefill"],
+                DASHBOARD_PALETTE["decode"],
+            ),
+        )
+        inflight, inflight_grid = titled("Admission in-flight")
+        limit = next(
+            override["properties"]
+            for override in inflight["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "limit"
+        )
+        self.assertIn(
+            {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}}, limit
+        )
+        self.assertEqual(override_colors(inflight)["limit"], DASHBOARD_PALETTE["warning"])
+        # Queue wait is a quantile per stage, beside seat time.
+        waiting, waiting_grid = titled("Request waiting time")
+        waits = legend_queries(waiting)
+        for stage, legend in (
+            ("admission", "admission wait p95"),
+            ("prefill", "prefill seat wait p95"),
+            ("decode", "decode seat wait p95"),
+        ):
+            self.assertIn("narwhal_queue_wait_seconds_bucket", waits[legend])
+            self.assertIn(f'stage="{stage}"', waits[legend])
+        self.assertIn("narwhal_seat_seconds_bucket", waits["seat time p95"])
+        # Admission and queue panels sit beside Pool pressure, retries beside waiting time.
+        _, pressure_grid = titled("Pool pressure")
+        _, retries_grid = titled("Retries and early exits")
+        _, credits_grid = titled("Retry credits")
+        for row in (
+            (pressure_grid, inflight_grid, queue_grid),
+            (waiting_grid, retries_grid, credits_grid),
+        ):
+            self.assertEqual({grid["y"] for grid in row}, {row[0]["y"]})
+            self.assertEqual([grid["x"] for grid in row], [0, 8, 16])
+        self.assertEqual(waiting_grid["y"], pressure_grid["y"] + pressure_grid["height"])
+
+    def test_dashboard_attributes_drops_and_failed_attempts_by_reason(self):
+        """Reason panels sit under Request outcomes and keep each outcome's colour."""
+        outcomes, outcome_grid = titled("Request outcomes")
+        outcome_colors = override_colors(outcomes)
+        dropped, dropped_grid = titled("Dropped requests by reason")
+        queries = legend_queries(dropped)
+        # Bar legend: (outcome, label, the outcome's series on Request outcomes).
+        bars = {
+            "refused: {{cause}}": ("refused", "cause", "refused (predictive)"),
+            "rejected: {{reason}}": ("rejected", "reason", "rejected (capacity)"),
+            "failed: {{reason}}": ("failed", "reason", "failed"),
+            "expired: {{reason}}": ("expired", "reason", "expired"),
+        }
+        self.assertEqual(set(queries), set(bars))
+        colors = override_colors(dropped)
+        for legend, (outcome, label, series) in bars.items():
+            with self.subTest(outcome=outcome):
+                expr = queries[legend]
+                self.assertTrue(
+                    expr.startswith(
+                        f"round(sum by({label}) (increase(narwhal_{outcome}_total"
+                        '{job="narwhal-router",instance=~"$router"}[$__range]))) > 0'
+                    ),
+                    expr,
+                )
+                self.assertEqual(colors[f"^{outcome}: "], outcome_colors[series])
+        for query in dropped["data"]["spec"]["queries"]:
+            self.assertTrue(query["spec"]["query"]["spec"]["instant"])
+        attempts, attempts_grid = titled("Failed attempts by reason")
+        [expr] = panel_queries({"spec": attempts})
+        self.assertIn("sum by(phase, reason) (increase(narwhal_attempt_failures_total{", expr)
+        colors = override_colors(attempts)
+        self.assertEqual(colors["^prefill: "], DASHBOARD_PALETTE["prefill"])
+        self.assertEqual(colors["^decode: "], DASHBOARD_PALETTE["decode"])
+        self.assertEqual(colors["^(admission|queue): "], DASHBOARD_PALETTE["router delay"])
+        for panel in (dropped, attempts):
+            self.assertEqual(panel["vizConfig"]["kind"], "bargauge")
+        # Request, attempt and producer engine read left to right under Request outcomes.
+        _, kv_grid = titled("Expired KV by producer")
+        row = (dropped_grid, attempts_grid, kv_grid)
+        self.assertEqual({grid["y"] for grid in row}, {outcome_grid["y"] + outcome_grid["height"]})
+        self.assertEqual([grid["x"] for grid in row], [0, 8, 16])
+
+    def test_dashboard_shows_expired_kv_per_producer_engine(self):
+        """The vLLM expired-KV counter is charted per engine in the expired colour."""
+        panel, _ = titled("Expired KV by producer")
+        self.assertEqual(
+            legend_queries(panel),
+            {
+                "{{iid}}": 'sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{job="engines",'
+                'iid=~"$iid"}[$__rate_interval]))'
+            },
+        )
+        color = panel["vizConfig"]["spec"]["fieldConfig"]["defaults"]["color"]
+        self.assertEqual(color, {"mode": "fixed", "fixedColor": DASHBOARD_PALETTE["severe"]})
+
+    def test_router_event_loop_stays_the_last_row(self):
+        spec = dashboard()["spec"]
+        _, loop = titled("Router event loop")
+        self.assertEqual(
+            loop["y"], max(item["spec"]["y"] for item in spec["layout"]["spec"]["items"])
+        )
+
+    def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
+        """Each share alert divides by offered requests and fires above 1% for 5 minutes."""
+        rules = alert_rules()
+        for name, numerator in (
+            ("NarwhalRejectedRising", "sum without (reason) (rate(narwhal_rejected_total[5m]))"),
+            ("NarwhalExpiredRising", "sum without (reason) (rate(narwhal_expired_total[5m]))"),
+            ("NarwhalRetryDeniedRising", "rate(narwhal_retry_denied_total[5m])"),
+        ):
+            with self.subTest(alert=name):
+                self.assertEqual(
+                    rules[name],
+                    {
+                        "expr": f"{numerator} / rate(narwhal_offered_total[5m]) > 0.01",
+                        "for": "5m",
+                        "severity": "warn",
+                    },
+                )
+        # Reason-labelled counters are summed so a threshold applies to the whole outcome.
+        for name, rule in rules.items():
+            for metric in re.findall(r"narwhal_(?:failed|rejected|expired)_total", rule["expr"]):
+                with self.subTest(alert=name):
+                    self.assertIn(f"sum without (reason) (rate({metric}[", rule["expr"])
+        # The monitoring guide lists every shipped alert.
+        guide = (ROOT / "docs/operate/02-Monitor.md").read_text()
+        for name in rules:
+            self.assertIn(f"| `{name}` |", guide)
 
     async def test_dashboard_scopes_latency_quantiles_to_the_selected_router(self):
         elements = dashboard()["spec"]["elements"]

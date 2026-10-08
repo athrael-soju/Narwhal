@@ -30,13 +30,42 @@ groups:
           summary: "The router stopped answering its scrape"
 
       - alert: NarwhalErrorBurst
-        expr: rate(narwhal_failed_total[5m]) > 0.5
+        expr: sum without (reason) (rate(narwhal_failed_total[5m])) > 0.5
         for: 5m
         labels:
           severity: warn
         annotations:
           summary: "Requests failing at {{ $value | printf \"%.2f\" }}/s over 5m"
           description: "Inspect terminal errors and attempt_failures in the request journal, then check the named engines and breaker evidence."
+
+      # Each share rule divides by offered requests, which include early refusals and
+      # rejections. 0.01 is the 1% at which the dashboard's Dropped headline turns yellow.
+      - alert: NarwhalRejectedRising
+        expr: sum without (reason) (rate(narwhal_rejected_total[5m])) / rate(narwhal_offered_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "The router rejected {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "Rejected requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_rejected_total by reason: inflight_limit means requests filled the router in-flight limit and serving.queue_capacity, saturated means event-loop lag or request sizing delay reached the saturation threshold, and not_ready means the router was not ready to serve."
+
+      - alert: NarwhalExpiredRising
+        expr: sum without (reason) (rate(narwhal_expired_total[5m])) / rate(narwhal_offered_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Deadlines expired {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "Expired requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_expired_total by reason: queue_timeout means the admission wait reached serving.queue_timeout_s, and deadline means serving.request_timeout_s expired. Compare queue depth and wait by stage on the dashboard."
+
+      - alert: NarwhalRetryDeniedRising
+        expr: rate(narwhal_retry_denied_total[5m]) / rate(narwhal_offered_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "The retry quota denied retries for {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "A denied retry ends a request the retry policy would otherwise retry, so denials above 1% of offered requests can turn the dashboard's Dropped headline yellow on their own. Check narwhal_retry_credits and narwhal_attempt_failures_total by reason for the failures that consume the quota."
 
       - alert: NarwhalUnservedRising
         expr: rate(narwhal_unserved_total[10m]) > 0.2
