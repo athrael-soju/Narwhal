@@ -39,7 +39,7 @@ The router reaches engines through two kinds of connection pool:
 
 A data leg waits for a connection to its own engine only, so a busy engine does not hold connections that another engine's legs need. Health and inference probes for every engine share the control pool.
 
-Both pools reuse a kept-alive connection for 5 s after its last response. A connection the engine has closed leaves the pool before reuse.
+Both pools reuse a kept-alive connection for up to 4 s after its last response. vLLM closes an idle connection after 5 s, so the router stops reusing a connection before the engine closes it. A connection the engine has already closed leaves the pool before reuse.
 
 ### Failure evidence
 

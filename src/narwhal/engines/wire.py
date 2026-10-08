@@ -17,8 +17,10 @@ import httpx
 
 Dial = Callable[[str, int], Awaitable[socket.socket]]
 GapTimeout = Callable[[], float | None]
-# Seconds an idle keep-alive connection stays reusable, the HTTPX default.
-KEEPALIVE_EXPIRY_S = 5.0
+# Seconds an idle keep-alive connection stays reusable. vLLM closes an idle connection
+# after 5 s (VLLM_HTTP_TIMEOUT_KEEP_ALIVE), so a request sent at the same age can meet the
+# engine's close and fail without a response.
+KEEPALIVE_EXPIRY_S = 4.0
 
 
 async def dial_tcp(host: str, port: int) -> socket.socket:

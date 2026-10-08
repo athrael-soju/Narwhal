@@ -22,7 +22,7 @@ from ..types import (
 from .connector import KvConnector, NixlConnector, PrefillResult
 from .dialect import EngineDialect, VllmDialect
 from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
-from .wire import Dial, WireClient, dial_tcp
+from .wire import KEEPALIVE_EXPIRY_S, Dial, WireClient, dial_tcp
 
 
 class EngineError(RuntimeError):
@@ -192,6 +192,7 @@ class EngineClient:
             limits=httpx.Limits(
                 max_connections=control_connections,
                 max_keepalive_connections=max(1, control_connections // 2),
+                keepalive_expiry=KEEPALIVE_EXPIRY_S,
             ),
             transport=transport,
         )
