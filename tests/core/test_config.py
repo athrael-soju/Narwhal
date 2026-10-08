@@ -372,7 +372,7 @@ class ConfigTests(unittest.TestCase):
         policy = ServingPolicy()
         for changes, message in (
             ({"queue_capacity": True}, "queue_capacity"),
-            ({"decode_concurrency": -1}, "decode_concurrency"),
+            ({"retry_budget": -1}, "retry_budget"),
             ({"max_attempts": 4}, "max_attempts"),
             ({"max_request_bytes": 0}, "max_request_bytes"),
             ({"max_response_bytes": True}, "max_response_bytes"),

@@ -140,8 +140,6 @@ class HttpAccountingTests(HttpHarness):
                     ServingPolicy(
                         queue_capacity=queue,
                         queue_timeout_s=5.0,
-                        prefill_concurrency=4,
-                        decode_concurrency=4,
                         handoff_timeout_s=5.0,
                     )
                     if queue

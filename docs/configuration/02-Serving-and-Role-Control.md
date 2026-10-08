@@ -27,7 +27,7 @@ The decode admission check projects when each request holds a slot in the decode
 
 The check admits the request outright when the fleet has zero live decode engines, or when any live decode engine's profile or profiled `decode_max_requests` is unset.
 
-Each request holds one slot. The pool's slot count is the sum of each live decode engine's `decode_max_requests`, capped per engine by `serving.decode_concurrency` when that setting is positive.
+Each request holds one slot. The pool's slot count is the sum of each live decode engine's [decode seats](#engine-seats).
 
 | Request                                    | Reaches decode                      | Holds a slot                                                                       |
 | ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- |
@@ -88,8 +88,6 @@ The check admits the request when all three of these pass:
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
 | `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline.                                                      | Positive when `serving.queue_capacity` is positive                         |
-| `serving.prefill_concurrency` | `0`        | Maximum resident prefill requests per engine.                                                                         | Positive when `serving.queue_capacity` is positive                         |
-| `serving.decode_concurrency`  | `0`        | Maximum resident decode requests per engine.                                                                          | Positive when `serving.queue_capacity` is positive                         |
 | `serving.handoff_timeout_s`   | `0.0`      | Maximum KV handoff age from the start of the prefill HTTP request, with `0` meaning the request deadline.             | Positive and below the verified backend KV lease when queueing or retrying |
 | `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
@@ -99,12 +97,22 @@ The check admits the request when all three of these pass:
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                                       | At least 1                                                                 |
 | `serving.max_response_bytes`  | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output. | At least 1                                                                 |
 
-When `serving.decode_concurrency` is positive, role control prices each engine's decode capacity at that limit. Each candidate split's decode load is at least:
+#### Engine seats
 
-```text
-(decode residents on decode-role engines + requests waiting for a decode slot)
-  / (serving.decode_concurrency * max(current decode engines, candidate decode engines))
-```
+The router derives each engine's prefill and decode seats from engine evidence:
+
+| Seats   | Value |
+| ------- | ----- |
+| Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
+| Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
+
+The attested sequence limit is the `--max-num-seqs` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. An engine launched without `--max-num-seqs` takes its decode seats from the profile alone.
+
+The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
+
+The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
+
+`/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
 The admission limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`.
 
@@ -127,9 +135,9 @@ The original request deadline covers tokenization, queue wait, retry backoff, en
 
 Tune queueing and retries:
 
-1. Set queue capacity, phase concurrency, and deadlines from the workload's measured latency and capacity.
+1. Set queue capacity and deadlines from the workload's measured latency and capacity.
 2. Verify that the backend releases abandoned KV handoffs when the lease expires.
-3. After any change to queueing, concurrency limits, KV handoff expiry, retries, or byte limits, measure again.
+3. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
 
 ### 4.3 Streaming failure semantics
 

@@ -70,6 +70,7 @@ async def check_process_identities(
                 )
                 if problems:
                     return None, "; ".join(problems)
+                router.attested(spec.iid, payload)
                 return identity.process_start_time_seconds, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 return None, f"process identity unavailable: {type(exc).__name__}"

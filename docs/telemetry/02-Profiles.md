@@ -119,7 +119,7 @@ Placement, admission, pool load, demand, and role-split scoring all use this pri
 
 Narwhal limits concurrent decode requests on each fitted engine by the priced context length, `context_tokens`.
 
-When `context_tokens <= 0` or `decode_max_requests` is `null`, the decode request limit is zero. Otherwise the limit is the smallest of `decode_max_requests`, a positive `serving.decode_concurrency`, and the KV budget divided by `context_tokens`, with a minimum of `1`.
+When `context_tokens <= 0` or `decode_max_requests` is `null`, the decode request limit is zero. Otherwise the limit is the smaller of `decode_max_requests` and the KV budget divided by `context_tokens`, with a minimum of `1`.
 
 For a profile with `kv_capacity_tokens`, the KV budget is the smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. Otherwise the KV budget is `decode_max_kv_tokens`.
 

@@ -106,6 +106,17 @@ def render_admission(state: dict) -> list[str]:
             "gauge",
             [({}, admission.get(field_name, 0))],
         )
+    seats = (state.get("seats") or {}).get("engines") or {}
+    out += metric_lines(
+        "narwhal_engine_seats",
+        "Engine seats by phase; 0 means no seat limit",
+        "gauge",
+        [
+            ({"iid": iid, "phase": phase}, entry.get(phase, 0))
+            for iid, entry in sorted(seats.items())
+            for phase in ("prefill", "decode")
+        ],
+    )
     out += metric_lines(
         "narwhal_upstream_seconds_total",
         "Summed HTTP leg duration including transfer and failed attempts; not GPU execution time",

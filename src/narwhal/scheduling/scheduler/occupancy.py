@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING
@@ -130,10 +130,12 @@ def decode_occupancy(
     input_len: int,
     *,
     concurrency: int = 0,
+    seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> DecodeOccupancy | None:
     """Project decode holds from now for a joining request of `input_len` prompt tokens.
 
+    A positive `concurrency`, or an engine's positive `seats` entry, caps its slots.
     Returns None without live decode engines or with an engine lacking `decode_max_requests`.
     """
     engines = tuple(scheduler.live_instances(Role.DECODE))
@@ -147,6 +149,8 @@ def decode_occupancy(
             return None
         limit = profile.decode_max_requests
         limit = min(limit, concurrency) if concurrency > 0 else limit
+        seat = (seats or {}).get(inst.iid, 0)
+        limit = min(limit, seat) if seat > 0 else limit
         token_limit = profile.decode_token_limit
         slots += limit
         tokens += float("inf") if token_limit is None else token_limit
@@ -199,6 +203,7 @@ def decode_admits(
     ttft_s: float | None = None,
     ttft_margin: float = 0.0,
     concurrency: int = 0,
+    seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> bool:
     """Return whether `request` starts decode within its TTFT budget and fits decode."""
@@ -210,6 +215,7 @@ def decode_admits(
             ttft_s=ttft_s,
             ttft_margin=ttft_margin,
             concurrency=concurrency,
+            seats=seats,
             expected_output=expected_output,
         )
         is None
@@ -224,6 +230,7 @@ def decode_refusal(
     ttft_s: float | None = None,
     ttft_margin: float = 0.0,
     concurrency: int = 0,
+    seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> str | None:
     """Return the decode check `request` fails, `slot_wait`, `kv_capacity` or `tpot`, else None.
@@ -235,7 +242,11 @@ def decode_refusal(
     """
     estimate = expected_output or (lambda r: r.wanted_len)
     occupancy = decode_occupancy(
-        scheduler, request.input_len, concurrency=concurrency, expected_output=estimate
+        scheduler,
+        request.input_len,
+        concurrency=concurrency,
+        seats=seats,
+        expected_output=estimate,
     )
     if occupancy is None:
         return None

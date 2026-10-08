@@ -122,6 +122,7 @@ async def validate_readmission(
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
+                router.attested(spec.iid, payload)
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
                 )

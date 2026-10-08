@@ -26,6 +26,7 @@ from .outcomes import NoEngine, RequestExpired, ResponseLimitExceeded, failure_r
 from .records import forward_headers, refuse_request, ttft_refusal_cause
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
+from .seats import decode_seat_map
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
@@ -186,7 +187,7 @@ async def _prepare_once(
             ready_s=router.scheduler.prefill_ready_s(req, prefill),
             ttft_s=priced,
             ttft_margin=router.cfg.admission_margin,
-            concurrency=router.cfg.serving.decode_concurrency,
+            seats=decode_seat_map(router),
             expected_output=router.controller.demand.output_estimator(),
         )
         if check is not None:
@@ -310,6 +311,8 @@ async def serve_request(
             req.cache_checked_at = router._clock()
         finally:
             router.sizing_delays.add(router._clock() - sizing)
+        # Prefill seats follow the mean sized input length.
+        router.input_lengths.add(req.input_len)
         if state.demand_observation is not None:
             req.demand_arrival = router.controller.demand.resize_arrival(
                 state.demand_observation,

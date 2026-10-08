@@ -33,8 +33,8 @@ class Contract:
 
 
 CONTRACTS: dict[str, Contract] = {
-    FLEET: Contract("narwhal.fleet"),
-    EFFECTIVE_CONFIG: Contract("narwhal.effective-config"),
+    FLEET: Contract("narwhal.fleet", 2),
+    EFFECTIVE_CONFIG: Contract("narwhal.effective-config", 2),
     PROFILES: Contract("narwhal.profiles"),
     HANDOFF: Contract("narwhal.handoff"),
     LEASE: Contract("narwhal.router-lease"),
