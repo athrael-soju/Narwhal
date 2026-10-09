@@ -283,6 +283,11 @@
   width: 100%;
 }
 
+[data-md-color-scheme="default"] .md-typeset .narwhal-panel-row img[src$="#only-dark"],
+[data-md-color-scheme="slate"] .md-typeset .narwhal-panel-row img[src$="#only-light"] {
+  display: none;
+}
+
 @media screen and (max-width: 44.9375em) {
   .md-typeset .narwhal-panel-row {
     flex-direction: column;

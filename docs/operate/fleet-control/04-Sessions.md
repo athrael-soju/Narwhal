@@ -18,21 +18,22 @@ The session strip runs along the top of the console.
 
 <div class="narwhal-panel-row" markdown>
 
-![Session strip during a load job and a drain.](../../assets/fleet-control/session-strip.png)
+![Session strip during a load job and a drain.](../../assets/fleet-control/session-strip.png#only-light)
+![Session strip during a load job and a drain.](../../assets/fleet-control/session-strip-dark.png#only-dark)
 
 </div>
 
-| Item                   | Shows                                                                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Connection             | **Connected**, **Service unreachable** or **Not connected**                                                                   |
-| **Admission**          | **Ready** when the router admits requests, otherwise **Not ready** or **Unreachable**. The tooltip holds the router's reason  |
-| **Alerts**             | Number of firing Narwhal alerts, red when any has page severity. Requires `prometheus_url`. The names of the firing alerts follow the count |
-| **In progress**        | Actions still running, such as `drain n7`                                                                                     |
-| **Session**            | Short session ID and start time                                                                                               |
-| **From session start** | Opens the dashboard with its time range starting at the session start                                                         |
-| **Load job**           | The current or last job, its state and its elapsed time                                                                       |
-| **Drain deadline**     | Deadline in seconds for drains started from this tab. Empty uses the router's default                                         |
-| Buttons                | **Start session** or **End session**, **Dashboard**, which opens the Grafana dashboard in a new tab, and **Forget token** |
+| Item                   | Shows                                                                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection             | **Connected**, **Service unreachable** or **Not connected**                                                                                               |
+| **Admission**          | **Ready** when the router admits requests, otherwise **Not ready** or **Unreachable**. The tooltip holds the router's reason                              |
+| **Alerts**             | Number of firing Narwhal alerts, red when any has page severity. Requires `prometheus_url`. The names of the firing alerts follow the count               |
+| **In progress**        | Actions still running, such as `drain n7`                                                                                                                 |
+| **Session**            | Short session ID and start time                                                                                                                           |
+| **From session start** | Opens the dashboard with its time range starting at the session start                                                                                     |
+| **Benchmark**          | The current or last job, its state and its elapsed time                                                                                                   |
+| **Drain deadline**     | Deadline in seconds for drains started from this tab. Empty uses the router's default                                                                     |
+| Buttons                | **Start session** or **End session**, **Dashboard**, which opens the Grafana dashboard in a new tab, **Forget token**, and the light and dark mode switch |
 
 ## Exclusive actions
 
@@ -46,7 +47,8 @@ The **Activity** view lists the session's actions, newest first, with each actio
 
 <div class="narwhal-panel-row" markdown>
 
-![Activity view during a drain.](../../assets/fleet-control/activity.png)
+![Activity view during a drain.](../../assets/fleet-control/activity.png#only-light)
+![Activity view during a drain.](../../assets/fleet-control/activity-dark.png#only-dark)
 
 </div>
 

@@ -31,7 +31,9 @@ from tools.fleet_control.config import (
 from tools.fleet_control.console import (
     PAGE,
     PUBLIC_PATHS,
+    console_document,
     console_routes,
+    content_security_policy,
     panel_url,
     with_token,
 )
@@ -72,7 +74,11 @@ class Elements(HTMLParser):
             self._open = tag
             self.text[tag].append("")
         if tag in ("script", "link", "img"):
-            self.external += [(tag, name) for name, _ in attrs if name in ("src", "href")]
+            self.external += [
+                (tag, name)
+                for name, value in attrs
+                if name in ("src", "href") and not (value or "").startswith("data:image/png;")
+            ]
 
     def handle_endtag(self, tag: str) -> None:
         if tag == self._open:
@@ -143,6 +149,18 @@ class ConsoleConfigTests(unittest.TestCase):
         path.write_text(json.dumps(document))
         return path
 
+    def test_a_grafana_path_links_and_frames_the_page_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(self.write(folder, {"grafana_url": "/", "panels": [5]}), {})
+        assert config.console is not None
+        settings = console_document(config)["grafana"]
+        self.assertEqual(settings["dashboard_url"], "/d/narwhal-router/")
+        self.assertTrue(settings["panels"][0]["url"].startswith("/d-solo/narwhal-router/?"))
+        embedded = replace(config.console, embed_in_grafana=True)
+        policy = content_security_policy("", embedded)
+        self.assertIn("frame-src 'self'", policy)
+        self.assertTrue(policy.endswith("frame-ancestors 'self'"))
+
     def test_example_config_embeds_panels_of_the_shipped_dashboard(self) -> None:
         console = load_config(ROOT / "config/fleet-control.example.json", {}).console
         assert console is not None
@@ -180,10 +198,14 @@ class ConsoleConfigTests(unittest.TestCase):
                 {"grafana_url": GRAFANA, "panels": [1], "theme": "dark"},
                 "unknown key console.theme",
             ),
-            "missing url": ({"panels": [1]}, "console.grafana_url must be an http or https URL"),
+            "missing url": (
+                {"panels": [1]},
+                "console.grafana_url must be a path or an http or https URL",
+            ),
             "query": ({"grafana_url": GRAFANA + "/?x=1", "panels": [1]}, "without credentials"),
             "credentials": ({"grafana_url": "http://u:p@grafana", "panels": [1]}, "credentials"),
             "scheme": ({"grafana_url": "ftp://grafana", "panels": [1]}, "http or https"),
+            "network path": ({"grafana_url": "//grafana", "panels": [1]}, "http or https"),
             "uid": (
                 {"grafana_url": GRAFANA, "dashboard_uid": "a/b", "panels": [1]},
                 "console.dashboard_uid must be a Grafana dashboard UID",
@@ -324,6 +346,7 @@ class ConsolePageTests(ConsoleCase):
         self.assertEqual(policy["script-src"], [sha256_source(scripts[0])])
         self.assertEqual(policy["style-src"], [sha256_source(styles[0])])
         self.assertEqual(policy["connect-src"], ["'self'"])
+        self.assertEqual(policy["img-src"], ["data:"])
         self.assertEqual(policy["frame-src"], [GRAFANA])
         self.assertEqual(policy["frame-ancestors"], ["'none'"])
         self.assertEqual(policy["form-action"], ["'none'"])

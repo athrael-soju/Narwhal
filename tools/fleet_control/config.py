@@ -253,9 +253,14 @@ def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
     count = len(problems)
     problems.extend(f"unknown key console.{key}" for key in sorted(set(raw) - _CONSOLE_KEYS))
     url = raw.get("grafana_url")
-    if not isinstance(url, str) or not _is_http_url(url) or any(c in url for c in "?#@"):
+    same_origin = isinstance(url, str) and url.startswith("/") and not url.startswith("//")
+    if (
+        not isinstance(url, str)
+        or not (same_origin or _is_http_url(url))
+        or any(c in url for c in "?#@")
+    ):
         problems.append(
-            "console.grafana_url must be an http or https URL without credentials, "
+            "console.grafana_url must be a path or an http or https URL without credentials, "
             "query or fragment"
         )
     uid = raw.get("dashboard_uid", DEFAULT_DASHBOARD_UID)

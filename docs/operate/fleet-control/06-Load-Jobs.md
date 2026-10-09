@@ -8,7 +8,8 @@ The service runs one AIPerf job at a time against `router.url`. To change the ra
 
 <div class="narwhal-panel-row" markdown>
 
-![Load job view with a running job.](../../assets/fleet-control/load-job.png)
+![Benchmark view with a running job.](../../assets/fleet-control/load-job.png#only-light)
+![Benchmark view with a running job.](../../assets/fleet-control/load-job-dark.png#only-dark)
 
 </div>
 
@@ -18,7 +19,7 @@ The hint under the inputs describes the selected workload and the inputs it acce
 
 ## Start a job
 
-In the **Load job** view, select a workload and set its inputs:
+In the **Benchmark** view, select a workload and set its inputs:
 
 | Input            | Field             | Meaning                                                                                                  | Range        | Default  |
 | ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
@@ -52,9 +53,9 @@ A `timestamped_trace` workload sends each request at its recorded time. With bot
 
 The view locks its inputs, and the session strip shows the job's progress. **Stop job** stops AIPerf.
 
-## Load metrics
+## Benchmark results
 
-**Load metrics** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
+**Benchmark results** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
 
 - the job's progress against its duration
 - completed requests, errors, requests per second and output tokens per second
@@ -63,6 +64,13 @@ The view locks its inputs, and the session strip shows the job's progress. **Sto
 - charts of completed requests per second and time to first token p95 over the job
 
 A p95 value turns yellow at 80% of its target and red at 100%.
+
+<div class="narwhal-panel-row" markdown>
+
+![Benchmark results during a running job.](../../assets/fleet-control/load-metrics.png#only-light)
+![Benchmark results during a running job.](../../assets/fleet-control/load-metrics-dark.png#only-dark)
+
+</div>
 
 **Job document** downloads the full job document as `<job>.json`. [Load jobs](10-API-Reference.md#load-jobs) in the API reference lists its fields.
 

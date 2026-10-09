@@ -10,7 +10,7 @@ from mkdocs.structure.files import Files
 from mkdocs.structure.pages import Page
 
 _ROW = re.compile(r'(<div class="narwhal-panel-row([^"]*)">)(.*?)(</div>)', re.S)
-_ITEM = re.compile(r'<p>(?=(?:(?!</p>).)*?<img[^>]*\bsrc="([^"]+\.png)")', re.S)
+_ITEM = re.compile(r'<p>(?=(?:(?!</p>).)*?<img[^>]*\bsrc="([^"#]+\.png)(?:#[^"]*)?")', re.S)
 
 
 def _png_width(path: Path) -> int:

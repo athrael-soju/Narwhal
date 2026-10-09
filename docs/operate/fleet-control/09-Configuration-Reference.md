@@ -162,7 +162,7 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 
 | Key                        | Default          | Meaning                                                                                                                                          |
 | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `console.grafana_url`      | none; required   | Grafana base URL as the operator's browser reaches it, without credentials, query or fragment                                                    |
+| `console.grafana_url`      | none; required   | Grafana base URL as the operator's browser reaches it, or a path such as `/` for Grafana on the console's origin. No credentials, query or fragment |
 | `console.dashboard_uid`    | `narwhal-router` | Dashboard UID for embedded panels and dashboard links                                                                                         |
 | `console.panels`           | none             | Non-empty list of distinct panel IDs that the standalone console embeds, in display order                                                        |
 | `console.from`             | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`                                                   |
@@ -171,7 +171,7 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 | `console.auto_connect`     | `false`          | Whether the console page carries the token and connects on load. See [Connecting automatically](02-Open-the-Console.md#connecting-automatically) |
 | `console.trusted_hosts`    | none             | Host names or IPv4 addresses, besides loopback, for which the console page carries the token. Requires `console.auto_connect` |
 
-`console.grafana_url` is Grafana's address as your workstation browser sees it, usually the tunnel's local Grafana port such as `http://127.0.0.1:13000`.
+`console.grafana_url` is Grafana's address as your workstation browser sees it, such as `http://127.0.0.1:13000`. When one proxy serves Grafana and the console, set it to `/`.
 
 The example configuration embeds the shipped dashboard's **Requests**, **Latency**, **Time to first token**, **Time per output token**, **Engine role history** and **Fleet events** panels. [Reading the dashboard](../../observability/05-Dashboard.md) describes each panel. If those panels show as empty frames, see [Charts in the standalone console are empty frames](08-Troubleshooting.md#charts-in-the-standalone-console-are-empty-frames).
 

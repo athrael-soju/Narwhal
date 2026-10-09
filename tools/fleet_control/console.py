@@ -59,9 +59,9 @@ def inline_hashes(html: str) -> dict[str, list[str]]:
 
 
 def origin(url: str) -> str:
-    """Return the scheme, host and port of `url`."""
+    """Return the CSP source for the origin of `url`."""
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}"
+    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else "'self'"
 
 
 def content_security_policy(html: str, console: ConsoleConfig | None) -> str:
@@ -70,13 +70,14 @@ def content_security_policy(html: str, console: ConsoleConfig | None) -> str:
     grafana = None if console is None else origin(console.grafana_url)
     frames = grafana if console is not None and console.panels else "'none'"
     embedded = console is not None and console.embed_in_grafana
-    ancestors = f"'self' {grafana}" if embedded else "'none'"
+    ancestors = " ".join(dict.fromkeys(("'self'", str(grafana)))) if embedded else "'none'"
     return "; ".join(
         (
             "default-src 'none'",
             "script-src " + " ".join(hashes["script"]),
             "style-src " + " ".join(hashes["style"]),
             "connect-src 'self'",
+            "img-src data:",
             f"frame-src {frames}",
             "base-uri 'none'",
             "form-action 'none'",

@@ -22,7 +22,15 @@ Click an engine ID to open its details beside the list: its state, role, residen
 
 <div class="narwhal-panel-row" markdown>
 
-![Engines view with n7 draining.](../../assets/fleet-control/engines-draining.png)
+![Engines view filtered to engines that need attention, with n7's details open.](../../assets/fleet-control/engine-details.png#only-light)
+![Engines view filtered to engines that need attention, with n7's details open.](../../assets/fleet-control/engine-details-dark.png#only-dark)
+
+</div>
+
+<div class="narwhal-panel-row" markdown>
+
+![Engines view with n7 draining.](../../assets/fleet-control/engines-draining.png#only-light)
+![Engines view with n7 draining.](../../assets/fleet-control/engines-draining-dark.png#only-dark)
 
 </div>
 
@@ -57,7 +65,8 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 <div class="narwhal-panel-row" markdown>
 
-![Engines view with the n6 action menu open.](../../assets/fleet-control/engine-menu.png)
+![Engines view with the n2 action menu open.](../../assets/fleet-control/engine-menu.png#only-light)
+![Engines view with the n2 action menu open.](../../assets/fleet-control/engine-menu-dark.png#only-dark)
 
 </div>
 

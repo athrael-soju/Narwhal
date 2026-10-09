@@ -44,7 +44,7 @@ To connect from other machines, add the host names their browsers use:
 
 ```json
 "console": {
-  "grafana_url": "http://localhost:3000",
+  "grafana_url": "/",
   "auto_connect": true,
   "trusted_hosts": ["ops-host", "ops-host.example.ts.net"]
 }
